@@ -88,7 +88,7 @@
     align-items: center;
     justify-content: space-between;
     min-height: 72px;
-    padding: 10px 14px 10px 18px;
+    padding: 10px 14px 10px 0;
     background: transparent;
     border-bottom: 0;
     box-sizing: border-box;
@@ -109,7 +109,7 @@
 #yzm-memory-root .yzm-shell-brand {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: center;
     flex: 0 0 var(--yzm-desktop-sidebar-width);
     width: var(--yzm-desktop-sidebar-width);
     height: 52px;
@@ -119,9 +119,9 @@
 
 #yzm-memory-root .yzm-shell-logo {
     display: block;
-    width: calc(100% - 30px);
+    width: calc(100% - 28px);
     height: 42px;
-    margin-left: 18px;
+    margin: 0 auto;
     object-fit: contain;
 }
 
@@ -2413,7 +2413,7 @@
         flex-wrap: nowrap;
         gap: 2px;
         min-height: 46px;
-        padding: 5px 4px;
+        padding: 5px 4px 5px 0;
     }
 
     #yzm-memory-root .yzm-shell-brand {
@@ -2425,7 +2425,7 @@
     #yzm-memory-root .yzm-shell-logo {
         width: calc(100% - 12px);
         height: 24px;
-        margin-left: 6px;
+        margin: 0 auto;
     }
 
     #yzm-memory-root .yzm-shell-bar::after {
