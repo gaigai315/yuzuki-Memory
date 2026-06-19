@@ -675,28 +675,63 @@
 
         const titleNode = document.createElement('div');
         titleNode.className = 'yzm-config-card-title';
-        titleNode.append(createIconNode('fa-regular fa-bookmark', ''), document.createTextNode('黑白名单预设'));
+        titleNode.append(createIconNode('fa-regular fa-bookmark', ''), document.createTextNode('预设管理'));
 
-        const desc = document.createElement('div');
-        desc.className = 'yzm-config-card-desc';
-        desc.textContent = '保存常用过滤规则，后续可一键套用到当前配置。';
+        card.append(
+            titleNode,
+            createPresetField('选择预设', createPresetSelect()),
+            createPresetField('输入预设名称', createPresetNameInput()),
+            createPresetActions()
+        );
+        return card;
+    }
 
-        const presetList = document.createElement('div');
-        presetList.className = 'yzm-preset-list';
-        [
-            ['默认过滤', 'think, thinking, details, summary'],
-            ['仅保留正文', 'content, message'],
-            ['状态栏过滤', 'statusbar'],
-        ].forEach(([name, meta], index) => {
-            const item = document.createElement('button');
-            item.type = 'button';
-            item.className = index === 0 ? 'yzm-preset-item yzm-preset-item-active' : 'yzm-preset-item';
-            item.innerHTML = `<span>${name}</span><small>${meta}</small>`;
-            presetList.appendChild(item);
+    function createPresetField(labelText, control) {
+        const field = document.createElement('label');
+        field.className = 'yzm-preset-field';
+
+        const label = document.createElement('span');
+        label.className = 'yzm-preset-field-label';
+        label.textContent = labelText;
+
+        field.append(label, control);
+        return field;
+    }
+
+    function createPresetSelect() {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'yzm-preset-select-wrap';
+
+        const select = document.createElement('select');
+        select.className = 'yzm-preset-select';
+        select.setAttribute('aria-label', '选择预设');
+        ['选择预设', '默认过滤', '仅保留正文', '状态栏过滤'].forEach((label) => {
+            const option = document.createElement('option');
+            option.textContent = label;
+            option.value = label === '选择预设' ? '' : label;
+            select.appendChild(option);
         });
 
-        card.append(titleNode, desc, presetList, createIconButton('新增预设', 'fa-solid fa-plus', 'yzm-config-secondary-button'));
-        return card;
+        wrapper.append(select, createIconNode('fa-solid fa-chevron-down', ''));
+        return wrapper;
+    }
+
+    function createPresetNameInput() {
+        const input = document.createElement('input');
+        input.className = 'yzm-preset-name-input';
+        input.type = 'text';
+        input.placeholder = '例如：仅保留内容相关';
+        return input;
+    }
+
+    function createPresetActions() {
+        const actions = document.createElement('div');
+        actions.className = 'yzm-preset-actions';
+        actions.append(
+            createIconButton('保存', 'fa-regular fa-floppy-disk', 'yzm-preset-action-button'),
+            createIconButton('删除', 'fa-regular fa-trash-can', 'yzm-preset-action-button yzm-preset-action-danger')
+        );
+        return actions;
     }
 
     function createFillModePanel() {

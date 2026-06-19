@@ -732,6 +732,10 @@
     touch-action: pan-x pan-y;
 }
 
+#yzm-memory-root .yzm-workspace.yzm-config-mode .yzm-table-frame {
+    overflow-x: hidden;
+}
+
 #yzm-memory-root .yzm-table-content-view {
     min-height: 100%;
 }
@@ -808,7 +812,8 @@
 
 #yzm-memory-root .yzm-config-view {
     min-height: 100%;
-    padding: 18px;
+    padding: 12px 14px;
+    overflow-x: hidden;
     box-sizing: border-box;
 }
 
@@ -829,20 +834,20 @@
 #yzm-memory-root .yzm-config-content {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 18px;
-    margin-top: 14px;
+    gap: 12px;
+    margin-top: 10px;
 }
 
 #yzm-memory-root .yzm-config-filter-layout {
     display: grid;
-    grid-template-columns: minmax(220px, 0.72fr) minmax(360px, 1.28fr);
-    gap: 18px;
+    grid-template-columns: minmax(190px, 0.58fr) minmax(0, 1.42fr);
+    gap: 12px;
     min-width: 0;
 }
 
 #yzm-memory-root .yzm-config-card {
     min-width: 0;
-    padding: 18px;
+    padding: 14px 16px;
     background: var(--yzm-surface);
     border: 1px solid var(--yzm-border);
     border-radius: 12px;
@@ -854,7 +859,7 @@
     align-items: center;
     gap: 9px;
     color: var(--yzm-title);
-    font-size: 16px;
+    font-size: 15px;
     font-weight: 600;
 }
 
@@ -863,68 +868,85 @@
 }
 
 #yzm-memory-root .yzm-config-card-desc {
-    margin-top: 8px;
+    margin-top: 7px;
     color: var(--yzm-muted);
     font-size: 12px;
     line-height: 1.45;
 }
 
-#yzm-memory-root .yzm-preset-list {
+#yzm-memory-root .yzm-preset-field {
     display: flex;
     flex-direction: column;
     gap: 8px;
     margin-top: 16px;
 }
 
-#yzm-memory-root .yzm-preset-item {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 3px;
-    width: 100%;
-    min-height: 54px;
-    padding: 9px 10px;
-    color: var(--yzm-text);
-    background: var(--yzm-row-bg);
-    border: 1px solid var(--yzm-border-soft);
-    border-radius: 10px;
-    box-sizing: border-box;
-    cursor: pointer;
-    font: inherit;
-    text-align: left;
-}
-
-#yzm-memory-root .yzm-preset-item span {
-    color: var(--yzm-title);
+#yzm-memory-root .yzm-preset-field-label {
+    color: var(--yzm-muted);
     font-size: 13px;
 }
 
-#yzm-memory-root .yzm-preset-item small {
-    max-width: 100%;
-    overflow: hidden;
+#yzm-memory-root .yzm-preset-select-wrap {
+    position: relative;
+    width: 100%;
+}
+
+#yzm-memory-root .yzm-preset-select-wrap i {
+    position: absolute;
+    right: 12px;
+    top: 50%;
     color: var(--yzm-muted);
     font-size: 11px;
-    line-height: 1.25;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    pointer-events: none;
+    transform: translateY(-50%);
 }
 
-#yzm-memory-root .yzm-preset-item-active {
-    background: var(--yzm-surface-strong);
-    border-color: var(--yzm-border);
+#yzm-memory-root .yzm-preset-select,
+#yzm-memory-root .yzm-preset-name-input {
+    width: 100%;
+    min-height: 38px;
+    padding: 0 34px 0 12px;
+    color: var(--yzm-text);
+    background: var(--yzm-input-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 9px;
+    box-shadow: none;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 13px;
+    outline: 0;
 }
 
-#yzm-memory-root .yzm-config-secondary-button {
+#yzm-memory-root .yzm-preset-select {
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+}
+
+#yzm-memory-root .yzm-preset-name-input {
+    padding-right: 12px;
+}
+
+#yzm-memory-root .yzm-preset-name-input::placeholder {
+    color: var(--yzm-muted);
+}
+
+#yzm-memory-root .yzm-preset-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 22px;
+}
+
+#yzm-memory-root .yzm-preset-action-button {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 7px;
-    width: 100%;
-    min-height: 34px;
-    margin-top: 12px;
+    min-height: 36px;
     color: var(--yzm-text);
-    background: var(--yzm-surface-strong);
-    border: 1px solid var(--yzm-border-soft);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
     border-radius: 9px;
     box-sizing: border-box;
     cursor: pointer;
@@ -932,23 +954,28 @@
     font-size: 13px;
 }
 
-#yzm-memory-root .yzm-config-secondary-button i {
+#yzm-memory-root .yzm-preset-action-button i {
     color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-preset-action-danger,
+#yzm-memory-root .yzm-preset-action-danger i {
+    color: #ff4f68;
 }
 
 #yzm-memory-root .yzm-fill-mode-row {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
-    margin-top: 14px;
+    margin-top: 10px;
 }
 
 #yzm-memory-root .yzm-fill-mode-choice {
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr);
     gap: 4px 8px;
-    min-height: 76px;
-    padding: 12px;
+    min-height: 62px;
+    padding: 10px 12px;
     color: var(--yzm-text);
     background: var(--yzm-row-bg);
     border: 1px solid var(--yzm-border-soft);
@@ -968,7 +995,7 @@
 
 #yzm-memory-root .yzm-fill-mode-choice span {
     color: var(--yzm-title);
-    font-size: 14px;
+    font-size: 13px;
     font-weight: 600;
     line-height: 1.25;
 }
@@ -977,6 +1004,7 @@
     color: var(--yzm-muted);
     font-size: 11px;
     line-height: 1.35;
+    overflow-wrap: anywhere;
 }
 
 #yzm-memory-root .yzm-fill-mode-choice-active {
@@ -986,12 +1014,12 @@
 }
 
 #yzm-memory-root .yzm-fill-mode-card {
-    padding-bottom: 16px;
+    padding-bottom: 12px;
 }
 
 #yzm-memory-root .yzm-tag-filter-block {
-    margin-top: 18px;
-    padding-top: 16px;
+    margin-top: 14px;
+    padding-top: 12px;
     border-top: 1px solid var(--yzm-border-soft);
 }
 
@@ -1031,8 +1059,8 @@
     display: flex;
     align-items: center;
     flex-wrap: wrap;
-    gap: 8px;
-    margin-top: 10px;
+    gap: 7px;
+    margin-top: 9px;
 }
 
 #yzm-memory-root .yzm-tag-chip-prefix {
@@ -1045,8 +1073,8 @@
     align-items: center;
     justify-content: center;
     gap: 5px;
-    min-height: 30px;
-    padding: 0 11px;
+    min-height: 28px;
+    padding: 0 10px;
     color: var(--yzm-text);
     background: var(--yzm-surface-strong);
     border: 1px solid var(--yzm-border-soft);
@@ -1936,6 +1964,20 @@
     #yzm-memory-root .yzm-fill-mode-choice {
         min-height: 64px;
         padding: 10px;
+    }
+
+    #yzm-memory-root .yzm-preset-field {
+        margin-top: 12px;
+    }
+
+    #yzm-memory-root .yzm-preset-actions {
+        gap: 8px;
+        margin-top: 16px;
+    }
+
+    #yzm-memory-root .yzm-preset-action-button {
+        min-height: 32px;
+        font-size: 12px;
     }
 
     #yzm-memory-root .yzm-tag-filter-block {
