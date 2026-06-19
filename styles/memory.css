@@ -79,6 +79,11 @@
 }
 
 #yzm-memory-root .yzm-shell-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    z-index: 4;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -88,6 +93,7 @@
     border-bottom: 1px solid var(--yzm-border);
     box-sizing: border-box;
     overflow: visible;
+    pointer-events: none;
 }
 
 #yzm-memory-root .yzm-shell-brand {
@@ -126,6 +132,7 @@
     min-width: 0;
     flex: 1 1 auto;
     justify-content: flex-end;
+    pointer-events: auto;
 }
 
 #yzm-memory-root .yzm-top-actions {
@@ -341,7 +348,7 @@
 #yzm-memory-root .yzm-shell-body {
     display: grid;
     grid-template-columns: var(--yzm-desktop-sidebar-width) 12px minmax(320px, 1fr);
-    height: calc(100% - 72px);
+    height: 100%;
     padding: 0;
     overflow: hidden;
     overscroll-behavior: contain;
@@ -374,10 +381,12 @@
 #yzm-memory-root .yzm-sidebar {
     display: flex;
     flex-direction: column;
-    padding: 14px;
+    padding: 86px 14px 14px;
 }
 
 #yzm-memory-root .yzm-collapse-button {
+    position: relative;
+    z-index: 2;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -385,7 +394,7 @@
     min-width: 12px;
     height: 100%;
     padding: 0;
-    background: var(--yzm-surface-strong);
+    background: transparent;
     border-radius: 0;
     font-size: 10px;
     line-height: 1;
@@ -403,8 +412,37 @@
     user-select: none;
 }
 
+#yzm-memory-root .yzm-collapse-button::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 38%;
+    width: 18px;
+    height: 76px;
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 8px;
+    box-shadow: 0 8px 18px rgba(83, 106, 198, 0.12);
+    transform: translate(-50%, -50%);
+}
+
+#yzm-memory-root .yzm-collapse-button i {
+    position: absolute;
+    left: 50%;
+    top: 38%;
+    z-index: 1;
+    color: var(--yzm-icon);
+    font-size: 11px;
+    transform: translate(-50%, -50%);
+}
+
 #yzm-memory-root .yzm-collapse-button.yzm-resizing {
+    background: transparent;
+}
+
+#yzm-memory-root .yzm-collapse-button.yzm-resizing::before {
     background: var(--yzm-hover);
+    border-color: var(--yzm-icon);
 }
 
 #yzm-memory-root .yzm-column-resizing,
@@ -569,8 +607,10 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
+    padding-top: 72px;
     overflow: hidden;
     background: var(--yzm-bg);
+    box-sizing: border-box;
 }
 
 #yzm-memory-root .yzm-toolbar {
@@ -903,6 +943,54 @@
 #yzm-memory-root .yzm-shell[data-yzm-theme="dark"] .yzm-world-type-gold,
 #yzm-memory-root .yzm-shell[data-yzm-theme="dark"] .yzm-world-type-purple {
     color: var(--yzm-title);
+}
+
+#yzm-memory-root .yzm-primary-summary-item {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 7px;
+    min-height: 88px;
+    padding: 12px 14px;
+    white-space: normal;
+}
+
+#yzm-memory-root .yzm-primary-summary-item-active {
+    min-height: 112px;
+}
+
+#yzm-memory-root .yzm-primary-summary-title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--yzm-title);
+    font-size: 14px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-primary-summary-desc {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.45;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+#yzm-memory-root .yzm-primary-summary-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.25;
+}
+
+#yzm-memory-root .yzm-primary-summary-meta i {
+    color: var(--yzm-icon);
+    font-size: 12px;
 }
 
 #yzm-memory-root .yzm-current-table-title {
@@ -1803,6 +1891,191 @@
     overflow-wrap: anywhere;
 }
 
+#yzm-memory-root .yzm-summary-view {
+    display: grid;
+    grid-template-rows: auto minmax(220px, 1fr) minmax(130px, 0.55fr);
+    gap: 14px;
+    min-width: 0;
+    min-height: 100%;
+    height: 100%;
+    padding: 12px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-summary-hero {
+    display: grid;
+    grid-template-columns: 56px minmax(0, 1fr);
+    align-items: center;
+    gap: 16px;
+    min-height: 72px;
+}
+
+#yzm-memory-root .yzm-summary-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 56px;
+    height: 56px;
+    color: #ffffff;
+    background: var(--yzm-active-bg);
+    border-radius: 999px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font-size: 22px;
+    box-shadow: var(--yzm-active-shadow);
+    transition: transform 160ms ease, filter 160ms ease;
+}
+
+#yzm-memory-root .yzm-summary-avatar:hover {
+    filter: brightness(1.05);
+    transform: translateY(-1px);
+}
+
+#yzm-memory-root .yzm-summary-title-wrap {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 7px 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-summary-title {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--yzm-title);
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-summary-card {
+    min-width: 0;
+    min-height: 0;
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 12px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-summary-card-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 44px;
+    padding: 0 14px;
+    color: var(--yzm-title);
+    border-bottom: 1px solid var(--yzm-border-soft);
+    box-sizing: border-box;
+    font-size: 15px;
+    font-weight: 700;
+}
+
+#yzm-memory-root .yzm-summary-card-title i {
+    color: var(--yzm-icon);
+    font-size: 14px;
+}
+
+#yzm-memory-root .yzm-summary-timeline-list {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 10px 14px 14px;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+#yzm-memory-root .yzm-summary-timeline-row {
+    position: relative;
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    gap: 12px;
+    min-height: 42px;
+    padding-left: 24px;
+    border-bottom: 1px solid var(--yzm-border-soft);
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-summary-timeline-row:last-child {
+    border-bottom: 0;
+}
+
+#yzm-memory-root .yzm-summary-timeline-row::before {
+    content: "";
+    position: absolute;
+    left: 7px;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: var(--yzm-border);
+}
+
+#yzm-memory-root .yzm-summary-timeline-dot {
+    position: absolute;
+    left: 3px;
+    top: 50%;
+    width: 9px;
+    height: 9px;
+    background: #9ea8ff;
+    border-radius: 999px;
+    transform: translateY(-50%);
+}
+
+#yzm-memory-root .yzm-summary-timeline-time,
+#yzm-memory-root .yzm-summary-timeline-event {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    color: var(--yzm-text);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+#yzm-memory-root .yzm-summary-timeline-time {
+    color: #3d5df0;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-summary-timeline-event {
+    overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-summary-text-card {
+    display: flex;
+    flex-direction: column;
+}
+
+#yzm-memory-root .yzm-summary-card-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(120px, 1fr) minmax(110px, 0.9fr);
+    gap: 14px;
+    min-width: 0;
+    min-height: 0;
+}
+
+#yzm-memory-root .yzm-summary-card-grid .yzm-summary-text-card:first-child {
+    grid-column: 1 / -1;
+}
+
+#yzm-memory-root .yzm-summary-text-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 14px 16px;
+    color: var(--yzm-text);
+    box-sizing: border-box;
+    font-size: 14px;
+    line-height: 1.7;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    overscroll-behavior: contain;
+}
+
 #yzm-memory-root .yzm-table-header,
 #yzm-memory-root .yzm-table-row {
     display: grid;
@@ -2162,7 +2435,7 @@
     #yzm-memory-root .yzm-sidebar {
         min-width: 0;
         max-height: none;
-        padding: 10px 5px 8px;
+        padding: 64px 5px 8px;
         overflow: auto;
         border-right: 1px solid var(--yzm-border);
         border-bottom: 0;
@@ -2178,8 +2451,15 @@
         border-bottom: 0;
     }
 
+    #yzm-memory-root .yzm-collapse-button::before {
+        width: 16px;
+        height: 62px;
+        border-radius: 7px;
+    }
+
     #yzm-memory-root .yzm-workspace {
         min-width: 0;
+        padding-top: 56px;
     }
 
     #yzm-memory-root .yzm-workspace-content,
@@ -2284,13 +2564,19 @@
     }
 
     #yzm-memory-root .yzm-primary-world-item {
-        display: grid;
         grid-template-columns: 28px minmax(0, 1fr);
-        align-items: center;
-        gap: 7px;
-        min-height: 54px;
-        padding: 6px;
+    }
+
+    #yzm-memory-root .yzm-primary-summary-item {
+        display: flex;
+        gap: 4px;
+        min-height: 64px;
+        padding: 7px;
         white-space: normal;
+    }
+
+    #yzm-memory-root .yzm-primary-summary-item-active {
+        min-height: 82px;
     }
 
     #yzm-memory-root .yzm-primary-character-avatar,
@@ -2322,7 +2608,8 @@
 
     #yzm-memory-root .yzm-primary-character-name,
     #yzm-memory-root .yzm-primary-item-name,
-    #yzm-memory-root .yzm-primary-world-name {
+    #yzm-memory-root .yzm-primary-world-name,
+    #yzm-memory-root .yzm-primary-summary-title {
         font-size: 12px;
         line-height: 1.2;
     }
@@ -2331,7 +2618,9 @@
     #yzm-memory-root .yzm-primary-character-location,
     #yzm-memory-root .yzm-item-status,
     #yzm-memory-root .yzm-world-type-tag,
-    #yzm-memory-root .yzm-primary-world-desc {
+    #yzm-memory-root .yzm-primary-world-desc,
+    #yzm-memory-root .yzm-primary-summary-desc,
+    #yzm-memory-root .yzm-primary-summary-meta {
         font-size: 10px;
         line-height: 1.2;
     }
@@ -2564,6 +2853,79 @@
     #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-value {
         padding-left: 8px;
         font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-view {
+        grid-template-rows: auto minmax(180px, auto) minmax(110px, auto);
+        height: auto;
+        min-height: 0;
+        padding: 8px;
+        gap: 10px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-hero {
+        grid-template-columns: 44px minmax(0, 1fr);
+        gap: 10px;
+        min-height: 54px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-avatar {
+        width: 44px;
+        height: 44px;
+        font-size: 18px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-title {
+        font-size: 18px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-card-title {
+        min-height: 36px;
+        padding: 0 10px;
+        font-size: 13px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-card-grid {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: none;
+        gap: 10px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-card-grid .yzm-summary-text-card:first-child {
+        grid-column: auto;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-list {
+        overflow: visible;
+        padding: 8px 10px 10px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-row {
+        grid-template-columns: 72px minmax(0, 1fr);
+        gap: 8px;
+        min-height: 38px;
+        padding-left: 18px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-row::before {
+        left: 5px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-dot {
+        left: 1px;
+        width: 8px;
+        height: 8px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-time,
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-event,
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-text-body {
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-text-body {
+        padding: 10px;
+        overflow: visible;
     }
 
     #yzm-memory-root .yzm-empty-table-view {

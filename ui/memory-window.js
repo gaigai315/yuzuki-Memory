@@ -62,10 +62,17 @@
         详细说明: 'fa-regular fa-rectangle-list',
         影响范围: 'fa-solid fa-route',
     };
+    const SUMMARY_FIELD_ICONS = {
+        总结标题: 'fa-solid fa-book-open',
+        总结内容: 'fa-regular fa-file-lines',
+        时间线: 'fa-regular fa-calendar-days',
+        未解决问题: 'fa-regular fa-circle-question',
+        当前备注: 'fa-regular fa-note-sticky',
+    };
     const CONFIG_SECTIONS = [
         { id: 'init', label: '初始化', icon: 'fa-solid fa-wand-magic-sparkles' },
     ];
-    const DEFAULT_STATE_REVISION = 7;
+    const DEFAULT_STATE_REVISION = 9;
     const DEFAULT_TABLES = [
         {
             id: 'character_profile',
@@ -89,7 +96,7 @@
             id: 'memory_summary',
             name: '记忆总结',
             icon: 'memory_book',
-            columns: ['表格类型', '总结内容'],
+            columns: ['总结标题', '总结内容', '时间线', '未解决问题', '当前备注'],
         },
     ];
     let memoryState = null;
@@ -196,6 +203,10 @@
         return WORLD_FIELD_ICONS[column] || 'fa-regular fa-note-sticky';
     }
 
+    function getSummaryFieldIcon(column) {
+        return SUMMARY_FIELD_ICONS[column] || 'fa-regular fa-note-sticky';
+    }
+
     function getRecordValueByCandidates(record, fields) {
         for (const field of fields) {
             const value = getRecordValue(record, field);
@@ -216,6 +227,25 @@
         if (/历史|事件|战争|传说/.test(type)) return 'yzm-world-type-gold';
         if (/物品|资源|矿物|道具/.test(type)) return 'yzm-world-type-blue';
         return 'yzm-world-type-default';
+    }
+
+    function getSummaryValue(record, fields) {
+        return getRecordValueByCandidates(record, fields);
+    }
+
+    function getSummaryTimelineItems(text = '') {
+        return String(text || '')
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .slice(0, 8)
+            .map((line) => {
+                const parts = line.split(/[:：|｜]\s*/);
+                if (parts.length > 1) {
+                    return { time: parts.shift().trim(), event: parts.join('：').trim() };
+                }
+                return { time: '', event: line };
+            });
     }
 
     function createRecord(table) {
@@ -786,6 +816,8 @@
                 item = createItemPrimaryItem(table, record, activeRecordId === record.id);
             } else if (table.id === 'world_setting') {
                 item = createWorldPrimaryItem(table, record, activeRecordId === record.id);
+            } else if (table.id === 'memory_summary') {
+                item = createSummaryPrimaryItem(table, record, activeRecordId === record.id);
             } else {
                 item = createButton(getRecordTitle(table, record), activeRecordId === record.id ? 'yzm-primary-item yzm-primary-item-active' : 'yzm-primary-item');
             }
@@ -905,6 +937,26 @@
         return item;
     }
 
+    function createSummaryPrimaryItem(table, record, isActive) {
+        const item = createButton('', isActive ? 'yzm-primary-item yzm-primary-summary-item yzm-primary-summary-item-active yzm-primary-item-active' : 'yzm-primary-item yzm-primary-summary-item');
+
+        const title = document.createElement('div');
+        title.className = 'yzm-primary-summary-title';
+        title.textContent = getRecordTitle(table, record);
+
+        const desc = document.createElement('div');
+        desc.className = 'yzm-primary-summary-desc';
+        desc.textContent = getSummaryValue(record, ['总结内容']);
+
+        const timelineCount = getSummaryTimelineItems(getSummaryValue(record, ['时间线'])).length;
+        const meta = document.createElement('div');
+        meta.className = 'yzm-primary-summary-meta';
+        meta.append(createIconNode('fa-regular fa-file-lines', ''), document.createTextNode(`${timelineCount} 条记录`));
+
+        item.append(title, desc, meta);
+        return item;
+    }
+
     function createTableWorkspaceView(table) {
         if (table?.id === 'character_profile') {
             return createCharacterProfileView(table);
@@ -916,6 +968,10 @@
 
         if (table?.id === 'world_setting') {
             return createWorldSettingView(table);
+        }
+
+        if (table?.id === 'memory_summary') {
+            return createMemorySummaryView(table);
         }
 
         const empty = document.createElement('div');
@@ -1304,6 +1360,96 @@
         return row;
     }
 
+    function createMemorySummaryView(table) {
+        const record = getActiveRecord(table);
+        const view = document.createElement('div');
+        view.className = 'yzm-summary-view';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-summary-hero';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-summary-avatar';
+        avatar.setAttribute('role', 'button');
+        avatar.setAttribute('tabindex', '0');
+        avatar.setAttribute('aria-label', '编辑记忆总结');
+        avatar.appendChild(createIconNode('fa-solid fa-book-open', ''));
+
+        const title = document.createElement('div');
+        title.className = 'yzm-summary-title-wrap';
+
+        const name = document.createElement('div');
+        name.className = 'yzm-summary-title';
+        name.textContent = record ? getRecordTitle(table, record) : '未选择总结';
+
+        title.append(name);
+        header.append(avatar, title);
+        const summaryKind = /支线/.test(name.textContent) ? '支线' : '主线';
+
+        const timeline = document.createElement('section');
+        timeline.className = 'yzm-summary-card yzm-summary-timeline-card';
+
+        const timelineTitle = document.createElement('div');
+        timelineTitle.className = 'yzm-summary-card-title';
+        timelineTitle.append(createIconNode(getSummaryFieldIcon('时间线'), ''), document.createTextNode(`${summaryKind}时间线`));
+
+        const timelineList = document.createElement('div');
+        timelineList.className = 'yzm-summary-timeline-list';
+        const timelineItems = getSummaryTimelineItems(getSummaryValue(record, ['时间线']));
+        if (timelineItems.length) {
+            timelineItems.forEach((item) => timelineList.appendChild(createSummaryTimelineRow(item)));
+        } else {
+            timelineList.appendChild(createSummaryTimelineRow({ time: '', event: '' }));
+        }
+        timeline.append(timelineTitle, timelineList);
+
+        const cardGrid = document.createElement('div');
+        cardGrid.className = 'yzm-summary-card-grid';
+        cardGrid.append(
+            createSummaryTextCard(`${summaryKind}内容`, '总结内容', getSummaryValue(record, ['总结内容'])),
+            createSummaryTextCard('当前备注', '当前备注', getSummaryValue(record, ['当前备注'])),
+            createSummaryTextCard('未解决问题', '未解决问题', getSummaryValue(record, ['未解决问题']))
+        );
+
+        view.append(header, timeline, cardGrid);
+        return view;
+    }
+
+    function createSummaryTextCard(title, field, text = '') {
+        const card = document.createElement('section');
+        card.className = 'yzm-summary-card yzm-summary-text-card';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-summary-card-title';
+        header.append(createIconNode(getSummaryFieldIcon(field), ''), document.createTextNode(title));
+
+        const body = document.createElement('div');
+        body.className = 'yzm-summary-text-body';
+        body.textContent = text;
+
+        card.append(header, body);
+        return card;
+    }
+
+    function createSummaryTimelineRow(item) {
+        const row = document.createElement('div');
+        row.className = 'yzm-summary-timeline-row';
+
+        const dot = document.createElement('span');
+        dot.className = 'yzm-summary-timeline-dot';
+
+        const time = document.createElement('div');
+        time.className = 'yzm-summary-timeline-time';
+        time.textContent = item.time;
+
+        const event = document.createElement('div');
+        event.className = 'yzm-summary-timeline-event';
+        event.textContent = item.event;
+
+        row.append(dot, time, event);
+        return row;
+    }
+
     function getActiveTableItem(root) {
         return root.querySelector('.yzm-nav-table-active');
     }
@@ -1518,6 +1664,7 @@
         if (table?.id === 'character_profile') return '角色';
         if (table?.id === 'item_tracking') return '物品';
         if (table?.id === 'world_setting') return '设定';
+        if (table?.id === 'memory_summary') return '总结';
         return '记录';
     }
 
@@ -1779,7 +1926,7 @@
             });
         }
 
-        root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar, .yzm-world-avatar').forEach((avatar) => {
+        root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar, .yzm-world-avatar, .yzm-summary-avatar').forEach((avatar) => {
             if (avatar.dataset.yzmBound === 'true') return;
             avatar.dataset.yzmBound = 'true';
             const openEditor = (event) => {
