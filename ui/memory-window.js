@@ -658,10 +658,12 @@
 
         const content = document.createElement('div');
         content.className = 'yzm-config-content';
-        content.append(
-            createTagPresetPanel(),
-            createFillModePanel()
-        );
+
+        const filterLayout = document.createElement('div');
+        filterLayout.className = 'yzm-config-filter-layout';
+        filterLayout.append(createTagPresetPanel(), createTagFilterPanel());
+
+        content.append(createFillModePanel(), filterLayout);
 
         page.append(header, content);
         return page;
@@ -699,7 +701,7 @@
 
     function createFillModePanel() {
         const card = document.createElement('section');
-        card.className = 'yzm-config-card yzm-config-rule-card';
+        card.className = 'yzm-config-card yzm-fill-mode-card';
 
         const titleNode = document.createElement('div');
         titleNode.className = 'yzm-config-card-title';
@@ -712,9 +714,20 @@
             createModeChoice('批量填表', 'fa-solid fa-layer-group', '按范围批量整理聊天内容，后续接入导入历史和重跑。', false)
         );
 
+        card.append(titleNode, modeRow);
+        return card;
+    }
+
+    function createTagFilterPanel() {
+        const card = document.createElement('section');
+        card.className = 'yzm-config-card yzm-tag-filter-card';
+
+        const titleNode = document.createElement('div');
+        titleNode.className = 'yzm-config-card-title';
+        titleNode.append(createIconNode('fa-solid fa-filter', ''), document.createTextNode('标签过滤'));
+
         card.append(
             titleNode,
-            modeRow,
             createTagFilterBlock('黑名单标签（去除）', 'fa-regular fa-circle-xmark', '例如：Music, Memory, |--', ['think', 'thinking', 'details', 'summary']),
             createTagFilterBlock('白名单标签（仅留）', 'fa-regular fa-circle-check', '例：content, message', ['content', 'statusbar'])
         );

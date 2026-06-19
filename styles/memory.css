@@ -828,9 +828,16 @@
 
 #yzm-memory-root .yzm-config-content {
     display: grid;
-    grid-template-columns: minmax(190px, 0.72fr) minmax(320px, 1.28fr);
+    grid-template-columns: minmax(0, 1fr);
     gap: 18px;
     margin-top: 14px;
+}
+
+#yzm-memory-root .yzm-config-filter-layout {
+    display: grid;
+    grid-template-columns: minmax(220px, 0.72fr) minmax(360px, 1.28fr);
+    gap: 18px;
+    min-width: 0;
 }
 
 #yzm-memory-root .yzm-config-card {
@@ -976,6 +983,10 @@
     background: var(--yzm-surface-strong);
     border-color: var(--yzm-border);
     box-shadow: 0 8px 18px rgba(83, 106, 198, 0.12);
+}
+
+#yzm-memory-root .yzm-fill-mode-card {
+    padding-bottom: 16px;
 }
 
 #yzm-memory-root .yzm-tag-filter-block {
@@ -1904,12 +1915,27 @@
         margin-top: 8px;
     }
 
+    #yzm-memory-root .yzm-config-filter-layout {
+        grid-template-columns: 1fr;
+        gap: 10px;
+    }
+
     #yzm-memory-root .yzm-config-card {
         padding: 12px;
     }
 
     #yzm-memory-root .yzm-config-card-title {
         font-size: 14px;
+    }
+
+    #yzm-memory-root .yzm-fill-mode-row {
+        grid-template-columns: 1fr;
+        gap: 8px;
+    }
+
+    #yzm-memory-root .yzm-fill-mode-choice {
+        min-height: 64px;
+        padding: 10px;
     }
 
     #yzm-memory-root .yzm-tag-filter-block {
