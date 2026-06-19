@@ -1270,6 +1270,9 @@
                 event.stopPropagation();
                 activeWorkspaceView = 'config';
                 setMobileDetailOpen(root, false);
+                root.querySelectorAll('.yzm-nav-item-active, .yzm-nav-table-active').forEach((node) => {
+                    node.classList.remove('yzm-nav-item-active', 'yzm-nav-table-active');
+                });
                 root.querySelectorAll('.yzm-sidebar-action-active').forEach((node) => {
                     node.classList.remove('yzm-sidebar-action-active');
                 });
