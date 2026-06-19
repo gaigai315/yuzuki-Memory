@@ -615,6 +615,63 @@
     background: transparent;
 }
 
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-shell-brand {
+    justify-content: center;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-shell-logo {
+    width: 30px;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar {
+    padding-left: 7px;
+    padding-right: 7px;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-table-search .yzm-search-input {
+    display: none;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-table-search {
+    width: 34px;
+    margin-right: auto;
+    margin-left: auto;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-table-search i {
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-overview-row {
+    display: flex;
+    justify-content: center;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-add-table-button {
+    width: 34px;
+    height: 34px;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-overview-item,
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-nav-table-name,
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar-action {
+    justify-content: center;
+    width: 34px;
+    min-height: 34px;
+    padding: 0;
+    margin-right: auto;
+    margin-left: auto;
+    color: transparent;
+    font-size: 0;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-nav-icon,
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar-action i {
+    width: auto;
+    font-size: 13px;
+}
+
 #yzm-memory-root .yzm-workspace {
     display: flex;
     flex-direction: column;
@@ -1039,6 +1096,93 @@
 #yzm-memory-root .yzm-primary-summary-meta i {
     color: var(--yzm-icon);
     font-size: 12px;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-header {
+    justify-content: center;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-current-table-title {
+    flex: 0 0 auto;
+    width: 34px;
+    justify-content: center;
+    padding: 0;
+    overflow: visible;
+    color: transparent;
+    font-size: 0;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-current-table-title .yzm-nav-icon {
+    width: auto;
+    color: var(--yzm-icon);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-current-table-edit {
+    width: 26px;
+    min-width: 26px;
+    padding: 0;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-search .yzm-search-input {
+    display: none;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-search {
+    width: 34px;
+    margin-right: auto;
+    margin-left: auto;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-search i {
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item {
+    justify-content: center;
+    min-height: 44px;
+    padding: 0;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-character-item,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-card,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-world-item {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-character-avatar,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-avatar,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-world-avatar {
+    width: 32px;
+    height: 32px;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-character-info,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-info,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-world-info,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-chevron,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-world-chevron,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-summary-title,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-summary-meta,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-summary-primary-section-title {
+    display: none;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-summary-item {
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-summary-item::before {
+    content: "\f02d";
+    color: var(--yzm-icon);
+    font-family: "Font Awesome 6 Free";
+    font-size: 16px;
+    font-weight: 900;
 }
 
 #yzm-memory-root .yzm-current-table-title {

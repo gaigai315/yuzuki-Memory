@@ -19,6 +19,12 @@
             primary: { value: 132, min: 72, max: 210 },
         },
     };
+    const LAYOUT_ICON_MODE_AT = {
+        mobile: {
+            sidebar: 76,
+            primary: 92,
+        },
+    };
     const TABLE_ICONS = [
         { id: 'summary', label: '总结', className: 'fa-solid fa-house' },
         { id: 'person', label: '人物档案', className: 'fa-solid fa-user' },
@@ -543,6 +549,16 @@
             shell.style.setProperty(`--yzm-${mode}-sidebar-width`, `${widths[mode].sidebar}px`);
             shell.style.setProperty(`--yzm-${mode}-primary-width`, `${widths[mode].primary}px`);
         });
+        updateLayoutModeClasses(shell, widths);
+    }
+
+    function updateLayoutModeClasses(shell, widths = getSavedLayoutWidths()) {
+        if (!shell) return;
+
+        const mode = getLayoutMode();
+        const iconLimits = LAYOUT_ICON_MODE_AT[mode] || {};
+        shell.classList.toggle('yzm-sidebar-icon-mode', !!iconLimits.sidebar && widths[mode].sidebar <= iconLimits.sidebar);
+        shell.classList.toggle('yzm-primary-icon-mode', !!iconLimits.primary && widths[mode].primary <= iconLimits.primary);
     }
 
     function updateThemeButton(themeButton, theme) {
@@ -712,6 +728,7 @@
         const nextValue = normalizeLayoutWidth(mode, area, value);
         shell.style.setProperty(`--yzm-${mode}-${area}-width`, `${nextValue}px`);
         saveLayoutWidth(mode, area, nextValue);
+        updateLayoutModeClasses(shell);
     }
 
     function bindColumnResizeHandle(root, handle, options) {
@@ -2172,6 +2189,7 @@
         shell.dataset.yzmTheme = getSavedTheme();
         shell.setAttribute('aria-label', DISPLAY_NAME);
         applyLayoutWidths(shell);
+        window.addEventListener('resize', () => updateLayoutModeClasses(shell));
 
         const bar = document.createElement('div');
         bar.className = 'yzm-shell-bar';
