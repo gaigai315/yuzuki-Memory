@@ -47,10 +47,19 @@
         约定: 'fa-solid fa-calendar-check',
     };
     const CHARACTER_PANEL_STYLES = ['yzm-panel-blue', 'yzm-panel-green', 'yzm-panel-gold', 'yzm-panel-purple'];
+    const ITEM_FIELD_ICONS = {
+        物品名称: 'fa-solid fa-tag',
+        物品描述: 'fa-regular fa-rectangle-list',
+        物品位置: 'fa-solid fa-location-dot',
+        当前位置: 'fa-solid fa-location-dot',
+        持有者: 'fa-regular fa-user',
+        状态: 'fa-solid fa-shield-check',
+        备注: 'fa-regular fa-note-sticky',
+    };
     const CONFIG_SECTIONS = [
         { id: 'init', label: '初始化', icon: 'fa-solid fa-wand-magic-sparkles' },
     ];
-    const DEFAULT_STATE_REVISION = 6;
+    const DEFAULT_STATE_REVISION = 7;
     const DEFAULT_TABLES = [
         {
             id: 'character_profile',
@@ -62,7 +71,7 @@
             id: 'item_tracking',
             name: '物品追踪',
             icon: 'item',
-            columns: ['物品名称', '物品描述', '当前位置', '持有者', '状态', '备注'],
+            columns: ['物品名称', '物品描述', '物品位置', '持有者', '状态', '备注'],
         },
         {
             id: 'world_setting',
@@ -171,6 +180,24 @@
 
     function getCharacterFieldIcon(column) {
         return CHARACTER_FIELD_ICONS[column] || 'fa-solid fa-note-sticky';
+    }
+
+    function getItemFieldIcon(column) {
+        return ITEM_FIELD_ICONS[column] || 'fa-regular fa-note-sticky';
+    }
+
+    function getRecordValueByCandidates(record, fields) {
+        for (const field of fields) {
+            const value = getRecordValue(record, field);
+            if (value) return value;
+        }
+        return '';
+    }
+
+    function getItemStatusClass(status) {
+        if (/未|无|丢失|损坏|失效/.test(status)) return 'yzm-item-status-muted';
+        if (/待|需|确认|检查|处理中/.test(status)) return 'yzm-item-status-warn';
+        return 'yzm-item-status-owned';
     }
 
     function createRecord(table) {
@@ -734,9 +761,14 @@
 
         const activeRecordId = getActiveRecordId(table.id);
         list.replaceChildren(...getRecords(table.id).map((record) => {
-            const item = table.id === 'character_profile'
-                ? createCharacterPrimaryItem(table, record, activeRecordId === record.id)
-                : createButton(getRecordTitle(table, record), activeRecordId === record.id ? 'yzm-primary-item yzm-primary-item-active' : 'yzm-primary-item');
+            let item;
+            if (table.id === 'character_profile') {
+                item = createCharacterPrimaryItem(table, record, activeRecordId === record.id);
+            } else if (table.id === 'item_tracking') {
+                item = createItemPrimaryItem(table, record, activeRecordId === record.id);
+            } else {
+                item = createButton(getRecordTitle(table, record), activeRecordId === record.id ? 'yzm-primary-item yzm-primary-item-active' : 'yzm-primary-item');
+            }
             item.dataset.yzmRecordId = record.id;
             return item;
         }));
@@ -797,9 +829,39 @@
         return item;
     }
 
+    function createItemPrimaryItem(table, record, isActive) {
+        const item = createButton('', isActive ? 'yzm-primary-item yzm-primary-item-card yzm-primary-item-active' : 'yzm-primary-item yzm-primary-item-card');
+
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-primary-item-avatar';
+        avatar.appendChild(createIconNode('fa-solid fa-box-open', ''));
+
+        const content = document.createElement('div');
+        content.className = 'yzm-primary-item-info';
+
+        const name = document.createElement('div');
+        name.className = 'yzm-primary-item-name';
+        name.textContent = getRecordTitle(table, record);
+
+        const statusText = getRecordValue(record, '状态') || '未标记';
+        const status = document.createElement('div');
+        status.className = `yzm-item-status ${getItemStatusClass(statusText)}`;
+        status.textContent = statusText;
+
+        const chevron = createIconNode('fa-solid fa-chevron-right', 'yzm-primary-item-chevron');
+
+        content.append(name, status);
+        item.append(avatar, content, chevron);
+        return item;
+    }
+
     function createTableWorkspaceView(table) {
         if (table?.id === 'character_profile') {
             return createCharacterProfileView(table);
+        }
+
+        if (table?.id === 'item_tracking') {
+            return createItemTrackingView(table);
         }
 
         const empty = document.createElement('div');
@@ -1046,6 +1108,83 @@
 
         panel.append(header, body);
         return panel;
+    }
+
+    function createItemTrackingView(table) {
+        const record = getActiveRecord(table);
+        const view = document.createElement('div');
+        view.className = 'yzm-item-view';
+
+        const card = document.createElement('section');
+        card.className = 'yzm-item-detail-card';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-item-detail-header';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-item-avatar';
+        avatar.appendChild(createIconNode('fa-solid fa-box-open', ''));
+
+        const title = document.createElement('div');
+        title.className = 'yzm-item-detail-title';
+
+        const name = document.createElement('div');
+        name.className = 'yzm-item-detail-name';
+        name.textContent = record ? getRecordTitle(table, record) : '未选择物品';
+
+        const statusText = getRecordValue(record, '状态') || '未标记';
+        const status = document.createElement('div');
+        status.className = `yzm-item-status ${getItemStatusClass(statusText)}`;
+        status.textContent = statusText;
+
+        title.append(name, status);
+        header.append(avatar, title);
+
+        const rows = document.createElement('div');
+        rows.className = 'yzm-item-detail-rows';
+        const columns = (table.columns || []).filter((column) => column !== getPrimaryColumn(table) && column !== '备注');
+        columns.forEach((column) => {
+            rows.appendChild(createItemDetailRow(column, getRecordValueByCandidates(record, column === '物品位置' ? ['物品位置', '当前位置'] : [column])));
+        });
+
+        const note = document.createElement('div');
+        note.className = 'yzm-item-note-box';
+
+        const noteTitle = document.createElement('div');
+        noteTitle.className = 'yzm-item-note-title';
+        noteTitle.textContent = '备注记录';
+
+        const noteBody = document.createElement('div');
+        noteBody.className = 'yzm-item-note-body';
+        noteBody.textContent = getRecordValue(record, '备注');
+
+        note.append(noteTitle, noteBody);
+        card.append(header, rows, note);
+        view.appendChild(card);
+        return view;
+    }
+
+    function createItemDetailRow(label, text = '') {
+        const row = document.createElement('div');
+        row.className = 'yzm-item-detail-row';
+
+        const labelNode = document.createElement('div');
+        labelNode.className = 'yzm-item-detail-label';
+        labelNode.append(createIconNode(getItemFieldIcon(label), ''), document.createTextNode(label));
+
+        const value = document.createElement('div');
+        value.className = 'yzm-item-detail-value';
+        if (label === '状态' && text) {
+            const status = document.createElement('span');
+            status.className = `yzm-item-status ${getItemStatusClass(text)}`;
+            status.textContent = text;
+            value.appendChild(status);
+        } else {
+            value.textContent = text;
+        }
+
+        row.append(labelNode, value);
+        return row;
     }
 
     function getActiveTableItem(root) {
