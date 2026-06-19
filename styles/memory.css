@@ -671,6 +671,41 @@
     padding: 0 8px 8px;
 }
 
+#yzm-memory-root .yzm-summary-primary-list {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+    min-height: 0;
+    height: calc(100% - 88px);
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-summary-primary-section {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-summary-primary-section-title {
+    flex: 0 0 auto;
+    padding: 0 4px 5px;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.2;
+}
+
+#yzm-memory-root .yzm-summary-primary-section-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 2px;
+    overscroll-behavior: contain;
+}
+
 #yzm-memory-root .yzm-primary-item {
     width: 100%;
     min-height: 42px;
@@ -961,14 +996,15 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 7px;
-    min-height: 88px;
-    padding: 12px 14px;
+    gap: 6px;
+    flex: 0 0 auto;
+    min-height: 72px;
+    padding: 12px;
     white-space: normal;
 }
 
 #yzm-memory-root .yzm-primary-summary-item-active {
-    min-height: 112px;
+    min-height: 72px;
 }
 
 #yzm-memory-root .yzm-primary-summary-title {
@@ -2623,13 +2659,13 @@
     #yzm-memory-root .yzm-primary-summary-item {
         display: flex;
         gap: 4px;
-        min-height: 64px;
+        min-height: 58px;
         padding: 7px;
         white-space: normal;
     }
 
     #yzm-memory-root .yzm-primary-summary-item-active {
-        min-height: 82px;
+        min-height: 58px;
     }
 
     #yzm-memory-root .yzm-primary-character-avatar,

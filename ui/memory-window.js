@@ -839,7 +839,13 @@
         const table = getActiveTable();
         if (!list || !table) return;
 
+        list.classList.toggle('yzm-summary-primary-list', table.id === 'memory_summary');
         const activeRecordId = getActiveRecordId(table.id);
+        if (table.id === 'memory_summary') {
+            renderSummaryPrimaryList(list, table, activeRecordId);
+            return;
+        }
+
         list.replaceChildren(...getRecords(table.id).map((record) => {
             let item;
             if (table.id === 'character_profile') {
@@ -848,14 +854,43 @@
                 item = createItemPrimaryItem(table, record, activeRecordId === record.id);
             } else if (table.id === 'world_setting') {
                 item = createWorldPrimaryItem(table, record, activeRecordId === record.id);
-            } else if (table.id === 'memory_summary') {
-                item = createSummaryPrimaryItem(table, record, activeRecordId === record.id);
             } else {
                 item = createButton(getRecordTitle(table, record), activeRecordId === record.id ? 'yzm-primary-item yzm-primary-item-active' : 'yzm-primary-item');
             }
             item.dataset.yzmRecordId = record.id;
             return item;
         }));
+    }
+
+    function renderSummaryPrimaryList(list, table, activeRecordId) {
+        const records = getRecords(table.id);
+        const mainRecords = records.filter((record) => getSummaryKind(record) === 'main');
+        const branchRecords = records.filter((record) => getSummaryKind(record) === 'branch');
+
+        list.replaceChildren(
+            createSummaryPrimarySection('主线', mainRecords, table, activeRecordId),
+            createSummaryPrimarySection('支线', branchRecords, table, activeRecordId)
+        );
+    }
+
+    function createSummaryPrimarySection(title, records, table, activeRecordId) {
+        const section = document.createElement('section');
+        section.className = 'yzm-summary-primary-section';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-summary-primary-section-title';
+        header.textContent = title;
+
+        const body = document.createElement('div');
+        body.className = 'yzm-summary-primary-section-body';
+        records.forEach((record) => {
+            const item = createSummaryPrimaryItem(table, record, activeRecordId === record.id);
+            item.dataset.yzmRecordId = record.id;
+            body.appendChild(item);
+        });
+
+        section.append(header, body);
+        return section;
     }
 
     function updateWorkspaceMode(root) {
@@ -976,17 +1011,17 @@
         title.className = 'yzm-primary-summary-title';
         title.textContent = getRecordTitle(table, record);
 
-        const desc = document.createElement('div');
-        desc.className = 'yzm-primary-summary-desc';
-        desc.textContent = getSummaryValue(record, ['总结内容']);
-
         const timelineCount = getSummaryTimelineItems(getSummaryValue(record, ['时间线'])).length;
         const meta = document.createElement('div');
         meta.className = 'yzm-primary-summary-meta';
         meta.append(createIconNode('fa-regular fa-file-lines', ''), document.createTextNode(`${timelineCount} 条记录`));
 
-        item.append(title, desc, meta);
+        item.append(title, meta);
         return item;
+    }
+
+    function getSummaryKind(record) {
+        return /支线/.test(getRecordValue(record, '总结标题')) ? 'branch' : 'main';
     }
 
     function createTableWorkspaceView(table) {
