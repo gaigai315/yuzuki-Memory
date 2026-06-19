@@ -1,0 +1,1934 @@
+#yzm-memory-root {
+    position: fixed;
+    inset: 0;
+    z-index: 30000;
+    pointer-events: none;
+
+    --yzm-bg: rgba(255, 255, 255, 0.9);
+    --yzm-panel-bg: rgba(246, 249, 255, 0.76);
+    --yzm-surface: rgba(255, 255, 255, 0.78);
+    --yzm-surface-strong: rgba(235, 240, 255, 0.88);
+    --yzm-row-bg: rgba(255, 255, 255, 0.52);
+    --yzm-input-bg: rgba(232, 237, 247, 0.9);
+    --yzm-text: #000000;
+    --yzm-title: #000000;
+    --yzm-muted: rgba(0, 0, 0, 0.58);
+    --yzm-icon: rgba(79, 95, 154, 0.86);
+    --yzm-icon-active: #ffffff;
+    --yzm-border: rgba(124, 145, 210, 0.24);
+    --yzm-border-soft: rgba(124, 145, 210, 0.14);
+    --yzm-hover: rgba(109, 132, 223, 0.14);
+    --yzm-active-bg: linear-gradient(135deg, #7489e6, #536ccf);
+    --yzm-active-text: #ffffff;
+    --yzm-active-shadow: 0 8px 18px rgba(83, 106, 198, 0.26);
+    --yzm-overlay-bg: rgba(0, 0, 0, 0.18);
+    --yzm-shadow: 0 22px 60px rgba(78, 98, 160, 0.28);
+}
+
+#yzm-memory-root .yzm-shell[data-yzm-theme="dark"] {
+    --yzm-bg: rgba(8, 15, 35, 0.92);
+    --yzm-panel-bg: rgba(10, 18, 42, 0.78);
+    --yzm-surface: rgba(18, 29, 62, 0.72);
+    --yzm-surface-strong: rgba(24, 36, 76, 0.84);
+    --yzm-row-bg: rgba(19, 31, 66, 0.58);
+    --yzm-input-bg: rgba(21, 32, 68, 0.86);
+    --yzm-text: #ffffff;
+    --yzm-title: #ffffff;
+    --yzm-muted: rgba(255, 255, 255, 0.62);
+    --yzm-icon: #a8b5ff;
+    --yzm-icon-active: #ffffff;
+    --yzm-border: rgba(137, 155, 255, 0.28);
+    --yzm-border-soft: rgba(137, 155, 255, 0.16);
+    --yzm-hover: rgba(120, 135, 255, 0.16);
+    --yzm-active-bg: linear-gradient(135deg, #7b7fff, #4f5ee8);
+    --yzm-active-text: #ffffff;
+    --yzm-active-shadow: 0 10px 24px rgba(69, 82, 210, 0.34);
+    --yzm-overlay-bg: rgba(2, 6, 18, 0.42);
+    --yzm-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+}
+
+#yzm-memory-root .yzm-shell[hidden] {
+    display: none !important;
+}
+
+#yzm-memory-root [hidden] {
+    display: none !important;
+}
+
+#yzm-memory-root .yzm-shell {
+    position: fixed;
+    left: 50%;
+    top: 50%;
+    width: min(980px, calc(100vw - 32px));
+    height: min(640px, calc(100vh - 96px));
+    overflow: hidden;
+    pointer-events: auto;
+    background: var(--yzm-bg);
+    color: var(--yzm-text);
+    border: 1px solid var(--yzm-border);
+    border-radius: 14px;
+    box-sizing: border-box;
+    box-shadow: var(--yzm-shadow);
+    transform: translate(-50%, -50%);
+    backdrop-filter: blur(18px) saturate(128%);
+    -webkit-backdrop-filter: blur(18px) saturate(128%);
+}
+
+#yzm-memory-root .yzm-shell-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    min-height: 72px;
+    padding: 10px 14px 10px 18px;
+    background: var(--yzm-bg);
+    border-bottom: 1px solid var(--yzm-border);
+    box-sizing: border-box;
+    overflow: visible;
+}
+
+#yzm-memory-root .yzm-shell-brand {
+    display: flex;
+    align-items: center;
+    flex: 0 0 216px;
+    width: 216px;
+    height: 52px;
+    min-width: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-shell-logo {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+#yzm-memory-root .yzm-shell-actions,
+#yzm-memory-root .yzm-theme-switcher,
+#yzm-memory-root .yzm-overview-row,
+#yzm-memory-root .yzm-nav-item,
+#yzm-memory-root .yzm-nav-table-name,
+#yzm-memory-root .yzm-sidebar-action,
+#yzm-memory-root .yzm-current-table-title,
+#yzm-memory-root .yzm-primary-header,
+#yzm-memory-root .yzm-structure-header,
+#yzm-memory-root .yzm-search-box {
+    display: flex;
+    align-items: center;
+}
+
+#yzm-memory-root .yzm-shell-actions {
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+}
+
+#yzm-memory-root .yzm-top-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    min-width: 0;
+    overflow: visible;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+}
+
+#yzm-memory-root .yzm-top-actions::-webkit-scrollbar {
+    display: none;
+}
+
+#yzm-memory-root .yzm-theme-switcher {
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+}
+
+#yzm-memory-root .yzm-theme-button,
+#yzm-memory-root .yzm-shell-close,
+#yzm-memory-root .yzm-top-action-button,
+#yzm-memory-root .yzm-top-more-item,
+#yzm-memory-root .yzm-nav-item,
+#yzm-memory-root .yzm-nav-table-name,
+#yzm-memory-root .yzm-add-table-button,
+#yzm-memory-root .yzm-tool-button,
+#yzm-memory-root .yzm-collapse-button,
+#yzm-memory-root .yzm-structure-close,
+#yzm-memory-root .yzm-sidebar-action,
+#yzm-memory-root .yzm-primary-item,
+#yzm-memory-root .yzm-icon-choice,
+#yzm-memory-root .yzm-add-table-confirm {
+    color: inherit;
+    cursor: pointer;
+    box-sizing: border-box;
+    font: inherit;
+}
+
+#yzm-memory-root .yzm-theme-button,
+#yzm-memory-root .yzm-shell-close,
+#yzm-memory-root .yzm-top-action-button,
+#yzm-memory-root .yzm-top-more-item,
+#yzm-memory-root .yzm-nav-item,
+#yzm-memory-root .yzm-nav-table-name,
+#yzm-memory-root .yzm-add-table-button,
+#yzm-memory-root .yzm-tool-button,
+#yzm-memory-root .yzm-collapse-button,
+#yzm-memory-root .yzm-structure-close,
+#yzm-memory-root .yzm-sidebar-action,
+#yzm-memory-root .yzm-primary-item {
+    border: 0;
+}
+
+#yzm-memory-root .yzm-theme-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+    min-height: 36px;
+    padding: 0;
+    color: var(--yzm-text);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 10px;
+    font-size: 14px;
+}
+
+#yzm-memory-root .yzm-theme-button i,
+#yzm-memory-root .yzm-shell-close i {
+    display: block;
+    color: var(--yzm-icon);
+    font-size: 14px;
+    line-height: 1;
+}
+
+#yzm-memory-root .yzm-top-action-button {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-width: 76px;
+    min-height: 36px;
+    padding: 0 12px;
+    color: var(--yzm-text);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 10px;
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-top-more {
+    position: relative;
+    flex: 0 0 auto;
+    z-index: 6;
+}
+
+#yzm-memory-root .yzm-top-more-menu[hidden] {
+    display: none !important;
+}
+
+#yzm-memory-root .yzm-top-more-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 8px);
+    z-index: 7;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 120px;
+    padding: 8px;
+    background: var(--yzm-surface-strong);
+    border: 1px solid var(--yzm-border);
+    border-radius: 10px;
+    box-shadow: var(--yzm-shadow);
+}
+
+#yzm-memory-root .yzm-top-more-item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    width: 100%;
+    min-height: 34px;
+    padding: 0 10px;
+    color: var(--yzm-text);
+    background: transparent;
+    border-radius: 8px;
+    font-size: 14px;
+    text-align: left;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-top-more-item i {
+    width: 16px;
+    color: var(--yzm-icon);
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-top-action-button i {
+    color: var(--yzm-icon);
+    font-size: 14px;
+}
+
+#yzm-memory-root .yzm-shell-close,
+#yzm-memory-root .yzm-structure-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    background: transparent;
+    border-radius: 8px;
+    line-height: 1;
+    touch-action: manipulation;
+}
+
+#yzm-memory-root .yzm-shell-close {
+    width: 34px;
+    height: 34px;
+    color: var(--yzm-text);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    font-size: 14px;
+}
+
+#yzm-memory-root .yzm-theme-button:hover,
+#yzm-memory-root .yzm-shell-close:hover,
+#yzm-memory-root .yzm-top-action-button:hover,
+#yzm-memory-root .yzm-top-more-item:hover,
+#yzm-memory-root .yzm-nav-item:hover,
+#yzm-memory-root .yzm-nav-table-name:hover,
+#yzm-memory-root .yzm-add-table-button:hover,
+#yzm-memory-root .yzm-tool-button:hover,
+#yzm-memory-root .yzm-collapse-button:hover,
+#yzm-memory-root .yzm-structure-close:hover,
+#yzm-memory-root .yzm-sidebar-action:hover,
+#yzm-memory-root .yzm-primary-item:hover,
+#yzm-memory-root .yzm-icon-choice:hover,
+#yzm-memory-root .yzm-add-table-confirm:hover {
+    background: var(--yzm-hover);
+}
+
+#yzm-memory-root .yzm-nav-table-active .yzm-nav-table-name,
+#yzm-memory-root .yzm-icon-choice-active {
+    color: var(--yzm-active-text);
+    background: var(--yzm-active-bg);
+    border-color: transparent;
+    box-shadow: var(--yzm-active-shadow);
+}
+
+#yzm-memory-root .yzm-primary-item-active {
+    color: var(--yzm-title);
+    background: var(--yzm-surface-strong);
+    border-color: var(--yzm-border);
+    box-shadow: 0 8px 18px rgba(83, 106, 198, 0.14);
+}
+
+#yzm-memory-root .yzm-shell[data-yzm-theme="dark"] .yzm-primary-item-active {
+    color: var(--yzm-title);
+    background: rgba(84, 99, 190, 0.34);
+    border-color: rgba(137, 155, 255, 0.34);
+}
+
+#yzm-memory-root .yzm-shell-body {
+    display: grid;
+    grid-template-columns: 180px 12px minmax(320px, 1fr);
+    height: calc(100% - 72px);
+    padding: 0;
+    overflow: hidden;
+    overscroll-behavior: contain;
+    touch-action: pan-x pan-y;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed {
+    grid-template-columns: 0 12px minmax(320px, 1fr);
+}
+
+#yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-sidebar,
+#yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-primary-pane {
+    padding: 0;
+    overflow: hidden;
+    border-right: 0;
+}
+
+#yzm-memory-root .yzm-sidebar,
+#yzm-memory-root .yzm-primary-pane {
+    min-width: 0;
+    overflow: auto;
+    background: var(--yzm-panel-bg);
+    border-right: 1px solid var(--yzm-border);
+    box-sizing: border-box;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+}
+
+#yzm-memory-root .yzm-sidebar {
+    display: flex;
+    flex-direction: column;
+    padding: 14px;
+}
+
+#yzm-memory-root .yzm-collapse-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    min-width: 12px;
+    height: 100%;
+    padding: 0;
+    background: var(--yzm-surface-strong);
+    border-radius: 0;
+    font-size: 10px;
+    line-height: 1;
+}
+
+#yzm-memory-root .yzm-sidebar-toggle,
+#yzm-memory-root .yzm-primary-toggle {
+    border-right: 1px solid var(--yzm-border);
+}
+
+#yzm-memory-root .yzm-nav-list,
+#yzm-memory-root .yzm-primary-list,
+#yzm-memory-root .yzm-sidebar-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+#yzm-memory-root .yzm-nav-list {
+    margin-top: 8px;
+}
+
+#yzm-memory-root .yzm-overview-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 28px;
+    gap: 4px;
+}
+
+#yzm-memory-root .yzm-nav-item,
+#yzm-memory-root .yzm-nav-table {
+    width: 100%;
+    min-height: 36px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-nav-item,
+#yzm-memory-root .yzm-nav-table-name,
+#yzm-memory-root .yzm-sidebar-action {
+    gap: 8px;
+    border-radius: 9px;
+    font-size: 14px;
+    text-align: left;
+}
+
+#yzm-memory-root .yzm-nav-item {
+    padding: 0 10px;
+    background: transparent;
+}
+
+#yzm-memory-root .yzm-overview-item {
+    cursor: default;
+}
+
+#yzm-memory-root .yzm-add-table-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    background: transparent;
+    border-radius: 7px;
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-nav-table-name {
+    min-width: 0;
+    min-height: 36px;
+    padding: 0 10px;
+    overflow: hidden;
+    background: transparent;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-nav-icon {
+    flex: 0 0 auto;
+    width: 16px;
+    color: var(--yzm-icon);
+    text-align: center;
+    font-size: 12px;
+    opacity: 1;
+}
+
+#yzm-memory-root .yzm-nav-table-active .yzm-nav-icon,
+#yzm-memory-root .yzm-nav-item:hover .yzm-nav-icon,
+#yzm-memory-root .yzm-nav-table-name:hover .yzm-nav-icon {
+    color: var(--yzm-icon-active);
+}
+
+#yzm-memory-root .yzm-search-box {
+    position: relative;
+    width: 100%;
+    height: 30px;
+    padding: 0;
+    color: inherit;
+    background: var(--yzm-input-bg);
+    border: 0;
+    border-radius: 10px;
+    box-shadow: none;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-search-box i {
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    color: var(--yzm-icon);
+    font-size: 12px;
+    pointer-events: none;
+    transform: translateY(-50%);
+}
+
+#yzm-memory-root .yzm-search-input {
+    width: 100%;
+    min-width: 0;
+    height: 30px;
+    padding: 0 0 0 24px;
+    color: var(--yzm-text) !important;
+    background: transparent !important;
+    border: 0 !important;
+    outline: 0 !important;
+    box-shadow: none !important;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 13px;
+    appearance: none;
+    -webkit-appearance: none;
+}
+
+#yzm-memory-root .yzm-search-input::placeholder {
+    color: var(--yzm-muted);
+    opacity: 0.88;
+}
+
+#yzm-memory-root .yzm-sidebar-actions {
+    margin-top: auto;
+    padding-top: 12px;
+    border-top: 1px solid var(--yzm-border-soft);
+}
+
+#yzm-memory-root .yzm-sidebar-action {
+    min-height: 30px;
+    padding: 0 10px;
+    background: transparent;
+}
+
+#yzm-memory-root .yzm-sidebar-action i {
+    width: 16px;
+    color: var(--yzm-icon);
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-sidebar-action:hover i,
+#yzm-memory-root .yzm-add-table-button:hover i,
+#yzm-memory-root .yzm-tool-button:hover i,
+#yzm-memory-root .yzm-top-action-button:hover i,
+#yzm-memory-root .yzm-top-more-item:hover i {
+    color: var(--yzm-icon-active);
+    background: transparent;
+}
+
+#yzm-memory-root .yzm-workspace {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    overflow: hidden;
+    background: var(--yzm-bg);
+}
+
+#yzm-memory-root .yzm-toolbar {
+    display: none;
+}
+
+#yzm-memory-root .yzm-tool-button,
+#yzm-memory-root .yzm-add-table-confirm,
+#yzm-memory-root .yzm-icon-choice {
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 9px;
+}
+
+#yzm-memory-root .yzm-workspace-content {
+    display: grid;
+    grid-template-columns: 168px 12px minmax(260px, 1fr);
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-workspace-content {
+    grid-template-columns: 0 12px minmax(260px, 1fr);
+}
+
+#yzm-memory-root .yzm-primary-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    gap: 4px;
+    min-height: 38px;
+    padding: 6px 6px 4px;
+    background: var(--yzm-panel-bg);
+    color: inherit;
+    line-height: 1.2;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-primary-search {
+    width: calc(100% - 12px);
+    margin: 12px 6px 8px;
+}
+
+#yzm-memory-root .yzm-primary-list {
+    padding: 0 8px 8px;
+}
+
+#yzm-memory-root .yzm-primary-item {
+    width: 100%;
+    min-height: 42px;
+    padding: 0 10px;
+    overflow: hidden;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 11px;
+    font-size: 13px;
+    text-align: left;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-primary-character-item {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    gap: 9px;
+    min-height: 70px;
+    padding: 8px 9px;
+    white-space: normal;
+}
+
+#yzm-memory-root .yzm-primary-character-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    color: var(--yzm-icon);
+    background: var(--yzm-input-bg);
+    border: 1px dashed var(--yzm-border);
+    border-radius: 999px;
+    box-sizing: border-box;
+    font-size: 15px;
+}
+
+#yzm-memory-root .yzm-primary-character-info {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-primary-character-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--yzm-title);
+    font-size: 13px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-primary-character-meta,
+#yzm-memory-root .yzm-primary-character-location {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-primary-character-location {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+#yzm-memory-root .yzm-primary-character-location i {
+    flex: 0 0 auto;
+    width: 10px;
+    color: var(--yzm-icon);
+    font-size: 10px;
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-primary-item-active .yzm-primary-character-name,
+#yzm-memory-root .yzm-primary-item-active .yzm-primary-character-meta,
+#yzm-memory-root .yzm-primary-item-active .yzm-primary-character-location {
+    color: var(--yzm-title);
+}
+
+#yzm-memory-root .yzm-current-table-title {
+    flex: 1 1 auto;
+    gap: 6px;
+    min-width: 0;
+    min-height: 28px;
+    padding: 0 6px;
+    overflow: hidden;
+    color: var(--yzm-title);
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-character-card-title .yzm-current-table-title {
+    flex: 0 1 auto;
+    min-height: 0;
+    padding: 0;
+    border-radius: 0;
+    font-size: inherit;
+    font-weight: inherit;
+}
+
+#yzm-memory-root .yzm-current-table-edit {
+    flex: 0 0 auto;
+    width: 24px;
+    min-height: 24px;
+    padding: 0;
+    font-size: 11px;
+}
+
+#yzm-memory-root .yzm-current-table-edit span {
+    display: none;
+}
+
+#yzm-memory-root .yzm-table-frame {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin: 12px;
+    overflow: auto;
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 12px;
+    overscroll-behavior: contain;
+    touch-action: pan-x pan-y;
+}
+
+#yzm-memory-root .yzm-table-content-view {
+    min-height: 100%;
+}
+
+#yzm-memory-root .yzm-config-primary-header {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-height: 38px;
+    padding: 6px 10px 4px;
+    color: var(--yzm-title);
+    background: var(--yzm-panel-bg);
+    box-sizing: border-box;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+#yzm-memory-root .yzm-config-primary-header i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-config-nav-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 8px;
+}
+
+#yzm-memory-root .yzm-config-nav-item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    width: 100%;
+    min-height: 38px;
+    padding: 0 10px;
+    color: var(--yzm-text);
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 10px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+}
+
+#yzm-memory-root .yzm-config-nav-item i {
+    width: 15px;
+    color: var(--yzm-icon);
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-config-nav-item-active {
+    color: var(--yzm-active-text);
+    background: var(--yzm-active-bg);
+    border-color: transparent;
+    box-shadow: var(--yzm-active-shadow);
+}
+
+#yzm-memory-root .yzm-config-nav-item-active i {
+    color: var(--yzm-icon-active);
+}
+
+#yzm-memory-root .yzm-sidebar-action-active {
+    color: var(--yzm-active-text);
+    background: var(--yzm-active-bg);
+    box-shadow: var(--yzm-active-shadow);
+}
+
+#yzm-memory-root .yzm-sidebar-action-active i {
+    color: var(--yzm-icon-active);
+}
+
+#yzm-memory-root .yzm-config-view {
+    min-height: 100%;
+    padding: 18px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-config-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    color: var(--yzm-title);
+    font-size: 18px;
+    font-weight: 600;
+}
+
+#yzm-memory-root .yzm-config-header i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-config-content {
+    display: grid;
+    grid-template-columns: minmax(190px, 0.72fr) minmax(320px, 1.28fr);
+    gap: 18px;
+    margin-top: 14px;
+}
+
+#yzm-memory-root .yzm-config-card {
+    min-width: 0;
+    padding: 18px;
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 12px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-config-card-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    color: var(--yzm-title);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+#yzm-memory-root .yzm-config-card-title i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-config-card-desc {
+    margin-top: 8px;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+#yzm-memory-root .yzm-preset-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+#yzm-memory-root .yzm-preset-item {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    width: 100%;
+    min-height: 54px;
+    padding: 9px 10px;
+    color: var(--yzm-text);
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 10px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+#yzm-memory-root .yzm-preset-item span {
+    color: var(--yzm-title);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-preset-item small {
+    max-width: 100%;
+    overflow: hidden;
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-preset-item-active {
+    background: var(--yzm-surface-strong);
+    border-color: var(--yzm-border);
+}
+
+#yzm-memory-root .yzm-config-secondary-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    width: 100%;
+    min-height: 34px;
+    margin-top: 12px;
+    color: var(--yzm-text);
+    background: var(--yzm-surface-strong);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 9px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-config-secondary-button i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-fill-mode-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+}
+
+#yzm-memory-root .yzm-fill-mode-choice {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    gap: 4px 8px;
+    min-height: 76px;
+    padding: 12px;
+    color: var(--yzm-text);
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 11px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    text-align: left;
+}
+
+#yzm-memory-root .yzm-fill-mode-choice i {
+    grid-row: 1 / span 2;
+    color: var(--yzm-icon);
+    font-size: 14px;
+    line-height: 1.3;
+}
+
+#yzm-memory-root .yzm-fill-mode-choice span {
+    color: var(--yzm-title);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.25;
+}
+
+#yzm-memory-root .yzm-fill-mode-choice small {
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-fill-mode-choice-active {
+    background: var(--yzm-surface-strong);
+    border-color: var(--yzm-border);
+    box-shadow: 0 8px 18px rgba(83, 106, 198, 0.12);
+}
+
+#yzm-memory-root .yzm-tag-filter-block {
+    margin-top: 18px;
+    padding-top: 16px;
+    border-top: 1px solid var(--yzm-border-soft);
+}
+
+#yzm-memory-root .yzm-tag-filter-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--yzm-title);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-tag-filter-label i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-config-input {
+    width: 100%;
+    min-height: 38px;
+    margin-top: 10px;
+    padding: 0 12px;
+    color: var(--yzm-text);
+    background: var(--yzm-input-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 9px;
+    box-shadow: none;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 13px;
+    outline: 0;
+}
+
+#yzm-memory-root .yzm-config-input::placeholder {
+    color: var(--yzm-muted);
+}
+
+#yzm-memory-root .yzm-tag-chip-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+#yzm-memory-root .yzm-tag-chip-prefix {
+    color: var(--yzm-muted);
+    font-size: 12px;
+}
+
+#yzm-memory-root .yzm-tag-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    min-height: 30px;
+    padding: 0 11px;
+    color: var(--yzm-text);
+    background: var(--yzm-surface-strong);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 8px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+}
+
+#yzm-memory-root .yzm-tag-chip i {
+    color: var(--yzm-icon);
+    font-size: 11px;
+}
+
+#yzm-memory-root .yzm-empty-table-view {
+    min-height: 100%;
+}
+
+#yzm-memory-root .yzm-character-view {
+    display: grid;
+    grid-template-columns: minmax(230px, 0.82fr) minmax(300px, 1.18fr);
+    gap: 18px;
+    min-width: 0;
+    min-height: 100%;
+    height: 100%;
+    padding: 16px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-card,
+#yzm-memory-root .yzm-character-panel {
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 12px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-character-main-card {
+    display: grid;
+    grid-template-rows: 40px 86px 30px minmax(0, 1fr);
+    min-height: 100%;
+}
+
+#yzm-memory-root .yzm-character-card-title,
+#yzm-memory-root .yzm-character-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 40px;
+    padding: 0 14px;
+    color: var(--yzm-title);
+    background: var(--yzm-surface-strong);
+    border-bottom: 1px solid var(--yzm-border);
+    box-sizing: border-box;
+    font-size: 17px;
+    font-weight: 400;
+}
+
+#yzm-memory-root .yzm-character-card-title {
+    font-weight: 700;
+}
+
+#yzm-memory-root .yzm-character-card-title i,
+#yzm-memory-root .yzm-character-panel-title i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-character-avatar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 72px;
+    height: 72px;
+    margin: 10px auto 4px;
+    color: var(--yzm-icon);
+    background: var(--yzm-input-bg);
+    border: 1px dashed var(--yzm-border);
+    border-radius: 999px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font-size: 28px;
+    transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+#yzm-memory-root .yzm-character-avatar:hover {
+    background: var(--yzm-hover);
+    border-color: var(--yzm-icon);
+    transform: translateY(-1px);
+}
+
+#yzm-memory-root .yzm-character-name {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 0;
+    padding: 0 18px;
+    color: var(--yzm-title);
+    font-size: 18px;
+    font-weight: 400;
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-character-name-text {
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-character-fields {
+    display: grid;
+    grid-template-rows: repeat(var(--yzm-character-field-count, 1), minmax(0, 1fr));
+    min-height: 0;
+    padding: 8px 18px 16px;
+}
+
+#yzm-memory-root .yzm-character-field {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(96px, 0.52fr) minmax(110px, 1fr);
+    gap: 10px;
+    min-height: 0;
+    padding: 3px 0;
+    border-bottom: 1px dashed var(--yzm-border-soft);
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-field:last-child {
+    border-bottom: 0;
+}
+
+#yzm-memory-root .yzm-character-field-label {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-width: 0;
+    color: var(--yzm-title);
+    font-size: 13px;
+    font-weight: 400;
+}
+
+#yzm-memory-root .yzm-character-field-label i {
+    width: 16px;
+    color: var(--yzm-icon);
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-character-field-value {
+    min-width: 0;
+    color: var(--yzm-text);
+    font-size: 13px;
+    line-height: 1.45;
+    overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-character-side {
+    display: grid;
+    grid-auto-rows: minmax(112px, 1fr);
+    gap: 16px;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 4px;
+    overscroll-behavior: contain;
+}
+
+#yzm-memory-root .yzm-character-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+#yzm-memory-root .yzm-character-panel-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    padding: 12px 16px;
+    color: var(--yzm-text);
+    box-sizing: border-box;
+    font-size: 14px;
+    line-height: 1.65;
+}
+
+#yzm-memory-root .yzm-panel-blue .yzm-character-panel-title {
+    color: #355bc5;
+}
+
+#yzm-memory-root .yzm-panel-green .yzm-character-panel-title {
+    color: #4b7a42;
+}
+
+#yzm-memory-root .yzm-panel-gold .yzm-character-panel-title {
+    color: #a97713;
+}
+
+#yzm-memory-root .yzm-panel-purple .yzm-character-panel-title {
+    color: #6c5aa5;
+}
+
+#yzm-memory-root .yzm-shell[data-yzm-theme="dark"] .yzm-panel-blue .yzm-character-panel-title,
+#yzm-memory-root .yzm-shell[data-yzm-theme="dark"] .yzm-panel-green .yzm-character-panel-title,
+#yzm-memory-root .yzm-shell[data-yzm-theme="dark"] .yzm-panel-gold .yzm-character-panel-title,
+#yzm-memory-root .yzm-shell[data-yzm-theme="dark"] .yzm-panel-purple .yzm-character-panel-title {
+    color: var(--yzm-title);
+}
+
+#yzm-memory-root .yzm-table-header,
+#yzm-memory-root .yzm-table-row {
+    display: grid;
+    grid-template-columns: 120px minmax(260px, 1fr) 80px;
+    min-width: 520px;
+}
+
+#yzm-memory-root .yzm-table-header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--yzm-surface-strong);
+    border-bottom: 1px solid var(--yzm-border);
+}
+
+#yzm-memory-root .yzm-table-row {
+    background: transparent;
+    border-bottom: 1px solid var(--yzm-border-soft);
+}
+
+#yzm-memory-root .yzm-table-head-cell,
+#yzm-memory-root .yzm-table-cell {
+    min-width: 0;
+    min-height: 40px;
+    padding: 10px;
+    color: inherit;
+    border-right: 1px solid var(--yzm-border-soft);
+    box-sizing: border-box;
+    font-size: 13px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-table-head-cell {
+    font-weight: 600;
+}
+
+#yzm-memory-root .yzm-structure-modal {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: var(--yzm-overlay-bg);
+    box-sizing: border-box;
+    pointer-events: auto;
+}
+
+#yzm-memory-root .yzm-structure-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: min(560px, 100%);
+    max-height: 100%;
+    padding: 14px;
+    overflow: auto;
+    background: var(--yzm-bg);
+    color: var(--yzm-text);
+    border: 1px solid var(--yzm-border);
+    border-radius: 14px;
+    box-sizing: border-box;
+    box-shadow: var(--yzm-shadow);
+}
+
+#yzm-memory-root .yzm-structure-header {
+    justify-content: space-between;
+    gap: 10px;
+}
+
+#yzm-memory-root .yzm-structure-title {
+    color: var(--yzm-title);
+    font-size: 15px;
+    line-height: 1.2;
+}
+
+#yzm-memory-root .yzm-structure-close {
+    position: relative;
+    z-index: 3;
+    width: 40px;
+    height: 40px;
+    font-size: 22px;
+}
+
+#yzm-memory-root .yzm-structure-name-input,
+#yzm-memory-root .yzm-structure-columns-input {
+    width: 100%;
+    color: inherit;
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 9px;
+    box-shadow: none;
+    box-sizing: border-box;
+    font: inherit;
+    outline: 0;
+}
+
+#yzm-memory-root .yzm-structure-name-input {
+    min-height: 36px;
+    padding: 0 10px;
+}
+
+#yzm-memory-root .yzm-structure-columns-input {
+    min-height: 160px;
+    padding: 10px;
+    line-height: 1.45;
+    resize: vertical;
+}
+
+#yzm-memory-root .yzm-icon-picker {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+    gap: 6px;
+}
+
+#yzm-memory-root .yzm-icon-choice {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 34px;
+    padding: 0;
+}
+
+#yzm-memory-root .yzm-icon-choice-active {
+    color: var(--yzm-active-text);
+    background: var(--yzm-active-bg);
+    border-color: transparent;
+    box-shadow: var(--yzm-active-shadow);
+}
+
+#yzm-memory-root .yzm-icon-choice-active i {
+    color: var(--yzm-icon-active);
+}
+
+#yzm-memory-root .yzm-structure-hint {
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-structure-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+#yzm-memory-root .yzm-add-table-dialog {
+    width: min(420px, 100%);
+}
+
+#yzm-memory-root .yzm-add-table-confirm {
+    min-height: 34px;
+    padding: 0 12px;
+}
+
+#yzm-memory-root .yzm-record-dialog {
+    width: min(680px, 100%);
+}
+
+#yzm-memory-root .yzm-record-fields {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+}
+
+#yzm-memory-root .yzm-record-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    color: var(--yzm-text);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-record-field-wide {
+    grid-column: 1 / -1;
+}
+
+#yzm-memory-root .yzm-record-field-label {
+    color: var(--yzm-title);
+}
+
+#yzm-memory-root .yzm-record-input {
+    width: 100%;
+    min-height: 34px;
+    padding: 0 10px;
+    color: var(--yzm-text);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 9px;
+    box-shadow: none;
+    box-sizing: border-box;
+    font: inherit;
+    outline: 0;
+}
+
+#yzm-memory-root .yzm-record-textarea {
+    min-height: 84px;
+    padding: 9px 10px;
+    line-height: 1.45;
+    resize: vertical;
+}
+
+#yzm-memory-root .yzm-record-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+#yzm-memory-root .yzm-record-action-menu {
+    position: absolute;
+    z-index: 30;
+    min-width: 86px;
+    padding: 6px;
+    background: var(--yzm-surface-strong);
+    border: 1px solid var(--yzm-border);
+    border-radius: 10px;
+    box-shadow: var(--yzm-shadow);
+}
+
+#yzm-memory-root .yzm-record-action-delete {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    width: 100%;
+    min-height: 32px;
+    padding: 0 10px;
+    color: #ff6f87;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+}
+
+#yzm-memory-root .yzm-record-action-delete i {
+    width: 14px;
+    color: #ff6f87;
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-record-action-delete:hover {
+    color: #ffffff;
+    background: linear-gradient(135deg, #ff7088, #d84a67);
+}
+
+#yzm-memory-root .yzm-record-action-delete:hover i {
+    color: #ffffff;
+}
+
+.yzm-memory-extension-entry {
+    width: 100%;
+    cursor: pointer;
+}
+
+.yzm-memory-extension-row {
+    align-items: center;
+    justify-content: flex-start;
+}
+
+.yzm-memory-extension-row > .yzm-memory-extension-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: inherit !important;
+    font-size: 0.9em;
+    line-height: 1;
+    margin-left: 0;
+    transform: translateY(0.02em);
+}
+
+.yzm-memory-extension-label {
+    line-height: 1.2;
+}
+
+#yzm-memory-root .yzm-mobile-detail-close {
+    display: none;
+}
+
+@media (max-width: 760px) {
+    #yzm-memory-root .yzm-shell {
+        display: flex;
+        flex-direction: column;
+        inset: 6px;
+        width: auto;
+        height: calc(100dvh - 12px);
+        min-height: 0;
+        overflow: hidden;
+        transform: none;
+    }
+
+    #yzm-memory-root .yzm-shell-bar {
+        flex-wrap: nowrap;
+        gap: 2px;
+        min-height: 46px;
+        padding: 5px 4px;
+    }
+
+    #yzm-memory-root .yzm-shell-brand {
+        flex: 0 1 88px;
+        width: 88px;
+        height: 28px;
+    }
+
+    #yzm-memory-root .yzm-shell-actions,
+    #yzm-memory-root .yzm-top-actions {
+        gap: 2px;
+        justify-content: flex-end;
+    }
+
+    #yzm-memory-root .yzm-top-action-button {
+        min-width: 24px;
+        min-height: 24px;
+        padding: 0 5px;
+        gap: 2px;
+        border-radius: 8px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-top-action-button span {
+        display: none;
+    }
+
+    #yzm-memory-root .yzm-theme-switcher {
+        padding: 0;
+    }
+
+    #yzm-memory-root .yzm-theme-button {
+        width: 24px;
+        min-width: 24px;
+        height: 24px;
+        min-height: 24px;
+        padding: 0;
+        border-radius: 8px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-shell-close {
+        width: 22px;
+        height: 22px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-shell-body {
+        position: relative;
+        grid-template-columns: minmax(104px, 45%) 10px minmax(0, 1fr);
+        flex: 1 1 auto;
+        width: 100%;
+        height: auto;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed {
+        grid-template-columns: 0 10px minmax(0, 1fr);
+    }
+
+    #yzm-memory-root .yzm-sidebar {
+        min-width: 0;
+        max-height: none;
+        padding: 10px 7px 8px;
+        overflow: auto;
+        border-right: 1px solid var(--yzm-border);
+        border-bottom: 0;
+    }
+
+    #yzm-memory-root .yzm-sidebar-toggle {
+        display: flex;
+        width: 10px;
+        min-width: 10px;
+        height: 100%;
+        min-height: 0;
+        border-right: 1px solid var(--yzm-border);
+        border-bottom: 0;
+    }
+
+    #yzm-memory-root .yzm-workspace {
+        min-width: 0;
+    }
+
+    #yzm-memory-root .yzm-workspace-content,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-workspace-content {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        height: 100%;
+        min-height: 0;
+    }
+
+    #yzm-memory-root .yzm-primary-toggle {
+        display: none;
+    }
+
+    #yzm-memory-root .yzm-primary-pane {
+        width: 100%;
+        min-width: 0;
+        max-height: none;
+        overflow: auto;
+        padding-top: 6px;
+        border-right: 0;
+        border-bottom: 0;
+    }
+
+    #yzm-memory-root .yzm-search-box {
+        height: 28px;
+    }
+
+    #yzm-memory-root .yzm-search-input {
+        height: 28px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-nav-list,
+    #yzm-memory-root .yzm-primary-list {
+        flex-direction: column;
+        gap: 6px;
+        overflow-x: hidden;
+    }
+
+    #yzm-memory-root .yzm-nav-item,
+    #yzm-memory-root .yzm-nav-table-name,
+    #yzm-memory-root .yzm-sidebar-action {
+        gap: 6px;
+        min-height: 32px;
+        padding: 0 7px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-nav-icon,
+    #yzm-memory-root .yzm-sidebar-action i {
+        width: 13px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-primary-header {
+        min-height: 32px;
+        padding: 4px 4px 3px;
+    }
+
+    #yzm-memory-root .yzm-current-table-title {
+        gap: 4px;
+        min-height: 24px;
+        padding: 0 4px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-current-table-edit {
+        width: 22px;
+        min-height: 22px;
+        font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-primary-search {
+        width: calc(100% - 8px);
+        margin: 6px 4px;
+    }
+
+    #yzm-memory-root .yzm-primary-item {
+        width: 100%;
+        max-width: none;
+        min-height: 40px;
+        white-space: nowrap;
+    }
+
+    #yzm-memory-root .yzm-primary-character-item {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr);
+        align-items: center;
+        gap: 7px;
+        min-height: 54px;
+        padding: 6px;
+        white-space: normal;
+    }
+
+    #yzm-memory-root .yzm-primary-character-avatar {
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-primary-character-info {
+        align-items: stretch;
+        gap: 1px;
+        min-width: 0;
+        width: auto;
+    }
+
+    #yzm-memory-root .yzm-primary-character-name,
+    #yzm-memory-root .yzm-primary-character-meta,
+    #yzm-memory-root .yzm-primary-character-location {
+        width: auto;
+        text-align: left;
+    }
+
+    #yzm-memory-root .yzm-primary-character-name {
+        font-size: 12px;
+        line-height: 1.2;
+    }
+
+    #yzm-memory-root .yzm-primary-character-meta,
+    #yzm-memory-root .yzm-primary-character-location {
+        font-size: 10px;
+        line-height: 1.2;
+    }
+
+    #yzm-memory-root .yzm-primary-character-location {
+        display: flex;
+        min-width: 0;
+    }
+
+    #yzm-memory-root .yzm-table-frame {
+        display: none;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-table-frame {
+        position: absolute;
+        inset: 46px 6px 6px;
+        z-index: 12;
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        width: auto;
+        height: auto;
+        min-height: 0;
+        overflow: auto;
+        background: var(--yzm-bg);
+        border: 1px solid var(--yzm-border);
+        border-radius: 12px;
+        box-shadow: var(--yzm-shadow);
+    }
+
+    #yzm-memory-root .yzm-workspace.yzm-config-mode .yzm-table-frame {
+        position: static;
+        display: block;
+        margin: 6px;
+        width: auto;
+        height: auto;
+        min-height: 0;
+        overflow: auto;
+        background: var(--yzm-surface);
+        border: 1px solid var(--yzm-border);
+        border-radius: 10px;
+        box-shadow: none;
+    }
+
+    #yzm-memory-root .yzm-workspace.yzm-config-mode .yzm-mobile-detail-close {
+        display: none;
+    }
+
+    #yzm-memory-root .yzm-mobile-detail-close {
+        position: sticky;
+        top: 0;
+        z-index: 2;
+        display: inline-flex;
+        align-items: center;
+        justify-content: flex-start;
+        gap: 6px;
+        min-height: 34px;
+        padding: 0 10px;
+        color: var(--yzm-text);
+        background: var(--yzm-surface-strong);
+        border: 0;
+        border-bottom: 1px solid var(--yzm-border);
+        border-radius: 0;
+        font: inherit;
+        font-size: 13px;
+        text-align: left;
+    }
+
+    #yzm-memory-root .yzm-mobile-detail-close i {
+        color: var(--yzm-icon);
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-view {
+        grid-template-columns: minmax(0, 1fr);
+        grid-auto-rows: auto;
+        height: auto;
+        min-height: 0;
+        padding: 8px;
+        gap: 10px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-main-card {
+        grid-template-rows: 36px 70px 28px minmax(0, 1fr);
+        min-height: 330px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-card-title,
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-panel-title {
+        min-height: 36px;
+        padding: 0 10px;
+        font-size: 15px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-avatar {
+        width: 58px;
+        height: 58px;
+        margin: 8px auto 3px;
+        font-size: 22px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-name {
+        padding: 0 10px;
+        font-size: 16px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-fields {
+        padding: 6px 12px 10px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-field {
+        grid-template-columns: minmax(86px, 0.48fr) minmax(80px, 1fr);
+        gap: 8px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-side {
+        grid-auto-rows: minmax(100px, auto);
+        overflow: visible;
+        padding-right: 0;
+    }
+
+    #yzm-memory-root .yzm-empty-table-view {
+        min-height: 260px;
+    }
+
+    #yzm-memory-root .yzm-config-primary-header {
+        min-height: 32px;
+        padding: 4px 7px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-config-nav-list {
+        gap: 6px;
+        padding: 8px 5px;
+    }
+
+    #yzm-memory-root .yzm-config-nav-item {
+        min-height: 34px;
+        padding: 0 7px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-config-view {
+        padding: 10px;
+    }
+
+    #yzm-memory-root .yzm-config-header {
+        min-height: 32px;
+        font-size: 15px;
+    }
+
+    #yzm-memory-root .yzm-config-content {
+        grid-template-columns: 1fr;
+        gap: 10px;
+        margin-top: 8px;
+    }
+
+    #yzm-memory-root .yzm-config-card {
+        padding: 12px;
+    }
+
+    #yzm-memory-root .yzm-config-card-title {
+        font-size: 14px;
+    }
+
+    #yzm-memory-root .yzm-tag-filter-block {
+        margin-top: 12px;
+        padding-top: 12px;
+    }
+
+    #yzm-memory-root .yzm-config-input {
+        min-height: 34px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-tag-chip {
+        min-height: 28px;
+        padding: 0 9px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-record-fields {
+        grid-template-columns: 1fr;
+    }
+}
