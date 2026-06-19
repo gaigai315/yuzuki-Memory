@@ -2296,6 +2296,37 @@
     justify-content: flex-end;
 }
 
+#yzm-memory-root .yzm-summary-add-choices {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+#yzm-memory-root .yzm-summary-choice-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 54px;
+    color: var(--yzm-title);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 12px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    font-size: 14px;
+}
+
+#yzm-memory-root .yzm-summary-choice-button:hover {
+    background: var(--yzm-hover);
+    border-color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-summary-choice-button i {
+    color: var(--yzm-icon);
+}
+
 #yzm-memory-root .yzm-record-action-menu {
     position: absolute;
     z-index: 30;

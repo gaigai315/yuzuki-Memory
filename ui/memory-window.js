@@ -67,12 +67,12 @@
         总结内容: 'fa-regular fa-file-lines',
         时间线: 'fa-regular fa-calendar-days',
         未解决问题: 'fa-regular fa-circle-question',
-        当前备注: 'fa-regular fa-note-sticky',
+        备注: 'fa-regular fa-note-sticky',
     };
     const CONFIG_SECTIONS = [
         { id: 'init', label: '初始化', icon: 'fa-solid fa-wand-magic-sparkles' },
     ];
-    const DEFAULT_STATE_REVISION = 9;
+    const DEFAULT_STATE_REVISION = 10;
     const DEFAULT_TABLES = [
         {
             id: 'character_profile',
@@ -96,7 +96,7 @@
             id: 'memory_summary',
             name: '记忆总结',
             icon: 'memory_book',
-            columns: ['总结标题', '总结内容', '时间线', '未解决问题', '当前备注'],
+            columns: ['总结标题', '总结内容', '时间线', '未解决问题', '备注'],
         },
     ];
     let memoryState = null;
@@ -116,7 +116,30 @@
             })),
             activeTableId: 'character_profile',
             activeRecordIds: {},
-            records: {},
+            records: {
+                memory_summary: [
+                    {
+                        id: 'summary_main_default',
+                        values: {
+                            总结标题: '主线总结',
+                            总结内容: '',
+                            时间线: '',
+                            未解决问题: '',
+                            备注: '',
+                        },
+                    },
+                    {
+                        id: 'summary_branch_default',
+                        values: {
+                            总结标题: '支线总结',
+                            总结内容: '',
+                            时间线: '',
+                            未解决问题: '',
+                            备注: '',
+                        },
+                    },
+                ],
+            },
             promptPresetId: '',
             settings: {},
         };
@@ -260,6 +283,15 @@
         const primaryColumn = getPrimaryColumn(table);
         const nextIndex = getRecords(table.id).length + 1;
         record.values[primaryColumn] = `${primaryColumn}${nextIndex}`;
+        return record;
+    }
+
+    function createSummaryRecord(table, kind) {
+        const record = createRecord(table);
+        const primaryColumn = getPrimaryColumn(table);
+        const label = kind === 'branch' ? '支线总结' : '主线总结';
+        const sameKindCount = getRecords(table.id).filter((entry) => getRecordTitle(table, entry).includes(label)).length;
+        record.values[primaryColumn] = sameKindCount > 0 ? `${label}${sameKindCount + 1}` : label;
         return record;
     }
 
@@ -1407,7 +1439,7 @@
         cardGrid.className = 'yzm-summary-card-grid';
         cardGrid.append(
             createSummaryTextCard(`${summaryKind}内容`, '总结内容', getSummaryValue(record, ['总结内容'])),
-            createSummaryTextCard('当前备注', '当前备注', getSummaryValue(record, ['当前备注'])),
+            createSummaryTextCard('备注', '备注', getSummaryValue(record, ['备注'])),
             createSummaryTextCard('未解决问题', '未解决问题', getSummaryValue(record, ['未解决问题']))
         );
 
@@ -1642,6 +1674,74 @@
         nameInput.focus();
     }
 
+    function openAddSummaryDialog(root, table) {
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-add-summary-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-add-summary-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-add-summary-dialog';
+        dialog.setAttribute('aria-label', '新增记忆总结');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = '新增总结';
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭新增总结');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+        const choices = document.createElement('div');
+        choices.className = 'yzm-summary-add-choices';
+        choices.append(
+            createSummaryChoiceButton('新增主线', 'fa-solid fa-book-open', 'main'),
+            createSummaryChoiceButton('新增支线', 'fa-solid fa-code-branch', 'branch')
+        );
+
+        header.append(title, close);
+        dialog.append(header, choices);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        const addSummary = (kind) => {
+            const record = createSummaryRecord(table, kind);
+            getRecords(table.id).push(record);
+            setActiveRecordId(table.id, record.id);
+            saveState();
+            renderWorkspaceList(root);
+            renderTableWorkspace(root);
+            bindPanelInteractions(root);
+            closeMoreMenu(root);
+            closeModal();
+        };
+
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        choices.addEventListener('click', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            const button = target?.closest('.yzm-summary-choice-button');
+            if (!button) return;
+            addSummary(button.dataset.yzmSummaryKind || 'main');
+        });
+    }
+
+    function createSummaryChoiceButton(label, iconClassName, kind) {
+        const button = createIconButton(label, iconClassName, 'yzm-summary-choice-button');
+        button.dataset.yzmSummaryKind = kind;
+        return button;
+    }
+
     function createRecordInput(label, value = '', multiline = false) {
         const field = document.createElement('label');
         field.className = multiline ? 'yzm-record-field yzm-record-field-wide' : 'yzm-record-field';
@@ -1810,6 +1910,11 @@
 
                 const table = getActiveTable();
                 if (!table) return;
+
+                if (table.id === 'memory_summary') {
+                    openAddSummaryDialog(root, table);
+                    return;
+                }
 
                 const record = createEmptyRecordForTable(table);
                 getRecords(table.id).push(record);
