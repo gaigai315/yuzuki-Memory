@@ -96,11 +96,22 @@
     pointer-events: none;
 }
 
+#yzm-memory-root .yzm-shell-bar::after {
+    content: "";
+    position: absolute;
+    left: calc(var(--yzm-desktop-sidebar-width) + 12px);
+    right: 0;
+    bottom: 0;
+    height: 1px;
+    background: var(--yzm-border);
+}
+
 #yzm-memory-root .yzm-shell-brand {
     display: flex;
     align-items: center;
-    flex: 0 0 216px;
-    width: 216px;
+    justify-content: flex-start;
+    flex: 0 0 var(--yzm-desktop-sidebar-width);
+    width: var(--yzm-desktop-sidebar-width);
     height: 52px;
     min-width: 0;
     overflow: hidden;
@@ -108,8 +119,9 @@
 
 #yzm-memory-root .yzm-shell-logo {
     display: block;
-    width: 100%;
-    height: 100%;
+    width: calc(100% - 30px);
+    height: 42px;
+    margin-left: 18px;
     object-fit: contain;
 }
 
@@ -315,7 +327,6 @@
 #yzm-memory-root .yzm-nav-table-name:hover,
 #yzm-memory-root .yzm-add-table-button:hover,
 #yzm-memory-root .yzm-tool-button:hover,
-#yzm-memory-root .yzm-collapse-button:hover,
 #yzm-memory-root .yzm-structure-close:hover,
 #yzm-memory-root .yzm-sidebar-action:hover,
 #yzm-memory-root .yzm-primary-item:hover,
@@ -372,7 +383,7 @@
     min-width: 0;
     overflow: auto;
     background: var(--yzm-panel-bg);
-    border-right: 1px solid var(--yzm-border);
+    border-right: 0;
     box-sizing: border-box;
     overscroll-behavior: contain;
     touch-action: pan-y;
@@ -394,7 +405,7 @@
     min-width: 12px;
     height: 100%;
     padding: 0;
-    background: transparent;
+    background: transparent !important;
     border-radius: 0;
     font-size: 10px;
     line-height: 1;
@@ -407,6 +418,7 @@
 #yzm-memory-root .yzm-sidebar-toggle,
 #yzm-memory-root .yzm-primary-toggle {
     border-right: 1px solid var(--yzm-border);
+    background: transparent !important;
     cursor: col-resize;
     touch-action: none;
     user-select: none;
@@ -610,7 +622,6 @@
     padding-top: 72px;
     overflow: hidden;
     background: var(--yzm-bg);
-    border-top: 1px solid var(--yzm-border);
     box-sizing: border-box;
 }
 
@@ -2375,9 +2386,19 @@
     }
 
     #yzm-memory-root .yzm-shell-brand {
-        flex: 0 1 88px;
-        width: 88px;
+        flex: 0 0 var(--yzm-mobile-sidebar-width);
+        width: var(--yzm-mobile-sidebar-width);
         height: 28px;
+    }
+
+    #yzm-memory-root .yzm-shell-logo {
+        width: calc(100% - 12px);
+        height: 24px;
+        margin-left: 6px;
+    }
+
+    #yzm-memory-root .yzm-shell-bar::after {
+        left: calc(var(--yzm-mobile-sidebar-width) + 10px);
     }
 
     #yzm-memory-root .yzm-shell-actions,
@@ -2438,7 +2459,7 @@
         max-height: none;
         padding: 64px 5px 8px;
         overflow: auto;
-        border-right: 1px solid var(--yzm-border);
+        border-right: 0;
         border-bottom: 0;
     }
 
