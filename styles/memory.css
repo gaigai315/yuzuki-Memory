@@ -1418,7 +1418,7 @@
     min-width: 0;
     min-height: 100%;
     height: 100%;
-    padding: 16px;
+    padding: 10px;
     box-sizing: border-box;
 }
 
@@ -1428,7 +1428,7 @@
     min-width: 0;
     min-height: 100%;
     height: 100%;
-    padding: 22px;
+    padding: 16px 18px;
     background: var(--yzm-surface);
     border: 1px solid var(--yzm-border);
     border-radius: 12px;
@@ -1438,11 +1438,11 @@
 
 #yzm-memory-root .yzm-item-detail-header {
     display: grid;
-    grid-template-columns: 86px minmax(0, 1fr);
+    grid-template-columns: 68px minmax(0, 1fr);
     align-items: center;
-    gap: 24px;
-    min-height: 104px;
-    padding: 8px 6px 20px;
+    gap: 18px;
+    min-height: 86px;
+    padding: 4px 2px 14px;
     border-bottom: 1px solid var(--yzm-border);
     box-sizing: border-box;
 }
@@ -1451,21 +1451,29 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 86px;
-    height: 86px;
+    width: 68px;
+    height: 68px;
     color: var(--yzm-icon);
     background: var(--yzm-input-bg);
     border: 1px dashed var(--yzm-border);
     border-radius: 999px;
     box-sizing: border-box;
-    font-size: 32px;
+    cursor: pointer;
+    font-size: 26px;
+    transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+#yzm-memory-root .yzm-item-avatar:hover {
+    background: var(--yzm-hover);
+    border-color: var(--yzm-icon);
+    transform: translateY(-1px);
 }
 
 #yzm-memory-root .yzm-item-detail-title {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 12px;
+    gap: 9px;
     min-width: 0;
 }
 
@@ -1473,7 +1481,7 @@
     max-width: 100%;
     overflow: hidden;
     color: var(--yzm-title);
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 700;
     line-height: 1.25;
     text-overflow: ellipsis;
@@ -1489,10 +1497,10 @@
 
 #yzm-memory-root .yzm-item-detail-row {
     display: grid;
-    grid-template-columns: minmax(118px, 0.28fr) minmax(160px, 1fr);
-    gap: 22px;
+    grid-template-columns: minmax(104px, 0.26fr) minmax(150px, 1fr);
+    gap: 16px;
     align-items: center;
-    min-height: 62px;
+    min-height: 50px;
     border-bottom: 1px solid var(--yzm-border-soft);
     box-sizing: border-box;
 }
@@ -1500,36 +1508,36 @@
 #yzm-memory-root .yzm-item-detail-label {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 10px;
     min-width: 0;
     color: var(--yzm-title);
-    font-size: 15px;
+    font-size: 14px;
     line-height: 1.35;
 }
 
 #yzm-memory-root .yzm-item-detail-label i {
     flex: 0 0 auto;
-    width: 18px;
+    width: 16px;
     color: var(--yzm-icon);
     text-align: center;
-    font-size: 17px;
+    font-size: 15px;
 }
 
 #yzm-memory-root .yzm-item-detail-value {
     min-width: 0;
-    padding-left: 22px;
+    padding-left: 16px;
     color: var(--yzm-text);
     border-left: 1px solid var(--yzm-border-soft);
     box-sizing: border-box;
-    font-size: 15px;
+    font-size: 14px;
     line-height: 1.55;
     overflow-wrap: anywhere;
 }
 
 #yzm-memory-root .yzm-item-note-box {
     flex: 0 0 auto;
-    margin-top: 18px;
-    padding: 14px;
+    margin-top: 12px;
+    padding: 12px;
     background: var(--yzm-row-bg);
     border: 1px solid var(--yzm-border);
     border-radius: 10px;
@@ -1544,15 +1552,15 @@
 }
 
 #yzm-memory-root .yzm-item-note-body {
-    min-height: 78px;
-    margin-top: 10px;
-    padding: 12px;
+    min-height: 58px;
+    margin-top: 8px;
+    padding: 10px;
     color: var(--yzm-text);
     background: var(--yzm-surface);
     border: 1px solid var(--yzm-border-soft);
     border-radius: 8px;
     box-sizing: border-box;
-    font-size: 14px;
+    font-size: 13px;
     line-height: 1.6;
     overflow-wrap: anywhere;
 }

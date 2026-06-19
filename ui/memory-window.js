@@ -1123,6 +1123,9 @@
 
         const avatar = document.createElement('div');
         avatar.className = 'yzm-item-avatar';
+        avatar.setAttribute('role', 'button');
+        avatar.setAttribute('tabindex', '0');
+        avatar.setAttribute('aria-label', '编辑物品');
         avatar.appendChild(createIconNode('fa-solid fa-box-open', ''));
 
         const title = document.createElement('div');
@@ -1142,7 +1145,11 @@
 
         const rows = document.createElement('div');
         rows.className = 'yzm-item-detail-rows';
-        const columns = (table.columns || []).filter((column) => column !== getPrimaryColumn(table) && column !== '备注');
+        const columns = (table.columns || []).filter((column) => (
+            column !== getPrimaryColumn(table)
+            && column !== '状态'
+            && column !== '备注'
+        ));
         columns.forEach((column) => {
             rows.appendChild(createItemDetailRow(column, getRecordValueByCandidates(record, column === '物品位置' ? ['物品位置', '当前位置'] : [column])));
         });
@@ -1397,9 +1404,15 @@
         return field;
     }
 
-    function openCharacterEditor(root) {
+    function getRecordEditorLabel(table) {
+        if (table?.id === 'character_profile') return '角色';
+        if (table?.id === 'item_tracking') return '物品';
+        return '记录';
+    }
+
+    function openRecordEditor(root) {
         const table = getActiveTable();
-        if (!table || table.id !== 'character_profile') return;
+        if (!table) return;
 
         const modalHost = getModalHost(root);
         removeModal(root, '.yzm-record-modal');
@@ -1407,25 +1420,26 @@
         let record = getActiveRecord(table);
         const isNewRecord = !record;
         if (!record) record = createRecord(table);
+        const editorLabel = getRecordEditorLabel(table);
 
         const overlay = document.createElement('div');
         overlay.className = 'yzm-structure-modal yzm-record-modal';
 
         const dialog = document.createElement('section');
         dialog.className = 'yzm-structure-dialog yzm-record-dialog';
-        dialog.setAttribute('aria-label', '编辑角色档案');
+        dialog.setAttribute('aria-label', `编辑${editorLabel}`);
 
         const header = document.createElement('div');
         header.className = 'yzm-structure-header';
 
         const title = document.createElement('strong');
         title.className = 'yzm-structure-title';
-        title.textContent = '编辑角色';
+        title.textContent = `编辑${editorLabel}`;
 
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'yzm-structure-close';
-        close.setAttribute('aria-label', '关闭编辑角色');
+        close.setAttribute('aria-label', `关闭编辑${editorLabel}`);
         close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
 
         const fields = document.createElement('div');
@@ -1654,19 +1668,19 @@
             });
         }
 
-        const characterAvatar = root.querySelector('.yzm-character-avatar');
-        if (characterAvatar && characterAvatar.dataset.yzmBound !== 'true') {
-            characterAvatar.dataset.yzmBound = 'true';
+        root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar').forEach((avatar) => {
+            if (avatar.dataset.yzmBound === 'true') return;
+            avatar.dataset.yzmBound = 'true';
             const openEditor = (event) => {
                 event.preventDefault();
                 event.stopPropagation();
-                openCharacterEditor(root);
+                openRecordEditor(root);
             };
-            characterAvatar.addEventListener('click', openEditor);
-            characterAvatar.addEventListener('keydown', (event) => {
+            avatar.addEventListener('click', openEditor);
+            avatar.addEventListener('keydown', (event) => {
                 if (event.key === 'Enter' || event.key === ' ') openEditor(event);
             });
-        }
+        });
 
         root.querySelectorAll('.yzm-primary-item').forEach((item) => {
             if (item.dataset.yzmBound === 'true') return;
