@@ -56,6 +56,12 @@
         状态: 'fa-solid fa-shield-check',
         备注: 'fa-regular fa-note-sticky',
     };
+    const WORLD_FIELD_ICONS = {
+        设定名: 'fa-solid fa-globe',
+        类型: 'fa-solid fa-bookmark',
+        详细说明: 'fa-regular fa-rectangle-list',
+        影响范围: 'fa-solid fa-route',
+    };
     const CONFIG_SECTIONS = [
         { id: 'init', label: '初始化', icon: 'fa-solid fa-wand-magic-sparkles' },
     ];
@@ -186,6 +192,10 @@
         return ITEM_FIELD_ICONS[column] || 'fa-regular fa-note-sticky';
     }
 
+    function getWorldFieldIcon(column) {
+        return WORLD_FIELD_ICONS[column] || 'fa-regular fa-note-sticky';
+    }
+
     function getRecordValueByCandidates(record, fields) {
         for (const field of fields) {
             const value = getRecordValue(record, field);
@@ -198,6 +208,14 @@
         if (/未|无|丢失|损坏|失效/.test(status)) return 'yzm-item-status-muted';
         if (/待|需|确认|检查|处理中/.test(status)) return 'yzm-item-status-warn';
         return 'yzm-item-status-owned';
+    }
+
+    function getWorldTypeClass(type) {
+        if (/政治|组织|势力|阵营/.test(type)) return 'yzm-world-type-purple';
+        if (/自然|地理|环境|现象/.test(type)) return 'yzm-world-type-green';
+        if (/历史|事件|战争|传说/.test(type)) return 'yzm-world-type-gold';
+        if (/物品|资源|矿物|道具/.test(type)) return 'yzm-world-type-blue';
+        return 'yzm-world-type-default';
     }
 
     function createRecord(table) {
@@ -766,6 +784,8 @@
                 item = createCharacterPrimaryItem(table, record, activeRecordId === record.id);
             } else if (table.id === 'item_tracking') {
                 item = createItemPrimaryItem(table, record, activeRecordId === record.id);
+            } else if (table.id === 'world_setting') {
+                item = createWorldPrimaryItem(table, record, activeRecordId === record.id);
             } else {
                 item = createButton(getRecordTitle(table, record), activeRecordId === record.id ? 'yzm-primary-item yzm-primary-item-active' : 'yzm-primary-item');
             }
@@ -855,6 +875,36 @@
         return item;
     }
 
+    function createWorldTypeTag(type = '') {
+        const tag = document.createElement('div');
+        tag.className = `yzm-world-type-tag ${getWorldTypeClass(type)}`;
+        tag.textContent = type || '未分类';
+        return tag;
+    }
+
+    function createWorldPrimaryItem(table, record, isActive) {
+        const item = createButton('', isActive ? 'yzm-primary-item yzm-primary-world-item yzm-primary-item-active' : 'yzm-primary-item yzm-primary-world-item');
+
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-primary-world-avatar';
+        avatar.appendChild(createIconNode('fa-solid fa-earth-asia', ''));
+
+        const content = document.createElement('div');
+        content.className = 'yzm-primary-world-info';
+
+        const name = document.createElement('div');
+        name.className = 'yzm-primary-world-name';
+        name.textContent = getRecordTitle(table, record);
+
+        const description = document.createElement('div');
+        description.className = 'yzm-primary-world-desc';
+        description.textContent = getRecordValue(record, '详细说明');
+
+        content.append(name, description, createWorldTypeTag(getRecordValue(record, '类型')));
+        item.append(avatar, content, createIconNode('fa-solid fa-chevron-right', 'yzm-primary-world-chevron'));
+        return item;
+    }
+
     function createTableWorkspaceView(table) {
         if (table?.id === 'character_profile') {
             return createCharacterProfileView(table);
@@ -862,6 +912,10 @@
 
         if (table?.id === 'item_tracking') {
             return createItemTrackingView(table);
+        }
+
+        if (table?.id === 'world_setting') {
+            return createWorldSettingView(table);
         }
 
         const empty = document.createElement('div');
@@ -1194,6 +1248,62 @@
         return row;
     }
 
+    function createWorldSettingView(table) {
+        const record = getActiveRecord(table);
+        const view = document.createElement('div');
+        view.className = 'yzm-world-view';
+
+        const card = document.createElement('section');
+        card.className = 'yzm-world-detail-card';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-world-detail-header';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-world-avatar';
+        avatar.setAttribute('role', 'button');
+        avatar.setAttribute('tabindex', '0');
+        avatar.setAttribute('aria-label', '编辑世界设定');
+        avatar.appendChild(createIconNode('fa-solid fa-earth-asia', ''));
+
+        const title = document.createElement('div');
+        title.className = 'yzm-world-detail-title';
+
+        const name = document.createElement('div');
+        name.className = 'yzm-world-detail-name';
+        name.textContent = record ? getRecordTitle(table, record) : '未选择设定';
+
+        title.append(name, createWorldTypeTag(getRecordValue(record, '类型')));
+        header.append(avatar, title);
+
+        const rows = document.createElement('div');
+        rows.className = 'yzm-world-detail-rows';
+        const columns = (table.columns || []).filter((column) => column !== getPrimaryColumn(table) && column !== '类型');
+        columns.forEach((column) => {
+            rows.appendChild(createWorldDetailRow(column, getRecordValue(record, column)));
+        });
+
+        card.append(header, rows);
+        view.appendChild(card);
+        return view;
+    }
+
+    function createWorldDetailRow(label, text = '') {
+        const row = document.createElement('div');
+        row.className = label === '详细说明' ? 'yzm-world-detail-row yzm-world-detail-row-wide' : 'yzm-world-detail-row';
+
+        const labelNode = document.createElement('div');
+        labelNode.className = 'yzm-world-detail-label';
+        labelNode.append(createIconNode(getWorldFieldIcon(label), ''), document.createTextNode(label));
+
+        const value = document.createElement('div');
+        value.className = 'yzm-world-detail-value';
+        value.textContent = text;
+
+        row.append(labelNode, value);
+        return row;
+    }
+
     function getActiveTableItem(root) {
         return root.querySelector('.yzm-nav-table-active');
     }
@@ -1407,6 +1517,7 @@
     function getRecordEditorLabel(table) {
         if (table?.id === 'character_profile') return '角色';
         if (table?.id === 'item_tracking') return '物品';
+        if (table?.id === 'world_setting') return '设定';
         return '记录';
     }
 
@@ -1668,7 +1779,7 @@
             });
         }
 
-        root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar').forEach((avatar) => {
+        root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar, .yzm-world-avatar').forEach((avatar) => {
             if (avatar.dataset.yzmBound === 'true') return;
             avatar.dataset.yzmBound = 'true';
             const openEditor = (event) => {
