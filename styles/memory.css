@@ -89,8 +89,8 @@
     justify-content: space-between;
     min-height: 72px;
     padding: 10px 14px 10px 18px;
-    background: var(--yzm-bg);
-    border-bottom: 1px solid var(--yzm-border);
+    background: transparent;
+    border-bottom: 0;
     box-sizing: border-box;
     overflow: visible;
     pointer-events: none;
@@ -610,6 +610,7 @@
     padding-top: 72px;
     overflow: hidden;
     background: var(--yzm-bg);
+    border-top: 1px solid var(--yzm-border);
     box-sizing: border-box;
 }
 
