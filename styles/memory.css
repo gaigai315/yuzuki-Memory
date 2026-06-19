@@ -620,12 +620,20 @@
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-shell-logo {
-    width: 30px;
+    width: min(48px, calc(100% - 8px));
+    height: 30px;
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar {
-    padding-left: 7px;
-    padding-right: 7px;
+    align-items: center;
+    padding-left: 4px;
+    padding-right: 4px;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-nav-list,
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar-actions {
+    align-items: center;
+    width: 100%;
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-table-search .yzm-search-input {
@@ -634,8 +642,8 @@
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-table-search {
     width: 34px;
-    margin-right: auto;
-    margin-left: auto;
+    margin-right: 0;
+    margin-left: 0;
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-table-search i {
@@ -646,6 +654,7 @@
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-overview-row {
     display: flex;
     justify-content: center;
+    width: 34px;
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-add-table-button {
@@ -660,8 +669,8 @@
     width: 34px;
     min-height: 34px;
     padding: 0;
-    margin-right: auto;
-    margin-left: auto;
+    margin-right: 0;
+    margin-left: 0;
     color: transparent;
     font-size: 0;
 }
