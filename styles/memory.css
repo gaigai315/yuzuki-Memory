@@ -853,6 +853,42 @@
     color: var(--yzm-icon);
 }
 
+#yzm-memory-root .yzm-config-title-spacer {
+    flex: 1 1 auto;
+}
+
+#yzm-memory-root .yzm-ai-fill-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 28px;
+    min-width: 28px;
+    height: 28px;
+    min-height: 28px;
+    padding: 0;
+    color: var(--yzm-text);
+    background: var(--yzm-surface-strong);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 8px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+}
+
+#yzm-memory-root .yzm-ai-fill-button span {
+    display: none;
+}
+
+#yzm-memory-root .yzm-ai-fill-button i {
+    color: var(--yzm-icon);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-ai-fill-button:hover {
+    background: var(--yzm-hover);
+}
+
 #yzm-memory-root .yzm-config-card-desc {
     margin-top: 7px;
     color: var(--yzm-muted);
@@ -1547,10 +1583,6 @@
     line-height: 1.2;
 }
 
-#yzm-memory-root .yzm-mobile-detail-close {
-    display: none;
-}
-
 @media (max-width: 760px) {
     #yzm-memory-root .yzm-shell {
         display: flex;
@@ -1829,35 +1861,6 @@
         box-shadow: none;
     }
 
-    #yzm-memory-root .yzm-workspace.yzm-config-mode .yzm-mobile-detail-close {
-        display: none;
-    }
-
-    #yzm-memory-root .yzm-mobile-detail-close {
-        position: sticky;
-        top: 0;
-        z-index: 2;
-        display: inline-flex;
-        align-items: center;
-        justify-content: flex-start;
-        gap: 6px;
-        min-height: 34px;
-        padding: 0 10px;
-        color: var(--yzm-text);
-        background: var(--yzm-surface-strong);
-        border: 0;
-        border-bottom: 1px solid var(--yzm-border);
-        border-radius: 0;
-        font: inherit;
-        font-size: 13px;
-        text-align: left;
-    }
-
-    #yzm-memory-root .yzm-mobile-detail-close i {
-        color: var(--yzm-icon);
-        font-size: 12px;
-    }
-
     #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-view {
         grid-template-columns: minmax(0, 1fr);
         grid-auto-rows: auto;
@@ -1948,6 +1951,13 @@
 
     #yzm-memory-root .yzm-config-card-title {
         font-size: 14px;
+    }
+
+    #yzm-memory-root .yzm-ai-fill-button {
+        width: 26px;
+        min-width: 26px;
+        height: 26px;
+        min-height: 26px;
     }
 
     #yzm-memory-root .yzm-fill-mode-row {

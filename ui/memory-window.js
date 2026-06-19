@@ -477,7 +477,7 @@
         tableContent.appendChild(createTableWorkspaceView(getActiveTable()));
         const configView = createConfigWorkspaceView();
         configView.hidden = true;
-        tableFrame.append(createMobileDetailCloseButton(), tableContent, configView);
+        tableFrame.append(tableContent, configView);
         content.append(primaryPane, primaryToggle, tableFrame);
         workspace.append(toolbar, content);
 
@@ -549,12 +549,6 @@
         const y = Math.min(Math.max(clientY - shellRect.top, 6), shellRect.height - menuRect.height - 6);
         menu.style.left = `${x}px`;
         menu.style.top = `${y}px`;
-    }
-
-    function createMobileDetailCloseButton() {
-        const button = createIconButton('返回', 'fa-solid fa-chevron-left', 'yzm-mobile-detail-close');
-        button.setAttribute('aria-label', '返回主键列表');
-        return button;
     }
 
     function renderTableWorkspace(root) {
@@ -756,7 +750,12 @@
 
         const titleNode = document.createElement('div');
         titleNode.className = 'yzm-config-card-title';
-        titleNode.append(createIconNode('fa-solid fa-filter', ''), document.createTextNode('标签过滤'));
+        titleNode.append(
+            createIconNode('fa-solid fa-filter', ''),
+            document.createTextNode('标签过滤'),
+            createConfigTitleSpacer(),
+            createIconButton('AI 填写', 'fa-solid fa-robot', 'yzm-ai-fill-button')
+        );
 
         card.append(
             titleNode,
@@ -764,6 +763,12 @@
             createTagFilterBlock('白名单标签（仅留）', 'fa-regular fa-circle-check', '例：content, message', ['content', 'statusbar'])
         );
         return card;
+    }
+
+    function createConfigTitleSpacer() {
+        const spacer = document.createElement('span');
+        spacer.className = 'yzm-config-title-spacer';
+        return spacer;
     }
 
     function createModeChoice(title, iconClassName, description, isActive) {
@@ -1402,16 +1407,6 @@
             item.addEventListener('pointercancel', clearLongPress);
             item.addEventListener('pointerleave', clearLongPress);
         });
-
-        const mobileDetailClose = root.querySelector('.yzm-mobile-detail-close');
-        if (mobileDetailClose && mobileDetailClose.dataset.yzmBound !== 'true') {
-            mobileDetailClose.dataset.yzmBound = 'true';
-            mobileDetailClose.addEventListener('click', (event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                setMobileDetailOpen(root, false);
-            });
-        }
 
         const tableSearchInput = root.querySelector('.yzm-table-search .yzm-search-input');
         if (tableSearchInput && tableSearchInput.dataset.yzmBound !== 'true') {
