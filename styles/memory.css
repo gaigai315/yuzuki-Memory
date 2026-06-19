@@ -1617,7 +1617,7 @@
 
     #yzm-memory-root .yzm-shell-body {
         position: relative;
-        grid-template-columns: minmax(104px, 45%) 10px minmax(0, 1fr);
+        grid-template-columns: clamp(126px, 34vw, 168px) 10px minmax(0, 1fr);
         flex: 1 1 auto;
         width: 100%;
         height: auto;
@@ -1632,7 +1632,7 @@
     #yzm-memory-root .yzm-sidebar {
         min-width: 0;
         max-height: none;
-        padding: 10px 7px 8px;
+        padding: 10px 5px 8px;
         overflow: auto;
         border-right: 1px solid var(--yzm-border);
         border-bottom: 0;
@@ -1695,7 +1695,7 @@
     #yzm-memory-root .yzm-sidebar-action {
         gap: 6px;
         min-height: 32px;
-        padding: 0 7px;
+        padding: 0 6px;
         font-size: 12px;
     }
 
