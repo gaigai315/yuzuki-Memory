@@ -1617,7 +1617,7 @@
 
     #yzm-memory-root .yzm-shell-body {
         position: relative;
-        grid-template-columns: clamp(126px, 34vw, 168px) 10px minmax(0, 1fr);
+        grid-template-columns: clamp(118px, 31vw, 148px) 10px minmax(0, 1fr);
         flex: 1 1 auto;
         width: 100%;
         height: auto;
@@ -1655,13 +1655,23 @@
     #yzm-memory-root .yzm-workspace-content,
     #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-workspace-content {
         display: grid;
-        grid-template-columns: minmax(0, 1fr);
+        grid-template-columns: minmax(128px, 38vw) 10px minmax(0, 0);
         height: 100%;
         min-height: 0;
     }
 
     #yzm-memory-root .yzm-primary-toggle {
-        display: none;
+        display: flex;
+        width: 10px;
+        min-width: 10px;
+        height: 100%;
+        min-height: 0;
+        border-right: 1px solid var(--yzm-border);
+        border-bottom: 0;
+    }
+
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-workspace-content {
+        grid-template-columns: 0 10px minmax(0, 1fr);
     }
 
     #yzm-memory-root .yzm-primary-pane {
@@ -1782,24 +1792,27 @@
     }
 
     #yzm-memory-root .yzm-table-frame {
-        display: none;
+        display: block;
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        background: transparent;
+        border: 0;
+        border-radius: 0;
     }
 
     #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-table-frame {
-        position: absolute;
-        inset: 46px 6px 6px;
-        z-index: 12;
         display: flex;
         flex-direction: column;
-        margin: 0;
-        width: auto;
-        height: auto;
-        min-height: 0;
+        margin: 6px;
         overflow: auto;
-        background: var(--yzm-bg);
+        background: var(--yzm-surface);
         border: 1px solid var(--yzm-border);
-        border-radius: 12px;
-        box-shadow: var(--yzm-shadow);
+        border-radius: 10px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-workspace-content {
+        grid-template-columns: 0 10px minmax(0, 1fr);
     }
 
     #yzm-memory-root .yzm-workspace.yzm-config-mode .yzm-table-frame {

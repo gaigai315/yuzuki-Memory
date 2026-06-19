@@ -517,6 +517,7 @@
 
     function setMobileDetailOpen(root, isOpen) {
         root.querySelector('.yzm-shell')?.classList.toggle('yzm-mobile-detail-open', isOpen);
+        if (isMobileLayout()) root.querySelector('.yzm-workspace')?.classList.toggle('yzm-primary-collapsed', isOpen);
     }
 
     function closeRecordActionMenu(root) {
@@ -1255,6 +1256,7 @@
             primaryToggle.dataset.yzmBound = 'true';
             primaryToggle.addEventListener('click', () => {
                 const isCollapsed = workspace.classList.toggle('yzm-primary-collapsed');
+                if (isMobileLayout()) root.querySelector('.yzm-shell')?.classList.toggle('yzm-mobile-detail-open', isCollapsed);
                 primaryToggle.setAttribute('aria-pressed', String(!isCollapsed));
                 primaryToggle.querySelector('i')?.classList.toggle('fa-chevron-right', isCollapsed);
                 primaryToggle.querySelector('i')?.classList.toggle('fa-chevron-left', !isCollapsed);
