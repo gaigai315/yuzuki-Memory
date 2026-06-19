@@ -1655,7 +1655,7 @@
     #yzm-memory-root .yzm-workspace-content,
     #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-workspace-content {
         display: grid;
-        grid-template-columns: minmax(0, 1fr) 10px 0;
+        grid-template-columns: clamp(126px, 44vw, 180px) 10px minmax(0, 1fr);
         height: 100%;
         min-height: 0;
     }
