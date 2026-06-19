@@ -817,25 +817,11 @@
     box-sizing: border-box;
 }
 
-#yzm-memory-root .yzm-config-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 40px;
-    color: var(--yzm-title);
-    font-size: 18px;
-    font-weight: 600;
-}
-
-#yzm-memory-root .yzm-config-header i {
-    color: var(--yzm-icon);
-}
-
 #yzm-memory-root .yzm-config-content {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
     gap: 12px;
-    margin-top: 10px;
+    margin-top: 0;
 }
 
 #yzm-memory-root .yzm-config-filter-layout {
@@ -1930,11 +1916,6 @@
 
     #yzm-memory-root .yzm-config-view {
         padding: 10px;
-    }
-
-    #yzm-memory-root .yzm-config-header {
-        min-height: 32px;
-        font-size: 15px;
     }
 
     #yzm-memory-root .yzm-config-content {

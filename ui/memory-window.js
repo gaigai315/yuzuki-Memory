@@ -652,10 +652,6 @@
         const page = document.createElement('div');
         page.className = 'yzm-config-view';
 
-        const header = document.createElement('div');
-        header.className = 'yzm-config-header';
-        header.append(createIconNode('fa-solid fa-wand-magic-sparkles', ''), document.createTextNode('初始化'));
-
         const content = document.createElement('div');
         content.className = 'yzm-config-content';
 
@@ -665,7 +661,7 @@
 
         content.append(createFillModePanel(), filterLayout);
 
-        page.append(header, content);
+        page.appendChild(content);
         return page;
     }
 
@@ -745,8 +741,8 @@
         const modeRow = document.createElement('div');
         modeRow.className = 'yzm-fill-mode-row';
         modeRow.append(
-            createModeChoice('实时填表', 'fa-solid fa-bolt', '单次回复后立即分析并更新当前会话记忆。', true),
-            createModeChoice('批量填表', 'fa-solid fa-layer-group', '按范围批量整理聊天内容，后续接入导入历史和重跑。', false)
+            createModeChoice('实时填表', 'fa-solid fa-bolt', '酒馆正文一起返回', true),
+            createModeChoice('批量填表', 'fa-solid fa-layer-group', '按楼层批量处理，API单独请求。', false)
         );
 
         card.append(titleNode, modeRow);
