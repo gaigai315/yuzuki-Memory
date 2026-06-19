@@ -23,6 +23,10 @@
     --yzm-active-shadow: 0 8px 18px rgba(83, 106, 198, 0.26);
     --yzm-overlay-bg: rgba(0, 0, 0, 0.18);
     --yzm-shadow: 0 22px 60px rgba(78, 98, 160, 0.28);
+    --yzm-desktop-sidebar-width: 180px;
+    --yzm-desktop-primary-width: 168px;
+    --yzm-mobile-sidebar-width: 118px;
+    --yzm-mobile-primary-width: 132px;
 }
 
 #yzm-memory-root .yzm-shell[data-yzm-theme="dark"] {
@@ -336,7 +340,7 @@
 
 #yzm-memory-root .yzm-shell-body {
     display: grid;
-    grid-template-columns: 180px 12px minmax(320px, 1fr);
+    grid-template-columns: var(--yzm-desktop-sidebar-width) 12px minmax(320px, 1fr);
     height: calc(100% - 72px);
     padding: 0;
     overflow: hidden;
@@ -387,9 +391,26 @@
     line-height: 1;
 }
 
+#yzm-memory-root .yzm-collapse-button i {
+    pointer-events: none;
+}
+
 #yzm-memory-root .yzm-sidebar-toggle,
 #yzm-memory-root .yzm-primary-toggle {
     border-right: 1px solid var(--yzm-border);
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
+}
+
+#yzm-memory-root .yzm-collapse-button.yzm-resizing {
+    background: var(--yzm-hover);
+}
+
+#yzm-memory-root .yzm-column-resizing,
+#yzm-memory-root .yzm-column-resizing * {
+    cursor: col-resize !important;
+    user-select: none !important;
 }
 
 #yzm-memory-root .yzm-nav-list,
@@ -566,7 +587,7 @@
 
 #yzm-memory-root .yzm-workspace-content {
     display: grid;
-    grid-template-columns: 168px 12px minmax(260px, 1fr);
+    grid-template-columns: var(--yzm-desktop-primary-width) 12px minmax(260px, 1fr);
     flex: 1 1 auto;
     min-height: 0;
     overflow: hidden;
@@ -1649,7 +1670,7 @@
 
     #yzm-memory-root .yzm-shell-body {
         position: relative;
-        grid-template-columns: clamp(118px, 31vw, 148px) 10px minmax(0, 1fr);
+        grid-template-columns: var(--yzm-mobile-sidebar-width) 10px minmax(0, 1fr);
         flex: 1 1 auto;
         width: 100%;
         height: auto;
@@ -1687,7 +1708,7 @@
     #yzm-memory-root .yzm-workspace-content,
     #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-workspace-content {
         display: grid;
-        grid-template-columns: clamp(126px, 44vw, 180px) 10px minmax(0, 1fr);
+        grid-template-columns: var(--yzm-mobile-primary-width) 10px minmax(0, 1fr);
         height: 100%;
         min-height: 0;
     }

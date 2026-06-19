@@ -8,6 +8,17 @@
     const EXTENSION_ICON_ID = 'yzm-memory-extension-icon';
     const DISPLAY_NAME = '柚月の记忆';
     const THEME_STORAGE_KEY = 'yzm_memory_theme';
+    const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
+    const LAYOUT_DEFAULTS = {
+        desktop: {
+            sidebar: { value: 180, min: 118, max: 300 },
+            primary: { value: 168, min: 118, max: 300 },
+        },
+        mobile: {
+            sidebar: { value: 118, min: 58, max: 176 },
+            primary: { value: 132, min: 72, max: 210 },
+        },
+    };
     const TABLE_ICONS = [
         { id: 'summary', label: '总结', className: 'fa-solid fa-house' },
         { id: 'person', label: '人物档案', className: 'fa-solid fa-user' },
@@ -361,6 +372,72 @@
         }
     }
 
+    function getLayoutMode() {
+        return isMobileLayout() ? 'mobile' : 'desktop';
+    }
+
+    function clampNumber(value, min, max) {
+        return Math.min(Math.max(value, min), max);
+    }
+
+    function getLayoutLimits(mode, area) {
+        return LAYOUT_DEFAULTS[mode]?.[area] || LAYOUT_DEFAULTS.desktop[area];
+    }
+
+    function normalizeLayoutWidth(mode, area, value) {
+        const limits = getLayoutLimits(mode, area);
+        return clampNumber(Number(value) || limits.value, limits.min, limits.max);
+    }
+
+    function getSavedLayoutWidths() {
+        const fallback = {
+            desktop: {
+                sidebar: LAYOUT_DEFAULTS.desktop.sidebar.value,
+                primary: LAYOUT_DEFAULTS.desktop.primary.value,
+            },
+            mobile: {
+                sidebar: LAYOUT_DEFAULTS.mobile.sidebar.value,
+                primary: LAYOUT_DEFAULTS.mobile.primary.value,
+            },
+        };
+
+        try {
+            const parsed = JSON.parse(localStorage.getItem(LAYOUT_STORAGE_KEY) || '{}');
+            return {
+                desktop: {
+                    sidebar: normalizeLayoutWidth('desktop', 'sidebar', parsed.desktop?.sidebar ?? fallback.desktop.sidebar),
+                    primary: normalizeLayoutWidth('desktop', 'primary', parsed.desktop?.primary ?? fallback.desktop.primary),
+                },
+                mobile: {
+                    sidebar: normalizeLayoutWidth('mobile', 'sidebar', parsed.mobile?.sidebar ?? fallback.mobile.sidebar),
+                    primary: normalizeLayoutWidth('mobile', 'primary', parsed.mobile?.primary ?? fallback.mobile.primary),
+                },
+            };
+        } catch (_error) {
+            return fallback;
+        }
+    }
+
+    function saveLayoutWidth(mode, area, value) {
+        try {
+            const widths = getSavedLayoutWidths();
+            widths[mode][area] = normalizeLayoutWidth(mode, area, value);
+            localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(widths));
+        } catch (_error) {
+            // Layout persistence is optional if browser storage is blocked.
+        }
+    }
+
+    function applyLayoutWidths(shell) {
+        if (!shell) return;
+
+        const widths = getSavedLayoutWidths();
+        ['desktop', 'mobile'].forEach((mode) => {
+            shell.style.setProperty(`--yzm-${mode}-sidebar-width`, `${widths[mode].sidebar}px`);
+            shell.style.setProperty(`--yzm-${mode}-primary-width`, `${widths[mode].primary}px`);
+        });
+    }
+
     function updateThemeButton(themeButton, theme) {
         if (!themeButton) return;
 
@@ -518,6 +595,93 @@
     function setMobileDetailOpen(root, isOpen) {
         root.querySelector('.yzm-shell')?.classList.toggle('yzm-mobile-detail-open', isOpen);
         if (isMobileLayout()) root.querySelector('.yzm-workspace')?.classList.toggle('yzm-primary-collapsed', isOpen);
+    }
+
+    function getPointerClientX(event) {
+        return event.clientX ?? event.touches?.[0]?.clientX ?? 0;
+    }
+
+    function setLayoutWidth(shell, mode, area, value) {
+        const nextValue = normalizeLayoutWidth(mode, area, value);
+        shell.style.setProperty(`--yzm-${mode}-${area}-width`, `${nextValue}px`);
+        saveLayoutWidth(mode, area, nextValue);
+    }
+
+    function bindColumnResizeHandle(root, handle, options) {
+        if (!handle || handle.dataset.yzmResizeBound === 'true') return;
+        handle.dataset.yzmResizeBound = 'true';
+        handle.dataset.yzmResizeArea = options.area;
+
+        let dragState = null;
+        let suppressNextClick = false;
+
+        const finishDrag = (event) => {
+            if (!dragState) return;
+
+            const state = dragState;
+            dragState = null;
+            suppressNextClick = state.moved;
+            handle.classList.remove('yzm-resizing');
+            root.querySelector('.yzm-shell')?.classList.remove('yzm-column-resizing');
+            try {
+                handle.releasePointerCapture?.(event.pointerId);
+            } catch (_error) {
+                // Pointer capture may already be released by the browser.
+            }
+
+            if (state.moved) {
+                event.preventDefault();
+                event.stopPropagation();
+                window.setTimeout(() => {
+                    suppressNextClick = false;
+                }, 220);
+            }
+        };
+
+        handle.addEventListener('pointerdown', (event) => {
+            if (event.button !== 0) return;
+
+            const shell = root.querySelector('.yzm-shell');
+            const targetPane = options.getPane();
+            if (!shell || !targetPane || targetPane.offsetWidth <= 0) return;
+
+            const mode = getLayoutMode();
+            dragState = {
+                mode,
+                area: options.area,
+                startX: getPointerClientX(event),
+                startWidth: targetPane.getBoundingClientRect().width,
+                moved: false,
+            };
+
+            handle.setPointerCapture?.(event.pointerId);
+        });
+
+        handle.addEventListener('pointermove', (event) => {
+            if (!dragState) return;
+
+            const shell = root.querySelector('.yzm-shell');
+            if (!shell) return;
+
+            const delta = getPointerClientX(event) - dragState.startX;
+            if (!dragState.moved && Math.abs(delta) < 4) return;
+
+            dragState.moved = true;
+            handle.classList.add('yzm-resizing');
+            shell.classList.add('yzm-column-resizing');
+            setLayoutWidth(shell, dragState.mode, dragState.area, dragState.startWidth + delta);
+            event.preventDefault();
+        });
+
+        handle.addEventListener('pointerup', finishDrag);
+        handle.addEventListener('pointercancel', finishDrag);
+
+        handle.addEventListener('click', (event) => {
+            if (!suppressNextClick) return;
+            suppressNextClick = false;
+            event.preventDefault();
+            event.stopPropagation();
+        }, true);
     }
 
     function closeRecordActionMenu(root) {
@@ -1177,6 +1341,16 @@
         const workspace = root.querySelector('.yzm-workspace');
         const sidebarToggle = root.querySelector('.yzm-sidebar-toggle');
         const primaryToggle = root.querySelector('.yzm-primary-toggle');
+        applyLayoutWidths(root.querySelector('.yzm-shell'));
+
+        bindColumnResizeHandle(root, sidebarToggle, {
+            area: 'sidebar',
+            getPane: () => root.querySelector('.yzm-sidebar'),
+        });
+        bindColumnResizeHandle(root, primaryToggle, {
+            area: 'primary',
+            getPane: () => root.querySelector('.yzm-primary-pane'),
+        });
 
         if (root.dataset.yzmCloseBound !== 'true') {
             root.dataset.yzmCloseBound = 'true';
@@ -1446,6 +1620,7 @@
         shell.hidden = true;
         shell.dataset.yzmTheme = getSavedTheme();
         shell.setAttribute('aria-label', DISPLAY_NAME);
+        applyLayoutWidths(shell);
 
         const bar = document.createElement('div');
         bar.className = 'yzm-shell-bar';
