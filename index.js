@@ -12,6 +12,7 @@
 
     const MODULES = [
         'config/storage.js',
+        'config/vector-store.js',
         'ui/memory-window.js',
     ];
 

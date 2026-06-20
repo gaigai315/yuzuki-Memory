@@ -9,6 +9,7 @@
     const DISPLAY_NAME = '柚月の记忆';
     const THEME_STORAGE_KEY = 'yzm_memory_theme';
     const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
+    const TAG_PRESETS_STORAGE_KEY = 'yzm_memory_global_tag_presets';
     const LAYOUT_DEFAULTS = {
         desktop: {
             sidebar: { value: 180, min: 118, max: 300 },
@@ -25,6 +26,14 @@
             primary: 92,
         },
     };
+    const LAYOUT_PRIMARY_COMPACT_AT = {
+        desktop: 160,
+        mobile: 150,
+    };
+    const LAYOUT_PRIMARY_TIGHT_AT = {
+        desktop: 132,
+        mobile: 120,
+    };
     const TABLE_ICONS = [
         { id: 'summary', label: '总结', className: 'fa-solid fa-house' },
         { id: 'person', label: '人物档案', className: 'fa-solid fa-user' },
@@ -38,10 +47,11 @@
         { id: 'note', label: '备注', className: 'fa-solid fa-note-sticky' },
         { id: 'memory_book', label: '记忆书本', className: 'fa-solid fa-book-open' },
     ];
-    const CHARACTER_MAIN_FIELDS = ['年龄', '身份', '性格', '当前位置', '周围角色', '生理'];
+    const CHARACTER_MAIN_FIELDS = ['年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理'];
     const CHARACTER_FIELD_ICONS = {
         角色名: 'fa-solid fa-user',
         年龄: 'fa-solid fa-calendar-days',
+        性别: 'fa-solid fa-venus-mars',
         身份: 'fa-solid fa-id-card',
         性格: 'fa-solid fa-face-smile',
         当前位置: 'fa-solid fa-location-dot',
@@ -76,15 +86,18 @@
         备注: 'fa-regular fa-note-sticky',
     };
     const CONFIG_SECTIONS = [
-        { id: 'init', label: '初始化', icon: 'fa-solid fa-wand-magic-sparkles' },
+        { id: 'plugin', label: '插件配置', icon: 'fa-solid fa-gear' },
+        { id: 'init', label: '基础设置', icon: 'fa-solid fa-wand-magic-sparkles' },
     ];
-    const DEFAULT_STATE_REVISION = 10;
+    const VECTOR_BOOK_PAGE_SIZE = 10;
+    const VECTOR_SEGMENT_PAGE_SIZE = 10;
+    const DEFAULT_STATE_REVISION = 11;
     const DEFAULT_TABLES = [
         {
             id: 'character_profile',
             name: '角色档案',
             icon: 'person',
-            columns: ['角色名', '年龄', '身份', '性格', '当前位置', '周围角色', '生理', '人际关系', '着装', '待办事项', '约定'],
+            columns: ['角色名', '年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理', '人际关系', '着装', '待办事项', '约定'],
         },
         {
             id: 'item_tracking',
@@ -109,7 +122,14 @@
     let loadedSessionId = null;
     let extensionRetryTimer = null;
     let activeWorkspaceView = 'table';
-    let activeConfigSectionId = 'init';
+    let activeConfigSectionId = 'plugin';
+    const vectorUiState = {
+        bookPage: 1,
+        segmentPage: 1,
+        bookQuery: '',
+        segmentQuery: '',
+    };
+    let vectorSearchTimer = null;
 
     function createDefaultState() {
         return {
@@ -153,6 +173,10 @@
 
     function getStorage() {
         return YuzukiMemory.Storage;
+    }
+
+    function getVectorStore() {
+        return YuzukiMemory.VectorStore;
     }
 
     function getState() {
@@ -262,6 +286,39 @@
         return getRecordValueByCandidates(record, fields);
     }
 
+    function formatVectorDate(timestamp) {
+        if (!timestamp) return '未更新';
+        const date = new Date(timestamp);
+        if (Number.isNaN(date.getTime())) return '未更新';
+        return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    }
+
+    function clampPage(page, totalPages) {
+        return Math.min(Math.max(Number(page) || 1, 1), Math.max(totalPages, 1));
+    }
+
+    function paginateItems(items, page, pageSize) {
+        const totalPages = Math.max(Math.ceil(items.length / pageSize), 1);
+        const currentPage = clampPage(page, totalPages);
+        return {
+            totalPages,
+            currentPage,
+            items: items.slice((currentPage - 1) * pageSize, currentPage * pageSize),
+        };
+    }
+
+    function getSummaryVectorChunks() {
+        const table = getTables().find((entry) => entry.id === 'memory_summary');
+        if (!table) return [];
+        return getRecords(table.id).map((record) => {
+            const title = getSummaryValue(record, ['总结标题', '标题']);
+            const content = getSummaryValue(record, ['总结内容', '内容']);
+            const timeline = getSummaryValue(record, ['时间线']);
+            const remark = getSummaryValue(record, ['备注']);
+            return [title, content, timeline, remark].filter(Boolean).join('\n');
+        }).filter(Boolean);
+    }
+
     function getSummaryTimelineItems(text = '') {
         return String(text || '')
             .split(/\n+/)
@@ -275,6 +332,56 @@
                 }
                 return { time: '', event: line };
             });
+    }
+
+    function splitTagText(text = '') {
+        return String(text || '')
+            .split(/[,，\n]+/)
+            .map((tag) => tag.trim())
+            .filter(Boolean);
+    }
+
+    function normalizeTagList(tags) {
+        const seen = new Set();
+        return (Array.isArray(tags) ? tags : splitTagText(tags))
+            .map((tag) => String(tag || '').trim())
+            .filter((tag) => {
+                if (!tag || seen.has(tag)) return false;
+                seen.add(tag);
+                return true;
+            });
+    }
+
+    function normalizeTagPreset(rawPreset) {
+        if (!rawPreset || typeof rawPreset !== 'object') return null;
+        const name = String(rawPreset.name || '').trim();
+        if (!name) return null;
+        return {
+            id: String(rawPreset.id || `tag_preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`),
+            name,
+            blacklist: normalizeTagList(rawPreset.blacklist),
+            whitelist: normalizeTagList(rawPreset.whitelist),
+        };
+    }
+
+    function getTagPresets() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(TAG_PRESETS_STORAGE_KEY) || '[]');
+            return Array.isArray(raw) ? raw.map(normalizeTagPreset).filter(Boolean) : [];
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load tag presets.', error);
+            return [];
+        }
+    }
+
+    function saveTagPresets(presets) {
+        const normalized = (Array.isArray(presets) ? presets : []).map(normalizeTagPreset).filter(Boolean);
+        localStorage.setItem(TAG_PRESETS_STORAGE_KEY, JSON.stringify(normalized));
+        return normalized;
+    }
+
+    function createTagPresetId() {
+        return `tag_preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     }
 
     function createRecord(table) {
@@ -341,6 +448,12 @@
         closeMoreMenu(root);
     }
 
+    function clearSidebarActionActive(root) {
+        root.querySelectorAll('.yzm-sidebar-action-active').forEach((node) => {
+            node.classList.remove('yzm-sidebar-action-active');
+        });
+    }
+
     function setActiveTable(tableId) {
         const table = getTables().find((entry) => entry.id === tableId);
         if (!table) return;
@@ -363,7 +476,7 @@
         return button;
     }
 
-    function createTopActions() {
+    function createTopActions(shell) {
         const actions = document.createElement('div');
         actions.className = 'yzm-top-actions';
         actions.setAttribute('aria-label', '记忆面板操作');
@@ -384,6 +497,7 @@
             createIconButton('清表', 'fa-solid fa-eraser', 'yzm-top-more-item yzm-top-clear-table'),
             createIconButton('导出', 'fa-solid fa-file-export', 'yzm-top-more-item'),
             createIconButton('导入', 'fa-solid fa-file-import', 'yzm-top-more-item'),
+            createThemeButton(shell, 'yzm-top-more-item yzm-theme-button'),
             createIconButton('重置结构', 'fa-solid fa-rotate-right', 'yzm-top-more-item yzm-top-reset-structure')
         );
 
@@ -433,6 +547,15 @@
         renderWorkspaceList(root);
         renderTableWorkspace(root);
         renderActiveTableTitle(root);
+        bindPanelInteractions(root);
+    }
+
+    function renderVectorWorkspace(root) {
+        const primaryView = root.querySelector('.yzm-vector-primary-view');
+        const workspaceView = root.querySelector('.yzm-vector-workspace-view');
+        if (primaryView) primaryView.replaceWith(createVectorPrimaryView());
+        if (workspaceView) workspaceView.replaceWith(createVectorWorkspaceView());
+        updateWorkspaceMode(root);
         bindPanelInteractions(root);
     }
 
@@ -559,6 +682,8 @@
         const iconLimits = LAYOUT_ICON_MODE_AT[mode] || {};
         shell.classList.toggle('yzm-sidebar-icon-mode', !!iconLimits.sidebar && widths[mode].sidebar <= iconLimits.sidebar);
         shell.classList.toggle('yzm-primary-icon-mode', !!iconLimits.primary && widths[mode].primary <= iconLimits.primary);
+        shell.classList.toggle('yzm-primary-compact-mode', widths[mode].primary <= (LAYOUT_PRIMARY_COMPACT_AT[mode] || 0));
+        shell.classList.toggle('yzm-primary-tight-mode', widths[mode].primary <= (LAYOUT_PRIMARY_TIGHT_AT[mode] || 0));
     }
 
     function updateThemeButton(themeButton, theme) {
@@ -569,7 +694,7 @@
         themeButton.title = isDark ? '当前夜间，切换白天模式' : '当前白天，切换夜间模式';
         themeButton.setAttribute('aria-label', themeButton.title);
         themeButton.setAttribute('aria-pressed', String(isDark));
-        themeButton.innerHTML = `<i class="fa-solid ${isDark ? 'fa-moon' : 'fa-sun'}" aria-hidden="true"></i>`;
+        themeButton.innerHTML = `<i class="fa-solid ${isDark ? 'fa-moon' : 'fa-sun'}" aria-hidden="true"></i><span>${isDark ? '夜间模式' : '白天模式'}</span>`;
     }
 
     function setTheme(shell, theme, options = {}) {
@@ -579,19 +704,13 @@
         if (!options.skipSave) saveTheme(nextTheme);
     }
 
-    function createThemeSwitcher(shell) {
-        const switcher = document.createElement('div');
-        switcher.className = 'yzm-theme-switcher';
-        switcher.setAttribute('aria-label', '面板主题');
-
-        const themeButton = createButton('', 'yzm-theme-button');
+    function createThemeButton(shell, className = 'yzm-theme-button') {
+        const themeButton = createButton('', className);
         updateThemeButton(themeButton, shell.dataset.yzmTheme || getSavedTheme());
         themeButton.addEventListener('click', () => {
             setTheme(shell, shell.dataset.yzmTheme === 'dark' ? 'light' : 'dark');
         });
-
-        switcher.appendChild(themeButton);
-        return switcher;
+        return themeButton;
     }
 
     function createPanelBody() {
@@ -616,12 +735,14 @@
         sidebarActions.className = 'yzm-sidebar-actions';
         const configAction = createIconButton('配置', 'fa-solid fa-gear', 'yzm-sidebar-action');
         configAction.dataset.yzmAction = 'config';
+        const vectorAction = createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-sidebar-action');
+        vectorAction.dataset.yzmAction = 'vector';
         sidebarActions.append(
             configAction,
             createIconButton('追溯', 'fa-solid fa-clock-rotate-left', 'yzm-sidebar-action'),
             createIconButton('总结', 'fa-solid fa-wand-magic-sparkles', 'yzm-sidebar-action'),
             createIconButton('API', 'fa-solid fa-plug', 'yzm-sidebar-action'),
-            createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-sidebar-action'),
+            vectorAction,
             createIconButton('记忆方案', 'fa-solid fa-book-bookmark', 'yzm-sidebar-action')
         );
 
@@ -662,7 +783,10 @@
         configPrimaryHeader.hidden = true;
         configPrimaryHeader.append(createIconNode('fa-solid fa-gear', ''), document.createTextNode('配置项目'));
 
-        primaryPane.append(primaryHeader, primarySearch, primaryList, configPrimaryHeader, createConfigNavList());
+        const vectorPrimaryView = createVectorPrimaryView();
+        vectorPrimaryView.hidden = true;
+
+        primaryPane.append(primaryHeader, primarySearch, primaryList, configPrimaryHeader, createConfigNavList(), vectorPrimaryView);
 
         const primaryToggle = createButton('', 'yzm-collapse-button yzm-primary-toggle');
         primaryToggle.setAttribute('aria-label', '折叠主键列表');
@@ -677,7 +801,9 @@
         tableContent.appendChild(createTableWorkspaceView(getActiveTable()));
         const configView = createConfigWorkspaceView();
         configView.hidden = true;
-        tableFrame.append(tableContent, configView);
+        const vectorView = createVectorWorkspaceView();
+        vectorView.hidden = true;
+        tableFrame.append(tableContent, configView, vectorView);
         content.append(primaryPane, primaryToggle, tableFrame);
         workspace.append(toolbar, content);
 
@@ -810,6 +936,7 @@
 
     function closeRecordActionMenu(root) {
         root.querySelector('.yzm-record-action-menu')?.remove();
+        root.querySelector('.yzm-vector-book-action-menu')?.remove();
     }
 
     function openRecordActionMenu(root, tableId, recordId, clientX, clientY) {
@@ -839,6 +966,38 @@
         menu.style.top = `${y}px`;
     }
 
+    function openVectorBookActionMenu(root, bookId, clientX, clientY) {
+        const shell = root.querySelector('.yzm-shell');
+        const store = getVectorStore();
+        const book = store?.getBook?.(bookId);
+        if (!shell || !store || !bookId || !book) return;
+
+        closeRecordActionMenu(root);
+
+        const menu = document.createElement('div');
+        menu.className = 'yzm-record-action-menu yzm-vector-book-action-menu';
+
+        const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-record-action-delete');
+        deleteButton.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            if (!window.confirm(`确定删除《${book.name}》吗？`)) return;
+            await store.deleteBook(bookId);
+            renderVectorWorkspace(root);
+            closeRecordActionMenu(root);
+        });
+
+        menu.appendChild(deleteButton);
+        shell.appendChild(menu);
+
+        const shellRect = shell.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        const x = Math.min(Math.max(clientX - shellRect.left, 6), shellRect.width - menuRect.width - 6);
+        const y = Math.min(Math.max(clientY - shellRect.top, 6), shellRect.height - menuRect.height - 6);
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+    }
+
     function renderTableWorkspace(root) {
         const tableContent = root.querySelector('.yzm-table-content-view');
         if (!tableContent) return;
@@ -847,7 +1006,7 @@
     }
 
     function renderWorkspaceList(root) {
-        if (activeWorkspaceView !== 'config') renderPrimaryList(root);
+        if (activeWorkspaceView === 'table') renderPrimaryList(root);
         updateWorkspaceMode(root);
     }
 
@@ -912,14 +1071,18 @@
 
     function updateWorkspaceMode(root) {
         const isConfig = activeWorkspaceView === 'config';
+        const isVector = activeWorkspaceView === 'vector';
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-config-mode', isConfig);
-        root.querySelector('.yzm-primary-header')?.toggleAttribute('hidden', isConfig);
-        root.querySelector('.yzm-primary-search')?.toggleAttribute('hidden', isConfig);
-        root.querySelector('.yzm-primary-list')?.toggleAttribute('hidden', isConfig);
+        root.querySelector('.yzm-workspace')?.classList.toggle('yzm-vector-mode', isVector);
+        root.querySelector('.yzm-primary-header')?.toggleAttribute('hidden', isConfig || isVector);
+        root.querySelector('.yzm-primary-search')?.toggleAttribute('hidden', isConfig || isVector);
+        root.querySelector('.yzm-primary-list')?.toggleAttribute('hidden', isConfig || isVector);
         root.querySelector('.yzm-config-primary-header')?.toggleAttribute('hidden', !isConfig);
         root.querySelector('.yzm-config-nav-list')?.toggleAttribute('hidden', !isConfig);
-        root.querySelector('.yzm-table-content-view')?.toggleAttribute('hidden', isConfig);
+        root.querySelector('.yzm-vector-primary-view')?.toggleAttribute('hidden', !isVector);
+        root.querySelector('.yzm-table-content-view')?.toggleAttribute('hidden', isConfig || isVector);
         root.querySelector('.yzm-config-view')?.toggleAttribute('hidden', !isConfig);
+        root.querySelector('.yzm-vector-workspace-view')?.toggleAttribute('hidden', !isVector);
     }
 
     function createConfigNavList() {
@@ -936,6 +1099,572 @@
         });
 
         return list;
+    }
+
+    function createVectorPrimaryView() {
+        const view = document.createElement('div');
+        view.className = 'yzm-vector-primary-view';
+        const store = getVectorStore();
+        const allBooks = store?.listBooks?.() || [];
+        const query = vectorUiState.bookQuery.trim().toLowerCase();
+        const filteredBooks = query ? allBooks.filter((book) => book.name.toLowerCase().includes(query)) : allBooks;
+        const page = paginateItems(filteredBooks, vectorUiState.bookPage, VECTOR_BOOK_PAGE_SIZE);
+        vectorUiState.bookPage = page.currentPage;
+
+        const header = document.createElement('div');
+        header.className = 'yzm-vector-primary-header';
+        header.append(createIconNode('fa-solid fa-book-bookmark', ''), document.createTextNode('我的书架'));
+
+        const controls = document.createElement('div');
+        controls.className = 'yzm-vector-primary-controls';
+        const search = createSearchBox('搜索书名...', 'yzm-vector-book-search');
+        const searchInput = search.querySelector('.yzm-search-input');
+        if (searchInput) searchInput.value = vectorUiState.bookQuery;
+        const filter = createIconButton('筛选', 'fa-solid fa-filter', 'yzm-vector-filter-button');
+        controls.append(search, filter);
+
+        const table = document.createElement('div');
+        table.className = 'yzm-vector-book-table';
+        table.append(createVectorBookHeader());
+        if (page.items.length) {
+            table.append(...page.items.map(createVectorBookRow));
+        } else {
+            table.appendChild(createVectorEmptyState(allBooks.length ? '没有匹配的书籍' : '暂无向量化书籍'));
+        }
+
+        const footer = document.createElement('div');
+        footer.className = 'yzm-vector-primary-footer';
+        footer.append(document.createTextNode(`共 ${filteredBooks.length} 本书`));
+        if (page.totalPages > 1) footer.appendChild(createVectorPager('book', page.currentPage, page.totalPages));
+
+        const bookFile = document.createElement('input');
+        bookFile.type = 'file';
+        bookFile.accept = '.txt,text/plain';
+        bookFile.hidden = true;
+        bookFile.dataset.yzmVectorFile = 'book';
+
+        const backupFile = document.createElement('input');
+        backupFile.type = 'file';
+        backupFile.accept = '.txt,application/json,text/plain';
+        backupFile.hidden = true;
+        backupFile.dataset.yzmVectorFile = 'backup';
+
+        view.append(header, controls, table, footer, bookFile, backupFile);
+        return view;
+    }
+
+    function createVectorBookHeader() {
+        const header = document.createElement('div');
+        header.className = 'yzm-vector-book-row yzm-vector-book-head';
+        header.append(
+            document.createElement('span'),
+            createVectorHeadCell('书名'),
+            createVectorHeadCell('分段数'),
+            createVectorHeadCell('向量化状态')
+        );
+        return header;
+    }
+
+    function createVectorHeadCell(text) {
+        const cell = document.createElement('span');
+        cell.textContent = text;
+        return cell;
+    }
+
+    function createVectorBookRow(book) {
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.className = book.selected ? 'yzm-vector-book-row yzm-vector-book-row-active' : 'yzm-vector-book-row';
+        row.dataset.yzmVectorBookId = book.id;
+
+        const check = document.createElement('span');
+        check.className = book.active ? 'yzm-vector-book-check yzm-vector-book-check-on' : 'yzm-vector-book-check';
+        check.dataset.yzmVectorBookToggle = book.id;
+        if (book.active) check.appendChild(createIconNode('fa-solid fa-check', ''));
+
+        const name = document.createElement('span');
+        name.className = 'yzm-vector-book-name';
+        name.textContent = book.name;
+        name.title = book.name;
+
+        const entries = document.createElement('span');
+        entries.className = 'yzm-vector-book-entries';
+        entries.textContent = book.entries.toLocaleString();
+
+        row.append(check, name, entries, createVectorStatus(book));
+        return row;
+    }
+
+    function createVectorStatus(book) {
+        const wrap = document.createElement('span');
+        wrap.className = 'yzm-vector-status-wrap';
+        const status = document.createElement('span');
+        status.className = `yzm-vector-status yzm-vector-status-${book.status}`;
+        status.textContent = getVectorStatusText(book.status);
+        const progress = document.createElement('span');
+        progress.className = 'yzm-vector-progress';
+        progress.textContent = `${book.progress}%`;
+        wrap.append(status, progress);
+        return wrap;
+    }
+
+    function getVectorStatusText(status) {
+        if (status === 'done') return '已完成';
+        if (status === 'running') return '进行中';
+        if (status === 'failed') return '已失败';
+        return '待向量化';
+    }
+
+    function createVectorPager(kind, currentPage, totalPages) {
+        const pager = document.createElement('div');
+        pager.className = 'yzm-vector-pager';
+        const previous = createIconButton('上一页', 'fa-solid fa-chevron-left', 'yzm-vector-page-button');
+        previous.dataset.yzmVectorPage = kind;
+        previous.dataset.yzmVectorPageDelta = '-1';
+        previous.disabled = currentPage <= 1;
+
+        const current = createButton(String(currentPage), 'yzm-vector-page-button yzm-vector-page-current');
+        current.disabled = true;
+        current.title = `第 ${currentPage} / ${totalPages} 页`;
+
+        const next = createIconButton('下一页', 'fa-solid fa-chevron-right', 'yzm-vector-page-button');
+        next.dataset.yzmVectorPage = kind;
+        next.dataset.yzmVectorPageDelta = '1';
+        next.disabled = currentPage >= totalPages;
+
+        pager.append(previous, current, next);
+        return pager;
+    }
+
+    function createVectorWorkspaceView() {
+        const view = document.createElement('div');
+        view.className = 'yzm-vector-workspace-view';
+        const store = getVectorStore();
+        const book = store?.getBook?.();
+        if (!book) {
+            view.appendChild(createVectorEmptyDetail());
+            return view;
+        }
+        view.append(
+            createVectorDetailHero(book),
+            createVectorCompletionCard(book),
+            createVectorSegmentPanel(book)
+        );
+        return view;
+    }
+
+    function createVectorEmptyDetail() {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-vector-empty-detail';
+        panel.appendChild(createVectorMoreMenu());
+
+        const content = document.createElement('div');
+        content.className = 'yzm-vector-empty-detail-content';
+        content.append(
+            createIconNode('fa-solid fa-book-open', ''),
+            document.createTextNode('暂无选中的向量化书籍')
+        );
+        panel.appendChild(content);
+        return panel;
+    }
+
+    function createVectorEmptyState(text) {
+        const empty = document.createElement('div');
+        empty.className = 'yzm-vector-empty-state';
+        empty.append(
+            createIconNode('fa-regular fa-folder-open', ''),
+            document.createTextNode(text)
+        );
+        return empty;
+    }
+
+    function createVectorDetailHero(book) {
+        const hero = document.createElement('section');
+        hero.className = 'yzm-vector-detail-hero';
+        const stats = getVectorStore()?.getBookStats?.(book) || { total: 0, progress: 0 };
+
+        const cover = document.createElement('div');
+        cover.className = 'yzm-vector-book-cover';
+        cover.appendChild(createIconNode('fa-solid fa-book-open', ''));
+
+        const info = document.createElement('div');
+        info.className = 'yzm-vector-detail-info';
+        const title = document.createElement('div');
+        title.className = 'yzm-vector-detail-title';
+        const titleText = document.createElement('span');
+        titleText.className = 'yzm-vector-detail-title-text';
+        titleText.textContent = book.name;
+        const renameButton = createIconButton('改名', 'fa-solid fa-pen', 'yzm-vector-rename-button');
+        renameButton.dataset.yzmVectorAction = 'rename';
+        title.append(titleText, renameButton);
+        const metrics = document.createElement('div');
+        metrics.className = 'yzm-vector-detail-metrics';
+        metrics.append(
+            createVectorMetric('分段数', stats.total.toLocaleString()),
+            createVectorMetric('向量化进度', `${stats.progress}%`, true, stats.progress),
+            createVectorMetric('最后更新', formatVectorDate(book.updateTime), false, 0, 'yzm-vector-metric-updated')
+        );
+        info.append(title, metrics);
+
+        const more = createVectorMoreMenu();
+        hero.append(cover, info, more);
+        return hero;
+    }
+
+    function createVectorMetric(label, value, withBar = false, progress = 0, extraClassName = '') {
+        const metric = document.createElement('div');
+        metric.className = extraClassName ? `yzm-vector-metric ${extraClassName}` : 'yzm-vector-metric';
+        const labelNode = document.createElement('span');
+        labelNode.textContent = label;
+        const valueNode = document.createElement('strong');
+        valueNode.textContent = value;
+        metric.append(labelNode, valueNode);
+        if (withBar) {
+            const bar = document.createElement('span');
+            bar.className = 'yzm-vector-metric-bar';
+            const fill = document.createElement('span');
+            fill.style.width = `${Math.min(Math.max(progress, 0), 100)}%`;
+            bar.appendChild(fill);
+            metric.appendChild(bar);
+        }
+        return metric;
+    }
+
+    function createVectorMoreMenu() {
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-vector-more';
+        const button = createIconButton('更多', 'fa-solid fa-ellipsis-vertical', 'yzm-vector-more-button');
+        const menu = document.createElement('div');
+        menu.className = 'yzm-vector-more-menu';
+        menu.hidden = true;
+        menu.append(
+            createVectorActionButton('new-book', '新建空白书', 'fa-solid fa-plus'),
+            createVectorActionButton('import-book', '导入新书（TXT）', 'fa-solid fa-file-import'),
+            createVectorActionButton('sync-summary', '同步总结到书架', 'fa-solid fa-rotate'),
+            createVectorActionButton('import-backup', '导入书馆备份', 'fa-solid fa-box-archive'),
+            createVectorActionButton('export-backup', '导出书馆备份', 'fa-solid fa-upload'),
+            createVectorActionButton('clear-all', '清空全部书籍', 'fa-solid fa-trash-can', true)
+        );
+        button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            menu.hidden = !menu.hidden;
+        });
+        wrap.append(button, menu);
+        return wrap;
+    }
+
+    function createVectorActionButton(action, label, iconClassName, danger = false) {
+        const button = createIconButton(label, iconClassName, danger ? 'yzm-vector-more-item yzm-vector-more-danger' : 'yzm-vector-more-item');
+        button.dataset.yzmVectorAction = action;
+        return button;
+    }
+
+    function createVectorCompletionCard(book) {
+        const card = document.createElement('section');
+        card.className = 'yzm-vector-complete-card';
+        const bookStats = getVectorStore()?.getBookStats?.(book) || { total: 0, done: 0, progress: 0, status: 'pending' };
+        const isDone = bookStats.total > 0 && bookStats.done >= bookStats.total;
+        const status = document.createElement('div');
+        status.className = 'yzm-vector-complete-title';
+        status.append(
+            createIconNode(isDone ? 'fa-solid fa-circle-check' : 'fa-regular fa-clock', ''),
+            document.createTextNode(isDone ? '向量化已完成' : '等待向量化')
+        );
+        const desc = document.createElement('div');
+        desc.className = 'yzm-vector-complete-desc';
+        desc.textContent = isDone ? '当前书籍所有分段已建立索引。' : '当前书籍仍有分段未建立索引。';
+        const statsGrid = document.createElement('div');
+        statsGrid.className = 'yzm-vector-complete-stats';
+        [
+            ['总分段', bookStats.total.toLocaleString()],
+            ['已向量化', bookStats.done.toLocaleString()],
+            ['待处理', Math.max(bookStats.total - bookStats.done, 0).toLocaleString()],
+            ['进度', `${bookStats.progress}%`],
+            ['更新时间', formatVectorDate(book.updateTime)],
+        ].forEach(([label, value]) => statsGrid.appendChild(createVectorStat(label, value)));
+        card.append(status, desc, statsGrid);
+        return card;
+    }
+
+    function createVectorStat(label, value) {
+        const item = document.createElement('div');
+        item.className = 'yzm-vector-stat';
+        const labelNode = document.createElement('span');
+        labelNode.textContent = label;
+        const valueNode = document.createElement('strong');
+        valueNode.textContent = value;
+        item.append(labelNode, valueNode);
+        return item;
+    }
+
+    function createVectorSegmentPanel(book) {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-vector-segment-panel';
+        const query = vectorUiState.segmentQuery.trim().toLowerCase();
+        const segments = (book.chunks || []).map((text, index) => ({
+            id: String(index + 1).padStart(5, '0'),
+            index,
+            text,
+            status: book.vectorized?.[index] ? 'done' : 'pending',
+        }));
+        const filteredSegments = query ? segments.filter((segment) => segment.text.toLowerCase().includes(query)) : segments;
+        const page = paginateItems(filteredSegments, vectorUiState.segmentPage, VECTOR_SEGMENT_PAGE_SIZE);
+        vectorUiState.segmentPage = page.currentPage;
+
+        const header = document.createElement('div');
+        header.className = 'yzm-vector-segment-header';
+        const search = createSearchBox('搜索分段内容...', 'yzm-vector-segment-search');
+        const searchInput = search.querySelector('.yzm-search-input');
+        if (searchInput) searchInput.value = vectorUiState.segmentQuery;
+        const exportButton = createIconButton('导出', 'fa-solid fa-download', 'yzm-vector-export-button');
+        exportButton.dataset.yzmVectorAction = 'export-current-book';
+        header.append(document.createTextNode('分段内容'), search, exportButton);
+
+        const table = document.createElement('div');
+        table.className = 'yzm-vector-segment-table';
+        table.append(createVectorSegmentHead());
+        if (page.items.length) {
+            table.append(...page.items.map(createVectorSegmentRow));
+        } else {
+            table.appendChild(createVectorEmptyState(segments.length ? '没有匹配的分段' : '暂无分段内容'));
+        }
+
+        const footer = document.createElement('div');
+        footer.className = 'yzm-vector-segment-footer';
+        footer.append(document.createTextNode(`共 ${filteredSegments.length.toLocaleString()} 个分段`));
+        if (page.totalPages > 1) footer.appendChild(createVectorPager('segment', page.currentPage, page.totalPages));
+        panel.append(header, table, footer);
+        return panel;
+    }
+
+    function createVectorSegmentHead() {
+        const row = document.createElement('div');
+        row.className = 'yzm-vector-segment-row yzm-vector-segment-head';
+        ['', '分段 ID', '分段内容', '向量化状态'].forEach((text) => {
+            const cell = document.createElement('span');
+            cell.textContent = text;
+            row.appendChild(cell);
+        });
+        return row;
+    }
+
+    function createVectorSegmentRow(segment) {
+        const row = document.createElement('div');
+        row.className = 'yzm-vector-segment-row';
+        const check = document.createElement('span');
+        check.className = 'yzm-vector-book-check';
+        const id = document.createElement('span');
+        id.textContent = segment.id;
+        const text = document.createElement('span');
+        text.className = 'yzm-vector-segment-text';
+        text.textContent = segment.text;
+        const status = document.createElement('span');
+        status.className = `yzm-vector-status yzm-vector-status-${segment.status}`;
+        status.textContent = getVectorStatusText(segment.status);
+        row.append(check, id, text, status);
+        return row;
+    }
+
+    async function ensureVectorStoreReady() {
+        const store = getVectorStore();
+        if (!store) return null;
+        await store.whenReady?.();
+        return store;
+    }
+
+    function refreshVectorAfterAction(root) {
+        renderVectorWorkspace(root);
+        root.querySelectorAll('.yzm-vector-more-menu').forEach((menu) => {
+            menu.hidden = true;
+        });
+    }
+
+    async function saveVectorBookFromEditor(root, overlay, bookId = '') {
+        const store = await ensureVectorStoreReady();
+        if (!store) return;
+
+        const nameInput = overlay.querySelector('[data-yzm-vector-book-name]');
+        const contentInput = overlay.querySelector('[data-yzm-vector-book-content]');
+        const name = String(nameInput?.value || '').trim();
+        const content = String(contentInput?.value || '').trim();
+        if (!name) {
+            nameInput?.focus();
+            return;
+        }
+        if (!content) {
+            contentInput?.focus();
+            return;
+        }
+
+        const chunks = store.splitText(content, '===');
+        if (!chunks.length) {
+            contentInput?.focus();
+            return;
+        }
+
+        const targetBookId = bookId && store.getBook(bookId) ? bookId : await store.createBook(name);
+        if (targetBookId === bookId) {
+            await store.renameBook(targetBookId, name);
+        }
+        await store.setBookChunks(targetBookId, chunks);
+        store.selectBook(targetBookId);
+        vectorUiState.bookPage = 1;
+        vectorUiState.segmentPage = 1;
+        overlay.remove();
+        refreshVectorAfterAction(root);
+    }
+
+    function openVectorBookEditor(root, bookId = '') {
+        const store = getVectorStore();
+        const book = store?.getBook?.(bookId);
+        const isEditing = Boolean(book);
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-vector-book-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-vector-book-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-vector-book-dialog';
+        dialog.setAttribute('aria-label', isEditing ? '编辑向量书' : '新建向量书');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = isEditing ? '编辑向量书' : '新建向量书';
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭新建向量书');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+        const fields = document.createElement('div');
+        fields.className = 'yzm-record-fields yzm-vector-book-fields';
+
+        const nameField = createRecordInput('书名', '', false);
+        const nameInput = nameField.querySelector('.yzm-record-input');
+        nameInput.dataset.yzmVectorBookName = 'true';
+        nameInput.placeholder = '例如：新版向量化';
+        nameInput.value = book?.name || '';
+
+        const contentField = createRecordInput('正文内容', '', true);
+        contentField.classList.add('yzm-vector-book-content-field');
+        const contentInput = contentField.querySelector('.yzm-record-input');
+        contentInput.dataset.yzmVectorBookContent = 'true';
+        contentInput.placeholder = '每个分段之间用 === 分割';
+        contentInput.value = (book?.chunks || []).join('\n===\n');
+
+        fields.append(nameField, contentField);
+
+        const hint = document.createElement('div');
+        hint.className = 'yzm-vector-book-editor-hint';
+        hint.textContent = '正文会按 === 切分为多个分段。';
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-record-actions';
+        const save = createButton('保存', 'yzm-add-table-confirm yzm-vector-book-save');
+        actions.appendChild(save);
+
+        header.append(title, close);
+        dialog.append(header, fields, hint, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        save.addEventListener('click', () => saveVectorBookFromEditor(root, overlay, bookId));
+        nameInput.focus();
+    }
+
+    async function handleVectorAction(root, action) {
+        const store = await ensureVectorStoreReady();
+        if (!store) return;
+
+        if (action === 'new-book') {
+            openVectorBookEditor(root);
+            return;
+        }
+
+        if (action === 'rename') {
+            const book = store.getBook();
+            if (!book) return;
+            openVectorBookEditor(root, store.selectedBookId);
+            return;
+        }
+
+        if (action === 'import-book') {
+            root.querySelector('[data-yzm-vector-file="book"]')?.click();
+            return;
+        }
+
+        if (action === 'import-backup') {
+            root.querySelector('[data-yzm-vector-file="backup"]')?.click();
+            return;
+        }
+
+        if (action === 'export-backup') {
+            store.downloadBackup();
+            refreshVectorAfterAction(root);
+            return;
+        }
+
+        if (action === 'export-current-book') {
+            if (store.selectedBookId) store.downloadBackup([store.selectedBookId]);
+            return;
+        }
+
+        if (action === 'sync-summary') {
+            const result = await store.syncSummaryToBook(getSummaryVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default');
+            if (!result.success) {
+                window.alert(result.error || '同步失败');
+                return;
+            }
+            vectorUiState.bookPage = 1;
+            vectorUiState.segmentPage = 1;
+            refreshVectorAfterAction(root);
+            return;
+        }
+
+        if (action === 'clear-all') {
+            if (!window.confirm('确定要清空全部向量化书籍吗？')) return;
+            await store.clearAllBooks();
+            vectorUiState.bookPage = 1;
+            vectorUiState.segmentPage = 1;
+            refreshVectorAfterAction(root);
+        }
+    }
+
+    async function handleVectorFileImport(root, input) {
+        const file = input.files?.[0];
+        input.value = '';
+        if (!file) return;
+
+        const store = await ensureVectorStoreReady();
+        if (!store) return;
+
+        try {
+            if (input.dataset.yzmVectorFile === 'book') {
+                const defaultName = file.name.replace(/\.[^.]+$/, '');
+                const name = window.prompt('请输入书名（留空则使用文件名）：', defaultName);
+                if (name === null) return;
+                await store.importBook(file, name || defaultName);
+            } else {
+                await store.importLibrary(file);
+            }
+            vectorUiState.bookPage = 1;
+            vectorUiState.segmentPage = 1;
+            refreshVectorAfterAction(root);
+        } catch (error) {
+            window.alert(`导入失败：${error.message || error}`);
+        }
     }
 
     function createCharacterPrimaryItem(table, record, isActive) {
@@ -1067,17 +1796,120 @@
         const page = document.createElement('div');
         page.className = 'yzm-config-view';
 
+        renderConfigWorkspaceContent(page);
+        return page;
+    }
+
+    function renderConfigWorkspace(root) {
+        const page = root.querySelector('.yzm-config-view');
+        if (!page) return;
+        renderConfigWorkspaceContent(page);
+        bindPanelInteractions(root);
+    }
+
+    function renderConfigWorkspaceContent(page) {
         const content = document.createElement('div');
         content.className = 'yzm-config-content';
+
+        if (activeConfigSectionId === 'plugin') {
+            content.appendChild(createPluginConfigPanel());
+            page.replaceChildren(content);
+            return;
+        }
 
         const filterLayout = document.createElement('div');
         filterLayout.className = 'yzm-config-filter-layout';
         filterLayout.append(createTagPresetPanel(), createTagFilterPanel());
 
         content.append(createFillModePanel(), filterLayout);
+        page.replaceChildren(content);
+    }
 
-        page.appendChild(content);
-        return page;
+    function createPluginConfigPanel() {
+        const card = document.createElement('section');
+        card.className = 'yzm-config-card yzm-plugin-config-card';
+
+        const titleNode = document.createElement('div');
+        titleNode.className = 'yzm-plugin-config-hero';
+        titleNode.append(
+            createIconNode('fa-solid fa-link', 'yzm-plugin-config-hero-icon'),
+            createPluginConfigTitle('智能联动配置', '配置插件的智能行为，提升自动化效率')
+        );
+
+        card.append(
+            createPluginConfigHeader(),
+            titleNode,
+            createPluginConfigRow('注入记忆表格', '此为总开关。关闭后不注入任何记忆内容（含向量化及总结）。', 'fa-solid fa-table-cells-large', createConfigSwitch(true)),
+            createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(true)),
+            createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput('50'), createConfigSwitch(false)))
+        );
+        return card;
+    }
+
+    function createPluginConfigHeader() {
+        const header = document.createElement('div');
+        header.className = 'yzm-plugin-config-header';
+        header.append(createIconNode('fa-solid fa-gear', ''), document.createTextNode('插件配置'));
+        return header;
+    }
+
+    function createPluginConfigTitle(title, description) {
+        const text = document.createElement('div');
+        text.className = 'yzm-plugin-config-title';
+        const heading = document.createElement('div');
+        heading.textContent = title;
+        const desc = document.createElement('span');
+        desc.textContent = description;
+        text.append(heading, desc);
+        return text;
+    }
+
+    function createPluginConfigRow(title, description, iconClassName, control, extra = null) {
+        const row = document.createElement('div');
+        row.className = 'yzm-plugin-config-row';
+
+        const icon = createIconNode(iconClassName, 'yzm-plugin-config-row-icon');
+        const text = createPluginConfigTitle(title, description);
+        const body = document.createElement('div');
+        body.className = 'yzm-plugin-config-row-body';
+        body.append(icon, text);
+
+        const action = document.createElement('div');
+        action.className = 'yzm-plugin-config-row-action';
+        action.appendChild(control);
+
+        row.append(body, action);
+        if (extra) row.appendChild(extra);
+        return row;
+    }
+
+    function createPluginConfigInlineControls(...controls) {
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-plugin-config-inline';
+        wrap.append(...controls);
+        return wrap;
+    }
+
+    function createConfigSwitch(isOn = false) {
+        const button = createButton('', isOn ? 'yzm-config-switch yzm-config-switch-on' : 'yzm-config-switch');
+        button.setAttribute('aria-pressed', String(isOn));
+        button.appendChild(document.createElement('span'));
+        return button;
+    }
+
+    function createConfigNumberInput(value) {
+        const input = document.createElement('input');
+        input.className = 'yzm-config-number-input';
+        input.type = 'number';
+        input.value = value;
+        return input;
+    }
+
+    function createPluginConfigHint(text) {
+        const hint = document.createElement('div');
+        hint.className = 'yzm-plugin-config-hint';
+        hint.append(createIconNode('fa-solid fa-circle-info', ''), document.createTextNode(text));
+        return hint;
     }
 
     function createTagPresetPanel() {
@@ -1115,21 +1947,152 @@
 
         const select = document.createElement('select');
         select.className = 'yzm-preset-select';
+        select.dataset.yzmPresetSelect = 'true';
         select.setAttribute('aria-label', '选择预设');
-        ['选择预设', '默认过滤', '仅保留正文', '状态栏过滤'].forEach((label) => {
-            const option = document.createElement('option');
-            option.textContent = label;
-            option.value = label === '选择预设' ? '' : label;
-            select.appendChild(option);
-        });
+        renderPresetOptions(select);
 
         wrapper.append(select, createIconNode('fa-solid fa-chevron-down', ''));
         return wrapper;
     }
 
+    function renderPresetOptions(select, activePresetId = '') {
+        if (!select) return;
+        const presets = getTagPresets();
+        const placeholder = document.createElement('option');
+        placeholder.textContent = presets.length ? '选择预设' : '暂无预设';
+        placeholder.value = '';
+        select.replaceChildren(placeholder);
+        presets.forEach((preset) => {
+            const option = document.createElement('option');
+            option.textContent = preset.name;
+            option.value = preset.id;
+            select.appendChild(option);
+        });
+        select.value = presets.some((preset) => preset.id === activePresetId) ? activePresetId : '';
+    }
+
+    function createTagChip(tag) {
+        const chip = createButton(tag, 'yzm-tag-chip');
+        chip.dataset.yzmTagChip = 'true';
+        return chip;
+    }
+
+    function getTagFilterPanel(root) {
+        return root.querySelector('.yzm-config-view');
+    }
+
+    function getTagRow(root, type) {
+        return getTagFilterPanel(root)?.querySelector(`[data-yzm-tag-row="${type}"]`);
+    }
+
+    function getTagInput(root, type) {
+        return getTagFilterPanel(root)?.querySelector(`[data-yzm-tag-input="${type}"]`);
+    }
+
+    function getPresetSelect(root) {
+        return getTagFilterPanel(root)?.querySelector('[data-yzm-preset-select]');
+    }
+
+    function getPresetNameInput(root) {
+        return getTagFilterPanel(root)?.querySelector('[data-yzm-preset-name]');
+    }
+
+    function clearTagRow(row) {
+        if (!row) return;
+        row.querySelectorAll('[data-yzm-tag-chip]').forEach((chip) => chip.remove());
+    }
+
+    function setTagChips(root, type, tags) {
+        const row = getTagRow(root, type);
+        if (!row) return;
+        clearTagRow(row);
+        const addButton = row.querySelector('.yzm-tag-chip-add');
+        normalizeTagList(tags).forEach((tag) => row.insertBefore(createTagChip(tag), addButton));
+        const input = getTagInput(root, type);
+        if (input) input.value = '';
+    }
+
+    function getTagChips(root, type) {
+        const row = getTagRow(root, type);
+        const chips = Array.from(row?.querySelectorAll('[data-yzm-tag-chip]') || []).map((chip) => chip.textContent || '');
+        const pending = splitTagText(getTagInput(root, type)?.value || '');
+        return normalizeTagList([...chips, ...pending]);
+    }
+
+    function clearTagPresetEditor(root) {
+        const select = getPresetSelect(root);
+        const nameInput = getPresetNameInput(root);
+        if (select) select.value = '';
+        if (nameInput) nameInput.value = '';
+        setTagChips(root, 'blacklist', []);
+        setTagChips(root, 'whitelist', []);
+    }
+
+    function applyTagPreset(root, presetId) {
+        const preset = getTagPresets().find((entry) => entry.id === presetId);
+        const nameInput = getPresetNameInput(root);
+        if (!preset) {
+            clearTagPresetEditor(root);
+            return;
+        }
+        if (nameInput) nameInput.value = preset.name;
+        setTagChips(root, 'blacklist', preset.blacklist);
+        setTagChips(root, 'whitelist', preset.whitelist);
+    }
+
+    function saveCurrentTagPreset(root) {
+        const nameInput = getPresetNameInput(root);
+        const select = getPresetSelect(root);
+        const name = String(nameInput?.value || '').trim();
+        if (!name) {
+            nameInput?.focus();
+            return;
+        }
+
+        const preset = {
+            id: select?.value || createTagPresetId(),
+            name,
+            blacklist: getTagChips(root, 'blacklist'),
+            whitelist: getTagChips(root, 'whitelist'),
+        };
+        const presets = getTagPresets();
+        const existingIndex = presets.findIndex((entry) => entry.id === preset.id);
+        if (existingIndex >= 0) {
+            presets[existingIndex] = preset;
+        } else {
+            presets.push(preset);
+        }
+        saveTagPresets(presets);
+        renderPresetOptions(select, preset.id);
+        applyTagPreset(root, preset.id);
+    }
+
+    function deleteCurrentTagPreset(root) {
+        const select = getPresetSelect(root);
+        const presetId = select?.value || '';
+        if (!presetId) return;
+        saveTagPresets(getTagPresets().filter((preset) => preset.id !== presetId));
+        renderPresetOptions(select);
+        clearTagPresetEditor(root);
+    }
+
+    function refreshTagPresetSelect(root) {
+        const select = getPresetSelect(root);
+        if (!select) return;
+        renderPresetOptions(select, select.value);
+    }
+
+    function addPendingTags(root, type) {
+        const input = getTagInput(root, type);
+        const tags = splitTagText(input?.value || '');
+        if (!tags.length) return;
+        setTagChips(root, type, [...getTagChips(root, type), ...tags]);
+    }
+
     function createPresetNameInput() {
         const input = document.createElement('input');
         input.className = 'yzm-preset-name-input';
+        input.dataset.yzmPresetName = 'true';
         input.type = 'text';
         input.placeholder = '例如：仅保留内容相关';
         return input;
@@ -1139,8 +2102,9 @@
         const actions = document.createElement('div');
         actions.className = 'yzm-preset-actions';
         actions.append(
-            createIconButton('保存', 'fa-regular fa-floppy-disk', 'yzm-preset-action-button'),
-            createIconButton('删除', 'fa-regular fa-trash-can', 'yzm-preset-action-button yzm-preset-action-danger')
+            createIconButton('新建', 'fa-solid fa-plus', 'yzm-preset-action-button yzm-preset-new'),
+            createIconButton('保存', 'fa-regular fa-floppy-disk', 'yzm-preset-action-button yzm-preset-save'),
+            createIconButton('删除', 'fa-regular fa-trash-can', 'yzm-preset-action-button yzm-preset-delete yzm-preset-action-danger')
         );
         return actions;
     }
@@ -1179,8 +2143,8 @@
 
         card.append(
             titleNode,
-            createTagFilterBlock('黑名单标签（去除）', 'fa-regular fa-circle-xmark', '例如：Music, Memory, |--', ['think', 'thinking', 'details', 'summary']),
-            createTagFilterBlock('白名单标签（仅留）', 'fa-regular fa-circle-check', '例：content, message', ['content', 'statusbar'])
+            createTagFilterBlock('黑名单标签（去除）', 'fa-regular fa-circle-xmark', '例如：Music, Memory, |--', 'blacklist'),
+            createTagFilterBlock('白名单标签（仅留）', 'fa-regular fa-circle-check', '例：content, message', 'whitelist')
         );
         return card;
     }
@@ -1199,9 +2163,10 @@
         return button;
     }
 
-    function createTagFilterBlock(title, iconClassName, placeholder, tags) {
+    function createTagFilterBlock(title, iconClassName, placeholder, type) {
         const block = document.createElement('div');
         block.className = 'yzm-tag-filter-block';
+        block.dataset.yzmTagBlock = type;
 
         const label = document.createElement('div');
         label.className = 'yzm-tag-filter-label';
@@ -1209,16 +2174,17 @@
 
         const input = document.createElement('input');
         input.className = 'yzm-config-input';
+        input.dataset.yzmTagInput = type;
         input.type = 'text';
         input.placeholder = placeholder;
 
         const row = document.createElement('div');
         row.className = 'yzm-tag-chip-row';
+        row.dataset.yzmTagRow = type;
         const prefix = document.createElement('span');
         prefix.className = 'yzm-tag-chip-prefix';
         prefix.textContent = '常用：';
         row.appendChild(prefix);
-        tags.forEach((tag) => row.appendChild(createButton(tag, 'yzm-tag-chip')));
         row.appendChild(createIconButton('新增', 'fa-solid fa-plus', 'yzm-tag-chip yzm-tag-chip-add'));
 
         block.append(label, input, row);
@@ -1282,10 +2248,26 @@
 
         const value = document.createElement('div');
         value.className = 'yzm-character-field-value';
-        value.textContent = text;
+        renderCharacterFieldValue(value, label, text);
 
         row.append(labelNode, value);
         return row;
+    }
+
+    function renderCharacterFieldValue(valueNode, label, text = '') {
+        const normalized = String(text || '').trim();
+        if (label !== '性别' || !['男', '女'].includes(normalized)) {
+            valueNode.textContent = text;
+            return;
+        }
+
+        valueNode.classList.add('yzm-character-gender-value');
+        const iconClassName = normalized === '男' ? 'fa-solid fa-mars' : 'fa-solid fa-venus';
+        const genderClassName = normalized === '男' ? 'yzm-character-gender-male' : 'yzm-character-gender-female';
+        valueNode.append(
+            createIconNode(iconClassName, genderClassName),
+            document.createTextNode(normalized)
+        );
     }
 
     function createCharacterPanel(title, iconClassName, colorClassName, text = '') {
@@ -1920,6 +2902,11 @@
             root.addEventListener('click', (event) => {
                 const target = event.target instanceof Element ? event.target : null;
                 const closeButton = target?.closest('.yzm-structure-close');
+                if (!target?.closest('.yzm-vector-more')) {
+                    root.querySelectorAll('.yzm-vector-more-menu').forEach((menu) => {
+                        menu.hidden = true;
+                    });
+                }
                 if (!closeButton) {
                     if (!target?.closest('.yzm-record-action-menu, .yzm-primary-item')) closeRecordActionMenu(root);
                     return;
@@ -2029,9 +3016,7 @@
                 root.querySelectorAll('.yzm-nav-item-active, .yzm-nav-table-active').forEach((node) => {
                     node.classList.remove('yzm-nav-item-active', 'yzm-nav-table-active');
                 });
-                root.querySelectorAll('.yzm-sidebar-action-active').forEach((node) => {
-                    node.classList.remove('yzm-sidebar-action-active');
-                });
+                clearSidebarActionActive(root);
                 item.classList.add('yzm-nav-table-active');
                 setActiveTable(item.dataset.yzmTableId);
                 setMobileDetailOpen(root, false);
@@ -2053,11 +3038,138 @@
                 root.querySelectorAll('.yzm-nav-item-active, .yzm-nav-table-active').forEach((node) => {
                     node.classList.remove('yzm-nav-item-active', 'yzm-nav-table-active');
                 });
-                root.querySelectorAll('.yzm-sidebar-action-active').forEach((node) => {
-                    node.classList.remove('yzm-sidebar-action-active');
-                });
+                clearSidebarActionActive(root);
                 configButton.classList.add('yzm-sidebar-action-active');
                 updateWorkspaceMode(root);
+                refreshTagPresetSelect(root);
+            });
+        }
+
+        const vectorButton = root.querySelector('.yzm-sidebar-action[data-yzm-action="vector"]');
+        if (vectorButton && vectorButton.dataset.yzmBound !== 'true') {
+            vectorButton.dataset.yzmBound = 'true';
+            vectorButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                activeWorkspaceView = 'vector';
+                setMobileDetailOpen(root, false);
+                root.querySelectorAll('.yzm-nav-item-active, .yzm-nav-table-active').forEach((node) => {
+                    node.classList.remove('yzm-nav-item-active', 'yzm-nav-table-active');
+                });
+                clearSidebarActionActive(root);
+                vectorButton.classList.add('yzm-sidebar-action-active');
+                updateWorkspaceMode(root);
+                getVectorStore()?.whenReady?.().then(() => renderVectorWorkspace(root));
+            });
+        }
+
+        if (root.dataset.yzmVectorBound !== 'true') {
+            root.dataset.yzmVectorBound = 'true';
+            let vectorLongPressTimer = null;
+            let vectorLongPressOpened = false;
+            const clearVectorLongPress = () => {
+                window.clearTimeout(vectorLongPressTimer);
+                vectorLongPressTimer = null;
+            };
+
+            root.addEventListener('click', async (event) => {
+                const target = event.target instanceof Element ? event.target : null;
+                const actionButton = target?.closest('[data-yzm-vector-action]');
+                const bookButton = target?.closest('[data-yzm-vector-book-id]');
+                const toggle = target?.closest('[data-yzm-vector-book-toggle]');
+                const pager = target?.closest('[data-yzm-vector-page]');
+
+                if (actionButton) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    await handleVectorAction(root, actionButton.dataset.yzmVectorAction);
+                    return;
+                }
+
+                if (toggle) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const store = await ensureVectorStoreReady();
+                    if (!store) return;
+                    const bookId = toggle.dataset.yzmVectorBookToggle;
+                    store.toggleActiveBook(bookId, !store.getActiveBooks().includes(bookId));
+                    renderVectorWorkspace(root);
+                    return;
+                }
+
+                if (bookButton) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    if (vectorLongPressOpened) {
+                        vectorLongPressOpened = false;
+                        return;
+                    }
+                    const store = await ensureVectorStoreReady();
+                    if (!store) return;
+                    store.selectBook(bookButton.dataset.yzmVectorBookId);
+                    vectorUiState.segmentPage = 1;
+                    renderVectorWorkspace(root);
+                    if (isMobileLayout()) setMobileDetailOpen(root, true);
+                    return;
+                }
+
+                if (pager) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const delta = Number(pager.dataset.yzmVectorPageDelta) || 0;
+                    if (pager.dataset.yzmVectorPage === 'book') vectorUiState.bookPage += delta;
+                    if (pager.dataset.yzmVectorPage === 'segment') vectorUiState.segmentPage += delta;
+                    renderVectorWorkspace(root);
+                }
+            });
+
+            root.addEventListener('contextmenu', (event) => {
+                const target = event.target instanceof Element ? event.target : null;
+                const bookButton = target?.closest('[data-yzm-vector-book-id]');
+                if (!bookButton) return;
+                event.preventDefault();
+                event.stopPropagation();
+                openVectorBookActionMenu(root, bookButton.dataset.yzmVectorBookId, event.clientX, event.clientY);
+            });
+
+            root.addEventListener('pointerdown', (event) => {
+                if (!isMobileLayout() || event.button !== 0) return;
+                const target = event.target instanceof Element ? event.target : null;
+                const bookButton = target?.closest('[data-yzm-vector-book-id]');
+                if (!bookButton) return;
+                clearVectorLongPress();
+                vectorLongPressOpened = false;
+                vectorLongPressTimer = window.setTimeout(() => {
+                    vectorLongPressOpened = true;
+                    openVectorBookActionMenu(root, bookButton.dataset.yzmVectorBookId, event.clientX, event.clientY);
+                }, 600);
+            });
+            root.addEventListener('pointerup', clearVectorLongPress);
+            root.addEventListener('pointercancel', clearVectorLongPress);
+            root.addEventListener('pointerleave', clearVectorLongPress);
+
+            root.addEventListener('input', (event) => {
+                const target = event.target;
+                if (target?.closest?.('.yzm-vector-book-search')) {
+                    vectorUiState.bookQuery = target.value || '';
+                    vectorUiState.bookPage = 1;
+                    window.clearTimeout(vectorSearchTimer);
+                    vectorSearchTimer = window.setTimeout(() => renderVectorWorkspace(root), 120);
+                    return;
+                }
+
+                if (target?.closest?.('.yzm-vector-segment-search')) {
+                    vectorUiState.segmentQuery = target.value || '';
+                    vectorUiState.segmentPage = 1;
+                    window.clearTimeout(vectorSearchTimer);
+                    vectorSearchTimer = window.setTimeout(() => renderVectorWorkspace(root), 120);
+                }
+            });
+
+            root.addEventListener('change', (event) => {
+                const target = event.target;
+                if (!target?.matches?.('[data-yzm-vector-file]')) return;
+                handleVectorFileImport(root, target);
             });
         }
 
@@ -2070,8 +3182,66 @@
                     node.classList.remove('yzm-config-nav-item-active');
                 });
                 item.classList.add('yzm-config-nav-item-active');
+                renderConfigWorkspace(root);
+                if (activeConfigSectionId === 'init') refreshTagPresetSelect(root);
             });
         });
+
+        const configView = root.querySelector('.yzm-config-view');
+        if (configView && configView.dataset.yzmPresetBound !== 'true') {
+            configView.dataset.yzmPresetBound = 'true';
+            configView.addEventListener('change', (event) => {
+                const target = event.target;
+                if (!target?.matches?.('[data-yzm-preset-select]')) return;
+                applyTagPreset(root, target.value);
+            });
+            configView.addEventListener('click', (event) => {
+                const target = event.target;
+                const newButton = target?.closest?.('.yzm-preset-new');
+                const saveButton = target?.closest?.('.yzm-preset-save');
+                const deleteButton = target?.closest?.('.yzm-preset-delete');
+                const addButton = target?.closest?.('.yzm-tag-chip-add');
+                const tagChip = target?.closest?.('[data-yzm-tag-chip]');
+                const configSwitch = target?.closest?.('.yzm-config-switch');
+
+                if (newButton) {
+                    clearTagPresetEditor(root);
+                    getPresetNameInput(root)?.focus();
+                    return;
+                }
+
+                if (saveButton) {
+                    saveCurrentTagPreset(root);
+                    return;
+                }
+
+                if (deleteButton) {
+                    deleteCurrentTagPreset(root);
+                    return;
+                }
+
+                if (addButton) {
+                    addPendingTags(root, addButton.closest('[data-yzm-tag-row]')?.dataset.yzmTagRow);
+                    return;
+                }
+
+                if (tagChip) {
+                    tagChip.remove();
+                    return;
+                }
+
+                if (configSwitch) {
+                    const isOn = configSwitch.classList.toggle('yzm-config-switch-on');
+                    configSwitch.setAttribute('aria-pressed', String(isOn));
+                }
+            });
+            configView.addEventListener('keydown', (event) => {
+                const target = event.target;
+                if (event.key !== 'Enter' || !target?.matches?.('[data-yzm-tag-input]')) return;
+                event.preventDefault();
+                addPendingTags(root, target.dataset.yzmTagInput);
+            });
+        }
 
         const currentTableEdit = root.querySelector('.yzm-current-table-edit');
         if (currentTableEdit && currentTableEdit.dataset.yzmBound !== 'true') {
@@ -2208,8 +3378,7 @@
         const actions = document.createElement('div');
         actions.className = 'yzm-shell-actions';
 
-        const topActions = createTopActions();
-        const themeSwitcher = createThemeSwitcher(shell);
+        const topActions = createTopActions(shell);
 
         const close = createButton('', 'yzm-shell-close');
         close.setAttribute('aria-label', '关闭 yuzuki-Memory');
@@ -2217,7 +3386,7 @@
 
         const body = createPanelBody();
 
-        actions.append(topActions, themeSwitcher, close);
+        actions.append(topActions, close);
         bar.append(brand, actions);
         shell.append(bar, body);
         root.append(shell);
@@ -2244,6 +3413,7 @@
             loadedSessionId = nextSessionId || getStorage()?.getCurrentSessionId?.() || null;
             memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
             renderPanelState(root);
+            if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
             getStorage()?.endSessionSwitch?.();
         }, 220);
 
@@ -2342,6 +3512,10 @@
         watchExtensionMenuButton();
         getStorage()?.bindSessionChange?.((nextSessionId, previousSessionId) => {
             reloadStateForCurrentSession(nextSessionId, previousSessionId);
+        });
+        getVectorStore()?.whenReady?.().then(() => {
+            const root = document.getElementById(ROOT_ID);
+            if (root) renderVectorWorkspace(root);
         });
 
         if (!mountExtensionMenuEntry()) {
