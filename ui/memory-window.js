@@ -11,6 +11,8 @@
     const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
     const TAG_PRESETS_STORAGE_KEY = 'yzm_memory_global_tag_presets';
     const LLM_API_PRESETS_STORAGE_KEY = 'yzm_memory_global_llm_api_presets';
+    const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
+    const AUTO_SUMMARY_SETTINGS_STORAGE_KEY = 'yzm_memory_global_auto_summary_settings';
     const LAYOUT_DEFAULTS = {
         desktop: {
             sidebar: { value: 180, min: 118, max: 300 },
@@ -89,6 +91,8 @@
     const CONFIG_SECTIONS = [
         { id: 'plugin', label: '插件配置', icon: 'fa-solid fa-gear' },
         { id: 'init', label: '基础设置', icon: 'fa-solid fa-wand-magic-sparkles' },
+        { id: 'autoSummary', label: '自动总结', icon: 'fa-solid fa-robot' },
+        { id: 'requestProbe', label: 'API 请求查看器', icon: 'fa-solid fa-list-check' },
     ];
     const API_SECTIONS = [
         { id: 'llm', label: 'LLM', icon: 'fa-solid fa-comments' },
@@ -101,6 +105,24 @@
         threshold: 0.3,
         recallLimit: 6,
         contextDepth: 2,
+    };
+    const DEFAULT_PLUGIN_SETTINGS = {
+        injectMemoryTable: true,
+        smartCalculationLinkage: false,
+        hideFloorsEnabled: false,
+        hiddenFloorCount: 50,
+    };
+    const DEFAULT_AUTO_SUMMARY_SETTINGS = {
+        summaryEnabled: true,
+        summaryEvery: 20,
+        historyEnabled: true,
+        historyEvery: 100,
+        summaryDelay: 2,
+        historyDelay: 3,
+        directTrigger: true,
+        autoSave: true,
+        autoVectorizeAfterHistory: false,
+        hideSummaryFloors: false,
     };
     const DEFAULT_STATE_REVISION = 11;
     const DEFAULT_TABLES = [
@@ -484,6 +506,93 @@
             maxTokens: '',
             stream: false,
         };
+    }
+
+    function normalizePluginSettings(rawSettings) {
+        const source = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
+        return {
+            injectMemoryTable: typeof source.injectMemoryTable === 'boolean' ? source.injectMemoryTable : DEFAULT_PLUGIN_SETTINGS.injectMemoryTable,
+            smartCalculationLinkage: typeof source.smartCalculationLinkage === 'boolean' ? source.smartCalculationLinkage : DEFAULT_PLUGIN_SETTINGS.smartCalculationLinkage,
+            hideFloorsEnabled: typeof source.hideFloorsEnabled === 'boolean' ? source.hideFloorsEnabled : DEFAULT_PLUGIN_SETTINGS.hideFloorsEnabled,
+            hiddenFloorCount: Math.round(normalizeNumberSetting(source.hiddenFloorCount, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0)),
+        };
+    }
+
+    function getPluginSettings() {
+        try {
+            return normalizePluginSettings(JSON.parse(localStorage.getItem(PLUGIN_SETTINGS_STORAGE_KEY) || '{}'));
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load plugin settings.', error);
+            return normalizePluginSettings();
+        }
+    }
+
+    function savePluginSettings(nextSettings) {
+        const normalized = normalizePluginSettings(nextSettings);
+        localStorage.setItem(PLUGIN_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+        return normalized;
+    }
+
+    function updatePluginSetting(key, value) {
+        const current = getPluginSettings();
+        if (!(key in current)) return current;
+        const nextSettings = savePluginSettings({
+            ...current,
+            [key]: value,
+        });
+        if (key === 'hideFloorsEnabled' && value === true) {
+            updateAutoSummarySetting('hideSummaryFloors', false);
+        }
+        return nextSettings;
+    }
+
+    function normalizeAutoSummarySettings(rawSettings) {
+        const source = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
+        return {
+            summaryEnabled: typeof source.summaryEnabled === 'boolean' ? source.summaryEnabled : DEFAULT_AUTO_SUMMARY_SETTINGS.summaryEnabled,
+            summaryEvery: Math.round(normalizeNumberSetting(source.summaryEvery, 1, 9999, DEFAULT_AUTO_SUMMARY_SETTINGS.summaryEvery, 0)),
+            historyEnabled: typeof source.historyEnabled === 'boolean' ? source.historyEnabled : DEFAULT_AUTO_SUMMARY_SETTINGS.historyEnabled,
+            historyEvery: Math.round(normalizeNumberSetting(source.historyEvery, 1, 9999, DEFAULT_AUTO_SUMMARY_SETTINGS.historyEvery, 0)),
+            summaryDelay: Math.round(normalizeNumberSetting(source.summaryDelay, 0, 9999, DEFAULT_AUTO_SUMMARY_SETTINGS.summaryDelay, 0)),
+            historyDelay: Math.round(normalizeNumberSetting(source.historyDelay, 0, 9999, DEFAULT_AUTO_SUMMARY_SETTINGS.historyDelay, 0)),
+            directTrigger: typeof source.directTrigger === 'boolean' ? source.directTrigger : DEFAULT_AUTO_SUMMARY_SETTINGS.directTrigger,
+            autoSave: typeof source.autoSave === 'boolean' ? source.autoSave : DEFAULT_AUTO_SUMMARY_SETTINGS.autoSave,
+            autoVectorizeAfterHistory: typeof source.autoVectorizeAfterHistory === 'boolean' ? source.autoVectorizeAfterHistory : DEFAULT_AUTO_SUMMARY_SETTINGS.autoVectorizeAfterHistory,
+            hideSummaryFloors: typeof source.hideSummaryFloors === 'boolean' ? source.hideSummaryFloors : DEFAULT_AUTO_SUMMARY_SETTINGS.hideSummaryFloors,
+        };
+    }
+
+    function getAutoSummarySettings() {
+        try {
+            return normalizeAutoSummarySettings(JSON.parse(localStorage.getItem(AUTO_SUMMARY_SETTINGS_STORAGE_KEY) || '{}'));
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load auto summary settings.', error);
+            return normalizeAutoSummarySettings();
+        }
+    }
+
+    function saveAutoSummarySettings(nextSettings) {
+        const normalized = normalizeAutoSummarySettings(nextSettings);
+        localStorage.setItem(AUTO_SUMMARY_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+        return normalized;
+    }
+
+    function updateAutoSummarySetting(key, value) {
+        const current = getAutoSummarySettings();
+        if (!(key in current)) return current;
+        const nextSettings = saveAutoSummarySettings({
+            ...current,
+            [key]: value,
+        });
+        if (key === 'hideSummaryFloors' && value === true) {
+            updatePluginSetting('hideFloorsEnabled', false);
+        }
+        return nextSettings;
+    }
+
+    function resetAutoSummarySettings() {
+        localStorage.removeItem(AUTO_SUMMARY_SETTINGS_STORAGE_KEY);
+        return getAutoSummarySettings();
     }
 
     function createRecord(table) {
@@ -1962,6 +2071,18 @@
             return;
         }
 
+        if (activeConfigSectionId === 'autoSummary') {
+            content.appendChild(createAutoSummaryConfigPanel());
+            page.replaceChildren(content);
+            return;
+        }
+
+        if (activeConfigSectionId === 'requestProbe') {
+            content.appendChild(createRequestProbePanel());
+            page.replaceChildren(content);
+            return;
+        }
+
         const filterLayout = document.createElement('div');
         filterLayout.className = 'yzm-config-filter-layout';
         filterLayout.append(createTagPresetPanel(), createTagFilterPanel());
@@ -2449,15 +2570,263 @@
         startNewLlmApiPreset(root);
     }
 
+    function getRequestProbeData() {
+        return YuzukiMemory.RequestProbe?.getLastRequestData?.() || null;
+    }
+
+    function formatRequestProbeTime(timestamp) {
+        if (!timestamp) return '暂无';
+        const date = new Date(timestamp);
+        if (Number.isNaN(date.getTime())) return '暂无';
+        return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+    }
+
+    function getProbeRoleMeta(message) {
+        const role = String(message?.role || '').toLowerCase();
+        if (message?.flags?.vector) return { label: message.name || 'SYSTEM (向量化)', className: 'yzm-probe-role-vector', icon: 'fa-solid fa-diagram-project' };
+        if (message?.flags?.memory) return { label: message.name || 'MEMORY', className: 'yzm-probe-role-memory', icon: 'fa-solid fa-table-cells-large' };
+        if (message?.flags?.prompt) return { label: message.name || 'PROMPT', className: 'yzm-probe-role-prompt', icon: 'fa-solid fa-thumbtack' };
+        if (role === 'user') return { label: 'USER', className: 'yzm-probe-role-user', icon: 'fa-solid fa-user' };
+        if (role === 'assistant' || role === 'model') return { label: 'ASSISTANT', className: 'yzm-probe-role-assistant', icon: 'fa-solid fa-circle-check' };
+        if (role === 'system') return { label: message.name || 'SYSTEM', className: 'yzm-probe-role-system', icon: 'fa-solid fa-gear' };
+        return { label: role ? role.toUpperCase() : 'MESSAGE', className: 'yzm-probe-role-default', icon: 'fa-regular fa-message' };
+    }
+
+    function createRequestProbePanel() {
+        const data = getRequestProbeData();
+        const panel = document.createElement('section');
+        panel.className = 'yzm-request-probe-panel';
+        panel.append(createRequestProbeHeader(data));
+
+        if (!data?.messages?.length) {
+            panel.appendChild(createRequestProbeEmpty());
+            return panel;
+        }
+
+        panel.append(createRequestProbeSearch(), createRequestProbeList(data.messages));
+        return panel;
+    }
+
+    function createRequestProbeHeader(data) {
+        const header = document.createElement('div');
+        header.className = 'yzm-request-probe-header';
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'yzm-request-probe-title';
+        const title = document.createElement('div');
+        title.append(createIconNode('fa-solid fa-list-check', ''), document.createTextNode('API 请求查看器'));
+        const desc = document.createElement('span');
+        desc.textContent = '查看最后一次发送给模型的请求内容，每条消息默认折叠。';
+        titleWrap.append(title, desc);
+        const refresh = createIconButton('刷新', 'fa-solid fa-rotate', 'yzm-api-button yzm-request-probe-refresh');
+        header.append(titleWrap, refresh);
+
+        const stats = document.createElement('div');
+        stats.className = 'yzm-request-probe-stats';
+        stats.append(
+            createRequestProbeStat('Total Tokens', data?.totalTokens || 0, 'fa-solid fa-coins'),
+            createRequestProbeStat('Messages', `${data?.messages?.length || 0} 条`, 'fa-regular fa-message'),
+            createRequestProbeStat('最近捕获于', formatRequestProbeTime(data?.timestamp), 'fa-regular fa-clock')
+        );
+
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-request-probe-top';
+        wrap.append(header, stats);
+        return wrap;
+    }
+
+    function createRequestProbeStat(labelText, value, iconClassName) {
+        const stat = document.createElement('div');
+        stat.className = 'yzm-request-probe-stat';
+        stat.append(createIconNode(iconClassName, ''), createRequestProbeStatText(labelText, value));
+        return stat;
+    }
+
+    function createRequestProbeStatText(labelText, value) {
+        const text = document.createElement('div');
+        const label = document.createElement('span');
+        label.textContent = labelText;
+        const strong = document.createElement('strong');
+        strong.textContent = String(value);
+        text.append(label, strong);
+        return text;
+    }
+
+    function createRequestProbeSearch() {
+        const wrap = document.createElement('label');
+        wrap.className = 'yzm-request-probe-search';
+        const jump = createButton('', 'yzm-request-probe-search-jump');
+        jump.dataset.yzmRequestProbeJump = 'true';
+        jump.setAttribute('aria-label', '定位关键词');
+        jump.appendChild(createIconNode('fa-solid fa-magnifying-glass', ''));
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = '搜索消息内容...';
+        input.dataset.yzmRequestProbeSearch = 'true';
+        input.autocomplete = 'off';
+        input.setAttribute('autocorrect', 'off');
+        input.autocapitalize = 'off';
+        input.spellcheck = false;
+        wrap.append(jump, input);
+        return wrap;
+    }
+
+    function createRequestProbeList(messages) {
+        const list = document.createElement('div');
+        list.className = 'yzm-request-probe-list';
+        messages.forEach((message, index) => {
+            list.appendChild(createRequestProbeItem(message, index));
+        });
+        return list;
+    }
+
+    function createRequestProbeItem(message, index) {
+        const item = document.createElement('details');
+        item.className = 'yzm-request-probe-item';
+        item.dataset.yzmRequestProbeItem = 'true';
+        item.dataset.yzmRequestProbeText = `${message?.content || ''} ${message?.role || ''} ${message?.name || ''}`.toLowerCase();
+
+        const summary = document.createElement('summary');
+        summary.className = 'yzm-request-probe-summary';
+        const meta = getProbeRoleMeta(message);
+        const left = document.createElement('div');
+        left.className = 'yzm-request-probe-message-meta';
+        const indexNode = document.createElement('span');
+        indexNode.className = 'yzm-request-probe-index';
+        indexNode.textContent = `#${index}`;
+        const role = document.createElement('span');
+        role.className = `yzm-request-probe-role ${meta.className}`;
+        role.append(createIconNode(meta.icon, ''), document.createTextNode(meta.label));
+        const preview = document.createElement('span');
+        preview.className = 'yzm-request-probe-preview';
+        preview.textContent = message?.content || '空消息';
+        left.append(indexNode, role, preview);
+        const tokens = document.createElement('span');
+        tokens.className = 'yzm-request-probe-token';
+        tokens.textContent = `${message?.tokens || 0} TK`;
+        summary.append(left, tokens);
+
+        const content = document.createElement('pre');
+        content.className = 'yzm-request-probe-content';
+        content.textContent = message?.content || '';
+        item.append(summary, content);
+        return item;
+    }
+
+    function createRequestProbeEmpty() {
+        const empty = document.createElement('div');
+        empty.className = 'yzm-request-probe-empty';
+        empty.append(createIconNode('fa-regular fa-message', ''), document.createTextNode('暂无记录。发送一条消息后，这里会显示最后一次 API 请求内容。'));
+        return empty;
+    }
+
+    function filterRequestProbeItems(root, query) {
+        const keyword = String(query || '').trim().toLowerCase();
+        resetRequestProbeJumpState(root, keyword);
+        clearRequestProbeHighlights(root);
+        root.querySelectorAll('[data-yzm-request-probe-item]').forEach((item) => {
+            const matched = !keyword || String(item.dataset.yzmRequestProbeText || '').includes(keyword);
+            item.hidden = !matched;
+        });
+    }
+
+    function resetRequestProbeJumpState(root, keyword = '') {
+        const panel = root.querySelector('.yzm-request-probe-panel');
+        if (!panel) return;
+        panel.dataset.yzmProbeJumpKeyword = keyword;
+        panel.dataset.yzmProbeJumpItem = '0';
+        panel.dataset.yzmProbeJumpMatch = '0';
+    }
+
+    function clearRequestProbeHighlights(root) {
+        root.querySelectorAll('.yzm-request-probe-highlight').forEach((mark) => {
+            mark.replaceWith(document.createTextNode(mark.textContent || ''));
+        });
+    }
+
+    function jumpToRequestProbeKeyword(root) {
+        const input = root.querySelector('[data-yzm-request-probe-search]');
+        const keyword = String(input?.value || '').trim();
+        if (!keyword) return;
+        clearRequestProbeHighlights(root);
+
+        const panel = root.querySelector('.yzm-request-probe-panel');
+        if (!panel) return;
+        const normalizedKeyword = keyword.toLowerCase();
+        if (panel.dataset.yzmProbeJumpKeyword !== normalizedKeyword) {
+            resetRequestProbeJumpState(root, normalizedKeyword);
+        }
+
+        const items = [...root.querySelectorAll('[data-yzm-request-probe-item]:not([hidden])')]
+            .filter((item) => String(item.dataset.yzmRequestProbeText || '').includes(normalizedKeyword));
+        if (!items.length) return;
+
+        let itemCursor = Number(panel.dataset.yzmProbeJumpItem || 0);
+        let matchCursor = Number(panel.dataset.yzmProbeJumpMatch || 0);
+        for (let tries = 0; tries < items.length; tries++) {
+            const item = items[itemCursor % items.length];
+            const content = item.querySelector('.yzm-request-probe-content');
+            if (!content) {
+                itemCursor++;
+                matchCursor = 0;
+                continue;
+            }
+
+            content.normalize();
+            const matches = getRequestProbeMatches(content.textContent || '', normalizedKeyword);
+            if (!matches.length) {
+                itemCursor++;
+                matchCursor = 0;
+                continue;
+            }
+
+            const match = matches[matchCursor % matches.length];
+            root.querySelectorAll('[data-yzm-request-probe-item][open]').forEach((node) => {
+                if (node !== item) node.open = false;
+            });
+            item.open = true;
+            highlightRequestProbeMatch(content, match.index, match.length);
+            panel.dataset.yzmProbeJumpItem = String(matchCursor + 1 >= matches.length ? (itemCursor + 1) % items.length : itemCursor % items.length);
+            panel.dataset.yzmProbeJumpMatch = String(matchCursor + 1 >= matches.length ? 0 : matchCursor + 1);
+            return;
+        }
+    }
+
+    function getRequestProbeMatches(text, keyword) {
+        const matches = [];
+        if (!text || !keyword) return matches;
+        const lowerText = text.toLowerCase();
+        let start = 0;
+        while (start < lowerText.length) {
+            const index = lowerText.indexOf(keyword, start);
+            if (index < 0) break;
+            matches.push({ index, length: keyword.length });
+            start = index + keyword.length;
+        }
+        return matches;
+    }
+
+    function highlightRequestProbeMatch(content, index, length) {
+        const textNode = [...content.childNodes].find((node) => node.nodeType === Node.TEXT_NODE);
+        if (!textNode) return;
+        const range = document.createRange();
+        range.setStart(textNode, index);
+        range.setEnd(textNode, index + length);
+        const mark = document.createElement('mark');
+        mark.className = 'yzm-request-probe-highlight';
+        range.surroundContents(mark);
+        mark.scrollIntoView({ block: 'center', inline: 'nearest' });
+    }
+
     function createPluginConfigPanel() {
+        const settings = getPluginSettings();
         const card = document.createElement('section');
         card.className = 'yzm-config-card yzm-plugin-config-card';
 
         card.append(
             createPluginConfigHeader(),
-            createPluginConfigRow('注入记忆表格', '此为总开关。关闭后不注入任何记忆内容（含向量化及总结）。', 'fa-solid fa-table-cells-large', createConfigSwitch(true)),
-            createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(true)),
-            createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput('50'), createConfigSwitch(false)))
+            createPluginConfigRow('注入记忆', '此为总开关。关闭后不注入任何记忆内容（含向量化及总结）。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
+            createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
+            createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled')))
         );
         return card;
     }
@@ -2506,19 +2875,240 @@
         return wrap;
     }
 
-    function createConfigSwitch(isOn = false) {
+    function createConfigSwitch(isOn = false, settingKey = '') {
         const button = createButton('', isOn ? 'yzm-config-switch yzm-config-switch-on' : 'yzm-config-switch');
         button.setAttribute('aria-pressed', String(isOn));
+        if (settingKey) button.dataset.yzmPluginSetting = settingKey;
         button.appendChild(document.createElement('span'));
         return button;
     }
 
-    function createConfigNumberInput(value) {
+    function createConfigNumberInput(value, settingKey = '') {
         const input = document.createElement('input');
         input.className = 'yzm-config-number-input';
         input.type = 'number';
-        input.value = value;
+        input.inputMode = 'numeric';
+        input.min = '0';
+        input.max = '9999';
+        input.step = '1';
+        input.value = String(value);
+        if (settingKey) input.dataset.yzmPluginSetting = settingKey;
         return input;
+    }
+
+    function createAutoSummaryConfigPanel() {
+        const settings = getAutoSummarySettings();
+        const panel = document.createElement('section');
+        panel.className = 'yzm-auto-summary-panel';
+
+        const topGrid = document.createElement('div');
+        topGrid.className = 'yzm-auto-summary-top-grid';
+        topGrid.append(
+            createAutoSummaryOverviewCard('自动小总结', 'fa-solid fa-robot', '按设定的楼层周期生成小总结，作为阶段性记忆。', 'summaryEnabled', settings.summaryEnabled, 'summaryEvery', settings.summaryEvery),
+            createAutoSummaryOverviewCard('自动大总结', 'fa-solid fa-book-open', '按设定的楼层周期整合前面的小总结，并清理已合并的小楼层。', 'historyEnabled', settings.historyEnabled, 'historyEvery', settings.historyEvery)
+        );
+
+        const modeGrid = document.createElement('div');
+        modeGrid.className = 'yzm-auto-summary-mode-grid';
+        modeGrid.append(
+            createAutoSummaryToggleCard('发起模式', 'fa-solid fa-bolt', '触发前静默发起（直接执行）', '未勾选时将弹窗确认', 'directTrigger', settings.directTrigger, 'blue'),
+            createAutoSummaryToggleCard('完成模式', 'fa-solid fa-circle-check', '完成后静默保存（不弹结果图）', '未勾选时弹窗显示总结结果', 'autoSave', settings.autoSave, 'green')
+        );
+
+        panel.append(
+            topGrid,
+            createAutoSummaryRulesCard(settings),
+            modeGrid,
+            createAutoSummaryVectorCard(settings),
+            createAutoSummaryContextCard(settings),
+            createAutoSummaryFooter()
+        );
+        return panel;
+    }
+
+    function createAutoSummaryOverviewCard(title, iconClassName, description, enabledKey, enabled, numberKey, numberValue) {
+        const card = document.createElement('div');
+        card.className = 'yzm-config-card yzm-auto-summary-card';
+
+        const titleNode = document.createElement('div');
+        titleNode.className = 'yzm-auto-summary-card-title';
+        titleNode.append(createIconNode(iconClassName, ''), document.createTextNode(title));
+
+        const row = document.createElement('div');
+        row.className = 'yzm-auto-summary-control-row';
+        const status = document.createElement('span');
+        status.className = 'yzm-auto-summary-status';
+        status.textContent = enabled ? '已启用' : '未启用';
+        row.append(createAutoSummarySwitch(enabled, enabledKey), status, createAutoSummaryNumberPhrase('每', numberKey, numberValue, '层'));
+
+        const desc = document.createElement('div');
+        desc.className = 'yzm-auto-summary-desc';
+        desc.textContent = description;
+
+        card.append(titleNode, row, desc);
+        return card;
+    }
+
+    function createAutoSummaryRulesCard(settings) {
+        const card = document.createElement('div');
+        card.className = 'yzm-config-card yzm-auto-summary-rules-card';
+
+        const title = document.createElement('div');
+        title.className = 'yzm-auto-summary-section-title';
+        title.append(createIconNode('fa-regular fa-clock', ''), document.createTextNode('执行规则'));
+
+        const grid = document.createElement('div');
+        grid.className = 'yzm-auto-summary-rules-grid';
+        grid.append(
+            createAutoSummaryRuleBlock('自动小总结', '达到指定层数后，延迟 N 层触发小总结。', 'summaryDelay', settings.summaryDelay),
+            createAutoSummaryRuleBlock('自动大总结', '达到指定层数后，延迟 N 层触发大总结。', 'historyDelay', settings.historyDelay)
+        );
+
+        card.append(title, grid);
+        return card;
+    }
+
+    function createAutoSummaryRuleBlock(titleText, description, settingKey, value) {
+        const block = document.createElement('div');
+        block.className = 'yzm-auto-summary-rule-block';
+        const title = document.createElement('div');
+        title.className = 'yzm-auto-summary-rule-title';
+        title.textContent = titleText;
+        const row = document.createElement('div');
+        row.className = 'yzm-auto-summary-rule-row';
+        row.append(document.createTextNode('延迟'), createAutoSummaryNumberInput(settingKey, value), document.createTextNode('层'));
+        const desc = document.createElement('div');
+        desc.className = 'yzm-auto-summary-desc';
+        desc.textContent = description;
+        block.append(title, row, desc);
+        return block;
+    }
+
+    function createAutoSummaryToggleCard(titleText, iconClassName, labelText, description, settingKey, checked, tone) {
+        const card = document.createElement('div');
+        card.className = `yzm-config-card yzm-auto-summary-toggle-card yzm-auto-summary-toggle-${tone}`;
+        const title = document.createElement('div');
+        title.className = 'yzm-auto-summary-section-title';
+        title.append(createIconNode(iconClassName, ''), document.createTextNode(titleText));
+        card.append(title, createAutoSummaryCheckRow(labelText, description, settingKey, checked));
+        return card;
+    }
+
+    function createAutoSummaryContextCard(settings) {
+        const card = document.createElement('div');
+        card.className = 'yzm-config-card yzm-auto-summary-context-card';
+        const title = document.createElement('div');
+        title.className = 'yzm-auto-summary-section-title';
+        title.append(createIconNode('fa-solid fa-upload', ''), document.createTextNode('上下文管理'));
+        const warning = document.createElement('div');
+        warning.className = 'yzm-auto-summary-warning';
+        warning.append(createIconNode('fa-solid fa-triangle-exclamation', ''), document.createTextNode('与「隐藏楼层」功能互斥，开启其中一个会自动关闭另一个'));
+        card.append(
+            title,
+            createAutoSummaryCheckRow('总结后隐藏原楼层（隐藏后会移除对将自动总结楼层的引用）', '开启后，发送请求时将自动剔除已总结的历史消息（0 ~ 指针位置）', 'hideSummaryFloors', settings.hideSummaryFloors),
+            warning
+        );
+        return card;
+    }
+
+    function createAutoSummaryVectorCard(settings) {
+        const card = document.createElement('div');
+        card.className = 'yzm-config-card yzm-auto-summary-vector-card';
+        const title = document.createElement('div');
+        title.className = 'yzm-auto-summary-section-title';
+        title.append(createIconNode('fa-solid fa-diagram-project', ''), document.createTextNode('向量化联动'));
+        const row = document.createElement('div');
+        row.className = 'yzm-auto-summary-vector-row';
+        const text = document.createElement('div');
+        text.className = 'yzm-auto-summary-vector-text';
+        const label = document.createElement('strong');
+        label.textContent = '大总结后自动同步到向量化';
+        const desc = document.createElement('span');
+        desc.textContent = '大总结完成后，将总结内容同步到向量化书籍，供后续检索召回。';
+        text.append(label, desc);
+        row.append(createAutoSummarySwitch(settings.autoVectorizeAfterHistory, 'autoVectorizeAfterHistory'), text, createIconButton('同步', 'fa-solid fa-rotate', 'yzm-api-button yzm-auto-summary-vector-button'));
+        card.append(title, row);
+        return card;
+    }
+
+    function createAutoSummaryFooter() {
+        const footer = document.createElement('div');
+        footer.className = 'yzm-auto-summary-footer';
+        footer.append(
+            createIconButton('保存配置', 'fa-regular fa-floppy-disk', 'yzm-api-button yzm-api-button-primary yzm-auto-summary-save'),
+            createIconButton('恢复默认', 'fa-solid fa-rotate-left', 'yzm-api-button yzm-auto-summary-reset')
+        );
+        return footer;
+    }
+
+    function createAutoSummaryNumberPhrase(prefix, settingKey, value, suffix) {
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-auto-summary-number-phrase';
+        wrap.append(document.createTextNode(prefix), createAutoSummaryNumberInput(settingKey, value), document.createTextNode(suffix));
+        return wrap;
+    }
+
+    function createAutoSummaryNumberInput(settingKey, value) {
+        const input = createConfigNumberInput(value);
+        input.classList.add('yzm-auto-summary-number-input');
+        input.dataset.yzmAutoSummarySetting = settingKey;
+        input.removeAttribute('data-yzm-plugin-setting');
+        return input;
+    }
+
+    function createAutoSummarySwitch(isOn, settingKey) {
+        const button = createConfigSwitch(isOn);
+        button.dataset.yzmAutoSummarySetting = settingKey;
+        return button;
+    }
+
+    function createAutoSummaryCheckRow(labelText, description, settingKey, checked) {
+        const row = document.createElement('label');
+        row.className = 'yzm-auto-summary-check-row';
+        const box = document.createElement('span');
+        box.className = checked ? 'yzm-auto-summary-check yzm-auto-summary-check-on' : 'yzm-auto-summary-check';
+        box.dataset.yzmAutoSummarySetting = settingKey;
+        if (checked) box.appendChild(createIconNode('fa-solid fa-check', ''));
+        const text = document.createElement('span');
+        text.className = 'yzm-auto-summary-check-text';
+        const label = document.createElement('strong');
+        label.textContent = labelText;
+        const desc = document.createElement('small');
+        desc.textContent = description;
+        text.append(label, desc);
+        row.append(box, text);
+        return row;
+    }
+
+    function normalizeAutoSummaryNumberInput(input) {
+        const key = input?.dataset?.yzmAutoSummarySetting;
+        if (!key) return;
+        const min = key === 'summaryDelay' || key === 'historyDelay' ? 0 : 1;
+        const fallback = DEFAULT_AUTO_SUMMARY_SETTINGS[key] ?? min;
+        const value = Math.round(normalizeNumberSetting(input.value, min, 9999, fallback, 0));
+        input.value = String(value);
+    }
+
+    function saveAutoSummarySettingsFromForm(root) {
+        const nextSettings = getAutoSummarySettings();
+        root.querySelectorAll('.yzm-config-view [data-yzm-auto-summary-setting]').forEach((node) => {
+            const key = node.dataset.yzmAutoSummarySetting;
+            if (!(key in nextSettings)) return;
+            if (node.classList.contains('yzm-config-switch')) {
+                nextSettings[key] = node.classList.contains('yzm-config-switch-on');
+                return;
+            }
+            if (node.classList.contains('yzm-auto-summary-check')) {
+                nextSettings[key] = node.classList.contains('yzm-auto-summary-check-on');
+                return;
+            }
+            if (node.classList.contains('yzm-auto-summary-number-input')) {
+                normalizeAutoSummaryNumberInput(node);
+                nextSettings[key] = Number(node.value);
+            }
+        });
+        const saved = saveAutoSummarySettings(nextSettings);
+        if (saved.hideSummaryFloors) updatePluginSetting('hideFloorsEnabled', false);
     }
 
     function createPluginConfigHint(text) {
@@ -3807,6 +4397,14 @@
             });
         }
 
+        if (root.dataset.yzmRequestProbeBound !== 'true') {
+            root.dataset.yzmRequestProbeBound = 'true';
+            window.addEventListener('yzm-memory-request-probe-updated', () => {
+                if (activeWorkspaceView !== 'config' || activeConfigSectionId !== 'requestProbe') return;
+                renderConfigWorkspace(root);
+            });
+        }
+
         root.querySelectorAll('.yzm-config-nav-item').forEach((item) => {
             if (item.dataset.yzmBound === 'true') return;
             item.dataset.yzmBound = 'true';
@@ -3905,6 +4503,11 @@
         const configView = root.querySelector('.yzm-config-view');
         if (configView && configView.dataset.yzmPresetBound !== 'true') {
             configView.dataset.yzmPresetBound = 'true';
+            configView.addEventListener('input', (event) => {
+                const target = event.target;
+                if (!target?.matches?.('[data-yzm-request-probe-search]')) return;
+                filterRequestProbeItems(root, target.value || '');
+            });
             configView.addEventListener('change', (event) => {
                 const target = event.target;
                 if (!target?.matches?.('[data-yzm-preset-select]')) return;
@@ -3918,6 +4521,11 @@
                 const addButton = target?.closest?.('.yzm-tag-chip-add');
                 const tagChip = target?.closest?.('[data-yzm-tag-chip]');
                 const configSwitch = target?.closest?.('.yzm-config-switch');
+                const autoSummarySave = target?.closest?.('.yzm-auto-summary-save');
+                const autoSummaryReset = target?.closest?.('.yzm-auto-summary-reset');
+                const autoSummaryCheck = target?.closest?.('.yzm-auto-summary-check');
+                const requestProbeRefresh = target?.closest?.('.yzm-request-probe-refresh');
+                const requestProbeJump = target?.closest?.('[data-yzm-request-probe-jump]');
 
                 if (newButton) {
                     clearTagPresetEditor(root);
@@ -3945,13 +4553,82 @@
                     return;
                 }
 
+                if (autoSummarySave) {
+                    saveAutoSummarySettingsFromForm(root);
+                    return;
+                }
+
+                if (autoSummaryReset) {
+                    resetAutoSummarySettings();
+                    renderConfigWorkspace(root);
+                    return;
+                }
+
+                if (autoSummaryCheck) {
+                    const settingKey = autoSummaryCheck.dataset.yzmAutoSummarySetting;
+                    const isOn = !autoSummaryCheck.classList.contains('yzm-auto-summary-check-on');
+                    autoSummaryCheck.classList.toggle('yzm-auto-summary-check-on', isOn);
+                    autoSummaryCheck.replaceChildren();
+                    if (isOn) autoSummaryCheck.appendChild(createIconNode('fa-solid fa-check', ''));
+                    if (settingKey) updateAutoSummarySetting(settingKey, isOn);
+                    return;
+                }
+
+                if (requestProbeRefresh) {
+                    renderConfigWorkspace(root);
+                    return;
+                }
+
+                if (requestProbeJump) {
+                    jumpToRequestProbeKeyword(root);
+                    return;
+                }
+
                 if (configSwitch) {
                     const isOn = configSwitch.classList.toggle('yzm-config-switch-on');
                     configSwitch.setAttribute('aria-pressed', String(isOn));
+                    const autoSummarySettingKey = configSwitch.dataset.yzmAutoSummarySetting;
+                    const pluginSettingKey = configSwitch.dataset.yzmPluginSetting;
+                    if (autoSummarySettingKey) {
+                        updateAutoSummarySetting(autoSummarySettingKey, isOn);
+                        const status = configSwitch.closest('.yzm-auto-summary-control-row')?.querySelector('.yzm-auto-summary-status');
+                        if (status) status.textContent = isOn ? '已启用' : '未启用';
+                    } else if (pluginSettingKey) {
+                        updatePluginSetting(pluginSettingKey, isOn);
+                    }
                 }
             });
+            configView.addEventListener('change', (event) => {
+                const target = event.target;
+                if (target?.matches?.('.yzm-auto-summary-number-input[data-yzm-auto-summary-setting]')) {
+                    normalizeAutoSummaryNumberInput(target);
+                    updateAutoSummarySetting(target.dataset.yzmAutoSummarySetting, Number(target.value));
+                    return;
+                }
+                if (!target?.matches?.('.yzm-config-number-input[data-yzm-plugin-setting]')) return;
+                const value = Math.round(normalizeNumberSetting(target.value, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0));
+                target.value = String(value);
+                updatePluginSetting(target.dataset.yzmPluginSetting, value);
+            });
+            configView.addEventListener('blur', (event) => {
+                const target = event.target;
+                if (target?.matches?.('.yzm-auto-summary-number-input[data-yzm-auto-summary-setting]')) {
+                    normalizeAutoSummaryNumberInput(target);
+                    updateAutoSummarySetting(target.dataset.yzmAutoSummarySetting, Number(target.value));
+                    return;
+                }
+                if (!target?.matches?.('.yzm-config-number-input[data-yzm-plugin-setting]')) return;
+                const value = Math.round(normalizeNumberSetting(target.value, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0));
+                target.value = String(value);
+                updatePluginSetting(target.dataset.yzmPluginSetting, value);
+            }, true);
             configView.addEventListener('keydown', (event) => {
                 const target = event.target;
+                if (event.key === 'Enter' && target?.matches?.('[data-yzm-request-probe-search]')) {
+                    event.preventDefault();
+                    jumpToRequestProbeKeyword(root);
+                    return;
+                }
                 if (event.key !== 'Enter' || !target?.matches?.('[data-yzm-tag-input]')) return;
                 event.preventDefault();
                 addPendingTags(root, target.dataset.yzmTagInput);

@@ -2092,6 +2092,7 @@
     justify-content: flex-start;
     gap: 8px;
     width: 100%;
+    min-width: 0;
     min-height: 38px;
     padding: 0 10px;
     color: var(--yzm-text);
@@ -2103,6 +2104,14 @@
     font: inherit;
     font-size: 13px;
     text-align: left;
+}
+
+#yzm-memory-root .yzm-config-nav-item span,
+#yzm-memory-root .yzm-api-nav-item span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 #yzm-memory-root .yzm-config-nav-item i,
@@ -2250,6 +2259,292 @@
 
 #yzm-memory-root .yzm-api-card-plain .yzm-plugin-config-row {
     padding-top: 0;
+}
+
+#yzm-memory-root .yzm-request-probe-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-request-probe-top {
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+    padding: 12px;
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 12px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-request-probe-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: start;
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-request-probe-title {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-request-probe-title > div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--yzm-title);
+    font-size: 17px;
+    font-weight: 700;
+}
+
+#yzm-memory-root .yzm-request-probe-title i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-request-probe-title span {
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+#yzm-memory-root .yzm-request-probe-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+}
+
+#yzm-memory-root .yzm-request-probe-stat {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 10px;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 10px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-request-probe-stat i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-request-probe-stat div {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-request-probe-stat span {
+    color: var(--yzm-muted);
+    font-size: 11px;
+}
+
+#yzm-memory-root .yzm-request-probe-stat strong {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--yzm-title);
+    font-size: 12px;
+    font-weight: 500;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-request-probe-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-request-probe-search-jump {
+    position: absolute;
+    left: 12px;
+    z-index: 1;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    color: var(--yzm-muted);
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-request-probe-search-jump i {
+    color: inherit;
+    font-size: 12px;
+}
+
+#yzm-memory-root .yzm-request-probe-search input {
+    width: 100%;
+    min-height: 36px;
+    padding: 0 12px 0 34px;
+    color: var(--yzm-text);
+    background: var(--yzm-input-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 10px;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 12px;
+    outline: 0;
+}
+
+#yzm-memory-root .yzm-request-probe-list {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-request-probe-item {
+    min-width: 0;
+    overflow: hidden;
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 10px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-request-probe-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    padding: 9px 10px;
+    cursor: pointer;
+    list-style: none;
+}
+
+#yzm-memory-root .yzm-request-probe-summary::-webkit-details-marker {
+    display: none;
+}
+
+#yzm-memory-root .yzm-request-probe-message-meta {
+    display: grid;
+    grid-template-columns: 34px auto minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-request-probe-index,
+#yzm-memory-root .yzm-request-probe-token {
+    color: var(--yzm-muted);
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 7px;
+    box-sizing: border-box;
+    font-size: 11px;
+    font-weight: 700;
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-request-probe-index {
+    padding: 4px 0;
+}
+
+#yzm-memory-root .yzm-request-probe-token {
+    padding: 4px 7px;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-request-probe-role {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-probe-role-system,
+#yzm-memory-root .yzm-probe-role-system i {
+    color: #6877c8;
+}
+
+#yzm-memory-root .yzm-probe-role-user,
+#yzm-memory-root .yzm-probe-role-user i {
+    color: #4b6fd6;
+}
+
+#yzm-memory-root .yzm-probe-role-assistant,
+#yzm-memory-root .yzm-probe-role-assistant i {
+    color: #24a36a;
+}
+
+#yzm-memory-root .yzm-probe-role-memory,
+#yzm-memory-root .yzm-probe-role-memory i {
+    color: #d47a28;
+}
+
+#yzm-memory-root .yzm-probe-role-prompt,
+#yzm-memory-root .yzm-probe-role-prompt i {
+    color: #b46be2;
+}
+
+#yzm-memory-root .yzm-probe-role-vector,
+#yzm-memory-root .yzm-probe-role-vector i {
+    color: #d9538f;
+}
+
+#yzm-memory-root .yzm-request-probe-preview {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-request-probe-content {
+    max-height: 420px;
+    margin: 0;
+    padding: 10px;
+    overflow: auto;
+    color: var(--yzm-text);
+    background: var(--yzm-row-bg);
+    border-top: 1px solid var(--yzm-border-soft);
+    box-sizing: border-box;
+    font: 12px/1.55 Consolas, 'Courier New', monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+#yzm-memory-root .yzm-request-probe-highlight {
+    color: var(--yzm-title);
+    background: rgba(116, 137, 230, 0.22);
+    border-bottom: 2px solid rgba(83, 108, 207, 0.72);
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px rgba(83, 108, 207, 0.12);
+}
+
+#yzm-memory-root .yzm-shell[data-yzm-theme="dark"] .yzm-request-probe-highlight {
+    color: #ffffff;
+    background: rgba(168, 181, 255, 0.24);
+    border-bottom-color: rgba(168, 181, 255, 0.78);
+    box-shadow: 0 0 0 1px rgba(168, 181, 255, 0.14);
+}
+
+#yzm-memory-root .yzm-request-probe-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 180px;
+    padding: 18px;
+    color: var(--yzm-muted);
+    background: var(--yzm-surface);
+    border: 1px dashed var(--yzm-border);
+    border-radius: 12px;
+    box-sizing: border-box;
+    font-size: 13px;
+    text-align: center;
 }
 
 #yzm-memory-root .yzm-api-choice-group {
@@ -2714,6 +3009,246 @@
     font: inherit;
     font-size: 14px;
     outline: 0;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
+#yzm-memory-root .yzm-config-number-input::-webkit-outer-spin-button,
+#yzm-memory-root .yzm-config-number-input::-webkit-inner-spin-button {
+    margin: 0;
+    appearance: none;
+    -webkit-appearance: none;
+}
+
+#yzm-memory-root .yzm-auto-summary-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-auto-summary-top-grid,
+#yzm-memory-root .yzm-auto-summary-mode-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-auto-summary-card,
+#yzm-memory-root .yzm-auto-summary-rules-card,
+#yzm-memory-root .yzm-auto-summary-toggle-card,
+#yzm-memory-root .yzm-auto-summary-vector-card,
+#yzm-memory-root .yzm-auto-summary-context-card {
+    display: grid;
+    gap: 10px;
+    padding: 12px 14px;
+}
+
+#yzm-memory-root .yzm-auto-summary-card-title,
+#yzm-memory-root .yzm-auto-summary-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--yzm-title);
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+#yzm-memory-root .yzm-auto-summary-card-title i,
+#yzm-memory-root .yzm-auto-summary-section-title i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-auto-summary-control-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-auto-summary-status {
+    color: var(--yzm-text);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-auto-summary-number-phrase,
+#yzm-memory-root .yzm-auto-summary-rule-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    color: var(--yzm-text);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-auto-summary-number-input {
+    width: 66px;
+    min-height: 30px;
+    padding: 0 8px;
+    border-radius: 8px;
+    font-size: 12px;
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-auto-summary-desc {
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.45;
+}
+
+#yzm-memory-root .yzm-auto-summary-rules-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0;
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-auto-summary-rule-block {
+    display: grid;
+    gap: 9px;
+    min-width: 0;
+    padding: 12px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-auto-summary-rule-block + .yzm-auto-summary-rule-block {
+    border-left: 1px solid var(--yzm-border-soft);
+}
+
+#yzm-memory-root .yzm-auto-summary-rule-title {
+    color: #516bd3;
+    font-size: 12px;
+    font-weight: 700;
+}
+
+#yzm-memory-root .yzm-auto-summary-toggle-card {
+    border-color: rgba(104, 132, 230, 0.28);
+    background: linear-gradient(135deg, rgba(107, 132, 229, 0.08), var(--yzm-surface));
+}
+
+#yzm-memory-root .yzm-auto-summary-toggle-green {
+    border-color: rgba(68, 181, 117, 0.26);
+    background: linear-gradient(135deg, rgba(67, 187, 119, 0.1), var(--yzm-surface));
+}
+
+#yzm-memory-root .yzm-auto-summary-context-card {
+    border-color: rgba(239, 154, 74, 0.32);
+    background: linear-gradient(135deg, rgba(239, 154, 74, 0.09), var(--yzm-surface));
+}
+
+#yzm-memory-root .yzm-auto-summary-vector-card {
+    border-color: rgba(89, 126, 225, 0.28);
+    background: linear-gradient(135deg, rgba(89, 126, 225, 0.08), var(--yzm-surface));
+}
+
+#yzm-memory-root .yzm-auto-summary-vector-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-auto-summary-vector-text {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-auto-summary-vector-text strong {
+    color: var(--yzm-text);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-auto-summary-vector-text span {
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+#yzm-memory-root .yzm-auto-summary-check-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-auto-summary-check {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
+    margin-top: 1px;
+    color: var(--yzm-icon-active);
+    background: transparent;
+    border: 2px solid var(--yzm-border);
+    border-radius: 5px;
+    box-sizing: border-box;
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-auto-summary-check-on {
+    background: #5d73d8;
+    border-color: transparent;
+}
+
+#yzm-memory-root .yzm-auto-summary-check i {
+    color: #ffffff;
+    font-size: 12px;
+}
+
+#yzm-memory-root .yzm-auto-summary-check-text {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-auto-summary-check-text strong {
+    color: var(--yzm-text);
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-auto-summary-check-text small {
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+#yzm-memory-root .yzm-auto-summary-warning {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: #f0782f;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.4;
+}
+
+#yzm-memory-root .yzm-auto-summary-footer {
+    display: grid;
+    grid-template-columns: auto auto;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-auto-summary-footer .yzm-api-button {
+    min-height: 34px;
+    padding: 0 16px;
+    font-size: 12px;
 }
 
 #yzm-memory-root .yzm-plugin-config-hint {
@@ -4760,6 +5295,77 @@
         padding: 10px;
     }
 
+    #yzm-memory-root .yzm-request-probe-panel {
+        gap: 8px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-top {
+        gap: 8px;
+        padding: 8px;
+        border-radius: 10px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-header,
+    #yzm-memory-root .yzm-request-probe-stats {
+        grid-template-columns: 1fr;
+        gap: 7px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-title > div {
+        font-size: 13px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-title span,
+    #yzm-memory-root .yzm-request-probe-preview,
+    #yzm-memory-root .yzm-request-probe-content {
+        font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-stat {
+        padding: 7px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-stat span,
+    #yzm-memory-root .yzm-request-probe-index,
+    #yzm-memory-root .yzm-request-probe-token,
+    #yzm-memory-root .yzm-request-probe-role {
+        font-size: 9px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-stat strong {
+        font-size: 10px;
+        font-weight: 500;
+    }
+
+    #yzm-memory-root .yzm-request-probe-search input {
+        min-height: 30px;
+        border-radius: 8px;
+        font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-summary {
+        gap: 6px;
+        padding: 7px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-message-meta {
+        grid-template-columns: 28px minmax(0, 1fr);
+        gap: 5px;
+    }
+
+    #yzm-memory-root .yzm-request-probe-role {
+        justify-self: start;
+    }
+
+    #yzm-memory-root .yzm-request-probe-preview {
+        grid-column: 1 / -1;
+    }
+
+    #yzm-memory-root .yzm-request-probe-content {
+        max-height: 260px;
+        padding: 8px;
+    }
+
     #yzm-memory-root .yzm-api-panel {
         gap: 8px;
     }
@@ -4960,6 +5566,132 @@
 
     #yzm-memory-root .yzm-plugin-config-inline {
         gap: 7px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-panel {
+        gap: 6px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-top-grid,
+    #yzm-memory-root .yzm-auto-summary-mode-grid,
+    #yzm-memory-root .yzm-auto-summary-rules-grid {
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-rules-grid {
+        border: 0;
+        border-radius: 0;
+        overflow: visible;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-rule-block {
+        gap: 7px;
+        padding: 8px;
+        border: 1px solid var(--yzm-border-soft);
+        border-radius: 8px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-rule-block + .yzm-auto-summary-rule-block {
+        border-left: 1px solid var(--yzm-border-soft);
+    }
+
+    #yzm-memory-root .yzm-auto-summary-card,
+    #yzm-memory-root .yzm-auto-summary-rules-card,
+    #yzm-memory-root .yzm-auto-summary-toggle-card,
+    #yzm-memory-root .yzm-auto-summary-vector-card,
+    #yzm-memory-root .yzm-auto-summary-context-card {
+        gap: 7px;
+        padding: 8px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-card-title,
+    #yzm-memory-root .yzm-auto-summary-section-title {
+        gap: 6px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-control-row {
+        gap: 7px;
+        flex-wrap: wrap;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-status,
+    #yzm-memory-root .yzm-auto-summary-number-phrase,
+    #yzm-memory-root .yzm-auto-summary-rule-row,
+    #yzm-memory-root .yzm-auto-summary-vector-text strong,
+    #yzm-memory-root .yzm-auto-summary-check-text strong {
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-desc,
+    #yzm-memory-root .yzm-auto-summary-vector-text span,
+    #yzm-memory-root .yzm-auto-summary-check-text small,
+    #yzm-memory-root .yzm-auto-summary-warning {
+        font-size: 9px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-number-input {
+        width: 50px;
+        min-height: 24px;
+        padding: 0 5px;
+        border-radius: 7px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-panel .yzm-config-switch {
+        width: 32px;
+        min-width: 32px;
+        height: 18px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-panel .yzm-config-switch span {
+        left: 2px;
+        width: 13px;
+        height: 13px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-panel .yzm-config-switch-on span {
+        right: 2px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-check-row {
+        gap: 7px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-check {
+        width: 16px;
+        height: 16px;
+        border-width: 1px;
+        border-radius: 4px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-check i {
+        font-size: 9px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-vector-row {
+        grid-template-columns: 1fr;
+        gap: 7px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-vector-button {
+        width: 100%;
+        min-height: 28px;
+        padding: 0 8px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-footer {
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+
+    #yzm-memory-root .yzm-auto-summary-footer .yzm-api-button {
+        width: 100%;
+        min-height: 28px;
+        padding: 0 8px;
+        font-size: 11px;
     }
 
     #yzm-memory-root .yzm-ai-fill-button {
