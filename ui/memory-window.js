@@ -1441,7 +1441,7 @@
     function createVectorSegmentHead() {
         const row = document.createElement('div');
         row.className = 'yzm-vector-segment-row yzm-vector-segment-head';
-        ['', '分段 ID', '分段内容', '向量化状态'].forEach((text) => {
+        ['分段 ID', '分段内容', '向量化状态'].forEach((text) => {
             const cell = document.createElement('span');
             cell.textContent = text;
             row.appendChild(cell);
@@ -1452,8 +1452,6 @@
     function createVectorSegmentRow(segment) {
         const row = document.createElement('div');
         row.className = 'yzm-vector-segment-row';
-        const check = document.createElement('span');
-        check.className = 'yzm-vector-book-check';
         const id = document.createElement('span');
         id.textContent = segment.id;
         const text = document.createElement('span');
@@ -1462,7 +1460,7 @@
         const status = document.createElement('span');
         status.className = `yzm-vector-status yzm-vector-status-${segment.status}`;
         status.textContent = getVectorStatusText(segment.status);
-        row.append(check, id, text, status);
+        row.append(id, text, status);
         return row;
     }
 
