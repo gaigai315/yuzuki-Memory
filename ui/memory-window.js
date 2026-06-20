@@ -10,6 +10,7 @@
     const THEME_STORAGE_KEY = 'yzm_memory_theme';
     const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
     const TAG_PRESETS_STORAGE_KEY = 'yzm_memory_global_tag_presets';
+    const LLM_API_PRESETS_STORAGE_KEY = 'yzm_memory_global_llm_api_presets';
     const LAYOUT_DEFAULTS = {
         desktop: {
             sidebar: { value: 180, min: 118, max: 300 },
@@ -89,8 +90,18 @@
         { id: 'plugin', label: '插件配置', icon: 'fa-solid fa-gear' },
         { id: 'init', label: '基础设置', icon: 'fa-solid fa-wand-magic-sparkles' },
     ];
+    const API_SECTIONS = [
+        { id: 'llm', label: 'LLM', icon: 'fa-solid fa-comments' },
+        { id: 'embedding', label: '向量化', icon: 'fa-solid fa-diagram-project' },
+        { id: 'rerank', label: 'Rerank', icon: 'fa-solid fa-arrow-down-wide-short' },
+    ];
     const VECTOR_BOOK_PAGE_SIZE = 10;
     const VECTOR_SEGMENT_PAGE_SIZE = 10;
+    const DEFAULT_VECTOR_SEARCH_SETTINGS = {
+        threshold: 0.3,
+        recallLimit: 6,
+        contextDepth: 2,
+    };
     const DEFAULT_STATE_REVISION = 11;
     const DEFAULT_TABLES = [
         {
@@ -123,6 +134,7 @@
     let extensionRetryTimer = null;
     let activeWorkspaceView = 'table';
     let activeConfigSectionId = 'plugin';
+    let activeApiSectionId = 'llm';
     const vectorUiState = {
         bookPage: 1,
         segmentPage: 1,
@@ -218,6 +230,45 @@
         state.activeRecordIds = state.activeRecordIds && typeof state.activeRecordIds === 'object' ? state.activeRecordIds : {};
         state.activeRecordIds[tableId] = recordId;
         saveState();
+    }
+
+    function getVectorSearchSettings() {
+        const state = getState();
+        state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+        state.settings.vectorSearch = state.settings.vectorSearch && typeof state.settings.vectorSearch === 'object' ? state.settings.vectorSearch : {};
+        const settings = state.settings.vectorSearch;
+        const normalized = {
+            threshold: normalizeNumberSetting(settings.threshold, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold, 2),
+            recallLimit: Math.round(normalizeNumberSetting(settings.recallLimit, 1, 999, DEFAULT_VECTOR_SEARCH_SETTINGS.recallLimit, 0)),
+            contextDepth: Math.round(normalizeNumberSetting(settings.contextDepth, 0, 99, DEFAULT_VECTOR_SEARCH_SETTINGS.contextDepth, 0)),
+        };
+        state.settings.vectorSearch = normalized;
+        return normalized;
+    }
+
+    function updateVectorSearchSettings(nextSettings) {
+        const state = getState();
+        state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+        const current = getVectorSearchSettings();
+        state.settings.vectorSearch = {
+            ...current,
+            ...nextSettings,
+        };
+        saveState();
+    }
+
+    function clampNumber(value, min, max, fallback) {
+        const number = Number(value);
+        if (!Number.isFinite(number)) return fallback;
+        return Math.min(Math.max(number, min), max);
+    }
+
+    function normalizeNumberSetting(value, min, max, fallback, digits = 0) {
+        if (value === null || value === undefined || String(value).trim() === '') return fallback;
+        const number = Number(value);
+        if (!Number.isFinite(number)) return fallback;
+        const clamped = Math.min(Math.max(number, min), max);
+        return digits > 0 ? Number(clamped.toFixed(digits)) : clamped;
     }
 
     function getActiveRecord(table = getActiveTable()) {
@@ -382,6 +433,57 @@
 
     function createTagPresetId() {
         return `tag_preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function normalizeLlmApiPreset(rawPreset) {
+        if (!rawPreset || typeof rawPreset !== 'object') return null;
+        const name = String(rawPreset.name || '').trim();
+        if (!name) return null;
+        return {
+            id: String(rawPreset.id || createLlmApiPresetId()),
+            name,
+            mode: rawPreset.mode === 'custom' ? 'custom' : 'tavern',
+            provider: String(rawPreset.provider || ''),
+            baseUrl: String(rawPreset.baseUrl || ''),
+            apiKey: String(rawPreset.apiKey || ''),
+            model: String(rawPreset.model || ''),
+            maxTokens: String(rawPreset.maxTokens || ''),
+            stream: !!rawPreset.stream,
+        };
+    }
+
+    function getLlmApiPresets() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(LLM_API_PRESETS_STORAGE_KEY) || '[]');
+            return Array.isArray(raw) ? raw.map(normalizeLlmApiPreset).filter(Boolean) : [];
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load LLM API presets.', error);
+            return [];
+        }
+    }
+
+    function saveLlmApiPresets(presets) {
+        const normalized = (Array.isArray(presets) ? presets : []).map(normalizeLlmApiPreset).filter(Boolean);
+        localStorage.setItem(LLM_API_PRESETS_STORAGE_KEY, JSON.stringify(normalized));
+        return normalized;
+    }
+
+    function createLlmApiPresetId() {
+        return `llm_api_preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function createEmptyLlmApiPreset() {
+        return {
+            id: '',
+            name: '',
+            mode: 'tavern',
+            provider: '',
+            baseUrl: '',
+            apiKey: '',
+            model: '',
+            maxTokens: '',
+            stream: false,
+        };
     }
 
     function createRecord(table) {
@@ -735,13 +837,15 @@
         sidebarActions.className = 'yzm-sidebar-actions';
         const configAction = createIconButton('配置', 'fa-solid fa-gear', 'yzm-sidebar-action');
         configAction.dataset.yzmAction = 'config';
+        const apiAction = createIconButton('API', 'fa-solid fa-plug', 'yzm-sidebar-action');
+        apiAction.dataset.yzmAction = 'api';
         const vectorAction = createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-sidebar-action');
         vectorAction.dataset.yzmAction = 'vector';
         sidebarActions.append(
             configAction,
             createIconButton('追溯', 'fa-solid fa-clock-rotate-left', 'yzm-sidebar-action'),
             createIconButton('总结', 'fa-solid fa-wand-magic-sparkles', 'yzm-sidebar-action'),
-            createIconButton('API', 'fa-solid fa-plug', 'yzm-sidebar-action'),
+            apiAction,
             vectorAction,
             createIconButton('记忆方案', 'fa-solid fa-book-bookmark', 'yzm-sidebar-action')
         );
@@ -783,10 +887,15 @@
         configPrimaryHeader.hidden = true;
         configPrimaryHeader.append(createIconNode('fa-solid fa-gear', ''), document.createTextNode('配置项目'));
 
+        const apiPrimaryHeader = document.createElement('div');
+        apiPrimaryHeader.className = 'yzm-api-primary-header';
+        apiPrimaryHeader.hidden = true;
+        apiPrimaryHeader.append(createIconNode('fa-solid fa-plug', ''), document.createTextNode('API 配置'));
+
         const vectorPrimaryView = createVectorPrimaryView();
         vectorPrimaryView.hidden = true;
 
-        primaryPane.append(primaryHeader, primarySearch, primaryList, configPrimaryHeader, createConfigNavList(), vectorPrimaryView);
+        primaryPane.append(primaryHeader, primarySearch, primaryList, configPrimaryHeader, createConfigNavList(), apiPrimaryHeader, createApiNavList(), vectorPrimaryView);
 
         const primaryToggle = createButton('', 'yzm-collapse-button yzm-primary-toggle');
         primaryToggle.setAttribute('aria-label', '折叠主键列表');
@@ -801,9 +910,11 @@
         tableContent.appendChild(createTableWorkspaceView(getActiveTable()));
         const configView = createConfigWorkspaceView();
         configView.hidden = true;
+        const apiView = createApiWorkspaceView();
+        apiView.hidden = true;
         const vectorView = createVectorWorkspaceView();
         vectorView.hidden = true;
-        tableFrame.append(tableContent, configView, vectorView);
+        tableFrame.append(tableContent, configView, apiView, vectorView);
         content.append(primaryPane, primaryToggle, tableFrame);
         workspace.append(toolbar, content);
 
@@ -838,7 +949,7 @@
     }
 
     function isMobileLayout() {
-        return window.matchMedia?.('(max-width: 760px)').matches;
+        return window.matchMedia?.('(max-width: 760px) and (pointer: coarse)').matches;
     }
 
     function setMobileDetailOpen(root, isOpen) {
@@ -1072,16 +1183,21 @@
     function updateWorkspaceMode(root) {
         const isConfig = activeWorkspaceView === 'config';
         const isVector = activeWorkspaceView === 'vector';
+        const isApi = activeWorkspaceView === 'api';
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-config-mode', isConfig);
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-vector-mode', isVector);
-        root.querySelector('.yzm-primary-header')?.toggleAttribute('hidden', isConfig || isVector);
-        root.querySelector('.yzm-primary-search')?.toggleAttribute('hidden', isConfig || isVector);
-        root.querySelector('.yzm-primary-list')?.toggleAttribute('hidden', isConfig || isVector);
+        root.querySelector('.yzm-workspace')?.classList.toggle('yzm-api-mode', isApi);
+        root.querySelector('.yzm-primary-header')?.toggleAttribute('hidden', isConfig || isVector || isApi);
+        root.querySelector('.yzm-primary-search')?.toggleAttribute('hidden', isConfig || isVector || isApi);
+        root.querySelector('.yzm-primary-list')?.toggleAttribute('hidden', isConfig || isVector || isApi);
         root.querySelector('.yzm-config-primary-header')?.toggleAttribute('hidden', !isConfig);
         root.querySelector('.yzm-config-nav-list')?.toggleAttribute('hidden', !isConfig);
+        root.querySelector('.yzm-api-primary-header')?.toggleAttribute('hidden', !isApi);
+        root.querySelector('.yzm-api-nav-list')?.toggleAttribute('hidden', !isApi);
         root.querySelector('.yzm-vector-primary-view')?.toggleAttribute('hidden', !isVector);
-        root.querySelector('.yzm-table-content-view')?.toggleAttribute('hidden', isConfig || isVector);
+        root.querySelector('.yzm-table-content-view')?.toggleAttribute('hidden', isConfig || isVector || isApi);
         root.querySelector('.yzm-config-view')?.toggleAttribute('hidden', !isConfig);
+        root.querySelector('.yzm-api-view')?.toggleAttribute('hidden', !isApi);
         root.querySelector('.yzm-vector-workspace-view')?.toggleAttribute('hidden', !isVector);
     }
 
@@ -1095,6 +1211,22 @@
                 ? 'yzm-config-nav-item yzm-config-nav-item-active'
                 : 'yzm-config-nav-item');
             item.dataset.yzmConfigSectionId = section.id;
+            list.appendChild(item);
+        });
+
+        return list;
+    }
+
+    function createApiNavList() {
+        const list = document.createElement('div');
+        list.className = 'yzm-api-nav-list';
+        list.hidden = true;
+
+        API_SECTIONS.forEach((section) => {
+            const item = createIconButton(section.label, section.icon, section.id === activeApiSectionId
+                ? 'yzm-api-nav-item yzm-api-nav-item-active'
+                : 'yzm-api-nav-item');
+            item.dataset.yzmApiSectionId = section.id;
             list.appendChild(item);
         });
 
@@ -1798,10 +1930,25 @@
         return page;
     }
 
+    function createApiWorkspaceView() {
+        const page = document.createElement('div');
+        page.className = 'yzm-api-view';
+
+        renderApiWorkspaceContent(page);
+        return page;
+    }
+
     function renderConfigWorkspace(root) {
         const page = root.querySelector('.yzm-config-view');
         if (!page) return;
         renderConfigWorkspaceContent(page);
+        bindPanelInteractions(root);
+    }
+
+    function renderApiWorkspace(root) {
+        const page = root.querySelector('.yzm-api-view');
+        if (!page) return;
+        renderApiWorkspaceContent(page);
         bindPanelInteractions(root);
     }
 
@@ -1823,20 +1970,491 @@
         page.replaceChildren(content);
     }
 
+    function renderApiWorkspaceContent(page) {
+        const content = document.createElement('div');
+        content.className = 'yzm-api-content';
+
+        if (activeApiSectionId === 'embedding') {
+            content.appendChild(createEmbeddingApiPanel());
+        } else if (activeApiSectionId === 'rerank') {
+            content.appendChild(createRerankApiPanel());
+        } else {
+            content.appendChild(createLlmApiPanel());
+        }
+
+        page.replaceChildren(content);
+    }
+
+    function createApiPagePanel(title, description, iconClassName, children) {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-api-panel';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-api-page-header';
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'yzm-api-page-title';
+        titleWrap.append(createIconNode(iconClassName, ''), document.createTextNode(title));
+        const desc = document.createElement('div');
+        desc.className = 'yzm-api-page-desc';
+        desc.textContent = description;
+        header.append(titleWrap, desc);
+
+        panel.append(header, ...children);
+        return panel;
+    }
+
+    function createLlmApiPanel() {
+        const preset = createEmptyLlmApiPreset();
+        return createApiPagePanel('LLM API 配置', '配置记忆生成、总结与结构化填表所使用的大语言模型。', 'fa-solid fa-comments', [
+            createApiCard('API 模式', 'fa-solid fa-route', [
+                createApiChoiceGroup([
+                    { label: '使用酒馆 API', description: '沿用 SillyTavern 当前模型配置', value: 'tavern', active: preset.mode !== 'custom' },
+                    { label: '使用独立 API', description: '为记忆插件单独配置模型与密钥', value: 'custom', active: preset.mode === 'custom' },
+                ], 'llmMode'),
+            ]),
+            createApiCard('预设管理', 'fa-regular fa-bookmark', [
+                createApiField('选择预设', createLlmApiPresetSelect()),
+                createApiField('预设名称', createApiInput('填写后点击存为预设', 'text', false, '', 'presetName')),
+                createApiActions([
+                    ['新增预设', 'fa-solid fa-plus', '', 'newLlmPreset'],
+                    ['存为预设', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveLlmPreset'],
+                    ['删除预设', 'fa-regular fa-trash-can', 'yzm-api-button-danger', 'deleteLlmPreset'],
+                ]),
+            ]),
+            createApiCard('连接配置', 'fa-solid fa-link', [
+                createApiGrid([
+                    createApiField('服务商', createApiSelect('', [{ label: '选择服务商', value: '' }, 'OpenAI Compatible', 'OpenAI', 'Claude', 'Gemini', 'DeepSeek'], 'provider')),
+                    createApiField('Base URL', createApiInput('输入 Base URL', 'text', false, '', 'baseUrl')),
+                    createApiField('API Key', createApiInput('sk-...', 'password', true, '', 'apiKey')),
+                    createApiField('模型名称', createApiInlineControl(createApiInput('输入模型名称', 'text', false, '', 'model'), createApiMiniButton('拉取模型列表', 'fa-solid fa-cloud-arrow-down'))),
+                    createApiField('Max Tokens', createApiInput('输入 Max Tokens', 'number', false, '', 'maxTokens')),
+                ]),
+                createApiConnectionFooter(createApiField('流式响应', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
+                    ['测试连接', 'fa-solid fa-plug-circle-check'],
+                ])),
+            ]),
+        ]);
+    }
+
+    function createEmbeddingApiPanel() {
+        const searchSettings = getVectorSearchSettings();
+        return createApiPagePanel('向量化 API 配置', '配置书籍分段向量化与相似度检索所使用的 Embedding 模型。', 'fa-solid fa-diagram-project', [
+            createApiCard('连接配置', 'fa-solid fa-link', [
+                createApiInlineWarning('此为向量化（Embedding）模型，不支持 LLM 模型'),
+                createApiGrid([
+                    createApiField('API 地址', createApiInput('https://api.openai.com/v1')),
+                    createApiField('API 密钥', createApiInput('sk-...', 'password', true)),
+                    createApiField('模型名称', createApiInlineControl(createApiInput('text-embedding-3-small'), createApiMiniButton('拉取模型', 'fa-solid fa-cloud-arrow-down'))),
+                ]),
+                createApiActions([
+                    ['测试连接', 'fa-solid fa-plug-circle-check'],
+                ]),
+            ]),
+            createApiCard('检索参数', 'fa-solid fa-sliders', [
+                createApiRangeField('相似度阈值', searchSettings.threshold),
+                createApiGrid([
+                    createApiField('最大召回条数', createVectorSearchNumberInput('recallLimit', searchSettings.recallLimit, 1, 999)),
+                    createApiField('检索上下文深度', createVectorSearchNumberInput('contextDepth', searchSettings.contextDepth, 0, 99)),
+                ]),
+                createApiActions([
+                    ['保存设置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveVectorSearchSettings'],
+                ]),
+            ]),
+        ]);
+    }
+
+    function createRerankApiPanel() {
+        return createApiPagePanel('Rerank API 配置', '对向量召回结果进行二次排序，提升注入内容的相关性。', 'fa-solid fa-arrow-down-wide-short', [
+            createApiCard('', '', [
+                createPluginConfigRow('启用 Rerank（重排序）', '开启后会在向量召回后调用 Rerank 模型重新排序结果。', 'fa-solid fa-layer-group', createConfigSwitch(false)),
+            ], 'yzm-api-card-plain'),
+            createApiCard('连接配置', 'fa-solid fa-link', [
+                createApiGrid([
+                    createApiField('Rerank API URL', createApiInput('https://api.example.com/rerank')),
+                    createApiField('Rerank API Key', createApiInput('rk-...', 'password', true)),
+                    createApiField('Rerank Model', createApiInlineControl(createApiInput('bge-reranker-v2-m3'), createApiMiniButton('拉取模型', 'fa-solid fa-cloud-arrow-down'))),
+                ]),
+                createApiActions([
+                    ['保存配置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary'],
+                    ['测试连接', 'fa-solid fa-plug-circle-check'],
+                ]),
+            ]),
+        ]);
+    }
+
+    function createApiCard(title, iconClassName, children, extraClassName = '') {
+        const card = document.createElement('section');
+        card.className = `yzm-config-card yzm-api-card ${extraClassName}`.trim();
+
+        const nodes = [];
+        if (title) {
+            const titleNode = document.createElement('div');
+            titleNode.className = 'yzm-config-card-title yzm-api-card-title';
+            if (iconClassName) titleNode.appendChild(createIconNode(iconClassName, ''));
+            titleNode.appendChild(document.createTextNode(title));
+            nodes.push(titleNode);
+        }
+
+        card.append(...nodes, ...children);
+        return card;
+    }
+
+    function createApiChoiceGroup(choices, fieldKey = '') {
+        const group = document.createElement('div');
+        group.className = 'yzm-api-choice-group';
+        choices.forEach((choice) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = choice.active ? 'yzm-api-choice yzm-api-choice-active' : 'yzm-api-choice';
+            if (fieldKey) {
+                button.dataset.yzmApiField = fieldKey;
+                button.dataset.yzmApiValue = choice.value || '';
+            }
+            button.append(createIconNode(choice.active ? 'fa-solid fa-circle-dot' : 'fa-regular fa-circle', ''), createApiChoiceText(choice.label, choice.description));
+            group.appendChild(button);
+        });
+        return group;
+    }
+
+    function createApiChoiceText(label, description) {
+        const wrap = document.createElement('span');
+        wrap.className = 'yzm-api-choice-text';
+        const title = document.createElement('strong');
+        title.textContent = label;
+        const desc = document.createElement('small');
+        desc.textContent = description;
+        wrap.append(title, desc);
+        return wrap;
+    }
+
+    function createApiGrid(children) {
+        const grid = document.createElement('div');
+        grid.className = 'yzm-api-grid';
+        grid.append(...children);
+        return grid;
+    }
+
+    function createApiField(labelText, control, className = '') {
+        const field = document.createElement(className.includes('yzm-api-field-inline') ? 'div' : 'label');
+        field.className = `yzm-api-field ${className}`.trim();
+        const label = document.createElement('span');
+        label.className = 'yzm-api-field-label';
+        label.textContent = labelText;
+        field.append(label, control);
+        return field;
+    }
+
+    function createApiInput(placeholder, type = 'text', hasSecretToggle = false, settingKey = '', fieldKey = '') {
+        const wrap = document.createElement('div');
+        wrap.className = hasSecretToggle ? 'yzm-api-input-wrap yzm-api-secret-wrap' : 'yzm-api-input-wrap';
+        const input = document.createElement('input');
+        input.className = 'yzm-api-input';
+        input.type = hasSecretToggle ? 'text' : type;
+        if (hasSecretToggle) {
+            input.classList.add('yzm-api-secret-masked');
+            input.inputMode = 'text';
+            input.autocomplete = 'off';
+            input.autocapitalize = 'off';
+            input.spellcheck = false;
+            input.setAttribute('autocorrect', 'off');
+        }
+        input.placeholder = placeholder;
+        if (fieldKey) input.dataset.yzmApiField = fieldKey;
+        if (settingKey) {
+            input.value = placeholder;
+            input.dataset.yzmVectorSearchSetting = settingKey;
+        }
+        if (type === 'number') input.inputMode = 'numeric';
+        wrap.appendChild(input);
+        if (hasSecretToggle) wrap.appendChild(createIconButton('显示', 'fa-regular fa-eye', 'yzm-api-icon-button'));
+        return wrap;
+    }
+
+    function createVectorSearchNumberInput(settingKey, value, min, max) {
+        const fallback = DEFAULT_VECTOR_SEARCH_SETTINGS[settingKey] ?? min;
+        const normalizedValue = Math.round(normalizeNumberSetting(value, min, max, fallback, 0));
+        const wrap = createApiInput(String(normalizedValue), 'number', false, settingKey);
+        const input = wrap.querySelector('.yzm-api-input');
+        if (input) {
+            input.min = String(min);
+            input.max = String(max);
+            input.step = '1';
+        }
+        return wrap;
+    }
+
+    function createLlmApiPresetSelect() {
+        const presets = getLlmApiPresets();
+        const wrap = createApiSelect('', [{ label: presets.length ? '选择预设' : '暂无预设', value: '' }, ...presets.map((preset) => ({ label: preset.name, value: preset.id }))]);
+        wrap.querySelector('.yzm-api-select')?.setAttribute('data-yzm-llm-preset-select', 'true');
+        return wrap;
+    }
+
+    function createApiSelect(value, options, fieldKey = '') {
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-api-select-wrap';
+        const select = document.createElement('select');
+        select.className = 'yzm-api-select';
+        if (fieldKey) select.dataset.yzmApiField = fieldKey;
+        options.forEach((optionEntry) => {
+            const optionText = typeof optionEntry === 'object' ? optionEntry.label : optionEntry;
+            const optionValue = typeof optionEntry === 'object' ? optionEntry.value : optionText;
+            const option = document.createElement('option');
+            option.textContent = optionText;
+            option.value = optionValue;
+            select.appendChild(option);
+        });
+        select.value = value;
+        wrap.append(select, createIconNode('fa-solid fa-chevron-down', ''));
+        return wrap;
+    }
+
+    function createApiInlineControl(control, action) {
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-api-inline-control';
+        wrap.append(control, action);
+        return wrap;
+    }
+
+    function createApiConnectionFooter(settingControl, actions) {
+        const footer = document.createElement('div');
+        footer.className = 'yzm-api-connection-footer';
+        footer.append(settingControl, actions);
+        return footer;
+    }
+
+    function createApiMiniButton(label, iconClassName) {
+        return createIconButton(label, iconClassName, 'yzm-api-mini-button');
+    }
+
+    function createApiActions(actions) {
+        const row = document.createElement('div');
+        row.className = 'yzm-api-actions';
+        actions.forEach(([label, iconClassName, className = '', action = '']) => {
+            const button = createIconButton(label, iconClassName, `yzm-api-button ${className}`.trim());
+            if (action) button.dataset.yzmApiAction = action;
+            row.appendChild(button);
+        });
+        return row;
+    }
+
+    function createApiWarning(text) {
+        const warning = document.createElement('div');
+        warning.className = 'yzm-api-warning';
+        warning.append(createIconNode('fa-solid fa-triangle-exclamation', ''), document.createTextNode(text));
+        return warning;
+    }
+
+    function createApiInlineWarning(text) {
+        const warning = createApiWarning(text);
+        warning.classList.add('yzm-api-warning-inline');
+        return warning;
+    }
+
+    function createApiRangeField(labelText, value) {
+        const normalizedValue = clampNumber(value, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold).toFixed(2);
+        const field = document.createElement('label');
+        field.className = 'yzm-api-range-field';
+        const top = document.createElement('div');
+        top.className = 'yzm-api-range-top';
+        const label = document.createElement('span');
+        label.textContent = labelText;
+        const numberWrap = createApiInput(normalizedValue, 'number', false, 'threshold');
+        numberWrap.classList.add('yzm-api-range-number-wrap');
+        const numberInput = numberWrap.querySelector('.yzm-api-input');
+        if (numberInput) {
+            numberInput.classList.add('yzm-api-range-number');
+            numberInput.min = '0';
+            numberInput.max = '1';
+            numberInput.step = '0.01';
+        }
+        const range = document.createElement('input');
+        range.className = 'yzm-api-range';
+        range.dataset.yzmVectorSearchSetting = 'threshold';
+        range.type = 'range';
+        range.min = '0';
+        range.max = '1';
+        range.step = '0.01';
+        range.value = normalizedValue;
+        top.append(label, numberWrap);
+        field.append(top, range);
+        return field;
+    }
+
+    function syncVectorSearchSettingInput(input) {
+        const key = input?.dataset?.yzmVectorSearchSetting;
+        if (!key) return;
+        if (input.value === '') return;
+
+        if (key === 'threshold') {
+            if (input.classList.contains('yzm-api-range-number') && /^(0|1)?\.?$/.test(input.value)) return;
+            const value = clampNumber(input.value, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold);
+            const rangeField = input.closest('.yzm-api-range-field');
+            rangeField?.querySelectorAll('[data-yzm-vector-search-setting="threshold"]').forEach((node) => {
+                if (node === input) return;
+                node.value = input.classList.contains('yzm-api-range') ? value.toFixed(2) : String(value);
+            });
+            if (input.classList.contains('yzm-api-range')) {
+                const numberInput = rangeField?.querySelector('.yzm-api-range-number');
+                if (numberInput) numberInput.value = value.toFixed(2);
+            }
+        }
+    }
+
+    function normalizeVectorSearchInput(input) {
+        const key = input?.dataset?.yzmVectorSearchSetting;
+        if (key !== 'threshold') return;
+        const value = clampNumber(input.value, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold);
+        input.value = value.toFixed(2);
+        input.closest('.yzm-api-range-field')?.querySelectorAll('.yzm-api-range').forEach((range) => {
+            range.value = value.toFixed(2);
+        });
+    }
+
+    function saveVectorSearchSettingsFromForm(root) {
+        const thresholdInput = root.querySelector('.yzm-api-view .yzm-api-range-number');
+        const recallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="recallLimit"]');
+        const depthInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="contextDepth"]');
+        const threshold = Number(clampNumber(thresholdInput?.value, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold).toFixed(2));
+        const recallLimit = Math.round(clampNumber(recallInput?.value, 1, 999, DEFAULT_VECTOR_SEARCH_SETTINGS.recallLimit));
+        const contextDepth = Math.round(clampNumber(depthInput?.value, 0, 99, DEFAULT_VECTOR_SEARCH_SETTINGS.contextDepth));
+        updateVectorSearchSettings({ threshold, recallLimit, contextDepth });
+        if (thresholdInput) thresholdInput.value = threshold.toFixed(2);
+        root.querySelectorAll('.yzm-api-view .yzm-api-range').forEach((range) => {
+            range.value = threshold.toFixed(2);
+        });
+        if (recallInput) recallInput.value = String(recallLimit);
+        if (depthInput) depthInput.value = String(contextDepth);
+    }
+
+    function getApiField(root, fieldKey) {
+        return root.querySelector(`.yzm-api-view [data-yzm-api-field="${escapeSelectorValue(fieldKey)}"]`);
+    }
+
+    function getApiFieldValue(root, fieldKey) {
+        const field = getApiField(root, fieldKey);
+        if (!field) return '';
+        if (field.classList.contains('yzm-api-choice')) return field.dataset.yzmApiValue || '';
+        return String(field.value || '').trim();
+    }
+
+    function setApiFieldValue(root, fieldKey, value) {
+        const fields = root.querySelectorAll(`.yzm-api-view [data-yzm-api-field="${escapeSelectorValue(fieldKey)}"]`);
+        fields.forEach((field) => {
+            if (field.classList.contains('yzm-api-choice')) {
+                const isActive = field.dataset.yzmApiValue === value;
+                field.classList.toggle('yzm-api-choice-active', isActive);
+                field.querySelector('i')?.classList.toggle('fa-solid', isActive);
+                field.querySelector('i')?.classList.toggle('fa-regular', !isActive);
+                field.querySelector('i')?.classList.toggle('fa-circle-dot', isActive);
+                field.querySelector('i')?.classList.toggle('fa-circle', !isActive);
+                return;
+            }
+            field.value = value || '';
+        });
+    }
+
+    function getLlmApiPresetSelect(root) {
+        return root.querySelector('.yzm-api-view [data-yzm-llm-preset-select]');
+    }
+
+    function escapeSelectorValue(value) {
+        return window.CSS?.escape ? window.CSS.escape(String(value)) : String(value).replace(/"/g, '\\"');
+    }
+
+    function readLlmApiForm(root) {
+        return normalizeLlmApiPreset({
+            id: getLlmApiPresetSelect(root)?.value || '',
+            name: getApiFieldValue(root, 'presetName'),
+            mode: root.querySelector('.yzm-api-view [data-yzm-api-field="llmMode"].yzm-api-choice-active')?.dataset.yzmApiValue || 'tavern',
+            provider: getApiFieldValue(root, 'provider'),
+            baseUrl: getApiFieldValue(root, 'baseUrl'),
+            apiKey: getApiFieldValue(root, 'apiKey'),
+            model: getApiFieldValue(root, 'model'),
+            maxTokens: getApiFieldValue(root, 'maxTokens'),
+            stream: root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch')?.classList.contains('yzm-config-switch-on'),
+        });
+    }
+
+    function applyLlmApiPreset(root, preset) {
+        const nextPreset = preset || createEmptyLlmApiPreset();
+        setApiFieldValue(root, 'presetName', nextPreset.name);
+        setApiFieldValue(root, 'llmMode', nextPreset.mode || 'tavern');
+        setApiFieldValue(root, 'provider', nextPreset.provider);
+        setApiFieldValue(root, 'baseUrl', nextPreset.baseUrl);
+        setApiFieldValue(root, 'apiKey', nextPreset.apiKey);
+        setApiFieldValue(root, 'model', nextPreset.model);
+        setApiFieldValue(root, 'maxTokens', nextPreset.maxTokens);
+        const streamSwitch = root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch');
+        if (streamSwitch) {
+            streamSwitch.classList.toggle('yzm-config-switch-on', !!nextPreset.stream);
+            streamSwitch.setAttribute('aria-pressed', String(!!nextPreset.stream));
+        }
+    }
+
+    function refreshLlmApiPresetSelect(root, activePresetId = '') {
+        const select = getLlmApiPresetSelect(root);
+        if (!select) return;
+        const presets = getLlmApiPresets();
+        const placeholder = document.createElement('option');
+        placeholder.textContent = presets.length ? '选择预设' : '暂无预设';
+        placeholder.value = '';
+        select.replaceChildren(placeholder);
+        presets.forEach((preset) => {
+            const option = document.createElement('option');
+            option.textContent = preset.name;
+            option.value = preset.id;
+            select.appendChild(option);
+        });
+        select.value = presets.some((preset) => preset.id === activePresetId) ? activePresetId : '';
+    }
+
+    function startNewLlmApiPreset(root) {
+        const select = getLlmApiPresetSelect(root);
+        if (select) select.value = '';
+        applyLlmApiPreset(root, createEmptyLlmApiPreset());
+        getApiField(root, 'presetName')?.focus?.();
+    }
+
+    function saveCurrentLlmApiPreset(root) {
+        const preset = readLlmApiForm(root);
+        const nameField = getApiField(root, 'presetName');
+        if (!preset) {
+            nameField?.focus?.();
+            return;
+        }
+
+        const presets = getLlmApiPresets();
+        const nextPreset = {
+            ...preset,
+            id: preset.id || createLlmApiPresetId(),
+        };
+        const existingIndex = presets.findIndex((entry) => entry.id === nextPreset.id);
+        if (existingIndex >= 0) {
+            presets[existingIndex] = nextPreset;
+        } else {
+            presets.push(nextPreset);
+        }
+        saveLlmApiPresets(presets);
+        refreshLlmApiPresetSelect(root, nextPreset.id);
+        applyLlmApiPreset(root, nextPreset);
+    }
+
+    function deleteCurrentLlmApiPreset(root) {
+        const select = getLlmApiPresetSelect(root);
+        const presetId = select?.value || '';
+        if (!presetId) return;
+        saveLlmApiPresets(getLlmApiPresets().filter((preset) => preset.id !== presetId));
+        refreshLlmApiPresetSelect(root);
+        startNewLlmApiPreset(root);
+    }
+
     function createPluginConfigPanel() {
         const card = document.createElement('section');
         card.className = 'yzm-config-card yzm-plugin-config-card';
 
-        const titleNode = document.createElement('div');
-        titleNode.className = 'yzm-plugin-config-hero';
-        titleNode.append(
-            createIconNode('fa-solid fa-link', 'yzm-plugin-config-hero-icon'),
-            createPluginConfigTitle('智能联动配置', '配置插件的智能行为，提升自动化效率')
-        );
-
         card.append(
             createPluginConfigHeader(),
-            titleNode,
             createPluginConfigRow('注入记忆表格', '此为总开关。关闭后不注入任何记忆内容（含向量化及总结）。', 'fa-solid fa-table-cells-large', createConfigSwitch(true)),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(true)),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput('50'), createConfigSwitch(false)))
@@ -3043,6 +3661,24 @@
             });
         }
 
+        const apiButton = root.querySelector('.yzm-sidebar-action[data-yzm-action="api"]');
+        if (apiButton && apiButton.dataset.yzmBound !== 'true') {
+            apiButton.dataset.yzmBound = 'true';
+            apiButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                activeWorkspaceView = 'api';
+                setMobileDetailOpen(root, false);
+                root.querySelectorAll('.yzm-nav-item-active, .yzm-nav-table-active').forEach((node) => {
+                    node.classList.remove('yzm-nav-item-active', 'yzm-nav-table-active');
+                });
+                clearSidebarActionActive(root);
+                apiButton.classList.add('yzm-sidebar-action-active');
+                renderApiWorkspace(root);
+                updateWorkspaceMode(root);
+            });
+        }
+
         const vectorButton = root.querySelector('.yzm-sidebar-action[data-yzm-action="vector"]');
         if (vectorButton && vectorButton.dataset.yzmBound !== 'true') {
             vectorButton.dataset.yzmBound = 'true';
@@ -3184,6 +3820,87 @@
                 if (activeConfigSectionId === 'init') refreshTagPresetSelect(root);
             });
         });
+
+        root.querySelectorAll('.yzm-api-nav-item').forEach((item) => {
+            if (item.dataset.yzmBound === 'true') return;
+            item.dataset.yzmBound = 'true';
+            item.addEventListener('click', () => {
+                activeApiSectionId = item.dataset.yzmApiSectionId || 'llm';
+                root.querySelectorAll('.yzm-api-nav-item-active').forEach((node) => {
+                    node.classList.remove('yzm-api-nav-item-active');
+                });
+                item.classList.add('yzm-api-nav-item-active');
+                renderApiWorkspace(root);
+            });
+        });
+
+        const apiView = root.querySelector('.yzm-api-view');
+        if (apiView && apiView.dataset.yzmApiBound !== 'true') {
+            apiView.dataset.yzmApiBound = 'true';
+            apiView.addEventListener('click', (event) => {
+                const target = event.target;
+                const configSwitch = target?.closest?.('.yzm-config-switch');
+                const secretButton = target?.closest?.('.yzm-api-icon-button');
+                const apiChoice = target?.closest?.('.yzm-api-choice');
+                const apiActionButton = target?.closest?.('[data-yzm-api-action]');
+
+                if (apiActionButton) {
+                    const action = apiActionButton.dataset.yzmApiAction;
+                    if (action === 'newLlmPreset') startNewLlmApiPreset(root);
+                    if (action === 'saveLlmPreset') saveCurrentLlmApiPreset(root);
+                    if (action === 'deleteLlmPreset') deleteCurrentLlmApiPreset(root);
+                    if (action === 'saveVectorSearchSettings') saveVectorSearchSettingsFromForm(root);
+                    return;
+                }
+
+                if (configSwitch) {
+                    const isOn = configSwitch.classList.toggle('yzm-config-switch-on');
+                    configSwitch.setAttribute('aria-pressed', String(isOn));
+                    return;
+                }
+
+                if (apiChoice) {
+                    apiChoice.closest('.yzm-api-choice-group')?.querySelectorAll('.yzm-api-choice').forEach((choice) => {
+                        const isActive = choice === apiChoice;
+                        choice.classList.toggle('yzm-api-choice-active', isActive);
+                        choice.querySelector('i')?.classList.toggle('fa-solid', isActive);
+                        choice.querySelector('i')?.classList.toggle('fa-regular', !isActive);
+                        choice.querySelector('i')?.classList.toggle('fa-circle-dot', isActive);
+                        choice.querySelector('i')?.classList.toggle('fa-circle', !isActive);
+                    });
+                    return;
+                }
+
+                if (secretButton) {
+                    event.preventDefault();
+                    const input = secretButton.closest('.yzm-api-secret-wrap')?.querySelector('.yzm-api-input');
+                    if (!input) return;
+                    const isMasked = input.classList.toggle('yzm-api-secret-masked');
+                    secretButton.querySelector('i')?.classList.toggle('fa-eye', isMasked);
+                    secretButton.querySelector('i')?.classList.toggle('fa-eye-slash', !isMasked);
+                }
+            });
+            apiView.addEventListener('input', (event) => {
+                const target = event.target;
+                if (!target?.matches?.('[data-yzm-vector-search-setting]')) return;
+                syncVectorSearchSettingInput(target);
+            });
+            apiView.addEventListener('change', (event) => {
+                const target = event.target;
+                if (target?.matches?.('[data-yzm-vector-search-setting]')) {
+                    normalizeVectorSearchInput(target);
+                    return;
+                }
+                if (!target?.matches?.('[data-yzm-llm-preset-select]')) return;
+                const preset = getLlmApiPresets().find((entry) => entry.id === target.value);
+                applyLlmApiPreset(root, preset || createEmptyLlmApiPreset());
+            });
+            apiView.addEventListener('blur', (event) => {
+                const target = event.target;
+                if (!target?.matches?.('[data-yzm-vector-search-setting]')) return;
+                normalizeVectorSearchInput(target);
+            }, true);
+        }
 
         const configView = root.querySelector('.yzm-config-view');
         if (configView && configView.dataset.yzmPresetBound !== 'true') {
