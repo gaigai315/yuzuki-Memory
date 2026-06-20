@@ -666,6 +666,7 @@
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-nav-table-name,
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar-action {
     justify-content: center;
+    gap: 0;
     width: 34px;
     min-height: 34px;
     padding: 0;
@@ -677,7 +678,9 @@
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-nav-icon,
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar-action i {
-    width: auto;
+    display: inline-flex;
+    justify-content: center;
+    width: 16px;
     font-size: 13px;
 }
 
@@ -2881,10 +2884,11 @@
         display: block;
         margin: 0;
         min-width: 0;
-        overflow: hidden;
+        overflow: auto;
         background: transparent;
         border: 0;
         border-radius: 0;
+        overscroll-behavior: contain;
     }
 
     #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-table-frame {
@@ -2915,7 +2919,7 @@
         box-shadow: none;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-view {
+    #yzm-memory-root .yzm-character-view {
         grid-template-columns: minmax(0, 1fr);
         grid-auto-rows: auto;
         height: auto;
@@ -2924,180 +2928,135 @@
         gap: 10px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-main-card {
+    #yzm-memory-root .yzm-character-main-card {
         grid-template-rows: 36px 70px 28px minmax(0, 1fr);
         min-height: 330px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-card-title,
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-panel-title {
+    #yzm-memory-root .yzm-character-card-title,
+    #yzm-memory-root .yzm-character-panel-title {
         min-height: 36px;
         padding: 0 10px;
         font-size: 15px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-avatar {
+    #yzm-memory-root .yzm-character-avatar {
         width: 58px;
         height: 58px;
         margin: 8px auto 3px;
         font-size: 22px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-name {
+    #yzm-memory-root .yzm-character-name {
         padding: 0 10px;
         font-size: 16px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-fields {
+    #yzm-memory-root .yzm-character-fields {
         padding: 6px 12px 10px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-field {
+    #yzm-memory-root .yzm-character-field {
         grid-template-columns: minmax(86px, 0.48fr) minmax(80px, 1fr);
         gap: 8px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-character-side {
+    #yzm-memory-root .yzm-character-side {
         grid-auto-rows: minmax(100px, auto);
         overflow: visible;
         padding-right: 0;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-view {
+    #yzm-memory-root .yzm-item-view,
+    #yzm-memory-root .yzm-world-view {
         height: auto;
         min-height: 0;
         padding: 8px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-detail-card {
+    #yzm-memory-root .yzm-item-detail-card,
+    #yzm-memory-root .yzm-world-detail-card {
         height: auto;
         min-height: 0;
         padding: 12px;
         overflow: visible;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-detail-header {
+    #yzm-memory-root .yzm-item-detail-header,
+    #yzm-memory-root .yzm-world-detail-header {
         grid-template-columns: 54px minmax(0, 1fr);
         gap: 12px;
         min-height: 72px;
         padding: 4px 2px 12px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-avatar {
+    #yzm-memory-root .yzm-item-avatar,
+    #yzm-memory-root .yzm-world-avatar {
         width: 54px;
         height: 54px;
         font-size: 22px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-detail-title {
+    #yzm-memory-root .yzm-item-detail-title,
+    #yzm-memory-root .yzm-world-detail-title {
         gap: 7px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-detail-name {
+    #yzm-memory-root .yzm-item-detail-name,
+    #yzm-memory-root .yzm-world-detail-name {
         font-size: 18px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-detail-rows {
+    #yzm-memory-root .yzm-item-detail-rows,
+    #yzm-memory-root .yzm-world-detail-rows {
         overflow: visible;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-detail-row {
+    #yzm-memory-root .yzm-item-detail-row,
+    #yzm-memory-root .yzm-world-detail-row {
         grid-template-columns: minmax(92px, 0.42fr) minmax(90px, 1fr);
         gap: 8px;
         min-height: 48px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-detail-label {
+    #yzm-memory-root .yzm-world-detail-row {
+        padding: 9px 0;
+    }
+
+    #yzm-memory-root .yzm-world-detail-row-wide {
+        min-height: 96px;
+    }
+
+    #yzm-memory-root .yzm-item-detail-label,
+    #yzm-memory-root .yzm-world-detail-label {
         gap: 7px;
         font-size: 12px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-detail-label i {
+    #yzm-memory-root .yzm-item-detail-label i,
+    #yzm-memory-root .yzm-world-detail-label i {
         width: 13px;
         font-size: 13px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-detail-value {
+    #yzm-memory-root .yzm-item-detail-value,
+    #yzm-memory-root .yzm-world-detail-value {
         padding-left: 8px;
         font-size: 12px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-note-box {
+    #yzm-memory-root .yzm-item-note-box {
         margin-top: 12px;
         padding: 10px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-item-note-body {
+    #yzm-memory-root .yzm-item-note-body {
         min-height: 64px;
         padding: 9px;
         font-size: 12px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-view {
-        height: auto;
-        min-height: 0;
-        padding: 8px;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-card {
-        height: auto;
-        min-height: 0;
-        padding: 12px;
-        overflow: visible;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-header {
-        grid-template-columns: 54px minmax(0, 1fr);
-        gap: 12px;
-        min-height: 72px;
-        padding: 4px 2px 12px;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-avatar {
-        width: 54px;
-        height: 54px;
-        font-size: 22px;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-title {
-        gap: 7px;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-name {
-        font-size: 18px;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-rows {
-        overflow: visible;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-row {
-        grid-template-columns: minmax(92px, 0.42fr) minmax(90px, 1fr);
-        gap: 8px;
-        min-height: 48px;
-        padding: 9px 0;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-row-wide {
-        min-height: 96px;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-label {
-        gap: 7px;
-        font-size: 12px;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-label i {
-        width: 13px;
-        font-size: 13px;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-world-detail-value {
-        padding-left: 8px;
-        font-size: 12px;
-    }
-
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-view {
+    #yzm-memory-root .yzm-summary-view {
         grid-template-rows: auto minmax(180px, auto) minmax(110px, auto);
         height: auto;
         min-height: 0;
@@ -3105,67 +3064,67 @@
         gap: 10px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-hero {
+    #yzm-memory-root .yzm-summary-hero {
         grid-template-columns: 44px minmax(0, 1fr);
         gap: 10px;
         min-height: 54px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-avatar {
+    #yzm-memory-root .yzm-summary-avatar {
         width: 44px;
         height: 44px;
         font-size: 18px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-title {
+    #yzm-memory-root .yzm-summary-title {
         font-size: 18px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-card-title {
+    #yzm-memory-root .yzm-summary-card-title {
         min-height: 36px;
         padding: 0 10px;
         font-size: 13px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-card-grid {
+    #yzm-memory-root .yzm-summary-card-grid {
         grid-template-columns: minmax(0, 1fr);
         grid-template-rows: none;
         gap: 10px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-card-grid .yzm-summary-text-card:first-child {
+    #yzm-memory-root .yzm-summary-card-grid .yzm-summary-text-card:first-child {
         grid-column: auto;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-list {
+    #yzm-memory-root .yzm-summary-timeline-list {
         overflow: visible;
         padding: 8px 10px 10px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-row {
+    #yzm-memory-root .yzm-summary-timeline-row {
         grid-template-columns: 72px minmax(0, 1fr);
         gap: 8px;
         min-height: 38px;
         padding-left: 18px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-row::before {
+    #yzm-memory-root .yzm-summary-timeline-row::before {
         left: 5px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-dot {
+    #yzm-memory-root .yzm-summary-timeline-dot {
         left: 1px;
         width: 8px;
         height: 8px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-time,
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-event,
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-text-body {
+    #yzm-memory-root .yzm-summary-timeline-time,
+    #yzm-memory-root .yzm-summary-timeline-event,
+    #yzm-memory-root .yzm-summary-text-body {
         font-size: 12px;
     }
 
-    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-text-body {
+    #yzm-memory-root .yzm-summary-text-body {
         padding: 10px;
         overflow: visible;
     }
