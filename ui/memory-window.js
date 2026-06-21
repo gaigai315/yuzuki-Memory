@@ -105,6 +105,14 @@
         { id: 'rerank', label: 'Rerank', icon: 'fa-solid fa-arrow-down-wide-short' },
         { id: 'requestProbe', label: 'API 请求查看器', icon: 'fa-solid fa-list-check' },
     ];
+    const TRACE_SECTIONS = [
+        { id: 'manual', label: '手动追溯', icon: 'fa-solid fa-clock-rotate-left' },
+        { id: 'optimize', label: '追溯优化', icon: 'fa-solid fa-wand-magic-sparkles' },
+    ];
+    const SUMMARY_TOOL_SECTIONS = [
+        { id: 'manual', label: '手动总结', icon: 'fa-solid fa-book-open' },
+        { id: 'optimize', label: '总结优化', icon: 'fa-solid fa-wand-magic-sparkles' },
+    ];
     const PROMPT_SCHEME_SECTIONS = [
         { id: 'info', label: '方案信息', icon: 'fa-regular fa-clipboard' },
         { id: 'historian', label: '史官破限', icon: 'fa-regular fa-clipboard' },
@@ -148,8 +156,14 @@
         hideSummaryFloors: false,
     };
     const FIXED_TABLE_ID = 'memory_summary';
-    const DEFAULT_STATE_REVISION = 11;
+    const DEFAULT_STATE_REVISION = 12;
     const DEFAULT_TABLES = [
+        {
+            id: 'plot_summary',
+            name: '剧情摘要',
+            icon: 'timeline',
+            columns: ['主线', '支线'],
+        },
         {
             id: 'character_profile',
             name: '角色档案',
@@ -181,6 +195,8 @@
     let activeWorkspaceView = 'table';
     let activeConfigSectionId = 'plugin';
     let activeApiSectionId = 'llm';
+    let activeTraceSectionId = 'manual';
+    let activeSummaryToolSectionId = 'manual';
     let activePromptSchemeSectionId = 'info';
     let activePromptSchemeDraft = null;
     const vectorUiState = {
@@ -363,6 +379,34 @@
             ...nextSettings,
         };
         saveState();
+    }
+
+    function getManualPointerSettings() {
+        const state = getState();
+        state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+        state.settings.manualPointers = state.settings.manualPointers && typeof state.settings.manualPointers === 'object'
+            ? state.settings.manualPointers
+            : {};
+        const pointers = state.settings.manualPointers;
+        const normalized = {
+            trace: Math.round(normalizeNumberSetting(pointers.trace, 0, 999999, 0, 0)),
+            summary: Math.round(normalizeNumberSetting(pointers.summary, 0, 999999, 0, 0)),
+        };
+        state.settings.manualPointers = normalized;
+        return normalized;
+    }
+
+    function updateManualPointerSetting(key, value) {
+        if (key !== 'trace' && key !== 'summary') return getManualPointerSettings();
+        const state = getState();
+        state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+        const current = getManualPointerSettings();
+        state.settings.manualPointers = {
+            ...current,
+            [key]: Math.max(0, Math.round(Number(value) || 0)),
+        };
+        saveState();
+        return state.settings.manualPointers;
     }
 
     function clampNumber(value, min, max, fallback) {
@@ -1128,6 +1172,10 @@
         sidebarActions.className = 'yzm-sidebar-actions';
         const configAction = createIconButton('设置', 'fa-solid fa-gear', 'yzm-sidebar-action');
         configAction.dataset.yzmAction = 'config';
+        const traceAction = createIconButton('追溯', 'fa-solid fa-clock-rotate-left', 'yzm-sidebar-action');
+        traceAction.dataset.yzmAction = 'trace';
+        const summaryToolAction = createIconButton('总结', 'fa-solid fa-wand-magic-sparkles', 'yzm-sidebar-action');
+        summaryToolAction.dataset.yzmAction = 'summaryTool';
         const apiAction = createIconButton('API', 'fa-solid fa-plug', 'yzm-sidebar-action');
         apiAction.dataset.yzmAction = 'api';
         const vectorAction = createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-sidebar-action');
@@ -1137,8 +1185,8 @@
         sidebarActions.append(
             createSidebarGroupLabel('系统功能'),
             configAction,
-            createIconButton('追溯', 'fa-solid fa-clock-rotate-left', 'yzm-sidebar-action'),
-            createIconButton('总结', 'fa-solid fa-wand-magic-sparkles', 'yzm-sidebar-action'),
+            traceAction,
+            summaryToolAction,
             apiAction,
             vectorAction,
             schemeAction
@@ -1186,6 +1234,16 @@
         apiPrimaryHeader.hidden = true;
         apiPrimaryHeader.append(createIconNode('fa-solid fa-plug', ''), document.createTextNode('API 配置'));
 
+        const tracePrimaryHeader = document.createElement('div');
+        tracePrimaryHeader.className = 'yzm-trace-primary-header';
+        tracePrimaryHeader.hidden = true;
+        tracePrimaryHeader.append(createIconNode('fa-solid fa-clock-rotate-left', ''), document.createTextNode('追溯项目'));
+
+        const summaryToolPrimaryHeader = document.createElement('div');
+        summaryToolPrimaryHeader.className = 'yzm-summary-tool-primary-header';
+        summaryToolPrimaryHeader.hidden = true;
+        summaryToolPrimaryHeader.append(createIconNode('fa-solid fa-wand-magic-sparkles', ''), document.createTextNode('总结项目'));
+
         const schemePrimaryHeader = document.createElement('div');
         schemePrimaryHeader.className = 'yzm-scheme-primary-header';
         schemePrimaryHeader.hidden = true;
@@ -1194,7 +1252,7 @@
         const vectorPrimaryView = createVectorPrimaryView();
         vectorPrimaryView.hidden = true;
 
-        primaryPane.append(primaryHeader, primarySearch, primaryList, configPrimaryHeader, createConfigNavList(), apiPrimaryHeader, createApiNavList(), schemePrimaryHeader, createPromptSchemeNavList(), vectorPrimaryView);
+        primaryPane.append(primaryHeader, primarySearch, primaryList, configPrimaryHeader, createConfigNavList(), tracePrimaryHeader, createTraceNavList(), summaryToolPrimaryHeader, createSummaryToolNavList(), apiPrimaryHeader, createApiNavList(), schemePrimaryHeader, createPromptSchemeNavList(), vectorPrimaryView);
 
         const primaryToggle = createButton('', 'yzm-collapse-button yzm-primary-toggle');
         primaryToggle.setAttribute('aria-label', '折叠主键列表');
@@ -1211,11 +1269,15 @@
         configView.hidden = true;
         const apiView = createApiWorkspaceView();
         apiView.hidden = true;
+        const traceView = createTraceWorkspaceView();
+        traceView.hidden = true;
+        const summaryToolView = createSummaryToolWorkspaceView();
+        summaryToolView.hidden = true;
         const schemeView = createPromptSchemeWorkspaceView();
         schemeView.hidden = true;
         const vectorView = createVectorWorkspaceView();
         vectorView.hidden = true;
-        tableFrame.append(tableContent, configView, apiView, schemeView, vectorView);
+        tableFrame.append(tableContent, configView, traceView, summaryToolView, apiView, schemeView, vectorView);
         content.append(primaryPane, primaryToggle, tableFrame);
         workspace.append(toolbar, content);
 
@@ -1530,23 +1592,33 @@
         const isConfig = activeWorkspaceView === 'config';
         const isVector = activeWorkspaceView === 'vector';
         const isApi = activeWorkspaceView === 'api';
+        const isTrace = activeWorkspaceView === 'trace';
+        const isSummaryTool = activeWorkspaceView === 'summaryTool';
         const isScheme = activeWorkspaceView === 'scheme';
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-config-mode', isConfig);
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-vector-mode', isVector);
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-api-mode', isApi);
+        root.querySelector('.yzm-workspace')?.classList.toggle('yzm-trace-mode', isTrace);
+        root.querySelector('.yzm-workspace')?.classList.toggle('yzm-summary-tool-mode', isSummaryTool);
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-scheme-mode', isScheme);
-        root.querySelector('.yzm-primary-header')?.toggleAttribute('hidden', isConfig || isVector || isApi || isScheme);
-        root.querySelector('.yzm-primary-search')?.toggleAttribute('hidden', isConfig || isVector || isApi || isScheme);
-        root.querySelector('.yzm-primary-list')?.toggleAttribute('hidden', isConfig || isVector || isApi || isScheme);
+        root.querySelector('.yzm-primary-header')?.toggleAttribute('hidden', isConfig || isVector || isApi || isTrace || isSummaryTool || isScheme);
+        root.querySelector('.yzm-primary-search')?.toggleAttribute('hidden', isConfig || isVector || isApi || isTrace || isSummaryTool || isScheme);
+        root.querySelector('.yzm-primary-list')?.toggleAttribute('hidden', isConfig || isVector || isApi || isTrace || isSummaryTool || isScheme);
         root.querySelector('.yzm-config-primary-header')?.toggleAttribute('hidden', !isConfig);
         root.querySelector('.yzm-config-nav-list')?.toggleAttribute('hidden', !isConfig);
+        root.querySelector('.yzm-trace-primary-header')?.toggleAttribute('hidden', !isTrace);
+        root.querySelector('.yzm-trace-nav-list')?.toggleAttribute('hidden', !isTrace);
+        root.querySelector('.yzm-summary-tool-primary-header')?.toggleAttribute('hidden', !isSummaryTool);
+        root.querySelector('.yzm-summary-tool-nav-list')?.toggleAttribute('hidden', !isSummaryTool);
         root.querySelector('.yzm-api-primary-header')?.toggleAttribute('hidden', !isApi);
         root.querySelector('.yzm-api-nav-list')?.toggleAttribute('hidden', !isApi);
         root.querySelector('.yzm-scheme-primary-header')?.toggleAttribute('hidden', !isScheme);
         root.querySelector('.yzm-scheme-nav-list')?.toggleAttribute('hidden', !isScheme);
         root.querySelector('.yzm-vector-primary-view')?.toggleAttribute('hidden', !isVector);
-        root.querySelector('.yzm-table-content-view')?.toggleAttribute('hidden', isConfig || isVector || isApi || isScheme);
+        root.querySelector('.yzm-table-content-view')?.toggleAttribute('hidden', isConfig || isVector || isApi || isTrace || isSummaryTool || isScheme);
         root.querySelector('.yzm-config-view')?.toggleAttribute('hidden', !isConfig);
+        root.querySelector('.yzm-trace-view')?.toggleAttribute('hidden', !isTrace);
+        root.querySelector('.yzm-summary-tool-view')?.toggleAttribute('hidden', !isSummaryTool);
         root.querySelector('.yzm-api-view')?.toggleAttribute('hidden', !isApi);
         root.querySelector('.yzm-scheme-view')?.toggleAttribute('hidden', !isScheme);
         root.querySelector('.yzm-vector-workspace-view')?.toggleAttribute('hidden', !isVector);
@@ -1578,6 +1650,38 @@
                 ? 'yzm-api-nav-item yzm-api-nav-item-active'
                 : 'yzm-api-nav-item');
             item.dataset.yzmApiSectionId = section.id;
+            list.appendChild(item);
+        });
+
+        return list;
+    }
+
+    function createTraceNavList() {
+        const list = document.createElement('div');
+        list.className = 'yzm-trace-nav-list';
+        list.hidden = true;
+
+        TRACE_SECTIONS.forEach((section) => {
+            const item = createIconButton(section.label, section.icon, section.id === activeTraceSectionId
+                ? 'yzm-trace-nav-item yzm-trace-nav-item-active'
+                : 'yzm-trace-nav-item');
+            item.dataset.yzmTraceSectionId = section.id;
+            list.appendChild(item);
+        });
+
+        return list;
+    }
+
+    function createSummaryToolNavList() {
+        const list = document.createElement('div');
+        list.className = 'yzm-summary-tool-nav-list';
+        list.hidden = true;
+
+        SUMMARY_TOOL_SECTIONS.forEach((section) => {
+            const item = createIconButton(section.label, section.icon, section.id === activeSummaryToolSectionId
+                ? 'yzm-summary-tool-nav-item yzm-summary-tool-nav-item-active'
+                : 'yzm-summary-tool-nav-item');
+            item.dataset.yzmSummaryToolSectionId = section.id;
             list.appendChild(item);
         });
 
@@ -2311,6 +2415,22 @@
         return page;
     }
 
+    function createTraceWorkspaceView() {
+        const page = document.createElement('div');
+        page.className = 'yzm-trace-view';
+
+        renderTraceWorkspaceContent(page);
+        return page;
+    }
+
+    function createSummaryToolWorkspaceView() {
+        const page = document.createElement('div');
+        page.className = 'yzm-summary-tool-view';
+
+        renderSummaryToolWorkspaceContent(page);
+        return page;
+    }
+
     function createPromptSchemeWorkspaceView() {
         const page = document.createElement('div');
         page.className = 'yzm-scheme-view';
@@ -2330,6 +2450,20 @@
         const page = root.querySelector('.yzm-api-view');
         if (!page) return;
         renderApiWorkspaceContent(page);
+        bindPanelInteractions(root);
+    }
+
+    function renderTraceWorkspace(root) {
+        const page = root.querySelector('.yzm-trace-view');
+        if (!page) return;
+        renderTraceWorkspaceContent(page);
+        bindPanelInteractions(root);
+    }
+
+    function renderSummaryToolWorkspace(root) {
+        const page = root.querySelector('.yzm-summary-tool-view');
+        if (!page) return;
+        renderSummaryToolWorkspaceContent(page);
         bindPanelInteractions(root);
     }
 
@@ -2389,6 +2523,429 @@
         }
 
         page.replaceChildren(content);
+    }
+
+    function renderTraceWorkspaceContent(page) {
+        const content = document.createElement('div');
+        content.className = 'yzm-trace-content';
+        content.appendChild(activeTraceSectionId === 'optimize' ? createTraceOptimizePanel() : createManualTracePanel());
+        page.replaceChildren(content);
+    }
+
+    function renderSummaryToolWorkspaceContent(page) {
+        const content = document.createElement('div');
+        content.className = 'yzm-summary-tool-content';
+        content.appendChild(activeSummaryToolSectionId === 'optimize' ? createSummaryOptimizePanel() : createManualSummaryPanel());
+        page.replaceChildren(content);
+    }
+
+    function createManualTracePanel() {
+        const totalFloors = getApproximateChatFloorCount();
+        const pointers = getManualPointerSettings();
+        const panel = document.createElement('section');
+        panel.className = 'yzm-trace-panel';
+
+        const topGrid = document.createElement('div');
+        topGrid.className = 'yzm-trace-top-grid';
+        topGrid.append(
+            createTraceStatCard('当前总楼层', `${totalFloors}`, '层', '', 'fa-solid fa-layer-group'),
+            createTraceStatCard('追溯指针位置', `${pointers.trace}`, '层', '', 'fa-solid fa-crosshairs', 'tracePointer')
+        );
+
+        panel.append(
+            topGrid,
+            createTraceRangeCard(totalFloors),
+            createTraceTargetCard(),
+            createTraceExecutionCard(),
+            createTraceStartButton('开始分析并生成')
+        );
+        return panel;
+    }
+
+    function createTraceOptimizePanel() {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-trace-panel';
+        panel.append(
+            createTraceHeaderCard('追溯优化', '对已有追溯结果进行整理、合并与冲突修正。', 'fa-solid fa-wand-magic-sparkles'),
+            createApiCard('当前目标记忆', 'fa-solid fa-table-cells-large', [
+                createApiField('', createApiSelect('all', [{ label: '全部记忆', value: 'all' }, ...getTables().map((table) => ({ label: table.name, value: table.id }))])),
+                createTraceTextBlock('将对当前选定记忆中的追溯内容进行优化。'),
+            ]),
+            createApiCard('重点优化建议（可选）', 'fa-regular fa-lightbulb', [
+                createTraceTextarea('例如：重点关注角色关系变化；统一时间格式为 YYYY-MM-DD；合并相似地点名称...'),
+            ]),
+            createTraceExecutionCard({
+                includeBatch: false,
+                confirmLabel: '弹窗确认（推荐）',
+                confirmDesc: '优化前弹窗确认，便于检查目标记忆与改动',
+                silentDesc: '自动完成当前表格优化，完成后仅显示最终结果',
+            }),
+            createTraceStartButton('开始优化')
+        );
+        return panel;
+    }
+
+    function createManualSummaryPanel() {
+        const totalFloors = getApproximateChatFloorCount();
+        const pointers = getManualPointerSettings();
+        const panel = document.createElement('section');
+        panel.className = 'yzm-trace-panel yzm-summary-tool-panel';
+
+        const topGrid = document.createElement('div');
+        topGrid.className = 'yzm-trace-top-grid';
+        topGrid.append(
+            createTraceStatCard('当前总楼层', `${totalFloors}`, '层', '', 'fa-solid fa-layer-group'),
+            createTraceStatCard('总结指针位置', `${pointers.summary}`, '层', '', 'fa-solid fa-crosshairs', 'summaryPointer')
+        );
+
+        panel.append(
+            topGrid,
+            createSummaryRangeCard(totalFloors),
+            createTraceExecutionCard({
+                radioName: 'yzm-summary-run-mode',
+                confirmDesc: '每批总结后弹窗确认，便于检查结果与进度',
+                silentDesc: '自动完成全部总结批次，完成后仅显示最终结果',
+            }),
+            createTraceStartButton('开始总结')
+        );
+        return panel;
+    }
+
+    function createSummaryOptimizePanel() {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-trace-panel yzm-summary-tool-panel';
+        panel.append(
+            createTraceHeaderCard('总结优化', '对已有总结内容进行整理、合并与冲突修正。', 'fa-solid fa-wand-magic-sparkles'),
+            createApiCard('当前目标总结', 'fa-solid fa-book-open', [
+                createApiField('', createApiSelect('all', [
+                    { label: '全部总结', value: 'all' },
+                    { label: '主线总结', value: 'main' },
+                    { label: '支线总结', value: 'branch' },
+                ])),
+                createTraceTextBlock('将对当前选定的总结内容进行优化。'),
+            ]),
+            createSummaryPromptCard('重点优化建议（可选）', '例如：压缩重复内容；补全时间线；统一称呼；保留未解决问题...'),
+            createTraceExecutionCard({
+                includeBatch: false,
+                radioName: 'yzm-summary-run-mode',
+                confirmLabel: '弹窗确认（推荐）',
+                confirmDesc: '优化前弹窗确认，便于检查目标总结与改动',
+                silentDesc: '自动完成当前总结优化，完成后仅显示最终结果',
+            }),
+            createTraceStartButton('开始优化')
+        );
+        return panel;
+    }
+
+    function createSummaryRangeCard(totalFloors) {
+        const startInput = createTraceNumberInput('0');
+        const endInput = createTraceNumberInput(String(totalFloors));
+        return createApiCard('总结范围', 'fa-regular fa-calendar', [
+            createTraceRangeRow(
+                createApiField('起始楼层', createTraceUnitInput(startInput, '层')),
+                createIconNode('fa-solid fa-arrow-right', 'yzm-trace-range-arrow'),
+                createApiField('结束楼层', createTraceUnitInput(endInput, '层'))
+            ),
+            createTraceHint(`建议范围：0 ~ ${totalFloors}（共 ${totalFloors} 层）`),
+        ]);
+    }
+
+    function createSummaryPromptCard(title, placeholder) {
+        return createApiCard(title, 'fa-regular fa-lightbulb', [
+            createTraceTextarea(placeholder),
+        ]);
+    }
+
+    function getApproximateChatFloorCount() {
+        const context = typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
+            ? SillyTavern.getContext()
+            : null;
+        return Array.isArray(context?.chat) ? context.chat.length : 0;
+    }
+
+    function createTraceStatCard(title, value, unit, desc, iconClassName, action = '') {
+        const card = document.createElement('section');
+        card.className = 'yzm-trace-stat-card';
+        const icon = document.createElement('div');
+        icon.className = 'yzm-trace-stat-icon';
+        icon.appendChild(createIconNode(iconClassName, ''));
+        const body = document.createElement('div');
+        body.className = 'yzm-trace-stat-body';
+        const label = document.createElement('span');
+        label.textContent = title;
+        const number = document.createElement('strong');
+        number.append(document.createTextNode(value), createTraceUnit(unit));
+        if (action === 'tracePointer' || action === 'summaryPointer') {
+            number.appendChild(createTracePointerButton(action));
+        }
+        body.append(label, number);
+        if (desc) {
+            const small = document.createElement('small');
+            small.textContent = desc;
+            body.appendChild(small);
+        }
+        card.append(icon, body);
+        return card;
+    }
+
+    function createTracePointerButton(action = 'tracePointer') {
+        const button = createIconButton('修正', 'fa-solid fa-pen', 'yzm-trace-pointer-edit');
+        button.dataset.yzmTraceAction = action === 'summaryPointer' ? 'editSummaryPointer' : 'editPointer';
+        return button;
+    }
+
+    function createTraceRangeCard(totalFloors) {
+        const startInput = createTraceNumberInput('0');
+        const endInput = createTraceNumberInput(String(totalFloors));
+        return createApiCard('追溯范围', 'fa-regular fa-calendar', [
+            createTraceRangeRow(
+                createApiField('起始楼层', createTraceUnitInput(startInput, '层')),
+                createIconNode('fa-solid fa-arrow-right', 'yzm-trace-range-arrow'),
+                createApiField('结束楼层', createTraceUnitInput(endInput, '层'))
+            ),
+            createTraceHint(`建议范围：0 ~ ${totalFloors}（共 ${totalFloors} 层）`),
+        ]);
+    }
+
+    function createTraceTargetCard() {
+        return createApiCard('目标记忆', 'fa-solid fa-table-cells-large', [
+            createApiField('', createApiSelect('all', [{ label: '全部记忆', value: 'all' }, ...getTables().map((table) => ({ label: table.name, value: table.id }))])),
+            createTraceTextBlock('系统将尝试将提取的内容分配到所有可用记忆中'),
+        ]);
+    }
+
+    function createTraceExecutionCard(options = {}) {
+        const includeBatch = options.includeBatch !== false;
+        const content = includeBatch
+            ? [createTraceExecutionGrid(createTraceBatchSettings(), createTraceRunModeSettings(options))]
+            : [createTraceRunModeSettings(options)];
+        const card = createApiCard('执行设置', 'fa-solid fa-gear', content);
+        card.classList.add('yzm-trace-execution-card');
+        if (!includeBatch) {
+            card.classList.add('yzm-trace-execution-card-compact');
+        }
+        return card;
+    }
+
+    function createTraceBatchSettings() {
+        const block = document.createElement('div');
+        block.className = 'yzm-trace-setting-block';
+        const row = document.createElement('div');
+        row.className = 'yzm-trace-switch-row';
+        row.append(createConfigSwitch(true), document.createTextNode('分批执行（推荐范围 > 50 层）'));
+        block.append(
+            row,
+            createApiField('每批处理楼层数', createTraceUnitInput(createTraceNumberInput('40'), '层')),
+            createTraceTextBlock('建议值：30-50 层。批次间会自动冷却 5 秒，避免 API 限流。')
+        );
+        return block;
+    }
+
+    function createTraceRunModeSettings(options = {}) {
+        const block = document.createElement('div');
+        block.className = 'yzm-trace-setting-block';
+        const title = document.createElement('div');
+        title.className = 'yzm-api-field-label';
+        title.textContent = '执行方式';
+        const confirmLabel = options.confirmLabel || '弹窗确认';
+        const confirmDesc = options.confirmDesc || '每批处理后弹窗确认，便于检查结果与进度';
+        const silentDesc = options.silentDesc || '自动执行全部批次，完成后仅显示最终结果';
+        block.append(
+            title,
+            createTraceRadioOption(confirmLabel, confirmDesc, true, options.radioName),
+            createTraceRadioOption('静默执行（不弹窗，直接写入）', silentDesc, false, options.radioName)
+        );
+        return block;
+    }
+
+    function createTraceHeaderCard(title, desc, iconClassName) {
+        const card = document.createElement('section');
+        card.className = 'yzm-config-card yzm-trace-header-card';
+        const heading = document.createElement('div');
+        heading.className = 'yzm-scheme-title';
+        heading.append(createIconNode(iconClassName, ''), document.createTextNode(title));
+        const text = document.createElement('div');
+        text.className = 'yzm-scheme-desc';
+        text.textContent = desc;
+        card.append(heading, text);
+        return card;
+    }
+
+    function createTraceRangeRow(left, arrow, right) {
+        const row = document.createElement('div');
+        row.className = 'yzm-trace-range-row';
+        row.append(left, arrow, right);
+        return row;
+    }
+
+    function createTraceExecutionGrid(left, right) {
+        const grid = document.createElement('div');
+        grid.className = 'yzm-trace-execution-grid';
+        grid.append(left, right);
+        return grid;
+    }
+
+    function createTraceNumberInput(value) {
+        const wrap = createApiInput(value, 'number');
+        wrap.classList.add('yzm-trace-number-input');
+        const input = wrap.querySelector('.yzm-api-input');
+        if (input) {
+            input.value = value;
+            input.min = '0';
+            input.step = '1';
+        }
+        return wrap;
+    }
+
+    function createTraceUnitInput(inputWrap, unit) {
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-trace-unit-input';
+        wrap.append(inputWrap, createTraceUnit(unit));
+        return wrap;
+    }
+
+    function createTraceUnit(unit) {
+        const node = document.createElement('span');
+        node.className = 'yzm-trace-unit';
+        node.textContent = unit;
+        return node;
+    }
+
+    function createTraceCardText(title, desc) {
+        const text = document.createElement('div');
+        text.className = 'yzm-trace-card-text';
+        const strong = document.createElement('strong');
+        strong.textContent = title;
+        const small = document.createElement('small');
+        small.textContent = desc;
+        text.append(strong, small);
+        return text;
+    }
+
+    function createTraceTextBlock(text) {
+        const block = document.createElement('div');
+        block.className = 'yzm-trace-text';
+        block.textContent = text;
+        return block;
+    }
+
+    function createTraceTextarea(placeholder) {
+        const textarea = document.createElement('textarea');
+        textarea.className = 'yzm-trace-textarea';
+        textarea.placeholder = placeholder;
+        textarea.maxLength = 500;
+        return textarea;
+    }
+
+    function createTraceHint(text) {
+        const hint = document.createElement('div');
+        hint.className = 'yzm-trace-hint';
+        hint.append(createIconNode('fa-regular fa-lightbulb', ''), document.createTextNode(text));
+        return hint;
+    }
+
+    function createTraceRadioOption(title, desc, checked, name = 'yzm-trace-run-mode') {
+        const option = document.createElement('label');
+        option.className = checked ? 'yzm-trace-radio yzm-trace-radio-active' : 'yzm-trace-radio';
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.name = name;
+        input.checked = checked;
+        const text = createTraceCardText(title, desc);
+        option.append(input, text);
+        return option;
+    }
+
+    function createTraceStartButton(label) {
+        return createIconButton(label, 'fa-solid fa-wand-magic-sparkles', 'yzm-trace-start-button');
+    }
+
+    function openTracePointerDialog(root) {
+        const pointers = getManualPointerSettings();
+        openPointerFloorDialog(root, {
+            modalClassName: 'yzm-trace-pointer-modal',
+            title: '修正追溯指针',
+            ariaLabel: '修正追溯指针',
+            value: pointers.trace,
+            onApply(value) {
+                updateManualPointerSetting('trace', value);
+                renderTraceWorkspace(root);
+            },
+        });
+    }
+
+    function openSummaryPointerDialog(root) {
+        const pointers = getManualPointerSettings();
+        openPointerFloorDialog(root, {
+            modalClassName: 'yzm-summary-pointer-modal',
+            title: '修正总结指针',
+            ariaLabel: '修正总结指针',
+            value: pointers.summary,
+            onApply(value) {
+                updateManualPointerSetting('summary', value);
+                renderSummaryToolWorkspace(root);
+            },
+        });
+    }
+
+    function openPointerFloorDialog(root, options) {
+        const modalHost = getModalHost(root);
+        removeModal(root, `.${options.modalClassName}`);
+
+        const overlay = document.createElement('div');
+        overlay.className = `yzm-structure-modal ${options.modalClassName}`;
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-trace-pointer-dialog';
+        dialog.setAttribute('aria-label', options.ariaLabel);
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = options.title;
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', `关闭${options.title}`);
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const input = document.createElement('input');
+        input.className = 'yzm-structure-name-input yzm-trace-pointer-input';
+        input.type = 'number';
+        input.min = '0';
+        input.step = '1';
+        input.value = String(options.value);
+        input.setAttribute('aria-label', `${options.title}楼层`);
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-record-actions';
+        const confirm = createButton('确定', 'yzm-add-table-confirm');
+        actions.append(confirm);
+
+        dialog.append(header, input, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        const applyValue = () => {
+            options.onApply(Math.max(0, Math.round(Number(input.value) || 0)));
+            closeModal();
+        };
+        close.onclick = closeModal;
+        confirm.onclick = applyValue;
+        input.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            applyValue();
+        });
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        input.focus();
+        input.select();
     }
 
     function renderPromptSchemeWorkspaceContent(page) {
@@ -2722,13 +3279,15 @@
 
     function createLlmApiPanel() {
         const preset = createEmptyLlmApiPreset();
-        return createApiPagePanel('LLM API 配置', '配置记忆生成、总结与结构化填表所使用的大语言模型。', 'fa-solid fa-comments', [
+        const panel = document.createElement('section');
+        panel.className = 'yzm-api-panel';
+        panel.append(
             createApiCard('API 模式', 'fa-solid fa-route', [
                 createApiChoiceGroup([
                     { label: '使用酒馆 API', description: '沿用 SillyTavern 当前模型配置', value: 'tavern', active: preset.mode !== 'custom' },
                     { label: '使用独立 API', description: '为记忆插件单独配置模型与密钥', value: 'custom', active: preset.mode === 'custom' },
                 ], 'llmMode'),
-            ]),
+            ], '', createApiTitleNote('配置记忆生成、总结与结构化填表所使用的大语言模型。')),
             createApiCard('预设管理', 'fa-regular fa-bookmark', [
                 createApiField('选择预设', createLlmApiPresetSelect()),
                 createApiField('预设名称', createApiInput('填写后点击存为预设', 'text', false, '', 'presetName')),
@@ -2750,7 +3309,8 @@
                     ['测试连接', 'fa-solid fa-plug-circle-check'],
                 ])),
             ]),
-        ]);
+        );
+        return panel;
     }
 
     function createEmbeddingApiPanel() {
@@ -2814,6 +3374,13 @@
 
         card.append(...nodes, ...children);
         return card;
+    }
+
+    function createApiTitleNote(text) {
+        const note = document.createElement('span');
+        note.className = 'yzm-api-title-note';
+        note.textContent = text;
+        return note;
     }
 
     function createApiChoiceGroup(choices, fieldKey = '') {
@@ -5168,6 +5735,42 @@
             });
         }
 
+        const traceButton = root.querySelector('.yzm-sidebar-action[data-yzm-action="trace"]');
+        if (traceButton && traceButton.dataset.yzmBound !== 'true') {
+            traceButton.dataset.yzmBound = 'true';
+            traceButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                activeWorkspaceView = 'trace';
+                setMobileDetailOpen(root, false);
+                root.querySelectorAll('.yzm-nav-item-active, .yzm-nav-table-active').forEach((node) => {
+                    node.classList.remove('yzm-nav-item-active', 'yzm-nav-table-active');
+                });
+                clearSidebarActionActive(root);
+                traceButton.classList.add('yzm-sidebar-action-active');
+                renderTraceWorkspace(root);
+                updateWorkspaceMode(root);
+            });
+        }
+
+        const summaryToolButton = root.querySelector('.yzm-sidebar-action[data-yzm-action="summaryTool"]');
+        if (summaryToolButton && summaryToolButton.dataset.yzmBound !== 'true') {
+            summaryToolButton.dataset.yzmBound = 'true';
+            summaryToolButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                activeWorkspaceView = 'summaryTool';
+                setMobileDetailOpen(root, false);
+                root.querySelectorAll('.yzm-nav-item-active, .yzm-nav-table-active').forEach((node) => {
+                    node.classList.remove('yzm-nav-item-active', 'yzm-nav-table-active');
+                });
+                clearSidebarActionActive(root);
+                summaryToolButton.classList.add('yzm-sidebar-action-active');
+                renderSummaryToolWorkspace(root);
+                updateWorkspaceMode(root);
+            });
+        }
+
         const apiButton = root.querySelector('.yzm-sidebar-action[data-yzm-action="api"]');
         if (apiButton && apiButton.dataset.yzmBound !== 'true') {
             apiButton.dataset.yzmBound = 'true';
@@ -5366,6 +5969,76 @@
                 renderApiWorkspace(root);
             });
         });
+
+        root.querySelectorAll('.yzm-trace-nav-item').forEach((item) => {
+            if (item.dataset.yzmBound === 'true') return;
+            item.dataset.yzmBound = 'true';
+            item.addEventListener('click', () => {
+                activeTraceSectionId = item.dataset.yzmTraceSectionId || 'manual';
+                root.querySelectorAll('.yzm-trace-nav-item-active').forEach((node) => {
+                    node.classList.remove('yzm-trace-nav-item-active');
+                });
+                item.classList.add('yzm-trace-nav-item-active');
+                renderTraceWorkspace(root);
+            });
+        });
+
+        root.querySelectorAll('.yzm-summary-tool-nav-item').forEach((item) => {
+            if (item.dataset.yzmBound === 'true') return;
+            item.dataset.yzmBound = 'true';
+            item.addEventListener('click', () => {
+                activeSummaryToolSectionId = item.dataset.yzmSummaryToolSectionId || 'manual';
+                root.querySelectorAll('.yzm-summary-tool-nav-item-active').forEach((node) => {
+                    node.classList.remove('yzm-summary-tool-nav-item-active');
+                });
+                item.classList.add('yzm-summary-tool-nav-item-active');
+                renderSummaryToolWorkspace(root);
+            });
+        });
+
+        const traceView = root.querySelector('.yzm-trace-view');
+        if (traceView && traceView.dataset.yzmTraceBound !== 'true') {
+            traceView.dataset.yzmTraceBound = 'true';
+            traceView.addEventListener('click', (event) => {
+                const target = event.target instanceof Element ? event.target : null;
+                const actionButton = target?.closest('[data-yzm-trace-action]');
+                if (!actionButton) return;
+                event.preventDefault();
+                event.stopPropagation();
+                if (actionButton.dataset.yzmTraceAction === 'editPointer') openTracePointerDialog(root);
+            });
+            traceView.addEventListener('change', (event) => {
+                const target = event.target instanceof HTMLInputElement ? event.target : null;
+                if (!target || target.name !== 'yzm-trace-run-mode') return;
+                const panel = target.closest('.yzm-trace-panel');
+                panel?.querySelectorAll('.yzm-trace-radio-active').forEach((node) => {
+                    node.classList.remove('yzm-trace-radio-active');
+                });
+                target.closest('.yzm-trace-radio')?.classList.add('yzm-trace-radio-active');
+            });
+        }
+
+        const summaryToolView = root.querySelector('.yzm-summary-tool-view');
+        if (summaryToolView && summaryToolView.dataset.yzmSummaryToolBound !== 'true') {
+            summaryToolView.dataset.yzmSummaryToolBound = 'true';
+            summaryToolView.addEventListener('click', (event) => {
+                const target = event.target instanceof Element ? event.target : null;
+                const actionButton = target?.closest('[data-yzm-trace-action]');
+                if (!actionButton) return;
+                event.preventDefault();
+                event.stopPropagation();
+                if (actionButton.dataset.yzmTraceAction === 'editSummaryPointer') openSummaryPointerDialog(root);
+            });
+            summaryToolView.addEventListener('change', (event) => {
+                const target = event.target instanceof HTMLInputElement ? event.target : null;
+                if (!target || target.name !== 'yzm-summary-run-mode') return;
+                const panel = target.closest('.yzm-summary-tool-panel');
+                panel?.querySelectorAll('.yzm-trace-radio-active').forEach((node) => {
+                    node.classList.remove('yzm-trace-radio-active');
+                });
+                target.closest('.yzm-trace-radio')?.classList.add('yzm-trace-radio-active');
+            });
+        }
 
         root.querySelectorAll('.yzm-scheme-nav-item').forEach((item) => {
             if (item.dataset.yzmBound === 'true') return;
