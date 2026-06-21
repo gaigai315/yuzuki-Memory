@@ -14,6 +14,7 @@
         'config/storage.js',
         'config/vector-store.js',
         'config/request-probe.js',
+        'config/log-viewer.js',
         'ui/memory-window.js',
     ];
 

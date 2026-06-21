@@ -11,12 +11,13 @@
     const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
     const TAG_PRESETS_STORAGE_KEY = 'yzm_memory_global_tag_presets';
     const LLM_API_PRESETS_STORAGE_KEY = 'yzm_memory_global_llm_api_presets';
+    const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
     const AUTO_SUMMARY_SETTINGS_STORAGE_KEY = 'yzm_memory_global_auto_summary_settings';
     const LAYOUT_DEFAULTS = {
         desktop: {
-            sidebar: { value: 180, min: 118, max: 300 },
-            primary: { value: 168, min: 118, max: 300 },
+            sidebar: { value: 180, min: 64, max: 300 },
+            primary: { value: 168, min: 72, max: 300 },
         },
         mobile: {
             sidebar: { value: 118, min: 58, max: 176 },
@@ -24,6 +25,10 @@
         },
     };
     const LAYOUT_ICON_MODE_AT = {
+        desktop: {
+            sidebar: 92,
+            primary: 104,
+        },
         mobile: {
             sidebar: 76,
             primary: 92,
@@ -92,13 +97,31 @@
         { id: 'plugin', label: '插件配置', icon: 'fa-solid fa-gear' },
         { id: 'init', label: '基础设置', icon: 'fa-solid fa-wand-magic-sparkles' },
         { id: 'autoSummary', label: '自动总结', icon: 'fa-solid fa-robot' },
-        { id: 'requestProbe', label: 'API 请求查看器', icon: 'fa-solid fa-list-check' },
+        { id: 'logViewer', label: '日志查看器', icon: 'fa-regular fa-file-lines' },
     ];
     const API_SECTIONS = [
         { id: 'llm', label: 'LLM', icon: 'fa-solid fa-comments' },
         { id: 'embedding', label: '向量化', icon: 'fa-solid fa-diagram-project' },
         { id: 'rerank', label: 'Rerank', icon: 'fa-solid fa-arrow-down-wide-short' },
+        { id: 'requestProbe', label: 'API 请求查看器', icon: 'fa-solid fa-list-check' },
     ];
+    const PROMPT_SCHEME_SECTIONS = [
+        { id: 'info', label: '方案信息', icon: 'fa-regular fa-clipboard' },
+        { id: 'historian', label: '史官破限', icon: 'fa-regular fa-clipboard' },
+        { id: 'table', label: '填表提示词', icon: 'fa-regular fa-clipboard' },
+        { id: 'summaryOptimize', label: '总结/优化提示词', icon: 'fa-regular fa-clipboard' },
+    ];
+    const PROMPT_SCHEME_PROMPT_IDS = ['historian', 'table', 'summaryOptimize'];
+    const PROMPT_SCHEME_MODE_OPTIONS = {
+        table: [
+            { id: 'realtime', label: '实时填表' },
+            { id: 'batch', label: '批量填表' },
+        ],
+        summaryOptimize: [
+            { id: 'summary', label: '聊天总结' },
+            { id: 'optimize', label: '总结优化' },
+        ],
+    };
     const VECTOR_BOOK_PAGE_SIZE = 10;
     const VECTOR_SEGMENT_PAGE_SIZE = 10;
     const DEFAULT_VECTOR_SEARCH_SETTINGS = {
@@ -124,6 +147,7 @@
         autoVectorizeAfterHistory: false,
         hideSummaryFloors: false,
     };
+    const FIXED_TABLE_ID = 'memory_summary';
     const DEFAULT_STATE_REVISION = 11;
     const DEFAULT_TABLES = [
         {
@@ -157,6 +181,8 @@
     let activeWorkspaceView = 'table';
     let activeConfigSectionId = 'plugin';
     let activeApiSectionId = 'llm';
+    let activePromptSchemeSectionId = 'info';
+    let activePromptSchemeDraft = null;
     const vectorUiState = {
         bookPage: 1,
         segmentPage: 1,
@@ -173,6 +199,7 @@
                 name: table.name,
                 icon: table.icon,
                 columns: [...table.columns],
+                hidden: false,
             })),
             activeTableId: 'character_profile',
             activeRecordIds: {},
@@ -225,9 +252,68 @@
         return getState().tables;
     }
 
+    function isBuiltInTable(tableId) {
+        return DEFAULT_TABLES.some((table) => table.id === tableId);
+    }
+
+    function isFixedTable(tableId) {
+        return tableId === FIXED_TABLE_ID;
+    }
+
+    function getSidebarTables() {
+        const tables = getTables();
+        const visibleTables = tables.filter((table) => !table.hidden && !isFixedTable(table.id));
+        const fixedTable = tables.find((table) => isFixedTable(table.id));
+        const hiddenTables = tables.filter((table) => table.hidden && !isFixedTable(table.id));
+        return fixedTable ? [...visibleTables, fixedTable, ...hiddenTables] : [...visibleTables, ...hiddenTables];
+    }
+
     function getActiveTable() {
         const state = getState();
         return getTables().find((table) => table.id === state.activeTableId) || getTables()[0];
+    }
+
+    function deleteTableById(root, tableId) {
+        const state = getState();
+        const table = getTables().find((entry) => entry.id === tableId);
+        if (!table || isBuiltInTable(tableId) || getTables().length <= 1) return;
+        if (!window.confirm(`确定删除《${table.name}》吗？`)) return;
+
+        state.tables = getTables().filter((entry) => entry.id !== tableId);
+        if (state.records && typeof state.records === 'object') delete state.records[tableId];
+        if (state.activeRecordIds && typeof state.activeRecordIds === 'object') delete state.activeRecordIds[tableId];
+        if (state.activeTableId === tableId) {
+            state.activeTableId = state.tables[0]?.id || '';
+            activeWorkspaceView = 'table';
+        }
+        const saved = saveState();
+        if (!saved) {
+            window.alert('当前会话尚未就绪，删除表格未保存。');
+            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+        }
+        closeRecordActionMenu(root);
+        setMobileDetailOpen(root, false);
+        renderPanelState(root);
+    }
+
+    function setTableHiddenById(root, tableId, hidden) {
+        const state = getState();
+        const table = getTables().find((entry) => entry.id === tableId);
+        if (!table || !isBuiltInTable(tableId) || isFixedTable(tableId)) return;
+
+        table.hidden = !!hidden;
+        if (table.hidden && state.activeTableId === tableId) {
+            state.activeTableId = getSidebarTables().find((entry) => !entry.hidden)?.id || FIXED_TABLE_ID;
+            activeWorkspaceView = 'table';
+        }
+        const saved = saveState();
+        if (!saved) {
+            window.alert('当前会话尚未就绪，表格隐藏状态未保存。');
+            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+        }
+        closeRecordActionMenu(root);
+        setMobileDetailOpen(root, false);
+        renderPanelState(root);
     }
 
     function getPrimaryColumn(table = getActiveTable()) {
@@ -508,6 +594,90 @@
         };
     }
 
+    function createPromptSchemeId() {
+        return `prompt_scheme_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function createEmptyPromptScheme(name = '') {
+        return {
+            id: '',
+            name: String(name || '').trim(),
+            prompts: {
+                historian: '',
+                table: '',
+                summaryOptimize: '',
+            },
+            modes: {
+                table: 'realtime',
+                summaryOptimize: 'summary',
+            },
+        };
+    }
+
+    function normalizePromptScheme(rawScheme) {
+        if (!rawScheme || typeof rawScheme !== 'object') return null;
+        const name = String(rawScheme.name || '').trim();
+        if (!name) return null;
+        const prompts = rawScheme.prompts && typeof rawScheme.prompts === 'object' ? rawScheme.prompts : {};
+        return {
+            id: String(rawScheme.id || createPromptSchemeId()),
+            name,
+            prompts: {
+                historian: String(prompts.historian || ''),
+                table: String(prompts.table || ''),
+                summaryOptimize: String(prompts.summaryOptimize || ''),
+            },
+            modes: {
+                table: String(rawScheme.modes?.table || 'realtime'),
+                summaryOptimize: String(rawScheme.modes?.summaryOptimize || 'summary'),
+            },
+        };
+    }
+
+    function getPromptSchemes() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(PROMPT_SCHEMES_STORAGE_KEY) || '[]');
+            return Array.isArray(raw) ? raw.map(normalizePromptScheme).filter(Boolean) : [];
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load prompt schemes.', error);
+            return [];
+        }
+    }
+
+    function savePromptSchemes(schemes) {
+        const normalized = (Array.isArray(schemes) ? schemes : []).map(normalizePromptScheme).filter(Boolean);
+        localStorage.setItem(PROMPT_SCHEMES_STORAGE_KEY, JSON.stringify(normalized));
+        return normalized;
+    }
+
+    function getActivePromptSchemeDraft() {
+        if (!activePromptSchemeDraft) {
+            activePromptSchemeDraft = getPromptSchemes()[0] || createEmptyPromptScheme('');
+        }
+        return activePromptSchemeDraft;
+    }
+
+    function setActivePromptSchemeDraft(scheme) {
+        activePromptSchemeDraft = normalizePromptScheme(scheme) || createEmptyPromptScheme(String(scheme?.name || ''));
+        return activePromptSchemeDraft;
+    }
+
+    function updateActivePromptSchemeDraftPrompt(promptId, value) {
+        const draft = getActivePromptSchemeDraft();
+        if (!PROMPT_SCHEME_PROMPT_IDS.includes(promptId)) return draft;
+        draft.prompts[promptId] = String(value || '');
+        return draft;
+    }
+
+    function updateActivePromptSchemeMode(sectionId, modeId) {
+        const options = PROMPT_SCHEME_MODE_OPTIONS[sectionId] || [];
+        if (!options.some((option) => option.id === modeId)) return getActivePromptSchemeDraft();
+        const draft = getActivePromptSchemeDraft();
+        draft.modes = draft.modes || {};
+        draft.modes[sectionId] = modeId;
+        return draft;
+    }
+
     function normalizePluginSettings(rawSettings) {
         const source = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
         return {
@@ -638,7 +808,7 @@
     }
 
     function saveState(options = {}) {
-        getStorage()?.saveState?.(getState(), createDefaultState(), loadedSessionId, options);
+        return !!getStorage()?.saveState?.(getState(), createDefaultState(), loadedSessionId, options);
     }
 
     function closeMoreMenu(root) {
@@ -723,7 +893,11 @@
 
     function createSidebarTableItem(table, isActive) {
         const item = document.createElement('div');
-        item.className = isActive ? 'yzm-nav-table yzm-nav-table-active' : 'yzm-nav-table';
+        item.className = [
+            'yzm-nav-table',
+            isActive ? 'yzm-nav-table-active' : '',
+            table.hidden ? 'yzm-nav-table-hidden' : '',
+        ].filter(Boolean).join(' ');
         item.dataset.yzmTableId = table.id;
 
         const nameButton = createButton(table.name, 'yzm-nav-table-name');
@@ -740,7 +914,7 @@
 
         const state = getState();
         nav.replaceChildren(createOverviewRow());
-        getTables().forEach((table) => {
+        getSidebarTables().forEach((table) => {
             nav.appendChild(createSidebarTableItem(table, table.id === state.activeTableId));
         });
     }
@@ -774,17 +948,12 @@
         const row = document.createElement('div');
         row.className = 'yzm-overview-row';
 
-        const overview = document.createElement('div');
-        overview.className = 'yzm-nav-item yzm-overview-item';
-        overview.textContent = '总览';
+        const overview = createButton('总览', 'yzm-nav-item yzm-overview-item yzm-add-table-trigger');
+        overview.title = '新增表';
+        overview.setAttribute('aria-label', '新增表');
         overview.prepend(createIconNode('fa-solid fa-house', 'yzm-nav-icon'));
 
-        const addButton = createButton('', 'yzm-add-table-button');
-        addButton.title = '新增表';
-        addButton.setAttribute('aria-label', '新增表');
-        addButton.innerHTML = '<i class="fa-solid fa-plus" aria-hidden="true"></i>';
-
-        row.append(overview, addButton);
+        row.appendChild(overview);
         return row;
     }
 
@@ -924,6 +1093,15 @@
         return themeButton;
     }
 
+    function createSidebarGroupLabel(label) {
+        const group = document.createElement('div');
+        group.className = 'yzm-sidebar-group-label';
+        const text = document.createElement('span');
+        text.textContent = label;
+        group.appendChild(text);
+        return group;
+    }
+
     function createPanelBody() {
         const body = document.createElement('div');
         body.className = 'yzm-shell-body';
@@ -936,30 +1114,37 @@
         nav.className = 'yzm-nav-list';
 
         nav.appendChild(createOverviewRow());
-        getTables().forEach((table) => {
+        getSidebarTables().forEach((table) => {
             nav.appendChild(createSidebarTableItem(table, table.id === getState().activeTableId));
         });
 
         const tableSearch = createSearchBox('搜索表格', 'yzm-table-search');
 
+        const sidebarMain = document.createElement('div');
+        sidebarMain.className = 'yzm-sidebar-main';
+        sidebarMain.append(tableSearch, createSidebarGroupLabel('记忆管理'), nav);
+
         const sidebarActions = document.createElement('div');
         sidebarActions.className = 'yzm-sidebar-actions';
-        const configAction = createIconButton('配置', 'fa-solid fa-gear', 'yzm-sidebar-action');
+        const configAction = createIconButton('设置', 'fa-solid fa-gear', 'yzm-sidebar-action');
         configAction.dataset.yzmAction = 'config';
         const apiAction = createIconButton('API', 'fa-solid fa-plug', 'yzm-sidebar-action');
         apiAction.dataset.yzmAction = 'api';
         const vectorAction = createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-sidebar-action');
         vectorAction.dataset.yzmAction = 'vector';
+        const schemeAction = createIconButton('记忆方案', 'fa-solid fa-book-bookmark', 'yzm-sidebar-action');
+        schemeAction.dataset.yzmAction = 'scheme';
         sidebarActions.append(
+            createSidebarGroupLabel('系统功能'),
             configAction,
             createIconButton('追溯', 'fa-solid fa-clock-rotate-left', 'yzm-sidebar-action'),
             createIconButton('总结', 'fa-solid fa-wand-magic-sparkles', 'yzm-sidebar-action'),
             apiAction,
             vectorAction,
-            createIconButton('记忆方案', 'fa-solid fa-book-bookmark', 'yzm-sidebar-action')
+            schemeAction
         );
 
-        sidebar.append(tableSearch, nav, sidebarActions);
+        sidebar.append(sidebarMain, sidebarActions);
 
         const sidebarToggle = createButton('', 'yzm-collapse-button yzm-sidebar-toggle');
         sidebarToggle.setAttribute('aria-label', '折叠表格分区');
@@ -994,17 +1179,22 @@
         const configPrimaryHeader = document.createElement('div');
         configPrimaryHeader.className = 'yzm-config-primary-header';
         configPrimaryHeader.hidden = true;
-        configPrimaryHeader.append(createIconNode('fa-solid fa-gear', ''), document.createTextNode('配置项目'));
+        configPrimaryHeader.append(createIconNode('fa-solid fa-gear', ''), document.createTextNode('设置项目'));
 
         const apiPrimaryHeader = document.createElement('div');
         apiPrimaryHeader.className = 'yzm-api-primary-header';
         apiPrimaryHeader.hidden = true;
         apiPrimaryHeader.append(createIconNode('fa-solid fa-plug', ''), document.createTextNode('API 配置'));
 
+        const schemePrimaryHeader = document.createElement('div');
+        schemePrimaryHeader.className = 'yzm-scheme-primary-header';
+        schemePrimaryHeader.hidden = true;
+        schemePrimaryHeader.append(createIconNode('fa-solid fa-book-bookmark', ''), document.createTextNode('记忆方案'));
+
         const vectorPrimaryView = createVectorPrimaryView();
         vectorPrimaryView.hidden = true;
 
-        primaryPane.append(primaryHeader, primarySearch, primaryList, configPrimaryHeader, createConfigNavList(), apiPrimaryHeader, createApiNavList(), vectorPrimaryView);
+        primaryPane.append(primaryHeader, primarySearch, primaryList, configPrimaryHeader, createConfigNavList(), apiPrimaryHeader, createApiNavList(), schemePrimaryHeader, createPromptSchemeNavList(), vectorPrimaryView);
 
         const primaryToggle = createButton('', 'yzm-collapse-button yzm-primary-toggle');
         primaryToggle.setAttribute('aria-label', '折叠主键列表');
@@ -1021,9 +1211,11 @@
         configView.hidden = true;
         const apiView = createApiWorkspaceView();
         apiView.hidden = true;
+        const schemeView = createPromptSchemeWorkspaceView();
+        schemeView.hidden = true;
         const vectorView = createVectorWorkspaceView();
         vectorView.hidden = true;
-        tableFrame.append(tableContent, configView, apiView, vectorView);
+        tableFrame.append(tableContent, configView, apiView, schemeView, vectorView);
         content.append(primaryPane, primaryToggle, tableFrame);
         workspace.append(toolbar, content);
 
@@ -1157,6 +1349,7 @@
     function closeRecordActionMenu(root) {
         root.querySelector('.yzm-record-action-menu')?.remove();
         root.querySelector('.yzm-vector-book-action-menu')?.remove();
+        root.querySelector('.yzm-table-action-menu')?.remove();
     }
 
     function openRecordActionMenu(root, tableId, recordId, clientX, clientY) {
@@ -1208,6 +1401,50 @@
         });
 
         menu.appendChild(deleteButton);
+        shell.appendChild(menu);
+
+        const shellRect = shell.getBoundingClientRect();
+        const menuRect = menu.getBoundingClientRect();
+        const x = Math.min(Math.max(clientX - shellRect.left, 6), shellRect.width - menuRect.width - 6);
+        const y = Math.min(Math.max(clientY - shellRect.top, 6), shellRect.height - menuRect.height - 6);
+        menu.style.left = `${x}px`;
+        menu.style.top = `${y}px`;
+    }
+
+    function openTableActionMenu(root, tableId, clientX, clientY) {
+        const shell = root.querySelector('.yzm-shell');
+        const table = getTables().find((entry) => entry.id === tableId);
+        if (!shell || !tableId || !table) return;
+
+        closeRecordActionMenu(root);
+
+        const menu = document.createElement('div');
+        menu.className = 'yzm-record-action-menu yzm-table-action-menu';
+
+        if (isFixedTable(tableId)) {
+            const fixedButton = createIconButton('固定表', 'fa-solid fa-lock', 'yzm-record-action-delete yzm-record-action-muted');
+            fixedButton.disabled = true;
+            menu.appendChild(fixedButton);
+        } else if (isBuiltInTable(tableId)) {
+            const hidden = !!table.hidden;
+            const hideButton = createIconButton(hidden ? '取消隐藏' : '隐藏', hidden ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash', 'yzm-record-action-delete yzm-record-action-hide');
+            hideButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setTableHiddenById(root, tableId, !hidden);
+            });
+            menu.appendChild(hideButton);
+        } else {
+            const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-record-action-delete');
+            deleteButton.disabled = getTables().length <= 1;
+            deleteButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                deleteTableById(root, tableId);
+            });
+            menu.appendChild(deleteButton);
+        }
+
         shell.appendChild(menu);
 
         const shellRect = shell.getBoundingClientRect();
@@ -1293,20 +1530,25 @@
         const isConfig = activeWorkspaceView === 'config';
         const isVector = activeWorkspaceView === 'vector';
         const isApi = activeWorkspaceView === 'api';
+        const isScheme = activeWorkspaceView === 'scheme';
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-config-mode', isConfig);
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-vector-mode', isVector);
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-api-mode', isApi);
-        root.querySelector('.yzm-primary-header')?.toggleAttribute('hidden', isConfig || isVector || isApi);
-        root.querySelector('.yzm-primary-search')?.toggleAttribute('hidden', isConfig || isVector || isApi);
-        root.querySelector('.yzm-primary-list')?.toggleAttribute('hidden', isConfig || isVector || isApi);
+        root.querySelector('.yzm-workspace')?.classList.toggle('yzm-scheme-mode', isScheme);
+        root.querySelector('.yzm-primary-header')?.toggleAttribute('hidden', isConfig || isVector || isApi || isScheme);
+        root.querySelector('.yzm-primary-search')?.toggleAttribute('hidden', isConfig || isVector || isApi || isScheme);
+        root.querySelector('.yzm-primary-list')?.toggleAttribute('hidden', isConfig || isVector || isApi || isScheme);
         root.querySelector('.yzm-config-primary-header')?.toggleAttribute('hidden', !isConfig);
         root.querySelector('.yzm-config-nav-list')?.toggleAttribute('hidden', !isConfig);
         root.querySelector('.yzm-api-primary-header')?.toggleAttribute('hidden', !isApi);
         root.querySelector('.yzm-api-nav-list')?.toggleAttribute('hidden', !isApi);
+        root.querySelector('.yzm-scheme-primary-header')?.toggleAttribute('hidden', !isScheme);
+        root.querySelector('.yzm-scheme-nav-list')?.toggleAttribute('hidden', !isScheme);
         root.querySelector('.yzm-vector-primary-view')?.toggleAttribute('hidden', !isVector);
-        root.querySelector('.yzm-table-content-view')?.toggleAttribute('hidden', isConfig || isVector || isApi);
+        root.querySelector('.yzm-table-content-view')?.toggleAttribute('hidden', isConfig || isVector || isApi || isScheme);
         root.querySelector('.yzm-config-view')?.toggleAttribute('hidden', !isConfig);
         root.querySelector('.yzm-api-view')?.toggleAttribute('hidden', !isApi);
+        root.querySelector('.yzm-scheme-view')?.toggleAttribute('hidden', !isScheme);
         root.querySelector('.yzm-vector-workspace-view')?.toggleAttribute('hidden', !isVector);
     }
 
@@ -1336,6 +1578,28 @@
                 ? 'yzm-api-nav-item yzm-api-nav-item-active'
                 : 'yzm-api-nav-item');
             item.dataset.yzmApiSectionId = section.id;
+            list.appendChild(item);
+        });
+
+        return list;
+    }
+
+    function createPromptSchemeNavList() {
+        const list = document.createElement('div');
+        list.className = 'yzm-scheme-nav-list';
+        list.hidden = true;
+
+        PROMPT_SCHEME_SECTIONS.forEach((section) => {
+            const item = createButton('', section.id === activePromptSchemeSectionId
+                ? 'yzm-scheme-nav-item yzm-scheme-nav-item-active'
+                : 'yzm-scheme-nav-item');
+            item.dataset.yzmSchemeSectionId = section.id;
+            const text = document.createElement('span');
+            text.className = 'yzm-scheme-nav-text';
+            const title = document.createElement('strong');
+            title.textContent = section.label;
+            text.appendChild(title);
+            item.append(createIconNode(section.icon, ''), text);
             list.appendChild(item);
         });
 
@@ -2047,6 +2311,14 @@
         return page;
     }
 
+    function createPromptSchemeWorkspaceView() {
+        const page = document.createElement('div');
+        page.className = 'yzm-scheme-view';
+
+        renderPromptSchemeWorkspaceContent(page);
+        return page;
+    }
+
     function renderConfigWorkspace(root) {
         const page = root.querySelector('.yzm-config-view');
         if (!page) return;
@@ -2058,6 +2330,13 @@
         const page = root.querySelector('.yzm-api-view');
         if (!page) return;
         renderApiWorkspaceContent(page);
+        bindPanelInteractions(root);
+    }
+
+    function renderPromptSchemeWorkspace(root) {
+        const page = root.querySelector('.yzm-scheme-view');
+        if (!page) return;
+        renderPromptSchemeWorkspaceContent(page);
         bindPanelInteractions(root);
     }
 
@@ -2077,8 +2356,8 @@
             return;
         }
 
-        if (activeConfigSectionId === 'requestProbe') {
-            content.appendChild(createRequestProbePanel());
+        if (activeConfigSectionId === 'logViewer') {
+            content.appendChild(createLogViewerPanel());
             page.replaceChildren(content);
             return;
         }
@@ -2095,6 +2374,12 @@
         const content = document.createElement('div');
         content.className = 'yzm-api-content';
 
+        if (activeApiSectionId === 'requestProbe') {
+            content.appendChild(createRequestProbePanel());
+            page.replaceChildren(content);
+            return;
+        }
+
         if (activeApiSectionId === 'embedding') {
             content.appendChild(createEmbeddingApiPanel());
         } else if (activeApiSectionId === 'rerank') {
@@ -2104,6 +2389,317 @@
         }
 
         page.replaceChildren(content);
+    }
+
+    function renderPromptSchemeWorkspaceContent(page) {
+        const content = document.createElement('div');
+        content.className = 'yzm-scheme-content';
+        content.appendChild(createPromptSchemePanel(getActivePromptSchemeSection()));
+        page.replaceChildren(content);
+    }
+
+    function getActivePromptSchemeSection() {
+        return PROMPT_SCHEME_SECTIONS.find((section) => section.id === activePromptSchemeSectionId) || PROMPT_SCHEME_SECTIONS[0];
+    }
+
+    function createPromptSchemePanel(section) {
+        if (section.id === 'info') return createPromptSchemeInfoPanel(section);
+        if (section.id === 'historian') return createHistorianPromptSchemePanel(section);
+
+        const panel = document.createElement('section');
+        panel.className = 'yzm-scheme-panel';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-scheme-header';
+        const title = document.createElement('div');
+        title.className = 'yzm-scheme-title';
+        title.append(createIconNode(section.icon, ''), document.createTextNode(section.label));
+        const desc = document.createElement('div');
+        desc.className = 'yzm-scheme-desc';
+        desc.textContent = getPromptSchemeDescription(section.id);
+        header.append(title, desc);
+
+        const editorCard = document.createElement('section');
+        editorCard.className = 'yzm-config-card yzm-scheme-editor-card';
+        editorCard.dataset.yzmSchemeEditorCard = 'true';
+        const cardHeader = document.createElement('div');
+        cardHeader.className = 'yzm-scheme-card-header';
+        const cardTitle = document.createElement('div');
+        cardTitle.className = 'yzm-config-card-title yzm-scheme-card-title';
+        cardTitle.append(createIconNode('fa-regular fa-pen-to-square', ''), document.createTextNode('提示词内容'));
+        const expand = createSchemeExpandButton();
+        const actions = document.createElement('div');
+        actions.className = 'yzm-scheme-card-actions';
+        const modeGroup = createPromptSchemeModeGroup(section.id);
+        if (modeGroup) actions.appendChild(modeGroup);
+        actions.appendChild(expand);
+        cardHeader.append(cardTitle, actions);
+        const textarea = document.createElement('textarea');
+        textarea.className = 'yzm-scheme-textarea';
+        textarea.placeholder = getPromptSchemePlaceholder(section.id);
+        textarea.value = getPromptSchemeDraftValue(section.id);
+        textarea.spellcheck = false;
+        textarea.dataset.yzmSchemeField = section.id;
+        textarea.dataset.yzmSchemeTitle = section.label;
+        editorCard.append(cardHeader, textarea);
+
+        panel.append(header, editorCard);
+        return panel;
+    }
+
+    function createHistorianPromptSchemePanel(section) {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-scheme-panel yzm-scheme-historian-panel';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-scheme-header';
+        const title = document.createElement('div');
+        title.className = 'yzm-scheme-title';
+        title.append(createIconNode('fa-solid fa-book-open', ''), document.createTextNode('记忆方案'));
+        const desc = document.createElement('div');
+        desc.className = 'yzm-scheme-desc';
+        desc.textContent = '配置当前方案的史官系统提示词与破限规则。';
+        header.append(title, desc);
+
+        const editorCard = document.createElement('section');
+        editorCard.className = 'yzm-config-card yzm-scheme-editor-card yzm-scheme-historian-card';
+        editorCard.dataset.yzmSchemeEditorCard = 'true';
+        const cardHeader = document.createElement('div');
+        cardHeader.className = 'yzm-scheme-card-header';
+        const cardTitle = document.createElement('div');
+        cardTitle.className = 'yzm-config-card-title yzm-scheme-card-title';
+        cardTitle.append(createIconNode(section.icon, ''), document.createTextNode('史官破限（System Pre-Prompt）'));
+        const info = document.createElement('span');
+        info.className = 'yzm-scheme-card-info';
+        info.title = '在主提示词前注入，用于约束叙事视角、边界和输出风格。';
+        info.appendChild(createIconNode('fa-regular fa-circle-question', ''));
+        const expand = createSchemeExpandButton();
+        cardTitle.appendChild(info);
+        cardHeader.append(cardTitle, expand);
+
+        const hint = document.createElement('div');
+        hint.className = 'yzm-scheme-editor-hint';
+        hint.textContent = '作用于系统提示词的前置段落，不会保存到角色卡或酒馆设置。';
+
+        const textarea = document.createElement('textarea');
+        textarea.className = 'yzm-scheme-textarea yzm-scheme-historian-textarea';
+        textarea.placeholder = getPromptSchemePlaceholder(section.id);
+        textarea.value = getPromptSchemeDraftValue(section.id);
+        textarea.spellcheck = false;
+        textarea.dataset.yzmSchemeField = section.id;
+        textarea.dataset.yzmSchemeTitle = '史官破限（System Pre-Prompt）';
+
+        const counter = document.createElement('div');
+        counter.className = 'yzm-scheme-counter';
+        counter.dataset.yzmSchemeCounter = section.id;
+        counter.textContent = `字数统计：${textarea.value.length} / 50000`;
+
+        editorCard.append(cardHeader, hint, textarea, counter);
+
+        panel.append(header, createPromptSchemeCurrentCard(), editorCard);
+        return panel;
+    }
+
+    function createSchemeExpandButton() {
+        const button = createIconButton('展开编辑', 'fa-solid fa-up-right-and-down-left-from-center', 'yzm-api-button yzm-scheme-expand-button');
+        button.dataset.yzmSchemeExpand = 'true';
+        return button;
+    }
+
+    function createPromptSchemeModeGroup(sectionId) {
+        const options = PROMPT_SCHEME_MODE_OPTIONS[sectionId];
+        if (!options) return null;
+        const activeMode = getActivePromptSchemeDraft().modes?.[sectionId] || options[0]?.id || '';
+        const group = document.createElement('div');
+        group.className = 'yzm-scheme-mode-group';
+        group.dataset.yzmSchemeModeGroup = sectionId;
+        options.forEach((option) => {
+            const button = createButton(option.label, option.id === activeMode
+                ? 'yzm-scheme-mode-button yzm-scheme-mode-button-active'
+                : 'yzm-scheme-mode-button');
+            button.dataset.yzmSchemeMode = option.id;
+            button.dataset.yzmSchemeModeSection = sectionId;
+            group.appendChild(button);
+        });
+        return group;
+    }
+
+    function createPromptSchemeInfoPanel(section) {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-scheme-panel yzm-scheme-info-panel';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-scheme-header';
+        const title = document.createElement('div');
+        title.className = 'yzm-scheme-title';
+        title.append(createIconNode(section.icon, ''), document.createTextNode('记忆方案'));
+        const desc = document.createElement('div');
+        desc.className = 'yzm-scheme-desc';
+        desc.textContent = '管理当前方案与导入导出设置，提示词内容在左侧其它项目中分别配置。';
+        header.append(title, desc);
+
+        const currentCard = createPromptSchemeCurrentCard();
+
+        const autoCard = createApiCard('自动加载设置', 'fa-solid fa-wand-magic-sparkles', [
+            createPromptSchemeAutoLoadRow(),
+        ]);
+
+        const importCard = createApiCard('导入与导出', 'fa-solid fa-download', [
+            createApiActions([
+                ['导入', 'fa-solid fa-upload'],
+                ['导出当前', 'fa-solid fa-download'],
+                ['导出全部', 'fa-solid fa-box-archive'],
+            ]),
+        ]);
+
+        panel.append(header, currentCard, autoCard, importCard);
+        return panel;
+    }
+
+    function createPromptSchemeCurrentCard() {
+        const card = document.createElement('section');
+        card.className = 'yzm-config-card yzm-api-card yzm-scheme-current-card';
+        const draft = getActivePromptSchemeDraft();
+
+        const header = document.createElement('div');
+        header.className = 'yzm-config-card-title yzm-api-card-title yzm-scheme-current-header';
+        const title = document.createElement('span');
+        title.append(createIconNode('fa-regular fa-folder-open', ''), document.createTextNode('当前方案'));
+        header.appendChild(title);
+        if (activePromptSchemeSectionId === 'info') {
+            const menuWrap = document.createElement('div');
+            menuWrap.className = 'yzm-scheme-current-menu';
+            const menuButton = createIconButton('方案操作', 'fa-solid fa-ellipsis-vertical', 'yzm-api-button yzm-scheme-current-menu-button');
+            menuButton.dataset.yzmSchemeMenu = 'true';
+            menuButton.setAttribute('aria-expanded', 'false');
+            const menu = document.createElement('div');
+            menu.className = 'yzm-scheme-current-menu-list';
+            menu.hidden = true;
+            [
+                ['new', '新建', 'fa-solid fa-plus'],
+                ['rename', '重命名', 'fa-solid fa-pen'],
+                ['delete', '删除', 'fa-regular fa-trash-can', 'yzm-scheme-menu-danger'],
+            ].forEach(([action, label, iconClassName, extraClassName = '']) => {
+                const item = createIconButton(label, iconClassName, `yzm-scheme-current-menu-item ${extraClassName}`.trim());
+                item.dataset.yzmSchemeAction = action;
+                menu.appendChild(item);
+            });
+            menuWrap.append(menuButton, menu);
+            header.appendChild(menuWrap);
+        }
+
+        const schemeOptions = getPromptSchemes().map((scheme) => ({ label: scheme.name, value: scheme.id }));
+        if (!schemeOptions.length && draft.name) schemeOptions.push({ label: draft.name, value: draft.id });
+        const select = createApiSelect(draft.id || '', schemeOptions.length ? schemeOptions : [{ label: draft.name || '未保存方案', value: draft.id || '' }], 'schemeName');
+        select.querySelector('.yzm-api-select')?.setAttribute('data-yzm-scheme-select', 'true');
+        card.append(header, createApiGrid([
+            createApiField('方案名称', select),
+        ]));
+        if (activePromptSchemeSectionId === 'info') {
+            card.appendChild(createApiActions([
+                ['保存整套方案', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveScheme'],
+            ]));
+            card.querySelector('[data-yzm-api-action="saveScheme"]')?.setAttribute('data-yzm-scheme-action', 'save');
+        }
+        return card;
+    }
+
+    function createPromptSchemeAutoLoadRow() {
+        const row = document.createElement('div');
+        row.className = 'yzm-scheme-autoload-row';
+        const text = document.createElement('div');
+        text.className = 'yzm-scheme-autoload-text';
+        const title = document.createElement('strong');
+        title.textContent = '角色专用自动加载';
+        const desc = document.createElement('span');
+        desc.textContent = '开启后，当前角色进入时自动使用指定方案。';
+        text.append(title, desc);
+        row.append(text, createConfigSwitch(true));
+        return row;
+    }
+
+    function startNewPromptScheme(root) {
+        const name = window.prompt('请输入新方案名称：', '');
+        const normalizedName = String(name || '').trim();
+        if (!normalizedName) return;
+        setActivePromptSchemeDraft({
+            ...createEmptyPromptScheme(normalizedName),
+            id: createPromptSchemeId(),
+        });
+        activePromptSchemeSectionId = 'info';
+        renderPromptSchemeWorkspace(root);
+        refreshPromptSchemeNav(root);
+    }
+
+    function renameActivePromptScheme(root) {
+        const draft = getActivePromptSchemeDraft();
+        const name = window.prompt('请输入方案名称：', draft.name || '');
+        const normalizedName = String(name || '').trim();
+        if (!normalizedName) return;
+        draft.name = normalizedName;
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function saveActivePromptScheme(root) {
+        const draft = getActivePromptSchemeDraft();
+        const name = String(draft.name || '').trim() || String(window.prompt('请输入方案名称：', '') || '').trim();
+        if (!name) return;
+        draft.name = name;
+        draft.id = draft.id || createPromptSchemeId();
+        const schemes = getPromptSchemes();
+        const index = schemes.findIndex((scheme) => scheme.id === draft.id);
+        if (index >= 0) {
+            schemes[index] = draft;
+        } else {
+            schemes.push(draft);
+        }
+        setActivePromptSchemeDraft(savePromptSchemes(schemes).find((scheme) => scheme.id === draft.id) || draft);
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function deleteActivePromptScheme(root) {
+        const draft = getActivePromptSchemeDraft();
+        if (!draft.id) {
+            setActivePromptSchemeDraft(createEmptyPromptScheme(''));
+            renderPromptSchemeWorkspace(root);
+            return;
+        }
+        const schemes = savePromptSchemes(getPromptSchemes().filter((scheme) => scheme.id !== draft.id));
+        setActivePromptSchemeDraft(schemes[0] || createEmptyPromptScheme(''));
+        activePromptSchemeSectionId = 'info';
+        renderPromptSchemeWorkspace(root);
+        refreshPromptSchemeNav(root);
+    }
+
+    function applyPromptSchemeSelection(root, schemeId) {
+        const scheme = getPromptSchemes().find((entry) => entry.id === schemeId);
+        if (!scheme) return;
+        setActivePromptSchemeDraft(scheme);
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function refreshPromptSchemeNav(root) {
+        root.querySelectorAll('.yzm-scheme-nav-item').forEach((item) => {
+            const isActive = item.dataset.yzmSchemeSectionId === activePromptSchemeSectionId;
+            item.classList.toggle('yzm-scheme-nav-item-active', isActive);
+        });
+    }
+
+    function getPromptSchemeDescription(sectionId) {
+        if (sectionId === 'info') return '管理记忆方案的基础信息、自动加载与导入导出。';
+        if (sectionId === 'historian') return '控制史官视角、叙事边界和破限输出规则。';
+        if (sectionId === 'table') return '控制正文内容如何被提取并写入记忆表格。';
+        return '控制小总结、大总结和总结优化时的输出格式。';
+    }
+
+    function getPromptSchemePlaceholder(sectionId) {
+        if (sectionId === 'historian') return '填写史官破限提示词...';
+        if (sectionId === 'table') return '填写填表提示词...';
+        return '填写总结/优化提示词...';
+    }
+
+    function getPromptSchemeDraftValue(sectionId) {
+        return getActivePromptSchemeDraft().prompts?.[sectionId] || '';
     }
 
     function createApiPagePanel(title, description, iconClassName, children) {
@@ -2161,7 +2757,6 @@
         const searchSettings = getVectorSearchSettings();
         return createApiPagePanel('向量化 API 配置', '配置书籍分段向量化与相似度检索所使用的 Embedding 模型。', 'fa-solid fa-diagram-project', [
             createApiCard('连接配置', 'fa-solid fa-link', [
-                createApiInlineWarning('此为向量化（Embedding）模型，不支持 LLM 模型'),
                 createApiGrid([
                     createApiField('API 地址', createApiInput('https://api.openai.com/v1')),
                     createApiField('API 密钥', createApiInput('sk-...', 'password', true)),
@@ -2170,7 +2765,7 @@
                 createApiActions([
                     ['测试连接', 'fa-solid fa-plug-circle-check'],
                 ]),
-            ]),
+            ], '', createApiInlineWarning('此为向量化（Embedding）模型，不支持 LLM 模型')),
             createApiCard('检索参数', 'fa-solid fa-sliders', [
                 createApiRangeField('相似度阈值', searchSettings.threshold),
                 createApiGrid([
@@ -2203,7 +2798,7 @@
         ]);
     }
 
-    function createApiCard(title, iconClassName, children, extraClassName = '') {
+    function createApiCard(title, iconClassName, children, extraClassName = '', titleExtra = null) {
         const card = document.createElement('section');
         card.className = `yzm-config-card yzm-api-card ${extraClassName}`.trim();
 
@@ -2213,6 +2808,7 @@
             titleNode.className = 'yzm-config-card-title yzm-api-card-title';
             if (iconClassName) titleNode.appendChild(createIconNode(iconClassName, ''));
             titleNode.appendChild(document.createTextNode(title));
+            if (titleExtra) titleNode.appendChild(titleExtra);
             nodes.push(titleNode);
         }
 
@@ -2817,6 +3413,223 @@
         mark.scrollIntoView({ block: 'center', inline: 'nearest' });
     }
 
+    function getLogViewerLogs() {
+        return YuzukiMemory.LogViewer?.getLogs?.() || [];
+    }
+
+    function formatLogViewerTime(timestamp) {
+        if (!timestamp) return '暂无';
+        const date = new Date(timestamp);
+        if (Number.isNaN(date.getTime())) return '暂无';
+        return `${date.toLocaleDateString()} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}`;
+    }
+
+    function createLogViewerPanel() {
+        const logs = getLogViewerLogs().slice().reverse();
+        const summary = YuzukiMemory.LogViewer?.getSummary?.() || { total: 0, debug: 0, info: 0, warn: 0, error: 0, latest: 0 };
+        const panel = document.createElement('section');
+        panel.className = 'yzm-log-viewer-panel';
+        panel.append(createLogViewerHeader(summary), createLogViewerToolbar());
+        if (!logs.length) {
+            panel.appendChild(createLogViewerEmpty());
+            return panel;
+        }
+        panel.appendChild(createLogViewerList(logs));
+        return panel;
+    }
+
+    function createLogViewerHeader(summary) {
+        const top = document.createElement('div');
+        top.className = 'yzm-log-viewer-top';
+        const header = document.createElement('div');
+        header.className = 'yzm-log-viewer-header';
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'yzm-log-viewer-title';
+        const title = document.createElement('div');
+        title.append(createIconNode('fa-regular fa-file-lines', ''), document.createTextNode('日志查看器'));
+        const desc = document.createElement('span');
+        desc.textContent = '查看控制台日志、浏览器报错和异常，方便移动端排查问题。';
+        titleWrap.append(title, desc);
+        const refresh = createIconButton('刷新', 'fa-solid fa-rotate', 'yzm-api-button yzm-log-viewer-refresh');
+        header.append(titleWrap, refresh);
+
+        const stats = document.createElement('div');
+        stats.className = 'yzm-log-viewer-stats';
+        stats.append(
+            createLogViewerStat('日志总数', `${summary.total || 0} 条`, 'fa-solid fa-layer-group', '', 'all'),
+            createLogViewerStat('错误', `${summary.error || 0} 条`, 'fa-solid fa-circle-exclamation', 'yzm-log-viewer-stat-error', 'error'),
+            createLogViewerStat('警告', `${summary.warn || 0} 条`, 'fa-solid fa-triangle-exclamation', 'yzm-log-viewer-stat-warn', 'warn'),
+            createLogViewerStat('最近更新', formatLogViewerTime(summary.latest), 'fa-regular fa-clock')
+        );
+        top.append(header, stats);
+        return top;
+    }
+
+    function createLogViewerStat(labelText, value, iconClassName, extraClassName = '', filterLevel = '') {
+        const stat = document.createElement('div');
+        stat.className = `yzm-log-viewer-stat ${extraClassName} ${filterLevel === 'all' ? 'yzm-log-stat-active' : ''}`.trim();
+        if (filterLevel) {
+            stat.dataset.yzmLogLevel = filterLevel;
+            stat.tabIndex = 0;
+            stat.role = 'button';
+        }
+        stat.append(createIconNode(iconClassName, ''), createRequestProbeStatText(labelText, value));
+        return stat;
+    }
+
+    function createLogViewerToolbar() {
+        const toolbar = document.createElement('div');
+        toolbar.className = 'yzm-log-viewer-toolbar';
+        const search = document.createElement('label');
+        search.className = 'yzm-log-viewer-search';
+        search.append(createIconNode('fa-solid fa-magnifying-glass', ''));
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.placeholder = '搜索日志内容、模块或关键词...';
+        input.dataset.yzmLogViewerSearch = 'true';
+        input.autocomplete = 'off';
+        input.setAttribute('autocorrect', 'off');
+        input.autocapitalize = 'off';
+        input.spellcheck = false;
+        search.appendChild(input);
+        toolbar.append(search, createIconButton('复制', 'fa-regular fa-copy', 'yzm-api-button yzm-log-viewer-copy'), createIconButton('清空', 'fa-regular fa-trash-can', 'yzm-api-button yzm-log-viewer-clear'));
+        return toolbar;
+    }
+
+    function createLogViewerList(logs) {
+        const list = document.createElement('div');
+        list.className = 'yzm-log-viewer-list';
+        logs.forEach((entry) => list.appendChild(createLogViewerItem(entry)));
+        return list;
+    }
+
+    function createLogViewerItem(entry) {
+        const item = document.createElement('details');
+        item.className = `yzm-log-viewer-item yzm-log-viewer-item-${entry.level}`;
+        item.dataset.yzmLogItem = 'true';
+        item.dataset.yzmLogLevelValue = entry.level;
+        item.dataset.yzmLogSearchText = `${entry.level} ${entry.source || ''} ${entry.message || ''}`.toLowerCase();
+        const summary = document.createElement('summary');
+        summary.className = 'yzm-log-viewer-summary';
+        const meta = document.createElement('div');
+        meta.className = 'yzm-log-viewer-meta';
+        const level = document.createElement('span');
+        level.className = `yzm-log-level yzm-log-level-${entry.level}`;
+        level.append(createIconNode(getLogViewerLevelIcon(entry.level), ''), document.createTextNode(entry.level.toUpperCase()));
+        const source = document.createElement('span');
+        source.className = 'yzm-log-source';
+        source.textContent = entry.source || 'runtime';
+        const preview = document.createElement('span');
+        preview.className = 'yzm-log-preview';
+        preview.textContent = entry.message || '';
+        meta.append(level, source, preview);
+        const time = document.createElement('span');
+        time.className = 'yzm-log-time';
+        time.textContent = formatLogViewerTime(entry.timestamp);
+        summary.append(meta, time);
+        const content = document.createElement('pre');
+        content.className = 'yzm-log-content';
+        content.textContent = entry.message || '';
+        item.append(summary, content);
+        return item;
+    }
+
+    function getLogViewerLevelIcon(level) {
+        if (level === 'error') return 'fa-solid fa-circle-exclamation';
+        if (level === 'warn') return 'fa-solid fa-triangle-exclamation';
+        if (level === 'debug') return 'fa-solid fa-code';
+        return 'fa-solid fa-circle-info';
+    }
+
+    function createLogViewerEmpty() {
+        const empty = document.createElement('div');
+        empty.className = 'yzm-log-viewer-empty';
+        empty.append(createIconNode('fa-regular fa-file-lines', ''), document.createTextNode('暂无日志。出现控制台输出、浏览器错误或未处理异常后，这里会显示记录。'));
+        return empty;
+    }
+
+    function getLogViewerFilterState(root) {
+        const keyword = String(root.querySelector('[data-yzm-log-viewer-search]')?.value || '').trim().toLowerCase();
+        const activeLevel = root.querySelector('.yzm-log-stat-active')?.dataset.yzmLogLevel || 'all';
+        return { keyword, activeLevel };
+    }
+
+    function isLogViewerItemMatched(item, state) {
+        const levelMatched = state.activeLevel === 'all' || item.dataset.yzmLogLevelValue === state.activeLevel;
+        const keywordMatched = !state.keyword || String(item.dataset.yzmLogSearchText || '').includes(state.keyword);
+        return levelMatched && keywordMatched;
+    }
+
+    function filterLogViewerItems(root) {
+        const state = getLogViewerFilterState(root);
+        root.querySelectorAll('[data-yzm-log-item]').forEach((item) => {
+            item.hidden = !isLogViewerItemMatched(item, state);
+        });
+    }
+
+    function buildLogViewerCopyText(root) {
+        const state = getLogViewerFilterState(root);
+        const lines = [...root.querySelectorAll('[data-yzm-log-item]')]
+            .filter((item) => isLogViewerItemMatched(item, state))
+            .map((item) => {
+                const level = item.dataset.yzmLogLevelValue || 'info';
+                const time = item.querySelector('.yzm-log-time')?.textContent || '';
+                const source = item.querySelector('.yzm-log-source')?.textContent || '';
+                const message = item.querySelector('.yzm-log-content')?.textContent || '';
+                return `[${time}] [${level.toUpperCase()}] [${source}]\n${message}`;
+            });
+        return lines.join('\n\n');
+    }
+
+    async function writeTextToClipboard(text) {
+        if (!text) return false;
+        if (navigator.clipboard?.writeText) {
+            try {
+                await navigator.clipboard.writeText(text);
+                return true;
+            } catch (error) {
+                // Fall through to textarea copy for mobile WebView / non-secure contexts.
+            }
+        }
+
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        textarea.style.top = '0';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, textarea.value.length);
+        try {
+            return document.execCommand('copy');
+        } catch (error) {
+            return false;
+        } finally {
+            textarea.remove();
+        }
+    }
+
+    async function copyLogViewerLogs(root, button) {
+        const ok = await writeTextToClipboard(buildLogViewerCopyText(root));
+        if (!button) return;
+        const originalTitle = button.title || '复制';
+        button.title = ok ? '已复制' : '复制失败';
+        button.classList.toggle('yzm-api-button-success', ok);
+        button.classList.toggle('yzm-api-button-danger', !ok);
+        setTimeout(() => {
+            button.title = originalTitle;
+            button.classList.remove('yzm-api-button-success', 'yzm-api-button-danger');
+        }, 1200);
+    }
+
+    function clearLogViewerLogs(root) {
+        YuzukiMemory.LogViewer?.clearLogs?.();
+        renderConfigWorkspace(root);
+    }
+
     function createPluginConfigPanel() {
         const settings = getPluginSettings();
         const card = document.createElement('section');
@@ -3343,7 +4156,6 @@
         titleNode.append(
             createIconNode('fa-solid fa-filter', ''),
             document.createTextNode('标签过滤'),
-            createConfigTitleSpacer(),
             createIconButton('AI 填写', 'fa-solid fa-robot', 'yzm-ai-fill-button')
         );
 
@@ -3903,10 +4715,18 @@
                 name,
                 icon: 'summary',
                 columns: ['名称', '内容'],
+                hidden: false,
             };
             getTables().push(table);
             getState().activeTableId = table.id;
-            saveState();
+            const saved = saveState();
+            if (!saved) {
+                window.alert('当前会话尚未就绪，新增表格未保存。');
+                memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+                renderPanelState(root);
+                closeModal();
+                return;
+            }
             renderPanelState(root);
             closeModal();
         });
@@ -3974,6 +4794,71 @@
             if (!button) return;
             addSummary(button.dataset.yzmSummaryKind || 'main');
         });
+    }
+
+    function openPromptSchemeEditorDialog(root, sourceTextarea) {
+        if (!sourceTextarea) return;
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-scheme-editor-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-scheme-editor-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-scheme-editor-dialog';
+        dialog.setAttribute('aria-label', '展开编辑提示词');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = sourceTextarea.dataset.yzmSchemeTitle || '提示词编辑';
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭提示词编辑');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const textarea = document.createElement('textarea');
+        textarea.className = 'yzm-scheme-modal-textarea';
+        textarea.value = sourceTextarea.value || '';
+        textarea.placeholder = sourceTextarea.placeholder || '';
+        textarea.spellcheck = false;
+
+        const footer = document.createElement('div');
+        footer.className = 'yzm-scheme-modal-footer';
+        const counter = document.createElement('span');
+        counter.className = 'yzm-scheme-modal-counter';
+        const updateCounter = () => {
+            counter.textContent = `字数统计：${textarea.value.length} / 50000`;
+        };
+        updateCounter();
+        const cancel = createButton('取消', 'yzm-api-button');
+        const apply = createIconButton('应用到当前框', 'fa-regular fa-circle-check', 'yzm-api-button yzm-api-button-primary');
+        footer.append(counter, cancel, apply);
+
+        dialog.append(header, textarea, footer);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+        textarea.focus();
+
+        const closeModal = () => overlay.remove();
+        textarea.addEventListener('input', updateCounter);
+        close.onclick = closeModal;
+        cancel.onclick = closeModal;
+        apply.onclick = () => {
+            sourceTextarea.value = textarea.value;
+            const fieldId = sourceTextarea.dataset.yzmSchemeField || '';
+            const sourceCounter = root.querySelector(`[data-yzm-scheme-counter="${escapeSelectorValue(fieldId)}"]`);
+            if (sourceCounter) sourceCounter.textContent = `字数统计：${sourceTextarea.value.length} / 50000`;
+            sourceTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+            closeModal();
+        };
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
     }
 
     function createSummaryChoiceButton(label, iconClassName, kind) {
@@ -4114,7 +4999,7 @@
                     });
                 }
                 if (!closeButton) {
-                    if (!target?.closest('.yzm-record-action-menu, .yzm-primary-item')) closeRecordActionMenu(root);
+                    if (!target?.closest('.yzm-record-action-menu, .yzm-primary-item, .yzm-nav-table')) closeRecordActionMenu(root);
                     return;
                 }
 
@@ -4203,7 +5088,7 @@
             });
         }
 
-        const addTableButton = root.querySelector('.yzm-add-table-button');
+        const addTableButton = root.querySelector('.yzm-add-table-trigger');
         if (addTableButton && addTableButton.dataset.yzmBound !== 'true') {
             addTableButton.dataset.yzmBound = 'true';
             addTableButton.addEventListener('click', (event) => {
@@ -4216,8 +5101,23 @@
         root.querySelectorAll('.yzm-nav-table').forEach((item) => {
             if (item.dataset.yzmBound === 'true') return;
             item.dataset.yzmBound = 'true';
+            let tableLongPressTimer = null;
+            let tableLongPressOpened = false;
+            const clearTableLongPress = () => {
+                window.clearTimeout(tableLongPressTimer);
+                tableLongPressTimer = null;
+            };
+            const openTableMenuFromEvent = (event) => {
+                const tableId = item.dataset.yzmTableId;
+                if (!tableId) return;
+                openTableActionMenu(root, tableId, event.clientX, event.clientY);
+            };
 
             item.querySelector('.yzm-nav-table-name')?.addEventListener('click', () => {
+                if (tableLongPressOpened) {
+                    tableLongPressOpened = false;
+                    return;
+                }
                 activeWorkspaceView = 'table';
                 root.querySelectorAll('.yzm-nav-item-active, .yzm-nav-table-active').forEach((node) => {
                     node.classList.remove('yzm-nav-item-active', 'yzm-nav-table-active');
@@ -4231,6 +5131,23 @@
                 renderActiveTableTitle(root);
                 bindPanelInteractions(root);
             });
+            item.addEventListener('contextmenu', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openTableMenuFromEvent(event);
+            });
+            item.addEventListener('pointerdown', (event) => {
+                if (!isMobileLayout() || event.button !== 0) return;
+                clearTableLongPress();
+                tableLongPressOpened = false;
+                tableLongPressTimer = window.setTimeout(() => {
+                    tableLongPressOpened = true;
+                    openTableMenuFromEvent(event);
+                }, 600);
+            });
+            item.addEventListener('pointerup', clearTableLongPress);
+            item.addEventListener('pointercancel', clearTableLongPress);
+            item.addEventListener('pointerleave', clearTableLongPress);
         });
 
         const configButton = root.querySelector('.yzm-sidebar-action[data-yzm-action="config"]');
@@ -4284,6 +5201,24 @@
                 vectorButton.classList.add('yzm-sidebar-action-active');
                 updateWorkspaceMode(root);
                 getVectorStore()?.whenReady?.().then(() => renderVectorWorkspace(root));
+            });
+        }
+
+        const schemeButton = root.querySelector('.yzm-sidebar-action[data-yzm-action="scheme"]');
+        if (schemeButton && schemeButton.dataset.yzmBound !== 'true') {
+            schemeButton.dataset.yzmBound = 'true';
+            schemeButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                activeWorkspaceView = 'scheme';
+                setMobileDetailOpen(root, false);
+                root.querySelectorAll('.yzm-nav-item-active, .yzm-nav-table-active').forEach((node) => {
+                    node.classList.remove('yzm-nav-item-active', 'yzm-nav-table-active');
+                });
+                clearSidebarActionActive(root);
+                schemeButton.classList.add('yzm-sidebar-action-active');
+                renderPromptSchemeWorkspace(root);
+                updateWorkspaceMode(root);
             });
         }
 
@@ -4400,8 +5335,8 @@
         if (root.dataset.yzmRequestProbeBound !== 'true') {
             root.dataset.yzmRequestProbeBound = 'true';
             window.addEventListener('yzm-memory-request-probe-updated', () => {
-                if (activeWorkspaceView !== 'config' || activeConfigSectionId !== 'requestProbe') return;
-                renderConfigWorkspace(root);
+                if (activeWorkspaceView !== 'api' || activeApiSectionId !== 'requestProbe') return;
+                renderApiWorkspace(root);
             });
         }
 
@@ -4432,6 +5367,94 @@
             });
         });
 
+        root.querySelectorAll('.yzm-scheme-nav-item').forEach((item) => {
+            if (item.dataset.yzmBound === 'true') return;
+            item.dataset.yzmBound = 'true';
+            item.addEventListener('click', () => {
+                activePromptSchemeSectionId = item.dataset.yzmSchemeSectionId || 'info';
+                root.querySelectorAll('.yzm-scheme-nav-item-active').forEach((node) => {
+                    node.classList.remove('yzm-scheme-nav-item-active');
+                });
+                item.classList.add('yzm-scheme-nav-item-active');
+                renderPromptSchemeWorkspace(root);
+            });
+        });
+
+        const schemeView = root.querySelector('.yzm-scheme-view');
+        if (schemeView && schemeView.dataset.yzmSchemeBound !== 'true') {
+            schemeView.dataset.yzmSchemeBound = 'true';
+            schemeView.addEventListener('click', (event) => {
+                const target = event.target instanceof Element ? event.target : null;
+                const menuButton = target?.closest('[data-yzm-scheme-menu]');
+                const schemeAction = target?.closest('[data-yzm-scheme-action]');
+                const modeButton = target?.closest('[data-yzm-scheme-mode]');
+                const expandButton = target?.closest('[data-yzm-scheme-expand]');
+                if (modeButton) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const sectionId = modeButton.dataset.yzmSchemeModeSection || '';
+                    updateActivePromptSchemeMode(sectionId, modeButton.dataset.yzmSchemeMode || '');
+                    modeButton.closest('[data-yzm-scheme-mode-group]')?.querySelectorAll('.yzm-scheme-mode-button').forEach((button) => {
+                        button.classList.toggle('yzm-scheme-mode-button-active', button === modeButton);
+                    });
+                    return;
+                }
+                if (schemeAction && !menuButton) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const action = schemeAction.dataset.yzmSchemeAction;
+                    if (action === 'new') startNewPromptScheme(root);
+                    if (action === 'rename') renameActivePromptScheme(root);
+                    if (action === 'delete') deleteActivePromptScheme(root);
+                    if (action === 'save') saveActivePromptScheme(root);
+                    return;
+                }
+                if (menuButton) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const menu = menuButton.closest('.yzm-scheme-current-menu')?.querySelector('.yzm-scheme-current-menu-list');
+                    const shouldOpen = !!menu?.hidden;
+                    schemeView.querySelectorAll('.yzm-scheme-current-menu-list').forEach((node) => {
+                        node.hidden = true;
+                    });
+                    schemeView.querySelectorAll('[data-yzm-scheme-menu]').forEach((node) => {
+                        node.setAttribute('aria-expanded', 'false');
+                    });
+                    if (menu) menu.hidden = !shouldOpen;
+                    menuButton.setAttribute('aria-expanded', String(shouldOpen));
+                    return;
+                }
+                if (!expandButton) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const card = expandButton.closest('[data-yzm-scheme-editor-card]');
+                if (!card) return;
+                openPromptSchemeEditorDialog(root, card.querySelector('.yzm-scheme-textarea'));
+            });
+            schemeView.addEventListener('input', (event) => {
+                const target = event.target;
+                if (!target?.matches?.('.yzm-scheme-textarea[data-yzm-scheme-field]')) return;
+                updateActivePromptSchemeDraftPrompt(target.dataset.yzmSchemeField, target.value);
+                const counter = root.querySelector(`[data-yzm-scheme-counter="${escapeSelectorValue(target.dataset.yzmSchemeField)}"]`);
+                if (counter) counter.textContent = `字数统计：${target.value.length} / 50000`;
+            });
+            schemeView.addEventListener('change', (event) => {
+                const target = event.target;
+                if (!target?.matches?.('[data-yzm-scheme-select]')) return;
+                applyPromptSchemeSelection(root, target.value);
+            });
+            document.addEventListener('click', (event) => {
+                const target = event.target instanceof Element ? event.target : null;
+                if (target?.closest?.('.yzm-scheme-current-menu')) return;
+                schemeView.querySelectorAll('.yzm-scheme-current-menu-list').forEach((node) => {
+                    node.hidden = true;
+                });
+                schemeView.querySelectorAll('[data-yzm-scheme-menu]').forEach((node) => {
+                    node.setAttribute('aria-expanded', 'false');
+                });
+            });
+        }
+
         const apiView = root.querySelector('.yzm-api-view');
         if (apiView && apiView.dataset.yzmApiBound !== 'true') {
             apiView.dataset.yzmApiBound = 'true';
@@ -4441,6 +5464,18 @@
                 const secretButton = target?.closest?.('.yzm-api-icon-button');
                 const apiChoice = target?.closest?.('.yzm-api-choice');
                 const apiActionButton = target?.closest?.('[data-yzm-api-action]');
+                const requestProbeRefresh = target?.closest?.('.yzm-request-probe-refresh');
+                const requestProbeJump = target?.closest?.('[data-yzm-request-probe-jump]');
+
+                if (requestProbeRefresh) {
+                    renderApiWorkspace(root);
+                    return;
+                }
+
+                if (requestProbeJump) {
+                    jumpToRequestProbeKeyword(root);
+                    return;
+                }
 
                 if (apiActionButton) {
                     const action = apiActionButton.dataset.yzmApiAction;
@@ -4480,6 +5515,10 @@
             });
             apiView.addEventListener('input', (event) => {
                 const target = event.target;
+                if (target?.matches?.('[data-yzm-request-probe-search]')) {
+                    filterRequestProbeItems(root, target.value || '');
+                    return;
+                }
                 if (!target?.matches?.('[data-yzm-vector-search-setting]')) return;
                 syncVectorSearchSettingInput(target);
             });
@@ -4498,6 +5537,12 @@
                 if (!target?.matches?.('[data-yzm-vector-search-setting]')) return;
                 normalizeVectorSearchInput(target);
             }, true);
+            apiView.addEventListener('keydown', (event) => {
+                const target = event.target;
+                if (event.key !== 'Enter' || !target?.matches?.('[data-yzm-request-probe-search]')) return;
+                event.preventDefault();
+                jumpToRequestProbeKeyword(root);
+            });
         }
 
         const configView = root.querySelector('.yzm-config-view');
@@ -4505,8 +5550,9 @@
             configView.dataset.yzmPresetBound = 'true';
             configView.addEventListener('input', (event) => {
                 const target = event.target;
-                if (!target?.matches?.('[data-yzm-request-probe-search]')) return;
-                filterRequestProbeItems(root, target.value || '');
+                if (target?.matches?.('[data-yzm-log-viewer-search]')) {
+                    filterLogViewerItems(root);
+                }
             });
             configView.addEventListener('change', (event) => {
                 const target = event.target;
@@ -4524,8 +5570,10 @@
                 const autoSummarySave = target?.closest?.('.yzm-auto-summary-save');
                 const autoSummaryReset = target?.closest?.('.yzm-auto-summary-reset');
                 const autoSummaryCheck = target?.closest?.('.yzm-auto-summary-check');
-                const requestProbeRefresh = target?.closest?.('.yzm-request-probe-refresh');
-                const requestProbeJump = target?.closest?.('[data-yzm-request-probe-jump]');
+                const logViewerRefresh = target?.closest?.('.yzm-log-viewer-refresh');
+                const logViewerCopy = target?.closest?.('.yzm-log-viewer-copy');
+                const logViewerClear = target?.closest?.('.yzm-log-viewer-clear');
+                const logFilter = target?.closest?.('[data-yzm-log-level]');
 
                 if (newButton) {
                     clearTagPresetEditor(root);
@@ -4574,13 +5622,25 @@
                     return;
                 }
 
-                if (requestProbeRefresh) {
+                if (logViewerRefresh) {
                     renderConfigWorkspace(root);
                     return;
                 }
 
-                if (requestProbeJump) {
-                    jumpToRequestProbeKeyword(root);
+                if (logViewerCopy) {
+                    copyLogViewerLogs(root, logViewerCopy);
+                    return;
+                }
+
+                if (logViewerClear) {
+                    clearLogViewerLogs(root);
+                    return;
+                }
+
+                if (logFilter) {
+                    root.querySelectorAll('.yzm-log-stat-active').forEach((node) => node.classList.remove('yzm-log-stat-active'));
+                    logFilter.classList.add('yzm-log-stat-active');
+                    filterLogViewerItems(root);
                     return;
                 }
 
@@ -4624,11 +5684,6 @@
             }, true);
             configView.addEventListener('keydown', (event) => {
                 const target = event.target;
-                if (event.key === 'Enter' && target?.matches?.('[data-yzm-request-probe-search]')) {
-                    event.preventDefault();
-                    jumpToRequestProbeKeyword(root);
-                    return;
-                }
                 if (event.key !== 'Enter' || !target?.matches?.('[data-yzm-tag-input]')) return;
                 event.preventDefault();
                 addPendingTags(root, target.dataset.yzmTagInput);

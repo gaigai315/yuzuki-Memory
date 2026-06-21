@@ -62,21 +62,31 @@
                     columns: Array.isArray(table.columns)
                         ? table.columns.map((column) => String(column || '').trim()).filter(Boolean)
                         : ['名称', '内容'],
+                    hidden: !!table.hidden,
                 }))
             : fallback.tables;
 
         const firstTableId = tables[0]?.id || '';
         const activeTableId = tables.some((table) => table.id === rawState.activeTableId)
             ? rawState.activeTableId
-            : (fallback.activeTableId || firstTableId);
+            : (tables.some((table) => table.id === fallback.activeTableId) ? fallback.activeTableId : firstTableId);
+        const tableIds = new Set(tables.map((table) => table.id));
+        const activeRecordIds = {};
+        Object.entries(rawState.activeRecordIds || {}).forEach(([tableId, recordId]) => {
+            if (tableIds.has(tableId)) activeRecordIds[tableId] = recordId;
+        });
+        const records = {};
+        Object.entries(rawState.records || {}).forEach(([tableId, tableRecords]) => {
+            if (tableIds.has(tableId)) records[tableId] = Array.isArray(tableRecords) ? tableRecords : [];
+        });
 
         return {
             version: VERSION,
             defaultRevision,
             tables,
             activeTableId,
-            activeRecordIds: Object.assign({}, rawState.activeRecordIds || {}),
-            records: Object.assign({}, rawState.records || {}),
+            activeRecordIds,
+            records,
             promptPresetId: String(rawState.promptPresetId || fallback.promptPresetId || ''),
             settings: Object.assign({}, fallback.settings || {}, rawState.settings || {}),
         };
