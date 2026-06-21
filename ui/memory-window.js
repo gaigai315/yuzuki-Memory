@@ -3454,7 +3454,7 @@
     function createRerankApiPanel() {
         return createApiPagePanel('Rerank API 配置', '对向量召回结果进行二次排序，提升注入内容的相关性。', 'fa-solid fa-arrow-down-wide-short', [
             createApiCard('', '', [
-                createPluginConfigRow('启用 Rerank（重排序）', '开启后会在向量召回后调用 Rerank 模型重新排序结果。', 'fa-solid fa-layer-group', createConfigSwitch(false)),
+                createPluginConfigRow('启用 Rerank（重排序）', '开启后会在向量召回后调用 Rerank 模型重新排序结果。', '', createConfigSwitch(false)),
             ], 'yzm-api-card-plain'),
             createApiCard('连接配置', 'fa-solid fa-link', [
                 createApiGrid([
@@ -4345,11 +4345,11 @@
         const row = document.createElement('div');
         row.className = 'yzm-plugin-config-row';
 
-        const icon = createIconNode(iconClassName, 'yzm-plugin-config-row-icon');
         const text = createPluginConfigTitle(title, description);
         const body = document.createElement('div');
-        body.className = 'yzm-plugin-config-row-body';
-        body.append(icon, text);
+        body.className = iconClassName ? 'yzm-plugin-config-row-body' : 'yzm-plugin-config-row-body yzm-plugin-config-row-body-no-icon';
+        if (iconClassName) body.appendChild(createIconNode(iconClassName, 'yzm-plugin-config-row-icon'));
+        body.appendChild(text);
 
         const action = document.createElement('div');
         action.className = 'yzm-plugin-config-row-action';
@@ -6365,7 +6365,6 @@
                     store.selectBook(bookButton.dataset.yzmVectorBookId);
                     vectorUiState.segmentPage = 1;
                     renderVectorWorkspace(root);
-                    if (isMobileLayout()) setMobileDetailOpen(root, true);
                     return;
                 }
 
@@ -6931,7 +6930,6 @@
                     renderPrimaryList(root);
                     renderTableWorkspace(root);
                     bindPanelInteractions(root);
-                    if (isMobileLayout()) setMobileDetailOpen(root, true);
                     return;
                 }
                 if (!table || !item.dataset.yzmRecordId) return;
@@ -6939,7 +6937,6 @@
                 renderPrimaryList(root);
                 renderTableWorkspace(root);
                 bindPanelInteractions(root);
-                if (isMobileLayout()) setMobileDetailOpen(root, true);
             });
             item.addEventListener('contextmenu', (event) => {
                 event.preventDefault();
