@@ -7,7 +7,8 @@
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const DEFAULT_STATE_REVISION = 12;
     const MEMORY_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\}\}/g;
-    const CLEANUP_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/g;
+    const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT)\}\}/g;
+    const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/g;
     const MEMORY_CONTENT_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT)\}\}/;
     const VECTOR_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/;
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
@@ -111,12 +112,18 @@
             .replace(/\{\{char\}\}/g, names.char);
     }
 
-    function isPluginInjectionEnabled() {
+    function getPluginSettings() {
         try {
             const settings = JSON.parse(localStorage.getItem(PLUGIN_SETTINGS_KEY) || '{}');
-            return settings.injectMemoryTable !== false;
+            return {
+                injectMemoryTable: settings.injectMemoryTable !== false,
+                injectVectorMemory: settings.injectVectorMemory !== false,
+            };
         } catch (_error) {
-            return true;
+            return {
+                injectMemoryTable: true,
+                injectVectorMemory: true,
+            };
         }
     }
 
@@ -350,32 +357,35 @@
         return Object.values(node).some((value) => nodeContainsPattern(value, pattern));
     }
 
-    function buildVariableReplacements(state, vectorText = '') {
+    function buildVariableReplacements(state, vectorText = '', settings = getPluginSettings()) {
         const names = getRuntimeNames();
         return {
-            '{{MEMORY}}': buildMemoryText(state),
-            '{{MEMORY_SUMMARY}}': resolveRuntimeVariables(buildSummaryText(state)),
-            '{{MEMORY_TABLE}}': resolveRuntimeVariables(buildAllTablesText(state)),
-            '{{MEMORY_PROMPT}}': buildMemoryPromptText(state),
-            '{{VECTOR_MEMORY}}': resolveRuntimeVariables(vectorText),
+            '{{MEMORY}}': settings.injectMemoryTable ? buildMemoryText(state) : '{{MEMORY}}',
+            '{{MEMORY_SUMMARY}}': settings.injectMemoryTable ? resolveRuntimeVariables(buildSummaryText(state)) : '{{MEMORY_SUMMARY}}',
+            '{{MEMORY_TABLE}}': settings.injectMemoryTable ? resolveRuntimeVariables(buildAllTablesText(state)) : '{{MEMORY_TABLE}}',
+            '{{MEMORY_PROMPT}}': settings.injectMemoryTable ? buildMemoryPromptText(state) : '{{MEMORY_PROMPT}}',
+            '{{VECTOR_MEMORY}}': settings.injectVectorMemory ? resolveRuntimeVariables(vectorText) : '{{VECTOR_MEMORY}}',
             '{{user}}': names.user,
             '{{char}}': names.char,
-            __table: (tableName) => resolveRuntimeVariables(buildSpecificTableText(state, tableName)),
+            __table: (tableName) => settings.injectMemoryTable
+                ? resolveRuntimeVariables(buildSpecificTableText(state, tableName))
+                : `{{MEMORY_TABLE_${tableName}}}`,
         };
     }
 
-    function cleanupVariablesInNode(node) {
+    function cleanupVariablesInNode(node, settings = getPluginSettings()) {
         if (!node) return;
         if (Array.isArray(node)) {
-            node.forEach(cleanupVariablesInNode);
+            node.forEach((item) => cleanupVariablesInNode(item, settings));
             return;
         }
         if (typeof node !== 'object') return;
         Object.keys(node).forEach((key) => {
             if (typeof node[key] === 'string') {
-                node[key] = node[key].replace(CLEANUP_VARIABLE_PATTERN, '');
+                if (settings.injectMemoryTable) node[key] = node[key].replace(STRUCTURED_VARIABLE_PATTERN, '');
+                if (settings.injectVectorMemory) node[key] = node[key].replace(VECTOR_CLEANUP_VARIABLE_PATTERN, '');
             } else if (node[key] && typeof node[key] === 'object') {
-                cleanupVariablesInNode(node[key]);
+                cleanupVariablesInNode(node[key], settings);
             }
         });
     }
@@ -387,24 +397,25 @@
 
     async function processBody(body, options = {}) {
         if (!body || typeof body !== 'object') return body;
-        if (!isPluginInjectionEnabled()) {
+        const settings = getPluginSettings();
+        if (!settings.injectMemoryTable && !settings.injectVectorMemory) {
             return body;
         }
         if (window.isSummarizing) {
-            cleanupVariablesInNode(body);
+            cleanupVariablesInNode(body, settings);
             return body;
         }
 
         const state = getCurrentState();
-        const hadMemoryContentVariable = nodeContainsPattern(body, MEMORY_CONTENT_VARIABLE_PATTERN);
-        const hadVectorVariable = nodeContainsPattern(body, VECTOR_VARIABLE_PATTERN);
-        const vectorText = typeof options.getVectorText === 'function' && !hasVectorMarker(body)
+        const hadMemoryContentVariable = settings.injectMemoryTable && nodeContainsPattern(body, MEMORY_CONTENT_VARIABLE_PATTERN);
+        const hadVectorVariable = settings.injectVectorMemory && nodeContainsPattern(body, VECTOR_VARIABLE_PATTERN);
+        const vectorText = settings.injectVectorMemory && typeof options.getVectorText === 'function' && !hasVectorMarker(body)
             ? await options.getVectorText(body)
             : '';
-        const replacements = buildVariableReplacements(state, vectorText);
+        const replacements = buildVariableReplacements(state, vectorText, settings);
         replaceVariablesInNode(body, replacements);
 
-        if (vectorText && !hasVectorMarker(body) && !hadVectorVariable) {
+        if (settings.injectVectorMemory && vectorText && !hasVectorMarker(body) && !hadVectorVariable) {
             insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(vectorText)}`, {
                 isYuzukiVector: true,
                 isGaigaiVector: true,
@@ -412,7 +423,7 @@
             });
         }
 
-        if (!hadMemoryContentVariable && !requestBodyContainsInjection(body, 'isGaigaiData')) {
+        if (settings.injectMemoryTable && !hadMemoryContentVariable && !requestBodyContainsInjection(body, 'isGaigaiData')) {
             const memoryText = buildMemoryText(state);
             if (memoryText) {
                 insertInjectedMessage(body, memoryText, {
@@ -422,7 +433,7 @@
             }
         }
 
-        cleanupVariablesInNode(body);
+        cleanupVariablesInNode(body, settings);
         return body;
     }
 

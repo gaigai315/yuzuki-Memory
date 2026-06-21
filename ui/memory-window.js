@@ -141,6 +141,7 @@
     };
     const DEFAULT_PLUGIN_SETTINGS = {
         injectMemoryTable: true,
+        injectVectorMemory: true,
         smartCalculationLinkage: false,
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
@@ -787,6 +788,7 @@
         const source = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
         return {
             injectMemoryTable: typeof source.injectMemoryTable === 'boolean' ? source.injectMemoryTable : DEFAULT_PLUGIN_SETTINGS.injectMemoryTable,
+            injectVectorMemory: typeof source.injectVectorMemory === 'boolean' ? source.injectVectorMemory : DEFAULT_PLUGIN_SETTINGS.injectVectorMemory,
             smartCalculationLinkage: typeof source.smartCalculationLinkage === 'boolean' ? source.smartCalculationLinkage : DEFAULT_PLUGIN_SETTINGS.smartCalculationLinkage,
             hideFloorsEnabled: typeof source.hideFloorsEnabled === 'boolean' ? source.hideFloorsEnabled : DEFAULT_PLUGIN_SETTINGS.hideFloorsEnabled,
             hiddenFloorCount: Math.round(normalizeNumberSetting(source.hiddenFloorCount, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0)),
@@ -5271,7 +5273,8 @@
 
         card.append(
             createPluginConfigHeader(),
-            createPluginConfigRow('注入记忆', '此为总开关。关闭后不注入任何记忆内容（含向量化及总结）。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
+            createPluginConfigRow('注入记忆', '开启后处理表格、总结与 {{MEMORY}} 等旧变量。只用新版向量化时可以关闭。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
+            createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled')))
         );
