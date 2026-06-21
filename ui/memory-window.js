@@ -1008,7 +1008,7 @@
         const title = root.querySelector('.yzm-current-table-title');
         if (!table || !title) return;
 
-        title.replaceChildren(createTableIcon(table), document.createTextNode(table.name));
+        title.replaceChildren(createTableIcon(table), createCurrentTableTitleText(table.name));
     }
 
     function renderPanelState(root) {
@@ -1329,8 +1329,15 @@
         const badge = document.createElement('div');
         badge.className = className;
         badge.dataset.yzmCurrentTableTitle = 'true';
-        badge.append(createTableIcon(table), document.createTextNode(table.name));
+        badge.append(createTableIcon(table), createCurrentTableTitleText(table.name));
         return badge;
+    }
+
+    function createCurrentTableTitleText(name) {
+        const text = document.createElement('span');
+        text.className = 'yzm-current-table-name';
+        text.textContent = name;
+        return text;
     }
 
     function createSearchBox(placeholder, className) {
@@ -5530,7 +5537,7 @@
             item.querySelector('[data-yzm-table-name]')?.replaceChildren(createTableIcon(table), document.createTextNode(nextName));
 
             if (item.classList.contains('yzm-nav-table-active')) {
-                root.querySelector('.yzm-current-table-title')?.replaceChildren(createTableIcon(table), document.createTextNode(nextName));
+                root.querySelector('.yzm-current-table-title')?.replaceChildren(createTableIcon(table), createCurrentTableTitleText(nextName));
             }
             saveState();
             renderWorkspaceList(root);

@@ -883,8 +883,7 @@
     position: sticky;
     top: 0;
     z-index: 1;
-    display: grid;
-    grid-template-columns: 22px minmax(0, 1fr) 22px;
+    display: flex;
     align-items: center;
     justify-content: center;
     gap: 4px;
@@ -894,6 +893,26 @@
     color: inherit;
     line-height: 1.2;
     box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-primary-header::after {
+    content: "";
+    position: absolute;
+    bottom: 0;
+    left: 50%;
+    width: 28px;
+    height: 1px;
+    border-radius: 999px;
+    background: var(--yzm-divider);
+    transform: translateX(-50%);
+    opacity: 0.9;
+}
+
+#yzm-memory-root .yzm-primary-header .yzm-current-table-edit {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    transform: translateY(-50%);
 }
 
 #yzm-memory-root .yzm-primary-search {
@@ -1954,11 +1973,9 @@
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-header {
     display: flex;
-    position: relative;
     justify-content: center;
-    grid-template-columns: none;
-    padding-right: 0;
-    padding-left: 0;
+    padding-right: 6px;
+    padding-left: 6px;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-config-primary-header,
@@ -1984,27 +2001,31 @@
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-current-table-title {
-    position: absolute;
-    left: 50%;
-    grid-column: auto;
-    flex: 0 0 34px;
-    width: 34px;
+    display: flex;
+    align-items: center;
     justify-content: center;
+    gap: 0;
+    flex: 0 0 100%;
+    width: 100%;
+    min-width: 0;
+    min-height: 28px;
     padding: 0;
     overflow: visible;
     color: transparent;
     font-size: 0;
-    transform: translateX(-50%);
-}
-
-#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-header .yzm-current-table-edit {
-    display: none;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-current-table-title .yzm-nav-icon {
-    width: auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
     color: var(--yzm-icon);
     font-size: 13px;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-current-table-name {
+    display: none;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-current-table-edit {
@@ -2268,7 +2289,7 @@
 }
 
 #yzm-memory-root .yzm-current-table-title {
-    grid-column: 2;
+    flex: 0 1 auto;
     justify-content: center;
     gap: 6px;
     min-width: 0;
@@ -2281,11 +2302,6 @@
     font-weight: 600;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-#yzm-memory-root .yzm-primary-header .yzm-current-table-edit {
-    grid-column: 3;
-    justify-self: center;
 }
 
 #yzm-memory-root .yzm-character-card-title .yzm-current-table-title {
@@ -5621,13 +5637,13 @@
     justify-content: center;
     width: 56px;
     height: 56px;
-    color: #ffffff;
-    background: var(--yzm-active-bg);
+    color: var(--yzm-icon);
+    background: var(--yzm-input-bg);
+    border: 1px dashed var(--yzm-border);
     border-radius: 999px;
     box-sizing: border-box;
     cursor: pointer;
     font-size: 22px;
-    box-shadow: var(--yzm-active-shadow);
     transition: transform 160ms ease, filter 160ms ease;
 }
 
@@ -6316,6 +6332,10 @@
         min-width: 18px;
         min-height: 18px;
         font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-primary-icon-mode .yzm-current-table-title .yzm-nav-icon {
+        width: auto;
     }
 
     #yzm-memory-root .yzm-primary-search {
