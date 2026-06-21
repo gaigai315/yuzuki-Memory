@@ -12,7 +12,12 @@
 
     const MODULES = [
         'config/storage.js',
+        'config/llm-client.js',
+        'config/embedding-client.js',
+        'config/rerank-client.js',
         'config/vector-store.js',
+        'config/floor-hider.js',
+        'config/variable-injector.js',
         'config/request-probe.js',
         'config/log-viewer.js',
         'ui/memory-window.js',

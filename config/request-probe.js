@@ -20,17 +20,23 @@
     }
 
     function isPhoneInternalRequest(options = {}) {
-        if (options.stPhoneInternalApi === true) return true;
+        if (options.stPhoneInternalApi === true || options.yzmMemoryInternalApi === true) return true;
         const headers = options.headers;
         if (!headers) return false;
         if (typeof Headers !== 'undefined' && headers instanceof Headers) {
-            return headers.get('X-ST-Phone-Internal-API') === '1';
+            return headers.get('X-ST-Phone-Internal-API') === '1' || headers.get('X-Yuzuki-Memory-Internal-API') === '1';
         }
         if (Array.isArray(headers)) {
-            return headers.some(([key, value]) => String(key || '').toLowerCase() === 'x-st-phone-internal-api' && String(value) === '1');
+            return headers.some(([key, value]) => (
+                ['x-st-phone-internal-api', 'x-yuzuki-memory-internal-api'].includes(String(key || '').toLowerCase())
+                && String(value) === '1'
+            ));
         }
         if (typeof headers === 'object') {
-            return Object.entries(headers).some(([key, value]) => String(key || '').toLowerCase() === 'x-st-phone-internal-api' && String(value) === '1');
+            return Object.entries(headers).some(([key, value]) => (
+                ['x-st-phone-internal-api', 'x-yuzuki-memory-internal-api'].includes(String(key || '').toLowerCase())
+                && String(value) === '1'
+            ));
         }
         return false;
     }
@@ -66,6 +72,83 @@
             }).filter(Boolean).join('\n');
         }
         return JSON.stringify(message, null, 2);
+    }
+
+    function removeHiddenMessagesFromBody(body, hiddenTexts = []) {
+        const target = getRequestArray(body);
+        if (!target || !hiddenTexts.length) return body;
+        const hiddenSet = new Set(hiddenTexts.map((text) => String(text || '').trim()).filter(Boolean));
+        if (!hiddenSet.size) return body;
+        const kept = target.items.filter((item) => {
+            if (item?.is_system === true && !item?.isGaigaiData && !item?.isGaigaiPrompt && !item?.isGaigaiVector && !item?.isYuzukiVector) return false;
+            const text = getMessageText(item).trim();
+            return !hiddenSet.has(text);
+        });
+        target.items.splice(0, target.items.length, ...kept);
+        return body;
+    }
+
+    function isSystemLikeMessage(message) {
+        const role = String(message?.role || '').toLowerCase();
+        const name = String(message?.name || message?.identifier || '').toLowerCase();
+        return role === 'system'
+            || role === 'tool'
+            || role === 'function'
+            || name === 'system'
+            || message?.is_system === true
+            || message?.is_system_prompt === true
+            || message?.isYuzukiVector === true
+            || message?.isGaigaiVector === true;
+    }
+
+    function getContextChatItems() {
+        try {
+            const context = typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
+                ? SillyTavern.getContext()
+                : null;
+            return Array.isArray(context?.chat) ? context.chat : [];
+        } catch (_error) {
+            return [];
+        }
+    }
+
+    function extractSearchText(body) {
+        const target = getRequestArray(body);
+        const sourceItems = getContextChatItems();
+        const items = sourceItems.length ? sourceItems : (target?.items || []);
+        if (!items.length) return '';
+        const settings = YuzukiMemory.EmbeddingClient?.loadSettings?.() || {};
+        const depth = Math.max(1, Math.round(Number(settings.contextDepth) || 2));
+        const collected = [];
+        for (let index = items.length - 1; index >= 0 && collected.length < depth; index -= 1) {
+            const item = items[index];
+            if (isSystemLikeMessage(item)) continue;
+            const text = getMessageText(item).trim();
+            if (text) collected.unshift(text);
+        }
+        return collected.join('\n').slice(-6000);
+    }
+
+    async function getVectorInjectionText(body) {
+        const store = YuzukiMemory.VectorStore;
+        const client = YuzukiMemory.EmbeddingClient;
+        if (!store || !client?.loadSettings) return '';
+        if (window.isSummarizing) return '';
+        const settings = client.loadSettings();
+        if (!settings.enabled) return '';
+        const query = extractSearchText(body);
+        if (!query) return '';
+        try {
+            const searchPromise = store.search(query);
+            const timeoutPromise = new Promise((_, reject) => {
+                window.setTimeout(() => reject(new Error('向量检索超时')), 20000);
+            });
+            const results = await Promise.race([searchPromise, timeoutPromise]);
+            return Array.isArray(results) && results.length ? results.map((item) => item.text).join('\n\n') : '';
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Vector search skipped.', error);
+            return '';
+        }
     }
 
     function estimateTokens(text) {
@@ -109,23 +192,60 @@
         return lastRequestData;
     }
 
-    function captureFetch(args) {
-        const url = args[0] ? args[0].toString() : '';
-        const options = args[1] || {};
-        if (!isTextGenerationRequest(url, options) || typeof options.body !== 'string') return;
+    function isRequestLike(value) {
+        return typeof Request !== 'undefined' && value instanceof Request;
+    }
+
+    async function readRequestBody(request) {
         try {
-            captureFromBody(JSON.parse(options.body), url);
+            return await request.clone().text();
+        } catch (_error) {
+            return '';
+        }
+    }
+
+    async function processJsonBody(url, options, bodyText, requestSource = null) {
+        if (!isTextGenerationRequest(url, options) || typeof bodyText !== 'string' || !bodyText.trim()) return null;
+        const hideResult = await YuzukiMemory.FloorHider?.applyContextLimitHiding?.();
+        const rawBody = JSON.parse(bodyText);
+        removeHiddenMessagesFromBody(rawBody, hideResult?.hiddenTexts || YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || []);
+        const body = YuzukiMemory.VariableInjector?.processBody
+            ? await YuzukiMemory.VariableInjector.processBody(rawBody, { getVectorText: getVectorInjectionText })
+            : rawBody;
+        const nextBody = JSON.stringify(body);
+        captureFromBody(body, url);
+        if (requestSource) {
+            return [new Request(requestSource, { body: nextBody })];
+        }
+        return [null, { ...options, body: nextBody }];
+    }
+
+    async function processFetchArgs(args) {
+        const input = args[0];
+        const requestInput = isRequestLike(input) ? input : null;
+        const url = requestInput ? requestInput.url : (input ? input.toString() : '');
+        const options = args[1] || {};
+        try {
+            if (requestInput && !options.body) {
+                const requestOptions = { ...options, method: requestInput.method, headers: options.headers || requestInput.headers };
+                const processed = await processJsonBody(url, requestOptions, await readRequestBody(requestInput), requestInput);
+                return processed || args;
+            }
+            const processed = await processJsonBody(url, options, options.body);
+            if (!processed) return args;
+            return [input, processed[1]];
         } catch (error) {
-            console.warn('[yuzuki-Memory] Failed to capture request body.', error);
+            console.warn('[yuzuki-Memory] Failed to process request body.', error);
+            return args;
         }
     }
 
     function installFetchProbe() {
         if (YuzukiMemory.RequestProbe?.installed || typeof window.fetch !== 'function') return;
         originalFetch = window.fetch;
-        window.fetch = function (...args) {
-            captureFetch(args);
-            return originalFetch.apply(this, args);
+        window.fetch = async function (...args) {
+            const nextArgs = await processFetchArgs(args);
+            return originalFetch.apply(this, nextArgs);
         };
         YuzukiMemory.RequestProbe.installed = true;
     }
@@ -137,6 +257,7 @@
     YuzukiMemory.RequestProbe = Object.assign(YuzukiMemory.RequestProbe || {}, {
         installed: false,
         captureFromBody,
+        processFetchArgs,
         getLastRequestData,
     });
 

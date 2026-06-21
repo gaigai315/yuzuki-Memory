@@ -11,6 +11,8 @@
     const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
     const TAG_PRESETS_STORAGE_KEY = 'yzm_memory_global_tag_presets';
     const LLM_API_PRESETS_STORAGE_KEY = 'yzm_memory_global_llm_api_presets';
+    const LLM_API_MODE_STORAGE_KEY = 'yzm_memory_global_llm_api_mode';
+    const LLM_API_ACTIVE_PRESET_STORAGE_KEY = 'yzm_memory_global_llm_api_active_preset';
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
     const AUTO_SUMMARY_SETTINGS_STORAGE_KEY = 'yzm_memory_global_auto_summary_settings';
@@ -640,6 +642,37 @@
         return normalized;
     }
 
+    function getGlobalLlmApiMode() {
+        return localStorage.getItem(LLM_API_MODE_STORAGE_KEY) === 'custom' ? 'custom' : 'tavern';
+    }
+
+    function saveGlobalLlmApiMode(mode) {
+        const normalized = mode === 'custom' ? 'custom' : 'tavern';
+        localStorage.setItem(LLM_API_MODE_STORAGE_KEY, normalized);
+        return normalized;
+    }
+
+    function getActiveLlmApiPresetId() {
+        return String(localStorage.getItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY) || '');
+    }
+
+    function saveActiveLlmApiPresetId(presetId = '') {
+        const normalized = String(presetId || '');
+        if (normalized) {
+            localStorage.setItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY, normalized);
+        } else {
+            localStorage.removeItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY);
+        }
+        return normalized;
+    }
+
+    function getResolvedActiveLlmApiPreset() {
+        const presets = getLlmApiPresets();
+        if (!presets.length) return null;
+        const activePresetId = getActiveLlmApiPresetId();
+        return presets.find((preset) => preset.id === activePresetId) || presets[0];
+    }
+
     function createLlmApiPresetId() {
         return `llm_api_preset_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     }
@@ -656,6 +689,12 @@
             maxTokens: '',
             stream: false,
         };
+    }
+
+    function getDefaultLlmMaxTokens(provider = '') {
+        const clientDefault = YuzukiMemory.LlmClient?.getProviderDefaultMaxTokens?.(provider);
+        if (Number.isFinite(Number(clientDefault))) return String(clientDefault);
+        return provider === 'deepseek' || provider === 'siliconflow' ? '8192' : '65536';
     }
 
     function createPromptSchemeId() {
@@ -716,7 +755,9 @@
 
     function getActivePromptSchemeDraft() {
         if (!activePromptSchemeDraft) {
-            activePromptSchemeDraft = getPromptSchemes()[0] || createEmptyPromptScheme('');
+            const schemes = getPromptSchemes();
+            const activeId = String(getState().promptPresetId || '');
+            activePromptSchemeDraft = schemes.find((scheme) => scheme.id === activeId) || schemes[0] || createEmptyPromptScheme('');
         }
         return activePromptSchemeDraft;
     }
@@ -778,6 +819,15 @@
             updateAutoSummarySetting('hideSummaryFloors', false);
         }
         return nextSettings;
+    }
+
+    function applyHiddenFloorsFromSettings(options = {}) {
+        const settings = getPluginSettings();
+        if (!settings.hideFloorsEnabled && !options.force) return;
+        void YuzukiMemory.FloorHider?.applyContextLimitHiding?.({
+            force: options.force === true,
+            keepFloors: settings.hiddenFloorCount,
+        });
     }
 
     function normalizeAutoSummarySettings(rawSettings) {
@@ -1638,6 +1688,16 @@
         const menu = document.createElement('div');
         menu.className = 'yzm-record-action-menu yzm-vector-book-action-menu';
 
+        const vectorizeButton = createIconButton('向量化', 'fa-solid fa-wand-magic-sparkles', 'yzm-record-action-delete yzm-record-action-muted');
+        vectorizeButton.disabled = false;
+        vectorizeButton.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            store.selectBook(bookId);
+            closeRecordActionMenu(root);
+            await handleVectorAction(root, 'vectorize-current-book');
+        });
+
         const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-record-action-delete');
         deleteButton.addEventListener('click', async (event) => {
             event.preventDefault();
@@ -1648,7 +1708,7 @@
             closeRecordActionMenu(root);
         });
 
-        menu.appendChild(deleteButton);
+        menu.append(vectorizeButton, deleteButton);
         shell.appendChild(menu);
 
         const shellRect = shell.getBoundingClientRect();
@@ -2219,6 +2279,7 @@
             createVectorActionButton('new-book', '新建空白书', 'fa-solid fa-plus'),
             createVectorActionButton('import-book', '导入新书（TXT）', 'fa-solid fa-file-import'),
             createVectorActionButton('sync-summary', '同步总结到书架', 'fa-solid fa-rotate'),
+            createVectorActionButton('vectorize-current-book', '向量化当前书', 'fa-solid fa-wand-magic-sparkles'),
             createVectorActionButton('import-backup', '导入书馆备份', 'fa-solid fa-box-archive'),
             createVectorActionButton('export-backup', '导出书馆备份', 'fa-solid fa-upload'),
             createVectorActionButton('clear-all', '清空全部书籍', 'fa-solid fa-trash-can', true)
@@ -2261,7 +2322,13 @@
             ['进度', `${bookStats.progress}%`],
             ['更新时间', formatVectorDate(book.updateTime)],
         ].forEach(([label, value]) => statsGrid.appendChild(createVectorStat(label, value)));
-        card.append(status, desc, statsGrid);
+        const actions = document.createElement('div');
+        actions.className = 'yzm-vector-complete-actions';
+        const vectorizeButton = createIconButton(isDone ? '重新向量化' : '开始向量化', 'fa-solid fa-wand-magic-sparkles', 'yzm-api-button yzm-api-button-primary yzm-vector-complete-button');
+        vectorizeButton.dataset.yzmVectorAction = 'vectorize-current-book';
+        vectorizeButton.disabled = bookStats.total <= 0;
+        actions.appendChild(vectorizeButton);
+        card.append(status, desc, statsGrid, actions);
         return card;
     }
 
@@ -2354,6 +2421,18 @@
         root.querySelectorAll('.yzm-vector-more-menu').forEach((menu) => {
             menu.hidden = true;
         });
+    }
+
+    async function syncSummaryToVectorBook(options = {}) {
+        const store = await ensureVectorStoreReady();
+        if (!store) return { success: false, error: '向量书模块尚未加载' };
+        const result = await store.syncSummaryToBook(getSummaryVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default');
+        if (!result.success) return result;
+        if (options.vectorize === true) {
+            const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
+            return { ...result, vectorized: true, vectorizeResult };
+        }
+        return { ...result, vectorized: false };
     }
 
     async function saveVectorBookFromEditor(root, overlay, bookId = '') {
@@ -2498,7 +2577,8 @@
         }
 
         if (action === 'sync-summary') {
-            const result = await store.syncSummaryToBook(getSummaryVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default');
+            const shouldVectorize = getAutoSummarySettings().autoVectorizeAfterHistory === true;
+            const result = await syncSummaryToVectorBook({ vectorize: shouldVectorize });
             if (!result.success) {
                 window.alert(result.error || '同步失败');
                 return;
@@ -2506,6 +2586,23 @@
             vectorUiState.bookPage = 1;
             vectorUiState.segmentPage = 1;
             refreshVectorAfterAction(root);
+            return;
+        }
+
+        if (action === 'vectorize-current-book') {
+            const book = store.getBook();
+            if (!book) return;
+            try {
+                const result = await store.vectorizeBook(store.selectedBookId, (done, total) => {
+                    const title = root.querySelector('.yzm-vector-detail-title-text');
+                    if (title) title.textContent = `${book.name}（向量化 ${done}/${total}）`;
+                });
+                refreshVectorAfterAction(root);
+                window.alert(result.errors ? `向量化完成：成功 ${result.count} 条，失败 ${result.errors} 条。` : `向量化完成：新增 ${result.count} 条。`);
+            } catch (error) {
+                window.alert(String(error?.message || error || '向量化失败'));
+                refreshVectorAfterAction(root);
+            }
             return;
         }
 
@@ -2647,11 +2744,7 @@
         meta.className = 'yzm-primary-character-meta';
         meta.textContent = `${timelineCount} 条时间线`;
 
-        const hint = document.createElement('div');
-        hint.className = 'yzm-primary-character-location';
-        hint.append(createIconNode('fa-regular fa-file-lines', ''), document.createTextNode(kind === 'branch' ? '支线总结' : '主线总结'));
-
-        content.append(title, meta, hint);
+        content.append(title, meta);
         item.append(avatar, content);
         return item;
     }
@@ -2819,6 +2912,7 @@
         if (!page) return;
         renderApiWorkspaceContent(page);
         bindPanelInteractions(root);
+        if (activeApiSectionId === 'llm') restoreActiveLlmApiPreset(root);
     }
 
     function renderTraceWorkspace(root) {
@@ -3579,6 +3673,8 @@
             schemes.push(draft);
         }
         setActivePromptSchemeDraft(savePromptSchemes(schemes).find((scheme) => scheme.id === draft.id) || draft);
+        getState().promptPresetId = draft.id;
+        saveState();
         renderPromptSchemeWorkspace(root);
     }
 
@@ -3591,6 +3687,8 @@
         }
         const schemes = savePromptSchemes(getPromptSchemes().filter((scheme) => scheme.id !== draft.id));
         setActivePromptSchemeDraft(schemes[0] || createEmptyPromptScheme(''));
+        getState().promptPresetId = activePromptSchemeDraft?.id || '';
+        saveState();
         activePromptSchemeSectionId = 'info';
         renderPromptSchemeWorkspace(root);
         refreshPromptSchemeNav(root);
@@ -3600,6 +3698,8 @@
         const scheme = getPromptSchemes().find((entry) => entry.id === schemeId);
         if (!scheme) return;
         setActivePromptSchemeDraft(scheme);
+        getState().promptPresetId = scheme.id;
+        saveState();
         renderPromptSchemeWorkspace(root);
     }
 
@@ -3646,53 +3746,107 @@
     }
 
     function createLlmApiPanel() {
-        const preset = createEmptyLlmApiPreset();
+        const mode = getGlobalLlmApiMode();
+        const fetchModelButton = createApiMiniButton('拉取模型列表', 'fa-solid fa-cloud-arrow-down');
+        fetchModelButton.dataset.yzmApiAction = 'fetchLlmModels';
         const panel = document.createElement('section');
         panel.className = 'yzm-api-panel';
         panel.append(
             createApiCard('API 模式', 'fa-solid fa-route', [
                 createApiChoiceGroup([
-                    { label: '使用酒馆 API', description: '沿用 SillyTavern 当前模型配置', value: 'tavern', active: preset.mode !== 'custom' },
-                    { label: '使用独立 API', description: '为记忆插件单独配置模型与密钥', value: 'custom', active: preset.mode === 'custom' },
+                    { label: '使用酒馆 API', description: '沿用 SillyTavern 当前模型配置', value: 'tavern', active: mode !== 'custom' },
+                    { label: '使用独立 API', description: '为记忆插件单独配置模型与密钥', value: 'custom', active: mode === 'custom' },
                 ], 'llmMode'),
             ], '', createApiTitleNote('配置记忆生成、总结与结构化填表所使用的大语言模型。')),
             createApiCard('预设管理', 'fa-regular fa-bookmark', [
                 createApiField('选择预设', createLlmApiPresetSelect()),
-                createApiField('预设名称', createApiInput('填写后点击存为预设', 'text', false, '', 'presetName')),
                 createApiActions([
                     ['新增预设', 'fa-solid fa-plus', '', 'newLlmPreset'],
-                    ['存为预设', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveLlmPreset'],
+                    ['保存预设', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveLlmPreset'],
                     ['删除预设', 'fa-regular fa-trash-can', 'yzm-api-button-danger', 'deleteLlmPreset'],
                 ]),
             ]),
             createApiCard('连接配置', 'fa-solid fa-link', [
                 createApiGrid([
-                    createApiField('服务商', createApiSelect('', [{ label: '选择服务商', value: '' }, 'OpenAI Compatible', 'OpenAI', 'Claude', 'Gemini', 'DeepSeek'], 'provider')),
+                    createApiField('服务商', createApiSelect('', [{ label: '选择服务商', value: '' }, ...getLlmProviderOptions()], 'provider')),
                     createApiField('Base URL', createApiInput('输入 Base URL', 'text', false, '', 'baseUrl')),
                     createApiField('API Key', createApiInput('sk-...', 'password', true, '', 'apiKey')),
-                    createApiField('模型名称', createApiInlineControl(createApiInput('输入模型名称', 'text', false, '', 'model'), createApiMiniButton('拉取模型列表', 'fa-solid fa-cloud-arrow-down'))),
+                    createApiField('模型名称', createApiInlineControl(createApiInput('输入模型名称', 'text', false, '', 'model'), fetchModelButton)),
                     createApiField('Max Tokens', createApiInput('输入 Max Tokens', 'number', false, '', 'maxTokens')),
                 ]),
                 createApiConnectionFooter(createApiField('流式响应', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
-                    ['测试连接', 'fa-solid fa-plug-circle-check'],
+                    ['测试连接', 'fa-solid fa-plug-circle-check', '', 'testLlmConnection'],
                 ])),
             ]),
         );
         return panel;
     }
 
+    function getLlmProviderOptions() {
+        const options = YuzukiMemory.LlmClient?.getProviderOptions?.();
+        if (Array.isArray(options) && options.length) return options.map(({ label, value }) => ({ label, value }));
+        return [
+            { label: '自定义（兼容 OpenAI）', value: 'proxy_only' },
+            { label: 'OpenAI', value: 'openai' },
+            { label: 'Google Gemini', value: 'gemini' },
+            { label: 'Claude', value: 'claude' },
+            { label: 'DeepSeek', value: 'deepseek' },
+            { label: 'SiliconFlow', value: 'siliconflow' },
+            { label: '本地反代（内网）', value: 'local' },
+            { label: '兼容中转/代理', value: 'compatible' },
+        ];
+    }
+
+    function getEmbeddingProviderOptions() {
+        const options = YuzukiMemory.EmbeddingClient?.getProviderOptions?.();
+        if (Array.isArray(options) && options.length) return options.map(({ label, value }) => ({ label, value }));
+        return [
+            { label: '兼容 OpenAI', value: 'compatible' },
+            { label: 'OpenAI', value: 'openai' },
+            { label: 'SiliconFlow', value: 'siliconflow' },
+            { label: 'Google Gemini', value: 'gemini' },
+            { label: '本地反代（内网）', value: 'local' },
+        ];
+    }
+
+    function getEmbeddingSettingsForForm() {
+        const clientSettings = YuzukiMemory.EmbeddingClient?.loadSettings?.();
+        if (clientSettings) return clientSettings;
+        return {
+            enabled: true,
+            provider: 'siliconflow',
+            baseUrl: '',
+            apiKey: '',
+            model: 'BAAI/bge-m3',
+            ...getVectorSearchSettings(),
+        };
+    }
+
+    function createApiBoundInput(placeholder, value, type = 'text', hasSecretToggle = false, fieldKey = '') {
+        const wrap = createApiInput(placeholder, type, hasSecretToggle, '', fieldKey);
+        const input = wrap.querySelector('.yzm-api-input');
+        if (input) input.value = value || '';
+        return wrap;
+    }
+
     function createEmbeddingApiPanel() {
-        const searchSettings = getVectorSearchSettings();
+        const searchSettings = getEmbeddingSettingsForForm();
+        const meta = YuzukiMemory.EmbeddingClient?.getProviderMeta?.(searchSettings.provider) || {};
+        const fetchModelButton = createApiMiniButton('拉取模型', 'fa-solid fa-cloud-arrow-down');
+        fetchModelButton.dataset.yzmApiAction = 'fetchEmbeddingModels';
+        const enabledSwitch = createConfigSwitch(searchSettings.enabled !== false);
+        enabledSwitch.classList.add('yzm-embedding-enabled-switch');
         return createApiPagePanel('向量化 API 配置', '配置书籍分段向量化与相似度检索所使用的 Embedding 模型。', 'fa-solid fa-diagram-project', [
             createApiCard('连接配置', 'fa-solid fa-link', [
                 createApiGrid([
-                    createApiField('API 地址', createApiInput('https://api.openai.com/v1')),
-                    createApiField('API 密钥', createApiInput('sk-...', 'password', true)),
-                    createApiField('模型名称', createApiInlineControl(createApiInput('text-embedding-3-small'), createApiMiniButton('拉取模型', 'fa-solid fa-cloud-arrow-down'))),
+                    createApiField('服务商', createApiSelect(searchSettings.provider, getEmbeddingProviderOptions(), 'embeddingProvider')),
+                    createApiField('Base URL', createApiBoundInput(meta.placeholderUrl || '输入 Base URL', searchSettings.baseUrl, 'text', false, 'embeddingBaseUrl')),
+                    createApiField('API Key', createApiBoundInput('sk-...', searchSettings.apiKey, 'password', true, 'embeddingApiKey')),
+                    createApiField('模型名称', createApiInlineControl(createApiBoundInput(meta.placeholderModel || '输入模型名称', searchSettings.model, 'text', false, 'embeddingModel'), fetchModelButton)),
                 ]),
-                createApiActions([
-                    ['测试连接', 'fa-solid fa-plug-circle-check'],
-                ]),
+                createApiConnectionFooter(createApiField('启用召回', enabledSwitch, 'yzm-api-field-inline'), createApiActions([
+                    ['测试连接', 'fa-solid fa-plug-circle-check', '', 'testEmbeddingConnection'],
+                ])),
             ], '', createApiInlineWarning('此为向量化（Embedding）模型，不支持 LLM 模型')),
             createApiCard('检索参数', 'fa-solid fa-sliders', [
                 createApiRangeField('相似度阈值', searchSettings.threshold),
@@ -3701,26 +3855,36 @@
                     createApiField('检索上下文深度', createVectorSearchNumberInput('contextDepth', searchSettings.contextDepth, 0, 99)),
                 ]),
                 createApiActions([
-                    ['保存设置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveVectorSearchSettings'],
+                    ['保存设置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveEmbeddingSettings'],
                 ]),
             ]),
         ]);
     }
 
     function createRerankApiPanel() {
+        const settings = YuzukiMemory.RerankClient?.loadSettings?.() || {
+            enabled: false,
+            baseUrl: 'https://api.siliconflow.cn/v1/rerank',
+            apiKey: '',
+            model: 'BAAI/bge-reranker-v2-m3',
+        };
+        const fetchModelButton = createApiMiniButton('拉取模型', 'fa-solid fa-cloud-arrow-down');
+        fetchModelButton.dataset.yzmApiAction = 'fetchRerankModels';
+        const enabledSwitch = createConfigSwitch(settings.enabled === true);
+        enabledSwitch.classList.add('yzm-rerank-enabled-switch');
         return createApiPagePanel('Rerank API 配置', '对向量召回结果进行二次排序，提升注入内容的相关性。', 'fa-solid fa-arrow-down-wide-short', [
             createApiCard('', '', [
-                createPluginConfigRow('启用 Rerank（重排序）', '开启后会在向量召回后调用 Rerank 模型重新排序结果。', '', createConfigSwitch(false)),
+                createPluginConfigRow('启用 Rerank（重排序）', '开启后会在向量召回后调用 Rerank 模型重新排序结果。', '', enabledSwitch),
             ], 'yzm-api-card-plain'),
             createApiCard('连接配置', 'fa-solid fa-link', [
                 createApiGrid([
-                    createApiField('Rerank API URL', createApiInput('https://api.example.com/rerank')),
-                    createApiField('Rerank API Key', createApiInput('rk-...', 'password', true)),
-                    createApiField('Rerank Model', createApiInlineControl(createApiInput('bge-reranker-v2-m3'), createApiMiniButton('拉取模型', 'fa-solid fa-cloud-arrow-down'))),
+                    createApiField('Rerank API URL', createApiBoundInput('https://api.siliconflow.cn/v1/rerank', settings.baseUrl, 'text', false, 'rerankBaseUrl')),
+                    createApiField('Rerank API Key', createApiBoundInput('rk-...', settings.apiKey, 'password', true, 'rerankApiKey')),
+                    createApiField('Rerank Model', createApiInlineControl(createApiBoundInput('BAAI/bge-reranker-v2-m3', settings.model, 'text', false, 'rerankModel'), fetchModelButton)),
                 ]),
                 createApiActions([
-                    ['保存配置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary'],
-                    ['测试连接', 'fa-solid fa-plug-circle-check'],
+                    ['保存配置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveRerankSettings'],
+                    ['测试连接', 'fa-solid fa-plug-circle-check', '', 'testRerankConnection'],
                 ]),
             ]),
         ]);
@@ -3979,6 +4143,88 @@
         if (depthInput) depthInput.value = String(contextDepth);
     }
 
+    function readEmbeddingApiForm(root) {
+        const thresholdInput = root.querySelector('.yzm-api-view .yzm-api-range-number');
+        const recallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="recallLimit"]');
+        const depthInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="contextDepth"]');
+        return {
+            enabled: root.querySelector('.yzm-api-view .yzm-embedding-enabled-switch')?.classList.contains('yzm-config-switch-on') !== false,
+            provider: getApiFieldValue(root, 'embeddingProvider'),
+            baseUrl: getApiFieldValue(root, 'embeddingBaseUrl'),
+            apiKey: getApiFieldValue(root, 'embeddingApiKey'),
+            model: getApiFieldValue(root, 'embeddingModel'),
+            threshold: Number(clampNumber(thresholdInput?.value, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold).toFixed(2)),
+            recallLimit: Math.round(clampNumber(recallInput?.value, 1, 999, DEFAULT_VECTOR_SEARCH_SETTINGS.recallLimit)),
+            contextDepth: Math.round(clampNumber(depthInput?.value, 0, 99, DEFAULT_VECTOR_SEARCH_SETTINGS.contextDepth)),
+        };
+    }
+
+    function applyEmbeddingApiForm(root, settings) {
+        const normalized = YuzukiMemory.EmbeddingClient?.normalizeSettings?.(settings) || settings;
+        setApiFieldValue(root, 'embeddingProvider', normalized.provider);
+        setApiFieldValue(root, 'embeddingBaseUrl', normalized.baseUrl);
+        setApiFieldValue(root, 'embeddingApiKey', normalized.apiKey);
+        setApiFieldValue(root, 'embeddingModel', normalized.model);
+        const enabledSwitch = root.querySelector('.yzm-api-view .yzm-embedding-enabled-switch');
+        if (enabledSwitch) {
+            enabledSwitch.classList.toggle('yzm-config-switch-on', normalized.enabled !== false);
+            enabledSwitch.setAttribute('aria-pressed', String(normalized.enabled !== false));
+        }
+        const thresholdInput = root.querySelector('.yzm-api-view .yzm-api-range-number');
+        const threshold = Number(clampNumber(normalized.threshold, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold).toFixed(2));
+        if (thresholdInput) thresholdInput.value = threshold.toFixed(2);
+        root.querySelectorAll('.yzm-api-view .yzm-api-range').forEach((range) => {
+            range.value = threshold.toFixed(2);
+        });
+        const recallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="recallLimit"]');
+        const depthInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="contextDepth"]');
+        if (recallInput) recallInput.value = String(Math.round(normalized.recallLimit));
+        if (depthInput) depthInput.value = String(Math.round(normalized.contextDepth));
+        syncEmbeddingProviderPlaceholders(root);
+    }
+
+    function saveEmbeddingSettingsFromForm(root, showResult = true) {
+        const settings = readEmbeddingApiForm(root);
+        updateVectorSearchSettings({
+            threshold: settings.threshold,
+            recallLimit: settings.recallLimit,
+            contextDepth: settings.contextDepth,
+        });
+        const saved = YuzukiMemory.EmbeddingClient?.saveSettings?.(settings);
+        applyEmbeddingApiForm(root, saved || settings);
+        if (showResult) showLlmApiResultDialog(root, '保存成功', '', 'success');
+        return saved || settings;
+    }
+
+    function readRerankApiForm(root) {
+        return {
+            enabled: root.querySelector('.yzm-api-view .yzm-rerank-enabled-switch')?.classList.contains('yzm-config-switch-on') === true,
+            baseUrl: getApiFieldValue(root, 'rerankBaseUrl'),
+            apiKey: getApiFieldValue(root, 'rerankApiKey'),
+            model: getApiFieldValue(root, 'rerankModel'),
+        };
+    }
+
+    function applyRerankApiForm(root, settings) {
+        const normalized = YuzukiMemory.RerankClient?.normalizeSettings?.(settings) || settings;
+        setApiFieldValue(root, 'rerankBaseUrl', normalized.baseUrl);
+        setApiFieldValue(root, 'rerankApiKey', normalized.apiKey);
+        setApiFieldValue(root, 'rerankModel', normalized.model);
+        const enabledSwitch = root.querySelector('.yzm-api-view .yzm-rerank-enabled-switch');
+        if (enabledSwitch) {
+            enabledSwitch.classList.toggle('yzm-config-switch-on', normalized.enabled === true);
+            enabledSwitch.setAttribute('aria-pressed', String(normalized.enabled === true));
+        }
+    }
+
+    function saveRerankSettingsFromForm(root, showResult = true) {
+        const settings = readRerankApiForm(root);
+        const saved = YuzukiMemory.RerankClient?.saveSettings?.(settings);
+        applyRerankApiForm(root, saved || settings);
+        if (showResult) showLlmApiResultDialog(root, '保存成功', '', 'success');
+        return saved || settings;
+    }
+
     function getApiField(root, fieldKey) {
         return root.querySelector(`.yzm-api-view [data-yzm-api-field="${escapeSelectorValue(fieldKey)}"]`);
     }
@@ -4006,6 +4252,54 @@
         });
     }
 
+    function getApiFieldInput(root, fieldKey) {
+        return root.querySelector(`.yzm-api-view [data-yzm-api-field="${escapeSelectorValue(fieldKey)}"]`);
+    }
+
+    function syncLlmProviderPlaceholders(root) {
+        const provider = getApiFieldValue(root, 'provider');
+        const meta = YuzukiMemory.LlmClient?.getProviderMeta?.(provider);
+        const baseUrlInput = getApiFieldInput(root, 'baseUrl');
+        const modelInput = getApiFieldInput(root, 'model');
+        if (baseUrlInput) baseUrlInput.placeholder = meta?.placeholderUrl || '输入 Base URL';
+        if (modelInput) modelInput.placeholder = meta?.placeholderModel || '输入模型名称';
+    }
+
+    function syncLlmProviderDefaults(root, options = {}) {
+        syncLlmProviderPlaceholders(root);
+        const provider = getApiFieldValue(root, 'provider');
+        const maxTokensInput = getApiFieldInput(root, 'maxTokens');
+        if (!maxTokensInput || !provider) return;
+        const currentValue = String(maxTokensInput.value || '').trim();
+        if (options.force || !currentValue) {
+            maxTokensInput.value = getDefaultLlmMaxTokens(provider);
+        }
+    }
+
+    function syncEmbeddingProviderPlaceholders(root) {
+        const provider = getApiFieldValue(root, 'embeddingProvider');
+        const meta = YuzukiMemory.EmbeddingClient?.getProviderMeta?.(provider);
+        const baseUrlInput = getApiFieldInput(root, 'embeddingBaseUrl');
+        const modelInput = getApiFieldInput(root, 'embeddingModel');
+        if (baseUrlInput) baseUrlInput.placeholder = meta?.placeholderUrl || '输入 Base URL';
+        if (modelInput) modelInput.placeholder = meta?.placeholderModel || '输入模型名称';
+    }
+
+    function syncEmbeddingProviderDefaults(root, options = {}) {
+        syncEmbeddingProviderPlaceholders(root);
+        const provider = getApiFieldValue(root, 'embeddingProvider');
+        const meta = YuzukiMemory.EmbeddingClient?.getProviderMeta?.(provider);
+        if (!provider || !meta) return;
+        const baseUrlInput = getApiFieldInput(root, 'embeddingBaseUrl');
+        const modelInput = getApiFieldInput(root, 'embeddingModel');
+        if (baseUrlInput && (options.force || !String(baseUrlInput.value || '').trim())) {
+            baseUrlInput.value = meta.defaultUrl || '';
+        }
+        if (modelInput && (options.force || !String(modelInput.value || '').trim())) {
+            modelInput.value = meta.defaultModel || '';
+        }
+    }
+
     function getLlmApiPresetSelect(root) {
         return root.querySelector('.yzm-api-view [data-yzm-llm-preset-select]');
     }
@@ -4015,33 +4309,43 @@
     }
 
     function readLlmApiForm(root) {
-        return normalizeLlmApiPreset({
-            id: getLlmApiPresetSelect(root)?.value || '',
-            name: getApiFieldValue(root, 'presetName'),
-            mode: root.querySelector('.yzm-api-view [data-yzm-api-field="llmMode"].yzm-api-choice-active')?.dataset.yzmApiValue || 'tavern',
+        const select = getLlmApiPresetSelect(root);
+        const selectedPreset = getLlmApiPresets().find((entry) => entry.id === (select?.value || ''));
+        return {
+            id: select?.value || '',
+            name: selectedPreset?.name || '',
+            mode: getGlobalLlmApiMode(),
             provider: getApiFieldValue(root, 'provider'),
             baseUrl: getApiFieldValue(root, 'baseUrl'),
             apiKey: getApiFieldValue(root, 'apiKey'),
             model: getApiFieldValue(root, 'model'),
             maxTokens: getApiFieldValue(root, 'maxTokens'),
             stream: root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch')?.classList.contains('yzm-config-switch-on'),
-        });
+        };
     }
 
     function applyLlmApiPreset(root, preset) {
         const nextPreset = preset || createEmptyLlmApiPreset();
-        setApiFieldValue(root, 'presetName', nextPreset.name);
-        setApiFieldValue(root, 'llmMode', nextPreset.mode || 'tavern');
+        setApiFieldValue(root, 'llmMode', getGlobalLlmApiMode());
         setApiFieldValue(root, 'provider', nextPreset.provider);
         setApiFieldValue(root, 'baseUrl', nextPreset.baseUrl);
         setApiFieldValue(root, 'apiKey', nextPreset.apiKey);
         setApiFieldValue(root, 'model', nextPreset.model);
-        setApiFieldValue(root, 'maxTokens', nextPreset.maxTokens);
+        setApiFieldValue(root, 'maxTokens', nextPreset.maxTokens || (nextPreset.provider ? getDefaultLlmMaxTokens(nextPreset.provider) : ''));
         const streamSwitch = root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch');
         if (streamSwitch) {
             streamSwitch.classList.toggle('yzm-config-switch-on', !!nextPreset.stream);
             streamSwitch.setAttribute('aria-pressed', String(!!nextPreset.stream));
         }
+        syncLlmProviderDefaults(root);
+    }
+
+    function restoreActiveLlmApiPreset(root) {
+        const preset = getResolvedActiveLlmApiPreset();
+        const activePresetId = preset?.id || '';
+        refreshLlmApiPresetSelect(root, activePresetId);
+        applyLlmApiPreset(root, preset || createEmptyLlmApiPreset());
+        saveActiveLlmApiPresetId(activePresetId);
     }
 
     function refreshLlmApiPresetSelect(root, activePresetId = '') {
@@ -4062,17 +4366,93 @@
     }
 
     function startNewLlmApiPreset(root) {
+        openLlmPresetNameDialog(root);
+    }
+
+    function createBlankLlmApiPreset(name) {
+        return {
+            ...createEmptyLlmApiPreset(),
+            id: createLlmApiPresetId(),
+            name,
+        };
+    }
+
+    function openLlmPresetNameDialog(root) {
         const select = getLlmApiPresetSelect(root);
-        if (select) select.value = '';
-        applyLlmApiPreset(root, createEmptyLlmApiPreset());
-        getApiField(root, 'presetName')?.focus?.();
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-api-preset-name-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-api-preset-name-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-api-preset-name-dialog';
+        dialog.setAttribute('aria-label', '新增 API 预设');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = '新增预设';
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭新增预设');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const input = document.createElement('input');
+        input.className = 'yzm-structure-name-input yzm-api-preset-name-input';
+        input.type = 'text';
+        input.placeholder = '输入预设名称';
+        input.maxLength = 80;
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-record-actions';
+        const cancel = createButton('取消', 'yzm-api-button');
+        const confirm = createButton('确定', 'yzm-add-table-confirm');
+        actions.append(cancel, confirm);
+
+        dialog.append(header, input, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        const createPreset = () => {
+            const name = String(input.value || '').trim();
+            if (!name) {
+                input.focus();
+                return;
+            }
+            const presets = getLlmApiPresets();
+            const nextPreset = createBlankLlmApiPreset(name);
+            saveLlmApiPresets([...presets, nextPreset]);
+            refreshLlmApiPresetSelect(root, nextPreset.id);
+            saveActiveLlmApiPresetId(nextPreset.id);
+            if (select) select.value = nextPreset.id;
+            applyLlmApiPreset(root, nextPreset);
+            closeModal();
+        };
+
+        close.onclick = closeModal;
+        cancel.onclick = closeModal;
+        confirm.onclick = createPreset;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        input.addEventListener('keydown', (event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            createPreset();
+        });
+        window.setTimeout(() => input.focus(), 0);
     }
 
     function saveCurrentLlmApiPreset(root) {
         const preset = readLlmApiForm(root);
-        const nameField = getApiField(root, 'presetName');
-        if (!preset) {
-            nameField?.focus?.();
+        if (!preset?.name) {
+            showLlmApiResultDialog(root, '保存失败', '请先新增或选择一个预设。', 'error');
             return;
         }
 
@@ -4089,16 +4469,337 @@
         }
         saveLlmApiPresets(presets);
         refreshLlmApiPresetSelect(root, nextPreset.id);
+        saveActiveLlmApiPresetId(nextPreset.id);
         applyLlmApiPreset(root, nextPreset);
+        showLlmApiResultDialog(root, '保存成功', '', 'success');
     }
 
     function deleteCurrentLlmApiPreset(root) {
         const select = getLlmApiPresetSelect(root);
         const presetId = select?.value || '';
         if (!presetId) return;
-        saveLlmApiPresets(getLlmApiPresets().filter((preset) => preset.id !== presetId));
-        refreshLlmApiPresetSelect(root);
-        startNewLlmApiPreset(root);
+        const presets = saveLlmApiPresets(getLlmApiPresets().filter((preset) => preset.id !== presetId));
+        const nextPreset = presets[0] || createEmptyLlmApiPreset();
+        refreshLlmApiPresetSelect(root, nextPreset.id || '');
+        saveActiveLlmApiPresetId(nextPreset.id || '');
+        applyLlmApiPreset(root, nextPreset);
+    }
+
+    function showLlmApiResultDialog(root, titleText, messageText = '', tone = 'success') {
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-api-result-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-api-result-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = `yzm-structure-dialog yzm-api-result-dialog yzm-api-result-${tone} ${messageText ? '' : 'yzm-api-result-compact'}`.trim();
+        dialog.setAttribute('aria-label', titleText);
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title yzm-api-result-title';
+        title.append(createIconNode(tone === 'success' ? 'fa-regular fa-circle-check' : 'fa-solid fa-triangle-exclamation', ''), document.createTextNode(titleText));
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭测试结果');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+        const confirm = createButton('确定', 'yzm-add-table-confirm');
+
+        header.append(title, close);
+        dialog.append(header);
+        if (messageText) {
+            const body = document.createElement('pre');
+            body.className = 'yzm-api-result-message';
+            body.textContent = messageText;
+            dialog.appendChild(body);
+        }
+        dialog.appendChild(confirm);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        close.onclick = closeModal;
+        confirm.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+    }
+
+    async function testLlmConnection(root, button) {
+        const preset = readLlmApiForm(root);
+        if (!YuzukiMemory.LlmClient) {
+            showLlmApiResultDialog(root, '测试失败', 'LLM 客户端模块尚未加载。', 'error');
+            return;
+        }
+
+        const label = button?.querySelector?.('span');
+        const previousLabel = label?.textContent || '';
+        if (button) {
+            button.disabled = true;
+            button.classList.add('yzm-api-button-loading');
+        }
+        if (label) label.textContent = '测试中...';
+        try {
+            const result = preset.mode === 'custom'
+                ? await YuzukiMemory.LlmClient.testCustomConnection(preset)
+                : await YuzukiMemory.LlmClient.testTavernConnection();
+            if (!result?.success) {
+                const errorText = result?.error || '测试失败';
+                showLlmApiResultDialog(root, '测试失败', errorText, 'error');
+                return;
+            }
+            showLlmApiResultDialog(root, '测试成功', '', 'success');
+        } catch (error) {
+            const errorText = String(error?.message || error || '测试失败');
+            showLlmApiResultDialog(root, '测试失败', errorText, 'error');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.classList.remove('yzm-api-button-loading');
+            }
+            if (label) label.textContent = previousLabel || '测试连接';
+        }
+    }
+
+    async function fetchLlmModels(root, button) {
+        const preset = readLlmApiForm(root);
+        if (preset.mode !== 'custom') {
+            showLlmApiResultDialog(root, '拉取失败', '模型列表仅用于独立 API。使用酒馆 API 时请在酒馆设置里管理模型。', 'error');
+            return;
+        }
+        if (!YuzukiMemory.LlmClient?.fetchCustomModels) {
+            showLlmApiResultDialog(root, '拉取失败', 'LLM 客户端模块尚未加载。', 'error');
+            return;
+        }
+
+        const label = button?.querySelector?.('span');
+        const previousLabel = label?.textContent || '';
+        if (button) {
+            button.disabled = true;
+            button.classList.add('yzm-api-button-loading');
+        }
+        if (label) label.textContent = '拉取中...';
+        try {
+            const result = await YuzukiMemory.LlmClient.fetchCustomModels(preset);
+            if (!result?.success) {
+                showLlmApiResultDialog(root, '拉取失败', result?.error || '无法获取模型列表。', 'error');
+                return;
+            }
+            showLlmModelSelectDialog(root, result.models || []);
+        } catch (error) {
+            showLlmApiResultDialog(root, '拉取失败', String(error?.message || error || '无法获取模型列表。'), 'error');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.classList.remove('yzm-api-button-loading');
+            }
+            if (label) label.textContent = previousLabel || '拉取模型列表';
+        }
+    }
+
+    function showLlmModelSelectDialog(root, models, targetField = 'model') {
+        const modelList = Array.isArray(models) ? models.filter((model) => model?.id) : [];
+        if (!modelList.length) {
+            showLlmApiResultDialog(root, '拉取失败', '未找到可用模型。', 'error');
+            return;
+        }
+
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-api-model-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-api-model-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-api-model-dialog';
+        dialog.setAttribute('aria-label', '选择模型');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = `选择模型（${modelList.length}）`;
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭模型列表');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+        const list = document.createElement('div');
+        list.className = 'yzm-api-model-list';
+        modelList.forEach((model) => {
+            const button = createButton('', 'yzm-api-model-item');
+            button.dataset.yzmModelId = model.id;
+            const displayName = String(model.name || model.id || '').trim();
+            const modelId = String(model.id || '').trim();
+            const name = document.createElement('strong');
+            name.textContent = displayName;
+            button.appendChild(name);
+            if (modelId && modelId !== displayName) {
+                const id = document.createElement('small');
+                id.textContent = modelId;
+                button.appendChild(id);
+            }
+            list.appendChild(button);
+        });
+
+        header.append(title, close);
+        dialog.append(header, list);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const target = event.target instanceof Element ? event.target : null;
+            const item = target?.closest?.('[data-yzm-model-id]');
+            if (!item) return;
+            setApiFieldValue(root, targetField, item.dataset.yzmModelId || '');
+            closeModal();
+        });
+    }
+
+    async function testEmbeddingConnection(root, button) {
+        if (!YuzukiMemory.EmbeddingClient?.testConnection) {
+            showLlmApiResultDialog(root, '测试失败', '向量化客户端模块尚未加载。', 'error');
+            return;
+        }
+
+        const settings = readEmbeddingApiForm(root);
+        const label = button?.querySelector?.('span');
+        const previousLabel = label?.textContent || '';
+        if (button) {
+            button.disabled = true;
+            button.classList.add('yzm-api-button-loading');
+        }
+        if (label) label.textContent = '测试中...';
+        try {
+            const result = await YuzukiMemory.EmbeddingClient.testConnection(settings);
+            if (!result?.success) {
+                showLlmApiResultDialog(root, '测试失败', result?.error || '测试失败', 'error');
+                return;
+            }
+            saveEmbeddingSettingsFromForm(root, false);
+            showLlmApiResultDialog(root, '测试成功', '', 'success');
+        } catch (error) {
+            showLlmApiResultDialog(root, '测试失败', String(error?.message || error || '测试失败'), 'error');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.classList.remove('yzm-api-button-loading');
+            }
+            if (label) label.textContent = previousLabel || '测试连接';
+        }
+    }
+
+    async function fetchEmbeddingModels(root, button) {
+        if (!YuzukiMemory.EmbeddingClient?.fetchModels) {
+            showLlmApiResultDialog(root, '拉取失败', '向量化客户端模块尚未加载。', 'error');
+            return;
+        }
+
+        const settings = readEmbeddingApiForm(root);
+        const label = button?.querySelector?.('span');
+        const previousLabel = label?.textContent || '';
+        if (button) {
+            button.disabled = true;
+            button.classList.add('yzm-api-button-loading');
+        }
+        if (label) label.textContent = '拉取中...';
+        try {
+            const result = await YuzukiMemory.EmbeddingClient.fetchModels(settings);
+            if (!result?.success) {
+                showLlmApiResultDialog(root, '拉取失败', result?.error || '无法获取模型列表。', 'error');
+                return;
+            }
+            showLlmModelSelectDialog(root, result.models || [], 'embeddingModel');
+        } catch (error) {
+            showLlmApiResultDialog(root, '拉取失败', String(error?.message || error || '无法获取模型列表。'), 'error');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.classList.remove('yzm-api-button-loading');
+            }
+            if (label) label.textContent = previousLabel || '拉取模型';
+        }
+    }
+
+    async function testRerankConnection(root, button) {
+        if (!YuzukiMemory.RerankClient?.testConnection) {
+            showLlmApiResultDialog(root, '测试失败', 'Rerank 客户端模块尚未加载。', 'error');
+            return;
+        }
+
+        const settings = readRerankApiForm(root);
+        const label = button?.querySelector?.('span');
+        const previousLabel = label?.textContent || '';
+        if (button) {
+            button.disabled = true;
+            button.classList.add('yzm-api-button-loading');
+        }
+        if (label) label.textContent = '测试中...';
+        try {
+            const result = await YuzukiMemory.RerankClient.testConnection(settings);
+            if (!result?.success) {
+                showLlmApiResultDialog(root, '测试失败', result?.error || '测试失败', 'error');
+                return;
+            }
+            saveRerankSettingsFromForm(root, false);
+            showLlmApiResultDialog(root, '测试成功', '', 'success');
+        } catch (error) {
+            showLlmApiResultDialog(root, '测试失败', String(error?.message || error || '测试失败'), 'error');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.classList.remove('yzm-api-button-loading');
+            }
+            if (label) label.textContent = previousLabel || '测试连接';
+        }
+    }
+
+    async function fetchRerankModels(root, button) {
+        if (!YuzukiMemory.RerankClient?.fetchModels) {
+            showLlmApiResultDialog(root, '拉取失败', 'Rerank 客户端模块尚未加载。', 'error');
+            return;
+        }
+
+        const settings = readRerankApiForm(root);
+        const label = button?.querySelector?.('span');
+        const previousLabel = label?.textContent || '';
+        if (button) {
+            button.disabled = true;
+            button.classList.add('yzm-api-button-loading');
+        }
+        if (label) label.textContent = '拉取中...';
+        try {
+            const result = await YuzukiMemory.RerankClient.fetchModels(settings);
+            if (!result?.success) {
+                showLlmApiResultDialog(root, '拉取失败', result?.error || '无法获取模型列表。', 'error');
+                return;
+            }
+            showLlmModelSelectDialog(root, result.models || [], 'rerankModel');
+        } catch (error) {
+            showLlmApiResultDialog(root, '拉取失败', String(error?.message || error || '无法获取模型列表。'), 'error');
+        } finally {
+            if (button) {
+                button.disabled = false;
+                button.classList.remove('yzm-api-button-loading');
+            }
+            if (label) label.textContent = previousLabel || '拉取模型';
+        }
     }
 
     function getRequestProbeData() {
@@ -4857,6 +5558,32 @@
         });
         const saved = saveAutoSummarySettings(nextSettings);
         if (saved.hideSummaryFloors) updatePluginSetting('hideFloorsEnabled', false);
+    }
+
+    async function syncAutoSummaryVectorBook(root, button = null) {
+        const label = button?.querySelector?.('span');
+        const previousLabel = label?.textContent || '';
+        if (button) button.disabled = true;
+        if (label) label.textContent = '同步中...';
+        try {
+            const settings = getAutoSummarySettings();
+            const result = await syncSummaryToVectorBook({
+                vectorize: settings.autoVectorizeAfterHistory === true,
+            });
+            if (!result.success) {
+                window.alert(result.error || '同步失败');
+                return;
+            }
+            const message = result.vectorized
+                ? `已同步 ${result.count} 条总结，并向量化 ${result.vectorizeResult?.count || 0} 条。`
+                : `已同步 ${result.count} 条总结。`;
+            window.alert(message);
+        } catch (error) {
+            window.alert(String(error?.message || error || '同步失败'));
+        } finally {
+            if (button) button.disabled = false;
+            if (label) label.textContent = previousLabel || '同步';
+        }
     }
 
     function createPluginConfigHint(text) {
@@ -7145,6 +7872,32 @@
             });
         }
 
+        if (root.dataset.yzmApiActionBound !== 'true') {
+            root.dataset.yzmApiActionBound = 'true';
+            root.addEventListener('click', (event) => {
+                const target = event.target instanceof Element ? event.target : null;
+                const apiActionButton = target?.closest?.('.yzm-api-view [data-yzm-api-action]');
+                if (!apiActionButton) return;
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                const action = apiActionButton.dataset.yzmApiAction;
+                if (action === 'newLlmPreset') startNewLlmApiPreset(root);
+                if (action === 'saveLlmPreset') saveCurrentLlmApiPreset(root);
+                if (action === 'deleteLlmPreset') deleteCurrentLlmApiPreset(root);
+                if (action === 'testLlmConnection') void testLlmConnection(root, apiActionButton);
+                if (action === 'fetchLlmModels') void fetchLlmModels(root, apiActionButton);
+                if (action === 'saveVectorSearchSettings') saveVectorSearchSettingsFromForm(root);
+                if (action === 'saveEmbeddingSettings') saveEmbeddingSettingsFromForm(root);
+                if (action === 'testEmbeddingConnection') void testEmbeddingConnection(root, apiActionButton);
+                if (action === 'fetchEmbeddingModels') void fetchEmbeddingModels(root, apiActionButton);
+                if (action === 'saveRerankSettings') saveRerankSettingsFromForm(root);
+                if (action === 'testRerankConnection') void testRerankConnection(root, apiActionButton);
+                if (action === 'fetchRerankModels') void fetchRerankModels(root, apiActionButton);
+            }, true);
+        }
+
         root.querySelectorAll('.yzm-config-nav-item').forEach((item) => {
             if (item.dataset.yzmBound === 'true') return;
             item.dataset.yzmBound = 'true';
@@ -7334,11 +8087,10 @@
         if (apiView && apiView.dataset.yzmApiBound !== 'true') {
             apiView.dataset.yzmApiBound = 'true';
             apiView.addEventListener('click', (event) => {
-                const target = event.target;
+                const target = event.target instanceof Element ? event.target : null;
                 const configSwitch = target?.closest?.('.yzm-config-switch');
                 const secretButton = target?.closest?.('.yzm-api-icon-button');
                 const apiChoice = target?.closest?.('.yzm-api-choice');
-                const apiActionButton = target?.closest?.('[data-yzm-api-action]');
                 const requestProbeRefresh = target?.closest?.('.yzm-request-probe-refresh');
                 const requestProbeJump = target?.closest?.('[data-yzm-request-probe-jump]');
 
@@ -7349,15 +8101,6 @@
 
                 if (requestProbeJump) {
                     jumpToRequestProbeKeyword(root);
-                    return;
-                }
-
-                if (apiActionButton) {
-                    const action = apiActionButton.dataset.yzmApiAction;
-                    if (action === 'newLlmPreset') startNewLlmApiPreset(root);
-                    if (action === 'saveLlmPreset') saveCurrentLlmApiPreset(root);
-                    if (action === 'deleteLlmPreset') deleteCurrentLlmApiPreset(root);
-                    if (action === 'saveVectorSearchSettings') saveVectorSearchSettingsFromForm(root);
                     return;
                 }
 
@@ -7376,6 +8119,9 @@
                         choice.querySelector('i')?.classList.toggle('fa-circle-dot', isActive);
                         choice.querySelector('i')?.classList.toggle('fa-circle', !isActive);
                     });
+                    if (apiChoice.dataset.yzmApiField === 'llmMode') {
+                        saveGlobalLlmApiMode(apiChoice.dataset.yzmApiValue || 'tavern');
+                    }
                     return;
                 }
 
@@ -7403,8 +8149,17 @@
                     normalizeVectorSearchInput(target);
                     return;
                 }
+                if (target?.matches?.('[data-yzm-api-field="provider"]')) {
+                    syncLlmProviderDefaults(root, { force: true });
+                    return;
+                }
+                if (target?.matches?.('[data-yzm-api-field="embeddingProvider"]')) {
+                    syncEmbeddingProviderDefaults(root, { force: true });
+                    return;
+                }
                 if (!target?.matches?.('[data-yzm-llm-preset-select]')) return;
                 const preset = getLlmApiPresets().find((entry) => entry.id === target.value);
+                saveActiveLlmApiPresetId(preset?.id || '');
                 applyLlmApiPreset(root, preset || createEmptyLlmApiPreset());
             });
             apiView.addEventListener('blur', (event) => {
@@ -7445,6 +8200,7 @@
                 const autoSummarySave = target?.closest?.('.yzm-auto-summary-save');
                 const autoSummaryReset = target?.closest?.('.yzm-auto-summary-reset');
                 const autoSummaryCheck = target?.closest?.('.yzm-auto-summary-check');
+                const autoSummaryVectorButton = target?.closest?.('.yzm-auto-summary-vector-button');
                 const logViewerRefresh = target?.closest?.('.yzm-log-viewer-refresh');
                 const logViewerCopy = target?.closest?.('.yzm-log-viewer-copy');
                 const logViewerClear = target?.closest?.('.yzm-log-viewer-clear');
@@ -7473,6 +8229,11 @@
 
                 if (tagChip) {
                     tagChip.remove();
+                    return;
+                }
+
+                if (autoSummaryVectorButton) {
+                    void syncAutoSummaryVectorBook(root, autoSummaryVectorButton);
                     return;
                 }
 
@@ -7530,6 +8291,9 @@
                         if (status) status.textContent = isOn ? '已启用' : '未启用';
                     } else if (pluginSettingKey) {
                         updatePluginSetting(pluginSettingKey, isOn);
+                        if (pluginSettingKey === 'hideFloorsEnabled' && isOn) {
+                            applyHiddenFloorsFromSettings();
+                        }
                     }
                 }
             });
@@ -7544,6 +8308,9 @@
                 const value = Math.round(normalizeNumberSetting(target.value, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0));
                 target.value = String(value);
                 updatePluginSetting(target.dataset.yzmPluginSetting, value);
+                if (target.dataset.yzmPluginSetting === 'hiddenFloorCount') {
+                    applyHiddenFloorsFromSettings();
+                }
             });
             configView.addEventListener('blur', (event) => {
                 const target = event.target;
@@ -7556,6 +8323,9 @@
                 const value = Math.round(normalizeNumberSetting(target.value, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0));
                 target.value = String(value);
                 updatePluginSetting(target.dataset.yzmPluginSetting, value);
+                if (target.dataset.yzmPluginSetting === 'hiddenFloorCount') {
+                    applyHiddenFloorsFromSettings();
+                }
             }, true);
             configView.addEventListener('keydown', (event) => {
                 const target = event.target;

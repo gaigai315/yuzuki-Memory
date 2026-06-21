@@ -13,6 +13,8 @@
             this.selectedBookId = '';
             this.isLoaded = false;
             this.hideObserver = null;
+            this.vectorCache = new Map();
+            this.pendingEmbeddings = new Map();
             this.ready = this.loadLibrary().finally(() => {
                 this.isLoaded = true;
                 this.hideStorageBookFromUI();
@@ -305,9 +307,16 @@
         async setBookChunks(bookId, chunks) {
             const book = this.library[bookId];
             if (!book) return false;
-            book.chunks = chunks.map((chunk) => String(chunk || '').trim()).filter(Boolean);
-            book.vectors = new Array(book.chunks.length).fill(null);
-            book.vectorized = new Array(book.chunks.length).fill(false);
+            const nextChunks = chunks.map((chunk) => String(chunk || '').trim()).filter(Boolean);
+            const previousVectors = new Map();
+            book.chunks.forEach((chunk, index) => {
+                if (book.vectorized[index] && Array.isArray(book.vectors[index])) {
+                    previousVectors.set(chunk, book.vectors[index]);
+                }
+            });
+            book.chunks = nextChunks;
+            book.vectors = nextChunks.map((chunk) => previousVectors.get(chunk) || null);
+            book.vectorized = nextChunks.map((chunk) => previousVectors.has(chunk));
             book.updateTime = Date.now();
             await this.saveLibrary();
             return true;
@@ -361,6 +370,169 @@
             await this.saveLibrary();
             this.toggleActiveBook(id, true);
             return { success: true, bookId: id, count: normalizedChunks.length };
+        }
+
+        hashText(text) {
+            const source = String(text || '');
+            let hash = 0;
+            for (let index = 0; index < source.length; index += 1) {
+                hash = ((hash << 5) - hash) + source.charCodeAt(index);
+                hash |= 0;
+            }
+            return `${source.length}_${hash.toString(36)}`;
+        }
+
+        async getEmbedding(text) {
+            const source = String(text || '').trim();
+            if (!source) throw new Error('向量化文本为空');
+            const cacheKey = this.hashText(source);
+            if (this.vectorCache.has(cacheKey)) return this.vectorCache.get(cacheKey);
+            if (this.pendingEmbeddings.has(cacheKey)) return this.pendingEmbeddings.get(cacheKey);
+            const request = YuzukiMemory.EmbeddingClient.embed(source);
+            this.pendingEmbeddings.set(cacheKey, request);
+            try {
+                const vector = await request;
+                this.vectorCache.set(cacheKey, vector);
+                return vector;
+            } finally {
+                this.pendingEmbeddings.delete(cacheKey);
+            }
+        }
+
+        async vectorizeBook(bookId = this.selectedBookId, progressCallback = null) {
+            await this.whenReady();
+            const book = this.library[bookId];
+            if (!book) throw new Error('向量书不存在');
+            const pending = book.chunks
+                .map((chunk, index) => ({ chunk, index }))
+                .filter(({ index }) => !book.vectorized[index] || !Array.isArray(book.vectors[index]));
+            if (!pending.length) return { success: true, count: 0, errors: 0 };
+
+            let success = 0;
+            let errors = 0;
+            let batchSize = 10;
+            for (let cursor = 0; cursor < pending.length; cursor += batchSize) {
+                const batchStart = cursor;
+                const batch = pending.slice(cursor, cursor + batchSize);
+                try {
+                    progressCallback?.(Math.min(cursor + batch.length, pending.length), pending.length);
+                    const vectors = await YuzukiMemory.EmbeddingClient.embed(batch.map((item) => item.chunk));
+                    batch.forEach((item, offset) => {
+                        const vector = vectors[offset];
+                        if (Array.isArray(vector)) {
+                            book.vectors[item.index] = vector;
+                            book.vectorized[item.index] = true;
+                            success += 1;
+                        } else {
+                            errors += 1;
+                        }
+                    });
+                    if (success % 50 === 0) await this.saveLibrary();
+                } catch (error) {
+                    const message = String(error?.message || error || '');
+                    if (/429|rate|limit/i.test(message) && batchSize > 1) {
+                        batchSize = Math.max(1, Math.floor(batchSize / 2));
+                        cursor = batchStart - batchSize;
+                        await new Promise((resolve) => setTimeout(resolve, 10000));
+                        continue;
+                    }
+                    errors += batch.length;
+                    console.warn('[yuzuki-Memory] Vectorize batch failed.', error);
+                }
+            }
+            book.updateTime = Date.now();
+            await this.saveLibrary();
+            return { success: true, count: success, errors };
+        }
+
+        cosineSimilarity(vecA, vecB) {
+            if (!Array.isArray(vecA) || !Array.isArray(vecB) || vecA.length !== vecB.length) return 0;
+            let dot = 0;
+            let normA = 0;
+            let normB = 0;
+            for (let index = 0; index < vecA.length; index += 1) {
+                dot += vecA[index] * vecB[index];
+                normA += vecA[index] * vecA[index];
+                normB += vecB[index] * vecB[index];
+            }
+            if (!normA || !normB) return 0;
+            return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+        }
+
+        searchEntityBoost(query, text) {
+            const source = String(text || '');
+            const pattern = /(?:姓名|名字|角色|Name|地点|位置|场景|Location|Place|物品|道具|装备|Item|Object|组织|势力|Organization|Group|设定|概念|Concept)[:：]\s*([^\s\n，,。.;；]+)/ig;
+            let match;
+            while ((match = pattern.exec(source)) !== null) {
+                const entity = String(match[1] || '').trim();
+                if (entity.length > 1 && query.includes(entity)) return 0.15;
+            }
+            if (query.length < 15 && source.includes(query)) return 0.15;
+            return 0;
+        }
+
+        async search(query, allowedBookIds = null) {
+            await this.whenReady();
+            const settings = YuzukiMemory.EmbeddingClient.loadSettings();
+            if (!settings.enabled) return [];
+            const rerankSettings = YuzukiMemory.RerankClient?.loadSettings?.() || { enabled: false };
+            const sourceQuery = String(query || '').trim();
+            if (!sourceQuery) return [];
+            const bookIds = Array.isArray(allowedBookIds) ? allowedBookIds : this.getActiveBooks();
+            if (!bookIds.length) return [];
+            const targetCount = Math.max(1, Number.parseInt(settings.recallLimit, 10) || 6);
+            const recallCount = rerankSettings.enabled ? targetCount * 2 : targetCount;
+            const initialThreshold = rerankSettings.enabled ? 0.1 : settings.threshold;
+
+            const queryVector = await this.getEmbedding(sourceQuery.slice(-6000));
+            const seen = new Set();
+            const results = [];
+            bookIds.forEach((bookId) => {
+                const book = this.library[bookId];
+                if (!book) return;
+                book.chunks.forEach((chunk, index) => {
+                    const vector = book.vectors[index];
+                    if (!book.vectorized[index] || !Array.isArray(vector) || seen.has(chunk)) return;
+                    seen.add(chunk);
+                    const score = this.cosineSimilarity(queryVector, vector) + this.searchEntityBoost(sourceQuery, chunk);
+                    if (score >= initialThreshold) {
+                        results.push({
+                            text: chunk,
+                            score,
+                            source: `${book.name} #${index + 1}`,
+                        });
+                    }
+                });
+            });
+            const candidates = results
+                .sort((a, b) => b.score - a.score)
+                .slice(0, recallCount);
+
+            if (rerankSettings.enabled && candidates.length && YuzukiMemory.RerankClient?.rerank) {
+                try {
+                    const scores = await YuzukiMemory.RerankClient.rerank(
+                        sourceQuery,
+                        candidates.map((item) => item.text),
+                        rerankSettings,
+                        { topN: targetCount }
+                    );
+                    if (Array.isArray(scores) && scores.length === candidates.length) {
+                        candidates.forEach((item, index) => {
+                            item.originalScore = item.score;
+                            item.rerankScore = scores[index];
+                            item.score = scores[index];
+                        });
+                        candidates.sort((a, b) => b.score - a.score);
+                    }
+                } catch (error) {
+                    console.warn('[yuzuki-Memory] Rerank skipped, using vector order.', error);
+                }
+            }
+
+            const finalThreshold = rerankSettings.enabled ? 0.001 : settings.threshold;
+            return candidates
+                .filter((item) => item.score >= finalThreshold)
+                .slice(0, targetCount);
         }
 
         async deleteBook(bookId) {
