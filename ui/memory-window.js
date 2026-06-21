@@ -17,11 +17,11 @@
     const LAYOUT_DEFAULTS = {
         desktop: {
             sidebar: { value: 180, min: 64, max: 300 },
-            primary: { value: 168, min: 72, max: 300 },
+            primary: { value: 168, min: 64, max: 300 },
         },
         mobile: {
             sidebar: { value: 118, min: 58, max: 176 },
-            primary: { value: 132, min: 72, max: 210 },
+            primary: { value: 132, min: 58, max: 210 },
         },
     };
     const LAYOUT_ICON_MODE_AT = {
@@ -199,6 +199,7 @@
     let activeSummaryToolSectionId = 'manual';
     let activePromptSchemeSectionId = 'info';
     let activePromptSchemeDraft = null;
+    let activePlotSummaryKind = 'main';
     const vectorUiState = {
         bookPage: 1,
         segmentPage: 1,
@@ -274,6 +275,10 @@
 
     function isFixedTable(tableId) {
         return tableId === FIXED_TABLE_ID;
+    }
+
+    function isSummaryLikeTable(tableId) {
+        return tableId === 'memory_summary';
     }
 
     function getSidebarTables() {
@@ -425,6 +430,7 @@
 
     function getActiveRecord(table = getActiveTable()) {
         if (!table) return null;
+        if (table.id === 'plot_summary') return getPlotSummaryRecord({ save: false });
         const activeRecordId = getActiveRecordId(table.id);
         return getRecords(table.id).find((record) => record.id === activeRecordId) || getRecords(table.id)[0] || null;
     }
@@ -830,6 +836,40 @@
         const label = kind === 'branch' ? '支线总结' : '主线总结';
         const sameKindCount = getRecords(table.id).filter((entry) => getRecordTitle(table, entry).includes(label)).length;
         record.values[primaryColumn] = sameKindCount > 0 ? `${label}${sameKindCount + 1}` : label;
+        return record;
+    }
+
+    function getPlotSummaryRecord(options = {}) {
+        const table = getTables().find((entry) => entry.id === 'plot_summary');
+        if (!table) return null;
+
+        const records = getRecords(table.id);
+        let record = records[0] || null;
+        if (!record) {
+            record = createRecord(table);
+            records.push(record);
+        }
+
+        const mergeValues = (field) => records
+            .map((entry) => getRecordValue(entry, field).trim())
+            .filter(Boolean)
+            .filter((value, index, values) => values.indexOf(value) === index)
+            .join('\n');
+
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        record.values['主线'] = mergeValues('主线');
+        record.values['支线'] = mergeValues('支线');
+
+        if (records.length > 1) {
+            getState().records[table.id] = [record];
+        }
+
+        if (!getActiveRecordId(table.id) || getActiveRecordId(table.id) !== record.id) {
+            getState().activeRecordIds = getState().activeRecordIds && typeof getState().activeRecordIds === 'object' ? getState().activeRecordIds : {};
+            getState().activeRecordIds[table.id] = record.id;
+        }
+
+        if (options.save !== false) saveState();
         return record;
     }
 
@@ -1534,9 +1574,15 @@
         const table = getActiveTable();
         if (!list || !table) return;
 
-        list.classList.toggle('yzm-summary-primary-list', table.id === 'memory_summary');
+        list.classList.toggle('yzm-summary-primary-list', isSummaryLikeTable(table.id));
+        list.classList.toggle('yzm-plot-primary-list', table.id === 'plot_summary');
         const activeRecordId = getActiveRecordId(table.id);
-        if (table.id === 'memory_summary') {
+        if (table.id === 'plot_summary') {
+            renderPlotPrimaryList(list);
+            return;
+        }
+
+        if (isSummaryLikeTable(table.id)) {
             renderSummaryPrimaryList(list, table, activeRecordId);
             return;
         }
@@ -1559,22 +1605,69 @@
 
     function renderSummaryPrimaryList(list, table, activeRecordId) {
         const records = getRecords(table.id);
-        const mainRecords = records.filter((record) => getSummaryKind(record) === 'main');
-        const branchRecords = records.filter((record) => getSummaryKind(record) === 'branch');
+        const sortedRecords = [
+            ...records.filter((record) => getSummaryKind(record) === 'main'),
+            ...records.filter((record) => getSummaryKind(record) === 'branch'),
+        ];
+
+        list.replaceChildren(...sortedRecords.map((record) => {
+            const item = createSummaryPrimaryItem(table, record, activeRecordId === record.id);
+            item.dataset.yzmRecordId = record.id;
+            return item;
+        }));
+    }
+
+    function renderPlotPrimaryList(list) {
+        const record = getPlotSummaryRecord({ save: false });
+        const mainCount = getPlotSummaryItems(getRecordValue(record, '主线')).length;
+        const branchCount = getPlotSummaryItems(getRecordValue(record, '支线')).length;
 
         list.replaceChildren(
-            createSummaryPrimarySection('主线', mainRecords, table, activeRecordId),
-            createSummaryPrimarySection('支线', branchRecords, table, activeRecordId)
+            createPlotPrimaryItem('main', '主线摘要', 'fa-solid fa-timeline', mainCount),
+            createPlotPrimaryItem('branch', '支线摘要', 'fa-solid fa-code-branch', branchCount)
         );
     }
 
-    function createSummaryPrimarySection(title, records, table, activeRecordId) {
+    function createPlotPrimaryItem(kind, titleText, iconClassName, count) {
+        const item = createButton('', activePlotSummaryKind === kind ? 'yzm-primary-item yzm-primary-character-item yzm-primary-plot-summary-item yzm-primary-item-active yzm-plot-primary-item-active' : 'yzm-primary-item yzm-primary-character-item yzm-primary-plot-summary-item');
+        item.classList.add(kind === 'branch' ? 'yzm-plot-primary-branch' : 'yzm-plot-primary-main');
+        item.dataset.yzmPlotKind = kind;
+
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-primary-character-avatar yzm-primary-plot-summary-avatar';
+        avatar.appendChild(createIconNode(iconClassName, ''));
+
+        const content = document.createElement('div');
+        content.className = 'yzm-primary-character-info';
+
+        const title = document.createElement('div');
+        title.className = 'yzm-primary-character-name';
+        title.textContent = titleText;
+
+        const meta = document.createElement('div');
+        meta.className = 'yzm-primary-character-meta';
+        meta.textContent = `${count} 条摘要`;
+
+        const hint = document.createElement('div');
+        hint.className = 'yzm-primary-character-location';
+        hint.append(createIconNode(kind === 'branch' ? 'fa-solid fa-code-branch' : 'fa-solid fa-book-open', ''), document.createTextNode(kind === 'branch' ? '支线记录' : '主线记录'));
+
+        content.append(title, meta, hint);
+        item.append(avatar, content);
+        return item;
+    }
+
+    function getSummarySectionIcon(table, kind) {
+        return kind === 'branch' ? 'fa-solid fa-code-branch' : 'fa-solid fa-book-open';
+    }
+
+    function createSummaryPrimarySection(title, records, table, activeRecordId, kind) {
         const section = document.createElement('section');
         section.className = 'yzm-summary-primary-section';
 
         const header = document.createElement('div');
         header.className = 'yzm-summary-primary-section-title';
-        header.textContent = title;
+        header.append(createIconNode(getSummarySectionIcon(table, kind), ''), document.createTextNode(title));
 
         const body = document.createElement('div');
         body.className = 'yzm-summary-primary-section-body';
@@ -1722,15 +1815,14 @@
 
         const header = document.createElement('div');
         header.className = 'yzm-vector-primary-header';
-        header.append(createIconNode('fa-solid fa-book-bookmark', ''), document.createTextNode('我的书架'));
+        header.append(createIconNode('fa-solid fa-diagram-project', ''), document.createTextNode('我的书架'));
 
         const controls = document.createElement('div');
         controls.className = 'yzm-vector-primary-controls';
         const search = createSearchBox('搜索书名...', 'yzm-vector-book-search');
         const searchInput = search.querySelector('.yzm-search-input');
         if (searchInput) searchInput.value = vectorUiState.bookQuery;
-        const filter = createIconButton('筛选', 'fa-solid fa-filter', 'yzm-vector-filter-button');
-        controls.append(search, filter);
+        controls.appendChild(search);
 
         const table = document.createElement('div');
         table.className = 'yzm-vector-book-table';
@@ -1768,7 +1860,6 @@
         header.append(
             document.createElement('span'),
             createVectorHeadCell('书名'),
-            createVectorHeadCell('分段数'),
             createVectorHeadCell('向量化状态')
         );
         return header;
@@ -1785,22 +1876,24 @@
         row.type = 'button';
         row.className = book.selected ? 'yzm-vector-book-row yzm-vector-book-row-active' : 'yzm-vector-book-row';
         row.dataset.yzmVectorBookId = book.id;
+        row.title = book.name;
+        row.setAttribute('aria-label', book.name);
 
         const check = document.createElement('span');
         check.className = book.active ? 'yzm-vector-book-check yzm-vector-book-check-on' : 'yzm-vector-book-check';
         check.dataset.yzmVectorBookToggle = book.id;
         if (book.active) check.appendChild(createIconNode('fa-solid fa-check', ''));
 
+        const icon = document.createElement('span');
+        icon.className = 'yzm-vector-book-icon';
+        icon.appendChild(createIconNode('fa-solid fa-book-open', ''));
+
         const name = document.createElement('span');
         name.className = 'yzm-vector-book-name';
         name.textContent = book.name;
         name.title = book.name;
 
-        const entries = document.createElement('span');
-        entries.className = 'yzm-vector-book-entries';
-        entries.textContent = book.entries.toLocaleString();
-
-        row.append(check, name, entries, createVectorStatus(book));
+        row.append(check, icon, name, createVectorStatus(book));
         return row;
     }
 
@@ -1810,10 +1903,7 @@
         const status = document.createElement('span');
         status.className = `yzm-vector-status yzm-vector-status-${book.status}`;
         status.textContent = getVectorStatusText(book.status);
-        const progress = document.createElement('span');
-        progress.className = 'yzm-vector-progress';
-        progress.textContent = `${book.progress}%`;
-        wrap.append(status, progress);
+        wrap.appendChild(status);
         return wrap;
     }
 
@@ -2169,7 +2259,7 @@
 
         const hint = document.createElement('div');
         hint.className = 'yzm-vector-book-editor-hint';
-        hint.textContent = '正文会按 === 切分为多个分段。';
+        hint.textContent = '请使用=== 作为切分每个分段的符号';
 
         const actions = document.createElement('div');
         actions.className = 'yzm-record-actions';
@@ -2358,23 +2448,41 @@
     }
 
     function createSummaryPrimaryItem(table, record, isActive) {
-        const item = createButton('', isActive ? 'yzm-primary-item yzm-primary-summary-item yzm-primary-summary-item-active yzm-primary-item-active' : 'yzm-primary-item yzm-primary-summary-item');
+        const kind = getSummaryKind(record);
+        const item = createButton('', isActive ? 'yzm-primary-item yzm-primary-character-item yzm-primary-memory-summary-item yzm-primary-item-active' : 'yzm-primary-item yzm-primary-character-item yzm-primary-memory-summary-item');
+        item.classList.add(kind === 'branch' ? 'yzm-primary-memory-summary-branch' : 'yzm-primary-memory-summary-main');
+
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-primary-character-avatar yzm-primary-memory-summary-avatar';
+        avatar.appendChild(createIconNode(getSummarySectionIcon(table, kind), ''));
+
+        const content = document.createElement('div');
+        content.className = 'yzm-primary-character-info';
 
         const title = document.createElement('div');
-        title.className = 'yzm-primary-summary-title';
-        title.textContent = getRecordTitle(table, record);
+        title.className = 'yzm-primary-character-name';
+        title.textContent = getSummaryPrimaryTitle(table, record);
 
         const timelineCount = getSummaryTimelineItems(getSummaryValue(record, ['时间线'])).length;
         const meta = document.createElement('div');
-        meta.className = 'yzm-primary-summary-meta';
-        meta.append(createIconNode('fa-regular fa-file-lines', ''), document.createTextNode(`${timelineCount} 条记录`));
+        meta.className = 'yzm-primary-character-meta';
+        meta.textContent = `${timelineCount} 条时间线`;
 
-        item.append(title, meta);
+        const hint = document.createElement('div');
+        hint.className = 'yzm-primary-character-location';
+        hint.append(createIconNode('fa-regular fa-file-lines', ''), document.createTextNode(kind === 'branch' ? '支线总结' : '主线总结'));
+
+        content.append(title, meta, hint);
+        item.append(avatar, content);
         return item;
     }
 
     function getSummaryKind(record) {
         return /支线/.test(getRecordValue(record, '总结标题')) ? 'branch' : 'main';
+    }
+
+    function getSummaryPrimaryTitle(table, record) {
+        return getRecordTitle(table, record);
     }
 
     function createTableWorkspaceView(table) {
@@ -2388,6 +2496,10 @@
 
         if (table?.id === 'world_setting') {
             return createWorldSettingView(table);
+        }
+
+        if (table?.id === 'plot_summary') {
+            return createPlotSummaryView(table);
         }
 
         if (table?.id === 'memory_summary') {
@@ -5011,6 +5123,228 @@
         return row;
     }
 
+    function getPlotSummaryItems(text = '') {
+        return String(text || '')
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line, index) => {
+                const parsed = parsePlotSummaryLine(line);
+                return {
+                    index,
+                    title: `节点 ${String(index + 1).padStart(2, '0')}`,
+                    raw: line,
+                    date: getPlotDateText(parsed.time),
+                    startTime: getPlotClockText(parsed.time, 'start'),
+                    endTime: getPlotClockText(parsed.time, 'end'),
+                    sortTime: getPlotSortTime(parsed.time),
+                    text: parsed.content,
+                };
+            })
+            .map((item, index, items) => ({
+                ...item,
+                status: items.some((entry, entryIndex) => entryIndex !== index && entry.sortTime > item.sortTime) ? 'completed' : 'running',
+            }));
+    }
+
+    function parsePlotSummaryLine(line = '') {
+        const normalized = String(line || '').trim();
+        if (!normalized) return { time: '', content: '' };
+
+        const tabIndex = normalized.indexOf('\t');
+        if (tabIndex > -1) {
+            return {
+                time: normalized.slice(0, tabIndex).trim(),
+                content: normalized.slice(tabIndex + 1).trim(),
+            };
+        }
+
+        const timeRangePattern = /^(.+?(?:\d{1,2}[:：]\d{2})(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?)\s*[：:]\s*(.*)$/;
+        const timeRangeMatch = normalized.match(timeRangePattern);
+        if (timeRangeMatch) {
+            return {
+                time: timeRangeMatch[1].trim(),
+                content: timeRangeMatch[2].trim(),
+            };
+        }
+
+        const standaloneTimePattern = /^(?=.*(?:\d{1,2}[:：]\d{2}|\d{1,4}\s*年|\d{1,2}\s*月|\d{1,2}\s*日)).*(?:\d{1,2}[:：]\d{2})(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?\s*$/;
+        if (standaloneTimePattern.test(normalized)) {
+            return {
+                time: normalized,
+                content: '',
+            };
+        }
+
+        const separatorIndex = normalized.indexOf('：');
+        if (separatorIndex > -1) {
+            return {
+                time: normalized.slice(0, separatorIndex).trim(),
+                content: normalized.slice(separatorIndex + 1).trim(),
+            };
+        }
+
+        return { time: '', content: normalized };
+    }
+
+    function getPlotDateText(timeText = '') {
+        const normalized = String(timeText || '').trim();
+        if (!normalized) return '未记录日期';
+        return normalized.split(/[，,\s]+/)[0] || normalized;
+    }
+
+    function getPlotClockText(timeText = '', position = 'start') {
+        const normalized = String(timeText || '').trim();
+        const matches = [...normalized.matchAll(/\d{1,2}[:：]\d{2}/g)].map((match) => match[0].replace('：', ':'));
+        if (!matches.length) return '—';
+        return position === 'end' ? matches[1] || '—' : matches[0];
+    }
+
+    function getPlotSortTime(timeText = '') {
+        const normalized = String(timeText || '').trim();
+        const clockMatch = normalized.match(/(\d{1,2})[:：](\d{2})/);
+        if (!clockMatch) return -1;
+        return Number(clockMatch[1]) * 60 + Number(clockMatch[2]);
+    }
+
+    function parsePlotSummaryEditorValue(text = '') {
+        const lines = String(text || '')
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+        if (!lines.length) return { time: '', content: '' };
+
+        const firstLine = lines[0];
+        const parsed = parsePlotSummaryLine(firstLine);
+        if (!parsed.time) return { time: '', content: lines.join('\n') };
+
+        return {
+            time: parsed.time,
+            content: [parsed.content, ...lines.slice(1)].filter(Boolean).join('\n'),
+        };
+    }
+
+    function formatPlotSummaryEditorValue(time = '', content = '') {
+        const normalizedTime = String(time || '').trim();
+        const normalizedContent = String(content || '').trim();
+        if (!normalizedTime) return normalizedContent;
+        if (!normalizedContent) return normalizedTime;
+        return `${normalizedTime}\t${normalizedContent}`;
+    }
+
+    function createPlotSummaryView(table) {
+        const record = getPlotSummaryRecord({ save: false });
+        const kind = activePlotSummaryKind === 'branch' ? 'branch' : 'main';
+        const field = kind === 'branch' ? '支线' : '主线';
+        const label = kind === 'branch' ? '支线摘要' : '主线摘要';
+        const icon = kind === 'branch' ? 'fa-solid fa-code-branch' : 'fa-solid fa-timeline';
+        const items = getPlotSummaryItems(getRecordValue(record, field));
+
+        const view = document.createElement('div');
+        view.className = 'yzm-plot-view';
+
+        const panel = document.createElement('section');
+        panel.className = 'yzm-plot-panel';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-plot-header';
+
+        const title = document.createElement('div');
+        title.className = 'yzm-plot-title';
+        title.append(createIconNode(icon, ''), document.createTextNode(label));
+
+        const count = document.createElement('span');
+        count.className = 'yzm-plot-count';
+        count.textContent = `${items.length} 条`;
+
+        header.append(title, count);
+
+        const list = document.createElement('div');
+        list.className = 'yzm-plot-list';
+        if (items.length) {
+            items.forEach((item) => list.appendChild(createPlotSummaryCard(item, kind)));
+        } else {
+            const empty = document.createElement('div');
+            empty.className = 'yzm-plot-empty';
+            empty.append(createIconNode(icon, ''), document.createTextNode(record ? '暂无剧情摘要' : '未选择剧情摘要'));
+            list.appendChild(empty);
+        }
+
+        panel.append(header, list);
+        view.appendChild(panel);
+        return view;
+    }
+
+    function createPlotSummaryCard(item, kind) {
+        const card = document.createElement('article');
+        card.className = 'yzm-plot-card';
+
+        const marker = document.createElement('button');
+        marker.type = 'button';
+        marker.className = 'yzm-plot-marker';
+        marker.dataset.yzmPlotKind = kind;
+        marker.dataset.yzmPlotIndex = String(item.index);
+        marker.setAttribute('aria-label', `编辑第 ${item.index + 1} 条剧情摘要`);
+        marker.appendChild(document.createElement('span'));
+
+        const content = document.createElement('div');
+        content.className = 'yzm-plot-card-content';
+
+        const top = document.createElement('div');
+        top.className = 'yzm-plot-card-top';
+
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'yzm-plot-card-title-wrap';
+
+        const titleLabel = document.createElement('span');
+        titleLabel.className = 'yzm-plot-card-title-label';
+        titleLabel.textContent = '日期';
+
+        const title = document.createElement('strong');
+        title.textContent = item.date;
+
+        titleWrap.append(titleLabel, title);
+
+        const status = document.createElement('span');
+        status.className = item.status === 'completed' ? 'yzm-plot-status yzm-plot-status-completed' : 'yzm-plot-status yzm-plot-status-running';
+        status.textContent = item.status === 'completed' ? '已完成' : '进行中';
+
+        const text = document.createElement('div');
+        text.className = 'yzm-plot-card-text';
+        text.textContent = item.text;
+
+        const timeGrid = document.createElement('div');
+        timeGrid.className = 'yzm-plot-time-grid';
+        timeGrid.append(
+            createPlotTimeChip('开始时间', item.startTime, 'fa-regular fa-clock'),
+            createPlotTimeChip('完成时间', item.endTime || '—', 'fa-regular fa-hourglass-half')
+        );
+
+        const summaryLabel = document.createElement('div');
+        summaryLabel.className = 'yzm-plot-summary-label';
+        summaryLabel.textContent = '事件概要';
+
+        top.append(titleWrap, status);
+        content.append(top, timeGrid, summaryLabel, text);
+        card.append(marker, content);
+        return card;
+    }
+
+    function createPlotTimeChip(label, value, iconClassName) {
+        const chip = document.createElement('div');
+        chip.className = 'yzm-plot-time-chip';
+
+        const labelNode = document.createElement('span');
+        labelNode.className = 'yzm-plot-time-label';
+        labelNode.append(createIconNode(iconClassName, ''), document.createTextNode(label));
+
+        const valueNode = document.createElement('strong');
+        valueNode.textContent = value || '—';
+
+        chip.append(labelNode, valueNode);
+        return chip;
+    }
+
     function createMemorySummaryView(table) {
         const record = getActiveRecord(table);
         const view = document.createElement('div');
@@ -5304,25 +5638,27 @@
     function openAddSummaryDialog(root, table) {
         const modalHost = getModalHost(root);
         removeModal(root, '.yzm-add-summary-modal');
+        const isPlotSummary = table?.id === 'plot_summary';
+        const summaryLabel = isPlotSummary ? '摘要' : '总结';
 
         const overlay = document.createElement('div');
         overlay.className = 'yzm-structure-modal yzm-add-summary-modal';
 
         const dialog = document.createElement('section');
         dialog.className = 'yzm-structure-dialog yzm-add-summary-dialog';
-        dialog.setAttribute('aria-label', '新增记忆总结');
+        dialog.setAttribute('aria-label', `新增${summaryLabel}`);
 
         const header = document.createElement('div');
         header.className = 'yzm-structure-header';
 
         const title = document.createElement('strong');
         title.className = 'yzm-structure-title';
-        title.textContent = '新增总结';
+        title.textContent = `新增${summaryLabel}`;
 
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'yzm-structure-close';
-        close.setAttribute('aria-label', '关闭新增总结');
+        close.setAttribute('aria-label', `关闭新增${summaryLabel}`);
         close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
 
         const choices = document.createElement('div');
@@ -5434,7 +5770,7 @@
         return button;
     }
 
-    function createRecordInput(label, value = '', multiline = false) {
+    function createRecordInput(label, value = '', multiline = false, options = {}) {
         const field = document.createElement('label');
         field.className = multiline ? 'yzm-record-field yzm-record-field-wide' : 'yzm-record-field';
 
@@ -5446,6 +5782,7 @@
         input.className = multiline ? 'yzm-record-input yzm-record-textarea' : 'yzm-record-input';
         if (!multiline) input.type = 'text';
         input.value = value;
+        if (options.placeholder) input.placeholder = options.placeholder;
         input.dataset.yzmRecordField = label;
 
         field.append(text, input);
@@ -5453,11 +5790,159 @@
     }
 
     function getRecordEditorLabel(table) {
+        if (table?.id === 'plot_summary') return '剧情摘要';
         if (table?.id === 'character_profile') return '角色';
         if (table?.id === 'item_tracking') return '物品';
         if (table?.id === 'world_setting') return '设定';
         if (table?.id === 'memory_summary') return '总结';
         return '记录';
+    }
+
+    function isRecordEditorMultilineField(table, column) {
+        if (table?.id === 'plot_summary') return column === '主线' || column === '支线';
+        return getCharacterDetailColumns(table).includes(column);
+    }
+
+    function openPlotSummaryKindChoiceDialog(root) {
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-add-summary-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-add-summary-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-add-summary-dialog';
+        dialog.setAttribute('aria-label', '新增剧情摘要');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = '新增剧情摘要';
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭新增剧情摘要');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+        const choices = document.createElement('div');
+        choices.className = 'yzm-summary-add-choices';
+        choices.append(
+            createSummaryChoiceButton('新增主线摘要', 'fa-solid fa-timeline', 'main'),
+            createSummaryChoiceButton('新增支线摘要', 'fa-solid fa-code-branch', 'branch')
+        );
+
+        header.append(title, close);
+        dialog.append(header, choices);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        choices.addEventListener('click', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            const button = target?.closest('.yzm-summary-choice-button');
+            if (!button) return;
+            const kind = button.dataset.yzmSummaryKind === 'branch' ? 'branch' : 'main';
+            closeModal();
+            openPlotSummaryFieldEditor(root, kind, { append: true });
+        });
+    }
+
+    function openPlotSummaryFieldEditor(root, kind = activePlotSummaryKind, options = {}) {
+        const table = getActiveTable();
+        if (table?.id !== 'plot_summary') return;
+
+        const normalizedKind = kind === 'branch' ? 'branch' : 'main';
+        const field = normalizedKind === 'branch' ? '支线' : '主线';
+        const label = normalizedKind === 'branch' ? '支线摘要' : '主线摘要';
+        const record = getPlotSummaryRecord();
+        const isAppend = !!options.append;
+        const editIndex = Number.isInteger(options.index) ? options.index : -1;
+        const currentLines = String(getRecordValue(record, field) || '')
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+        const currentValue = editIndex > -1 ? currentLines[editIndex] || '' : getRecordValue(record, field);
+        const parsedValue = isAppend ? { time: '', content: '' } : parsePlotSummaryEditorValue(currentValue);
+
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-record-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-record-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-record-dialog';
+        dialog.setAttribute('aria-label', `${isAppend ? '新增' : '编辑'}${label}`);
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = `${isAppend ? '新增' : '编辑'}${label}`;
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', `关闭${isAppend ? '新增' : '编辑'}${label}`);
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+        const fields = document.createElement('div');
+        fields.className = 'yzm-record-fields';
+        fields.append(
+            createRecordInput('时间', parsedValue.time, false, { placeholder: 'xxxx年x月x日，hh:mm' }),
+            createRecordInput(field, parsedValue.content, true, { placeholder: `填写${label}内容` })
+        );
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-record-actions';
+        const save = createButton('保存', 'yzm-add-table-confirm yzm-record-save');
+        actions.appendChild(save);
+
+        header.append(title, close);
+        dialog.append(header, fields, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+
+        save.addEventListener('click', () => {
+            const timeInput = fields.querySelector('[data-yzm-record-field="时间"]');
+            const contentInput = fields.querySelector(`[data-yzm-record-field="${field}"]`);
+            const nextValue = formatPlotSummaryEditorValue(timeInput?.value, contentInput?.value);
+            record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            if (isAppend) {
+                record.values[field] = [getRecordValue(record, field).trim(), nextValue].filter(Boolean).join('\n');
+            } else if (editIndex > -1) {
+                const nextLines = currentLines.slice();
+                nextLines[editIndex] = nextValue;
+                record.values[field] = nextLines.filter(Boolean).join('\n');
+            } else {
+                record.values[field] = nextValue;
+            }
+            setActiveRecordId(table.id, record.id);
+            activePlotSummaryKind = normalizedKind;
+            saveState();
+            renderWorkspaceList(root);
+            renderTableWorkspace(root);
+            bindPanelInteractions(root);
+            closeModal();
+        });
+
+        fields.querySelector('.yzm-record-input')?.focus();
     }
 
     function openRecordEditor(root) {
@@ -5495,7 +5980,7 @@
         const fields = document.createElement('div');
         fields.className = 'yzm-record-fields';
         table.columns.forEach((column) => {
-            fields.appendChild(createRecordInput(column, getRecordValue(record, column), getCharacterDetailColumns(table).includes(column)));
+            fields.appendChild(createRecordInput(column, getRecordValue(record, column), isRecordEditorMultilineField(table, column)));
         });
 
         const actions = document.createElement('div');
@@ -5522,7 +6007,9 @@
             });
 
             const primary = getPrimaryColumn(table);
-            if (!values[primary]) return;
+            if (table.id !== 'plot_summary' && !values[primary]) {
+                return;
+            }
 
             record.values = Object.fromEntries((table.columns || []).map((column) => [column, values[column] || '']));
             const records = getRecords(table.id);
@@ -5608,7 +6095,14 @@
                 const table = getActiveTable();
                 if (!table) return;
 
-                if (table.id === 'memory_summary') {
+                if (table.id === 'plot_summary') {
+                    getPlotSummaryRecord();
+                    openPlotSummaryKindChoiceDialog(root);
+                    closeMoreMenu(root);
+                    return;
+                }
+
+                if (isSummaryLikeTable(table.id)) {
                     openAddSummaryDialog(root, table);
                     return;
                 }
@@ -6373,6 +6867,23 @@
             });
         }
 
+        root.querySelectorAll('.yzm-plot-marker').forEach((button) => {
+            if (button.dataset.yzmBound === 'true') return;
+            button.dataset.yzmBound = 'true';
+            const openEditor = (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const index = Number.parseInt(button.dataset.yzmPlotIndex || '', 10);
+                openPlotSummaryFieldEditor(root, button.dataset.yzmPlotKind || activePlotSummaryKind, {
+                    index: Number.isInteger(index) ? index : -1,
+                });
+            };
+            button.addEventListener('click', openEditor);
+            button.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter' || event.key === ' ') openEditor(event);
+            });
+        });
+
         root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar, .yzm-world-avatar, .yzm-summary-avatar').forEach((avatar) => {
             if (avatar.dataset.yzmBound === 'true') return;
             avatar.dataset.yzmBound = 'true';
@@ -6398,6 +6909,7 @@
             };
             const openMenuFromEvent = (event) => {
                 const table = getActiveTable();
+                if (table?.id === 'plot_summary') return;
                 if (!table || !item.dataset.yzmRecordId) return;
 
                 setActiveRecordId(table.id, item.dataset.yzmRecordId);
@@ -6414,6 +6926,14 @@
                 }
                 closeRecordActionMenu(root);
                 const table = getActiveTable();
+                if (table?.id === 'plot_summary' && item.dataset.yzmPlotKind) {
+                    activePlotSummaryKind = item.dataset.yzmPlotKind === 'branch' ? 'branch' : 'main';
+                    renderPrimaryList(root);
+                    renderTableWorkspace(root);
+                    bindPanelInteractions(root);
+                    if (isMobileLayout()) setMobileDetailOpen(root, true);
+                    return;
+                }
                 if (!table || !item.dataset.yzmRecordId) return;
                 setActiveRecordId(table.id, item.dataset.yzmRecordId);
                 renderPrimaryList(root);

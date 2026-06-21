@@ -27,6 +27,7 @@
     --yzm-icon: rgba(79, 95, 154, 0.86);
     --yzm-icon-active: #ffffff;
     --yzm-border: rgba(124, 145, 210, 0.24);
+    --yzm-divider: rgba(105, 126, 198, 0.36);
     --yzm-border-soft: rgba(124, 145, 210, 0.14);
     --yzm-hover: rgba(109, 132, 223, 0.14);
     --yzm-active-bg: linear-gradient(135deg, #7489e6, #536ccf);
@@ -53,6 +54,7 @@
     --yzm-icon: #a8b5ff;
     --yzm-icon-active: #ffffff;
     --yzm-border: rgba(137, 155, 255, 0.28);
+    --yzm-divider: rgba(137, 155, 255, 0.34);
     --yzm-border-soft: rgba(137, 155, 255, 0.16);
     --yzm-hover: rgba(120, 135, 255, 0.16);
     --yzm-active-bg: linear-gradient(135deg, #7b7fff, #4f5ee8);
@@ -351,6 +353,7 @@
 }
 
 #yzm-memory-root .yzm-shell-body {
+    position: relative;
     display: grid;
     grid-template-columns: var(--yzm-desktop-sidebar-width) 12px minmax(320px, 1fr);
     height: 100%;
@@ -361,8 +364,24 @@
     box-sizing: border-box;
 }
 
+#yzm-memory-root .yzm-shell-body::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--yzm-desktop-sidebar-width) + 12px);
+    top: 0;
+    bottom: 0;
+    z-index: 3;
+    width: 1px;
+    background: var(--yzm-divider);
+    pointer-events: none;
+}
+
 #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed {
     grid-template-columns: 0 12px minmax(320px, 1fr);
+}
+
+#yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed::before {
+    left: 12px;
 }
 
 #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-sidebar,
@@ -432,10 +451,6 @@
     cursor: col-resize;
     touch-action: none;
     user-select: none;
-}
-
-#yzm-memory-root .yzm-primary-toggle {
-    background: var(--yzm-bg) !important;
 }
 
 #yzm-memory-root .yzm-collapse-button::before {
@@ -772,11 +787,14 @@
     justify-content: center;
     gap: 0;
     width: 34px;
+    height: 34px;
     min-height: 34px;
     padding: 0;
     margin-right: 0;
     margin-left: 0;
     color: transparent;
+    border: 1px solid transparent;
+    border-radius: 999px;
     font-size: 0;
 }
 
@@ -789,26 +807,29 @@
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar-action-active {
-    color: var(--yzm-active-text);
-    background: var(--yzm-active-bg);
-    box-shadow: var(--yzm-active-shadow);
+    color: transparent;
+    background: var(--yzm-row-bg);
+    border: 1px dashed rgba(101, 121, 218, 0.68);
+    box-shadow: none;
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar-action-active i {
-    color: var(--yzm-icon-active);
+    color: var(--yzm-icon);
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-nav-table-active .yzm-nav-table-name {
-    color: var(--yzm-active-text);
-    background: var(--yzm-active-bg);
-    box-shadow: var(--yzm-active-shadow);
+    color: transparent;
+    background: var(--yzm-row-bg);
+    border: 1px dashed rgba(101, 121, 218, 0.68);
+    box-shadow: none;
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-nav-table-active .yzm-nav-icon {
-    color: var(--yzm-icon-active);
+    color: var(--yzm-icon);
 }
 
 #yzm-memory-root .yzm-workspace {
+    position: relative;
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -816,6 +837,22 @@
     overflow: hidden;
     background: var(--yzm-bg);
     box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-workspace::before {
+    content: "";
+    position: absolute;
+    left: calc(var(--yzm-desktop-primary-width) + 12px);
+    top: 72px;
+    bottom: 0;
+    z-index: 3;
+    width: 1px;
+    background: var(--yzm-divider);
+    pointer-events: none;
+}
+
+#yzm-memory-root .yzm-workspace.yzm-primary-collapsed::before {
+    left: 12px;
 }
 
 #yzm-memory-root .yzm-toolbar {
@@ -865,12 +902,25 @@
 }
 
 #yzm-memory-root .yzm-summary-primary-list {
-    display: grid;
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    display: flex;
+    flex-direction: column;
     gap: 8px;
     min-height: 0;
-    height: calc(100% - 88px);
-    overflow: hidden;
+    height: auto;
+    padding: 0 8px 8px;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+#yzm-memory-root .yzm-plot-primary-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-height: 0;
+    height: auto;
+    padding: 0 8px 8px;
+    overflow: auto;
+    overscroll-behavior: contain;
 }
 
 #yzm-memory-root .yzm-summary-primary-section {
@@ -878,24 +928,39 @@
     flex-direction: column;
     min-height: 0;
     overflow: hidden;
+    padding: 6px;
+    background: rgba(124, 145, 210, 0.05);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 11px;
+    box-sizing: border-box;
 }
 
 #yzm-memory-root .yzm-summary-primary-section-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     flex: 0 0 auto;
-    padding: 0 4px 5px;
+    padding: 0 3px 6px;
     color: var(--yzm-muted);
-    font-size: 12px;
+    font-size: 11px;
+    font-weight: 700;
     line-height: 1.2;
+}
+
+#yzm-memory-root .yzm-summary-primary-section-title i {
+    width: 14px;
+    color: var(--yzm-icon);
+    text-align: center;
+    font-size: 11px;
 }
 
 #yzm-memory-root .yzm-summary-primary-section-body {
     display: flex;
     flex: 1 1 auto;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     min-height: 0;
     overflow: auto;
-    padding-right: 2px;
     overscroll-behavior: contain;
 }
 
@@ -904,57 +969,20 @@
     flex-direction: column;
     min-height: 0;
     height: 100%;
-    padding: 10px 8px;
+    padding: 0;
     box-sizing: border-box;
-}
-
-#yzm-memory-root .yzm-vector-primary-header {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    flex: 0 0 auto;
-    min-height: 30px;
-    color: var(--yzm-title);
-    font-size: 13px;
-    font-weight: 700;
-}
-
-#yzm-memory-root .yzm-vector-primary-header i {
-    color: var(--yzm-icon);
 }
 
 #yzm-memory-root .yzm-vector-primary-controls {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr);
     gap: 6px;
     flex: 0 0 auto;
-    margin: 8px 0;
+    margin: 10px 8px 8px;
 }
 
 #yzm-memory-root .yzm-vector-book-search {
     width: 100%;
-}
-
-#yzm-memory-root .yzm-vector-filter-button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    min-width: 58px;
-    min-height: 30px;
-    padding: 0 8px;
-    color: var(--yzm-text);
-    background: var(--yzm-surface);
-    border: 1px solid var(--yzm-border);
-    border-radius: 8px;
-    box-sizing: border-box;
-    font: inherit;
-    font-size: 12px;
-}
-
-#yzm-memory-root .yzm-vector-filter-button i {
-    color: var(--yzm-icon);
-    font-size: 11px;
 }
 
 #yzm-memory-root .yzm-vector-book-table {
@@ -962,6 +990,7 @@
     flex: 1 1 auto;
     flex-direction: column;
     min-height: 0;
+    margin: 0 8px;
     overflow: auto;
     border: 1px solid var(--yzm-border-soft);
     border-radius: 10px;
@@ -971,7 +1000,7 @@
 
 #yzm-memory-root .yzm-vector-book-row {
     display: grid;
-    grid-template-columns: 18px minmax(0, 1fr) 48px 72px;
+    grid-template-columns: 18px minmax(0, 1fr) 72px;
     align-items: center;
     gap: 6px;
     min-height: 36px;
@@ -1003,14 +1032,14 @@
     text-align: left;
 }
 
-#yzm-memory-root .yzm-vector-book-head span:nth-child(3),
-#yzm-memory-root .yzm-vector-book-head span:nth-child(4) {
+#yzm-memory-root .yzm-vector-book-head span:nth-child(3) {
     text-align: center;
 }
 
 #yzm-memory-root .yzm-vector-book-row-active {
-    background: var(--yzm-active-bg);
-    color: var(--yzm-active-text);
+    background: var(--yzm-row-bg);
+    color: var(--yzm-title);
+    border: 1px dashed rgba(101, 121, 218, 0.68);
 }
 
 #yzm-memory-root .yzm-vector-book-check {
@@ -1040,11 +1069,8 @@
     white-space: nowrap;
 }
 
-#yzm-memory-root .yzm-vector-book-entries {
-    color: inherit;
-    opacity: 0.78;
-    text-align: center;
-    white-space: nowrap;
+#yzm-memory-root .yzm-vector-book-icon {
+    display: none;
 }
 
 #yzm-memory-root .yzm-vector-status-wrap {
@@ -1056,22 +1082,15 @@
 }
 
 #yzm-memory-root .yzm-primary-compact-mode .yzm-vector-book-row {
-    grid-template-columns: 18px minmax(0, 1fr) 42px;
-}
-
-#yzm-memory-root .yzm-primary-compact-mode .yzm-vector-book-head span:nth-child(4),
-#yzm-memory-root .yzm-primary-compact-mode .yzm-vector-status-wrap {
-    display: none;
+    grid-template-columns: 18px minmax(0, 1fr) 54px;
 }
 
 #yzm-memory-root .yzm-primary-tight-mode .yzm-vector-book-row {
-    grid-template-columns: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) 50px;
 }
 
 #yzm-memory-root .yzm-primary-tight-mode .yzm-vector-book-head,
-#yzm-memory-root .yzm-primary-tight-mode .yzm-vector-book-check,
-#yzm-memory-root .yzm-primary-tight-mode .yzm-vector-book-entries,
-#yzm-memory-root .yzm-primary-tight-mode .yzm-vector-status-wrap {
+#yzm-memory-root .yzm-primary-tight-mode .yzm-vector-book-check {
     display: none;
 }
 
@@ -1136,13 +1155,6 @@
     background: rgba(228, 72, 93, 0.14);
 }
 
-#yzm-memory-root .yzm-vector-progress {
-    flex: 0 0 auto;
-    color: inherit;
-    opacity: 0.7;
-    font-size: 9px;
-}
-
 #yzm-memory-root .yzm-vector-primary-footer {
     display: flex;
     align-items: center;
@@ -1150,7 +1162,7 @@
     flex: 0 0 auto;
     gap: 8px;
     min-height: 34px;
-    padding-top: 8px;
+    padding: 8px 8px 0;
     color: var(--yzm-muted);
     font-size: 11px;
 }
@@ -1821,33 +1833,55 @@
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    gap: 6px;
+    gap: 5px;
     flex: 0 0 auto;
-    min-height: 72px;
-    padding: 12px;
+    min-height: 54px;
+    padding: 8px 9px;
+    border-left-color: rgba(101, 121, 218, 0.32);
     white-space: normal;
 }
 
 #yzm-memory-root .yzm-primary-summary-item-active {
-    min-height: 72px;
+    min-height: 54px;
+    border-left-color: rgba(101, 121, 218, 0.68);
+}
+
+#yzm-memory-root .yzm-primary-summary-branch {
+    border-left-color: rgba(104, 128, 164, 0.34);
+}
+
+#yzm-memory-root .yzm-primary-summary-branch.yzm-primary-summary-item-active {
+    border-left-color: rgba(104, 128, 164, 0.7);
 }
 
 #yzm-memory-root .yzm-primary-summary-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
     min-width: 0;
     overflow: hidden;
     color: var(--yzm-title);
-    font-size: 14px;
+    font-size: 12px;
+    font-weight: 700;
     line-height: 1.25;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+#yzm-memory-root .yzm-primary-summary-title i {
+    flex: 0 0 auto;
+    width: 14px;
+    color: var(--yzm-icon);
+    text-align: center;
+    font-size: 12px;
+}
+
 #yzm-memory-root .yzm-primary-summary-meta {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 5px;
     color: var(--yzm-muted);
-    font-size: 12px;
+    font-size: 10px;
     line-height: 1.25;
 }
 
@@ -1856,15 +1890,60 @@
     font-size: 12px;
 }
 
+#yzm-memory-root .yzm-primary-summary-main .yzm-primary-summary-title i {
+    color: #6579da;
+}
+
+#yzm-memory-root .yzm-primary-summary-branch .yzm-primary-summary-title i {
+    color: #6e7f9f;
+}
+
+#yzm-memory-root .yzm-plot-primary-item {
+    min-height: 70px;
+}
+
+#yzm-memory-root .yzm-primary-plot-summary-avatar,
+#yzm-memory-root .yzm-primary-memory-summary-avatar {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-primary-item-active .yzm-primary-plot-summary-avatar,
+#yzm-memory-root .yzm-primary-item-active .yzm-primary-memory-summary-avatar {
+    color: var(--yzm-icon);
+    background: var(--yzm-input-bg);
+    border-color: var(--yzm-border);
+}
+
+#yzm-memory-root .yzm-plot-primary-icon {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    color: var(--yzm-icon);
+    font-size: 15px;
+}
+
+#yzm-memory-root .yzm-plot-primary-text,
+#yzm-memory-root .yzm-plot-primary-count {
+    display: none;
+}
+
+#yzm-memory-root .yzm-plot-primary-item.yzm-primary-item-active .yzm-plot-primary-icon {
+    color: var(--yzm-icon);
+}
+
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-header {
     justify-content: center;
+    padding-right: 0;
+    padding-left: 0;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-config-primary-header,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-api-primary-header,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-trace-primary-header,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-summary-tool-primary-header,
-#yzm-memory-root .yzm-primary-icon-mode .yzm-scheme-primary-header {
+#yzm-memory-root .yzm-primary-icon-mode .yzm-scheme-primary-header,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-primary-header {
     justify-content: center;
     gap: 0;
     color: transparent;
@@ -1875,14 +1954,15 @@
 #yzm-memory-root .yzm-primary-icon-mode .yzm-api-primary-header i,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-trace-primary-header i,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-summary-tool-primary-header i,
-#yzm-memory-root .yzm-primary-icon-mode .yzm-scheme-primary-header i {
+#yzm-memory-root .yzm-primary-icon-mode .yzm-scheme-primary-header i,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-primary-header i {
     color: var(--yzm-icon);
     font-size: 13px;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-current-table-title {
-    flex: 1 1 auto;
-    width: 100%;
+    flex: 0 0 34px;
+    width: 34px;
     justify-content: center;
     padding: 0;
     overflow: visible;
@@ -1910,6 +1990,14 @@
     margin-left: auto;
 }
 
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-list,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-summary-primary-list,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-plot-primary-list {
+    align-items: center;
+    padding-right: 0;
+    padding-left: 0;
+}
+
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-search i {
     left: 50%;
     transform: translate(-50%, -50%);
@@ -1933,10 +2021,12 @@
     justify-content: center;
     gap: 0;
     width: 34px;
+    height: 34px;
     min-height: 34px;
     padding: 0;
     overflow: hidden;
     color: transparent;
+    border-radius: 999px;
     font-size: 0;
 }
 
@@ -1959,7 +2049,18 @@
 #yzm-memory-root .yzm-primary-icon-mode .yzm-trace-nav-item-active i,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-summary-tool-nav-item-active i,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-scheme-nav-item-active i {
-    color: var(--yzm-icon-active);
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-config-nav-item-active,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-api-nav-item-active,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-trace-nav-item-active,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-summary-tool-nav-item-active,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-scheme-nav-item-active {
+    background: var(--yzm-row-bg);
+    border: 1px dashed rgba(101, 121, 218, 0.68);
+    border-radius: 999px;
+    box-shadow: none;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-primary-view {
@@ -1969,28 +2070,25 @@
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-primary-header {
-    justify-content: center;
-    width: 34px;
-    color: transparent;
-    font-size: 0;
-}
-
-#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-primary-header i {
-    color: var(--yzm-icon);
-    font-size: 13px;
+    width: 100%;
+    min-width: 0;
+    max-width: none;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-primary-controls,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-head,
-#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-entries,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-status-wrap,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-primary-footer {
     display: none;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-table {
-    width: calc(100% - 8px);
-    max-width: 52px;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 10px 8px;
     border: 0;
     background: transparent;
     overflow: hidden;
@@ -1998,26 +2096,29 @@
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row {
     grid-template-columns: minmax(0, 1fr);
-    width: 100%;
+    justify-items: center;
+    width: 34px;
+    height: 34px;
     min-height: 34px;
-    padding: 0 5px;
+    padding: 0;
     border: 0;
-    border-radius: 10px;
+    border-radius: 999px;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-check {
     display: none;
 }
 
-#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-name {
-    display: block;
-    min-width: 0;
-    overflow: hidden;
-    direction: ltr;
+#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     color: inherit;
-    text-align: left;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-name {
+    display: none;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-empty-state {
@@ -2032,8 +2133,24 @@
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item {
     justify-content: center;
+    width: 34px;
     min-height: 44px;
     padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-active {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+
+#yzm-memory-root .yzm-shell[data-yzm-theme="dark"].yzm-primary-icon-mode .yzm-primary-item-active {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-character-item,
@@ -2049,6 +2166,27 @@
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-world-avatar {
     width: 32px;
     height: 32px;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-active .yzm-primary-character-avatar,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-active .yzm-primary-item-avatar,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-active .yzm-primary-world-avatar,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-active .yzm-primary-plot-summary-avatar,
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-active .yzm-primary-memory-summary-avatar {
+    color: var(--yzm-icon);
+    background: var(--yzm-input-bg);
+    border: 1px dashed rgba(101, 121, 218, 0.68);
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row-active {
+    background: var(--yzm-row-bg);
+    border: 1px dashed rgba(101, 121, 218, 0.68);
+    border-radius: 999px;
+    box-shadow: none;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row-active .yzm-vector-book-icon {
+    color: var(--yzm-icon);
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-character-info,
@@ -2074,6 +2212,28 @@
     font-family: "Font Awesome 6 Free";
     font-size: 16px;
     font-weight: 900;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-summary-branch::before {
+    content: "\f126";
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-plot-primary-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    color: var(--yzm-icon);
+    font-size: 16px;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-plot-primary-item.yzm-primary-item-active .yzm-plot-primary-icon {
+    color: var(--yzm-icon);
+    text-shadow: none;
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-primary-summary-item-active::before {
+    color: var(--yzm-icon);
 }
 
 #yzm-memory-root .yzm-current-table-title {
@@ -2166,7 +2326,8 @@
 #yzm-memory-root .yzm-api-primary-header,
 #yzm-memory-root .yzm-trace-primary-header,
 #yzm-memory-root .yzm-summary-tool-primary-header,
-#yzm-memory-root .yzm-scheme-primary-header {
+#yzm-memory-root .yzm-scheme-primary-header,
+#yzm-memory-root .yzm-vector-primary-header {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2184,7 +2345,8 @@
 #yzm-memory-root .yzm-api-primary-header i,
 #yzm-memory-root .yzm-trace-primary-header i,
 #yzm-memory-root .yzm-summary-tool-primary-header i,
-#yzm-memory-root .yzm-scheme-primary-header i {
+#yzm-memory-root .yzm-scheme-primary-header i,
+#yzm-memory-root .yzm-vector-primary-header i {
     color: var(--yzm-icon);
 }
 
@@ -2248,10 +2410,11 @@
 #yzm-memory-root .yzm-trace-nav-item-active,
 #yzm-memory-root .yzm-summary-tool-nav-item-active,
 #yzm-memory-root .yzm-scheme-nav-item-active {
-    color: var(--yzm-active-text);
-    background: var(--yzm-active-bg);
-    border-color: transparent;
-    box-shadow: var(--yzm-active-shadow);
+    color: var(--yzm-title);
+    background: var(--yzm-row-bg);
+    border-color: rgba(101, 121, 218, 0.68);
+    border-style: dashed;
+    box-shadow: none;
 }
 
 #yzm-memory-root .yzm-config-nav-item-active i,
@@ -2259,7 +2422,7 @@
 #yzm-memory-root .yzm-trace-nav-item-active i,
 #yzm-memory-root .yzm-summary-tool-nav-item-active i,
 #yzm-memory-root .yzm-scheme-nav-item-active i {
-    color: var(--yzm-icon-active);
+    color: var(--yzm-icon);
 }
 
 #yzm-memory-root .yzm-sidebar-action-active {
@@ -5123,14 +5286,279 @@
     overflow-wrap: anywhere;
 }
 
-#yzm-memory-root .yzm-summary-view {
-    display: grid;
-    grid-template-rows: auto minmax(220px, 1fr) minmax(130px, 0.55fr);
-    gap: 14px;
+#yzm-memory-root .yzm-plot-view {
     min-width: 0;
     min-height: 100%;
     height: 100%;
-    padding: 12px;
+    padding: 8px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-plot-panel {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 100%;
+    height: 100%;
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 12px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-plot-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 6px;
+    min-height: 38px;
+    padding: 0 10px;
+    background: var(--yzm-surface-strong);
+    border-bottom: 1px solid var(--yzm-border);
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-plot-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--yzm-title);
+    font-size: 14px;
+    font-weight: 700;
+}
+
+#yzm-memory-root .yzm-plot-title i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-plot-count,
+#yzm-memory-root .yzm-plot-status {
+    border-radius: 999px;
+    box-sizing: border-box;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-plot-count {
+    padding: 2px 7px;
+    color: var(--yzm-icon);
+    background: var(--yzm-input-bg);
+    border: 1px solid var(--yzm-border-soft);
+    font-size: 11px;
+}
+
+#yzm-memory-root .yzm-plot-list {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 7px;
+    min-height: 0;
+    padding: 8px 10px 10px;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+#yzm-memory-root .yzm-plot-list::before {
+    content: "";
+    position: absolute;
+    left: 20px;
+    top: 16px;
+    bottom: 14px;
+    width: 1px;
+    background: linear-gradient(180deg, rgba(124, 145, 210, 0.2), rgba(124, 145, 210, 0.5), rgba(124, 145, 210, 0.2));
+}
+
+#yzm-memory-root .yzm-plot-card {
+    position: relative;
+    display: grid;
+    grid-template-columns: 20px minmax(0, 1fr);
+    gap: 6px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-plot-marker {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    width: 100%;
+    min-width: 0;
+    padding-right: 0;
+    padding-left: 0;
+    justify-content: center;
+    padding-top: 10px;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    box-sizing: border-box;
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-plot-marker span {
+    width: 7px;
+    height: 7px;
+    background: #7c8fed;
+    border: 2px solid var(--yzm-surface);
+    border-radius: 999px;
+    box-sizing: content-box;
+    box-shadow: 0 0 0 1px rgba(124, 145, 210, 0.42), 0 4px 10px rgba(90, 110, 200, 0.18);
+}
+
+#yzm-memory-root .yzm-plot-card-content {
+    position: relative;
+    min-width: 0;
+    padding: 7px 9px 8px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), var(--yzm-row-bg));
+    border: 1px solid rgba(124, 145, 210, 0.22);
+    border-left: 2px solid rgba(124, 143, 237, 0.7);
+    border-radius: 8px;
+    box-sizing: border-box;
+    box-shadow: 0 8px 18px rgba(80, 96, 150, 0.08);
+}
+
+#yzm-memory-root[data-yzm-theme="dark"] .yzm-plot-card-content {
+    background: linear-gradient(180deg, rgba(44, 52, 88, 0.72), var(--yzm-row-bg));
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
+}
+
+#yzm-memory-root .yzm-plot-card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 6px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-plot-card-top strong {
+    min-width: 0;
+    overflow: hidden;
+    color: #5268d7;
+    font-size: 13px;
+    font-weight: 800;
+    line-height: 1.3;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root[data-yzm-theme="dark"] .yzm-plot-card-top strong {
+    color: #aeb8ff;
+}
+
+#yzm-memory-root .yzm-plot-card-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-plot-card-title-label,
+#yzm-memory-root .yzm-plot-summary-label,
+#yzm-memory-root .yzm-plot-time-label {
+    color: var(--yzm-icon);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+#yzm-memory-root .yzm-plot-status {
+    flex: 0 0 auto;
+    margin-top: 0;
+    padding: 2px 7px;
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1.2;
+}
+
+#yzm-memory-root .yzm-plot-status-running {
+    color: #168052;
+    background: rgba(60, 196, 132, 0.15);
+    border: 1px solid rgba(60, 196, 132, 0.24);
+}
+
+#yzm-memory-root .yzm-plot-status-completed {
+    color: var(--yzm-muted);
+    background: rgba(124, 145, 210, 0.1);
+    border: 1px solid rgba(124, 145, 210, 0.18);
+}
+
+#yzm-memory-root .yzm-plot-time-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 112px));
+    gap: 5px;
+    margin-top: 5px;
+}
+
+#yzm-memory-root .yzm-plot-time-chip {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    min-height: 24px;
+    padding: 3px 6px;
+    background: rgba(124, 145, 210, 0.08);
+    border: 1px solid rgba(124, 145, 210, 0.16);
+    border-radius: 6px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-plot-time-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-plot-time-label i {
+    color: var(--yzm-icon);
+    font-size: 10px;
+}
+
+#yzm-memory-root .yzm-plot-time-chip strong {
+    display: block;
+    margin-top: 0;
+    overflow: hidden;
+    color: var(--yzm-title);
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-plot-summary-label {
+    margin-top: 5px;
+}
+
+#yzm-memory-root .yzm-plot-card-text {
+    margin-top: 2px;
+    color: var(--yzm-text);
+    font-size: 11px;
+    line-height: 1.35;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-plot-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    flex: 1 1 auto;
+    min-height: 220px;
+    color: var(--yzm-muted);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-summary-view {
+    display: grid;
+    grid-template-rows: auto minmax(150px, 0.72fr) minmax(190px, 1fr);
+    gap: 12px;
+    min-width: 0;
+    min-height: 100%;
+    height: 100%;
+    padding: 10px 12px 12px;
     box-sizing: border-box;
 }
 
@@ -5139,7 +5567,7 @@
     grid-template-columns: 56px minmax(0, 1fr);
     align-items: center;
     gap: 16px;
-    min-height: 72px;
+    min-height: 62px;
 }
 
 #yzm-memory-root .yzm-summary-avatar {
@@ -5197,12 +5625,12 @@
     display: flex;
     align-items: center;
     gap: 9px;
-    min-height: 44px;
-    padding: 0 14px;
+    min-height: 38px;
+    padding: 0 13px;
     color: var(--yzm-title);
     border-bottom: 1px solid var(--yzm-border-soft);
     box-sizing: border-box;
-    font-size: 15px;
+    font-size: 14px;
     font-weight: 700;
 }
 
@@ -5216,7 +5644,7 @@
     display: flex;
     flex-direction: column;
     min-height: 0;
-    padding: 10px 14px 14px;
+    padding: 8px 13px 12px;
     overflow: auto;
     overscroll-behavior: contain;
 }
@@ -5226,7 +5654,7 @@
     display: grid;
     grid-template-columns: 92px minmax(0, 1fr);
     gap: 12px;
-    min-height: 42px;
+    min-height: 34px;
     padding-left: 24px;
     border-bottom: 1px solid var(--yzm-border-soft);
     box-sizing: border-box;
@@ -5284,8 +5712,8 @@
 #yzm-memory-root .yzm-summary-card-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: minmax(120px, 1fr) minmax(110px, 0.9fr);
-    gap: 14px;
+    grid-template-rows: minmax(86px, 0.92fr) minmax(76px, 0.78fr);
+    gap: 12px;
     min-width: 0;
     min-height: 0;
 }
@@ -5297,11 +5725,11 @@
 #yzm-memory-root .yzm-summary-text-body {
     flex: 1 1 auto;
     min-height: 0;
-    padding: 14px 16px;
+    padding: 11px 13px;
     color: var(--yzm-text);
     box-sizing: border-box;
-    font-size: 14px;
-    line-height: 1.7;
+    font-size: 13px;
+    line-height: 1.6;
     overflow: auto;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -5700,8 +6128,16 @@
         overflow: hidden;
     }
 
+    #yzm-memory-root .yzm-shell-body::before {
+        left: calc(var(--yzm-mobile-sidebar-width) + 10px);
+    }
+
     #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed {
         grid-template-columns: 0 10px minmax(0, 1fr);
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed::before {
+        left: 10px;
     }
 
     #yzm-memory-root .yzm-sidebar {
@@ -5733,6 +6169,11 @@
         padding-top: 46px;
     }
 
+    #yzm-memory-root .yzm-workspace::before {
+        left: calc(var(--yzm-mobile-primary-width) + 10px);
+        top: 46px;
+    }
+
     #yzm-memory-root .yzm-workspace-content,
     #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-workspace-content {
         display: grid;
@@ -5753,6 +6194,10 @@
 
     #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-workspace-content {
         grid-template-columns: 0 10px minmax(0, 1fr);
+    }
+
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed::before {
+        left: 10px;
     }
 
     #yzm-memory-root .yzm-primary-pane {
@@ -5841,26 +6286,22 @@
     }
 
     #yzm-memory-root .yzm-vector-primary-view {
-        padding: 8px 5px;
+        padding: 0;
     }
 
     #yzm-memory-root .yzm-vector-primary-controls {
         grid-template-columns: minmax(0, 1fr);
+        margin: 8px 5px 6px;
     }
 
-    #yzm-memory-root .yzm-vector-filter-button span {
-        display: none;
+    #yzm-memory-root .yzm-vector-book-table {
+        margin: 0 5px;
     }
 
     #yzm-memory-root .yzm-vector-book-row {
         grid-template-columns: 16px minmax(0, 1fr) 44px;
         min-height: 34px;
         padding: 0 6px;
-    }
-
-    #yzm-memory-root .yzm-vector-book-head span:nth-child(4),
-    #yzm-memory-root .yzm-vector-status-wrap {
-        display: none;
     }
 
     #yzm-memory-root .yzm-vector-primary-footer {
@@ -6038,13 +6479,20 @@
     #yzm-memory-root .yzm-primary-summary-item {
         display: flex;
         gap: 4px;
-        min-height: 58px;
-        padding: 7px;
+        min-height: 48px;
+        padding: 7px 8px;
         white-space: normal;
     }
 
+    #yzm-memory-root .yzm-plot-primary-item {
+        justify-content: center;
+        min-height: 40px;
+        padding: 0;
+        white-space: nowrap;
+    }
+
     #yzm-memory-root .yzm-primary-summary-item-active {
-        min-height: 58px;
+        min-height: 48px;
     }
 
     #yzm-memory-root .yzm-primary-character-avatar,
@@ -6280,6 +6728,119 @@
         font-size: 12px;
     }
 
+    #yzm-memory-root .yzm-plot-view {
+        height: auto;
+        min-height: 0;
+        padding: 6px;
+    }
+
+    #yzm-memory-root .yzm-plot-panel {
+        height: auto;
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    #yzm-memory-root .yzm-plot-header {
+        min-height: 34px;
+        padding: 0 8px;
+    }
+
+    #yzm-memory-root .yzm-plot-title {
+        gap: 5px;
+        font-size: 12px;
+        white-space: normal;
+    }
+
+    #yzm-memory-root .yzm-plot-count {
+        padding: 2px 6px;
+        font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-plot-list {
+        gap: 6px;
+        padding: 7px 7px 8px;
+        overflow-x: hidden;
+    }
+
+    #yzm-memory-root .yzm-plot-list::before {
+        left: 15px;
+        top: 14px;
+        bottom: 12px;
+    }
+
+    #yzm-memory-root .yzm-plot-card {
+        grid-template-columns: 15px minmax(0, 1fr);
+        gap: 4px;
+        width: 100%;
+        max-width: 100%;
+    }
+
+    #yzm-memory-root .yzm-plot-marker {
+        padding-top: 9px;
+    }
+
+    #yzm-memory-root .yzm-plot-marker span {
+        width: 6px;
+        height: 6px;
+        border-width: 2px;
+    }
+
+    #yzm-memory-root .yzm-plot-card-content {
+        min-width: 0;
+        max-width: 100%;
+        padding: 6px 7px 7px;
+        overflow: hidden;
+    }
+
+    #yzm-memory-root .yzm-plot-card-top {
+        align-items: flex-start;
+        gap: 4px;
+    }
+
+    #yzm-memory-root .yzm-plot-card-top strong {
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-plot-status {
+        padding: 2px 5px;
+        font-size: 8px;
+    }
+
+    #yzm-memory-root .yzm-plot-time-grid {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 4px;
+        margin-top: 4px;
+    }
+
+    #yzm-memory-root .yzm-plot-time-chip {
+        min-height: 21px;
+        padding: 2px 5px;
+        gap: 4px;
+    }
+
+    #yzm-memory-root .yzm-plot-time-label {
+        gap: 3px;
+        font-size: 8px;
+    }
+
+    #yzm-memory-root .yzm-plot-time-label i {
+        font-size: 8px;
+    }
+
+    #yzm-memory-root .yzm-plot-time-chip strong {
+        font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-plot-summary-label {
+        margin-top: 4px;
+        font-size: 8px;
+    }
+
+    #yzm-memory-root .yzm-plot-card-text {
+        font-size: 10px;
+        line-height: 1.3;
+    }
+
     #yzm-memory-root .yzm-summary-view {
         grid-template-rows: auto minmax(180px, auto) minmax(110px, auto);
         height: auto;
@@ -6361,7 +6922,8 @@
     #yzm-memory-root .yzm-api-primary-header,
     #yzm-memory-root .yzm-trace-primary-header,
     #yzm-memory-root .yzm-summary-tool-primary-header,
-    #yzm-memory-root .yzm-scheme-primary-header {
+    #yzm-memory-root .yzm-scheme-primary-header,
+    #yzm-memory-root .yzm-vector-primary-header {
         min-height: 32px;
         padding: 4px 7px;
         font-size: 12px;
