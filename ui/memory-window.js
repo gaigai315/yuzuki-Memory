@@ -1648,11 +1648,7 @@
         meta.className = 'yzm-primary-character-meta';
         meta.textContent = `${count} 条摘要`;
 
-        const hint = document.createElement('div');
-        hint.className = 'yzm-primary-character-location';
-        hint.append(createIconNode(kind === 'branch' ? 'fa-solid fa-code-branch' : 'fa-solid fa-book-open', ''), document.createTextNode(kind === 'branch' ? '支线记录' : '主线记录'));
-
-        content.append(title, meta, hint);
+        content.append(title, meta);
         item.append(avatar, content);
         return item;
     }
