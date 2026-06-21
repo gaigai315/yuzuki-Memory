@@ -349,6 +349,28 @@
         return replaced;
     }
 
+    function markVectorVariableContainers(node) {
+        if (!node) return false;
+        if (typeof node === 'string') return VECTOR_VARIABLE_PATTERN.test(node);
+        if (Array.isArray(node)) {
+            return node.some((item) => markVectorVariableContainers(item));
+        }
+        if (typeof node !== 'object') return false;
+
+        let containsVectorVariable = false;
+        Object.values(node).forEach((value) => {
+            if (markVectorVariableContainers(value)) containsVectorVariable = true;
+        });
+
+        if (containsVectorVariable) {
+            node.isYuzukiVector = true;
+            node.isGaigaiVector = true;
+            if (!node.name && !node.identifier) node.name = 'SYSTEM (向量化)';
+        }
+
+        return containsVectorVariable;
+    }
+
     function nodeContainsPattern(node, pattern) {
         if (!node) return false;
         if (typeof node === 'string') return pattern.test(node);
@@ -390,9 +412,17 @@
         });
     }
 
-    function hasVectorMarker(body) {
-        return requestBodyContainsInjection(body, 'isGaigaiVector', VECTOR_MARKER)
-            || requestBodyContainsInjection(body, 'isYuzukiVector', VECTOR_MARKER);
+    function hasYuzukiVectorMarker(body) {
+        return requestBodyContainsInjection(body, 'isYuzukiVector', VECTOR_MARKER);
+    }
+
+    function logVectorInfo(message, detail = null, level = 'info') {
+        const method = level === 'warn' ? 'warn' : 'info';
+        if (detail === null || detail === undefined) {
+            console[method](`[yuzuki-Memory Vector] ${message}`);
+        } else {
+            console[method](`[yuzuki-Memory Vector] ${message}`, detail);
+        }
     }
 
     async function processBody(body, options = {}) {
@@ -409,17 +439,30 @@
         const state = getCurrentState();
         const hadMemoryContentVariable = settings.injectMemoryTable && nodeContainsPattern(body, MEMORY_CONTENT_VARIABLE_PATTERN);
         const hadVectorVariable = settings.injectVectorMemory && nodeContainsPattern(body, VECTOR_VARIABLE_PATTERN);
-        const vectorText = settings.injectVectorMemory && typeof options.getVectorText === 'function' && !hasVectorMarker(body)
+        const hasOwnVectorMarker = hasYuzukiVectorMarker(body);
+        if (settings.injectVectorMemory && hasOwnVectorMarker) {
+            logVectorInfo('跳过：请求体已经包含新版向量注入标记');
+        }
+        const vectorText = settings.injectVectorMemory && typeof options.getVectorText === 'function' && !hasOwnVectorMarker
             ? await options.getVectorText(body)
             : '';
+        const markedVectorVariable = settings.injectVectorMemory && vectorText && hadVectorVariable
+            ? markVectorVariableContainers(body)
+            : false;
         const replacements = buildVariableReplacements(state, vectorText, settings);
         replaceVariablesInNode(body, replacements);
 
-        if (settings.injectVectorMemory && vectorText && !hasVectorMarker(body) && !hadVectorVariable) {
+        if (settings.injectVectorMemory && vectorText && !hasYuzukiVectorMarker(body) && !hadVectorVariable) {
             insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(vectorText)}`, {
                 isYuzukiVector: true,
                 isGaigaiVector: true,
                 name: 'SYSTEM (向量化)',
+            });
+            logVectorInfo('已自动插入向量记忆消息', { contentLength: vectorText.length });
+        } else if (settings.injectVectorMemory && vectorText && hadVectorVariable) {
+            logVectorInfo('已替换 {{VECTOR_MEMORY}} 变量', {
+                contentLength: vectorText.length,
+                marked: markedVectorVariable,
             });
         }
 

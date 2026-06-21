@@ -474,12 +474,21 @@
         async search(query, allowedBookIds = null) {
             await this.whenReady();
             const settings = YuzukiMemory.EmbeddingClient.loadSettings();
-            if (!settings.enabled) return [];
+            if (!settings.enabled) {
+                console.info('[yuzuki-Memory Vector] 搜索跳过：向量召回未启用');
+                return [];
+            }
             const rerankSettings = YuzukiMemory.RerankClient?.loadSettings?.() || { enabled: false };
             const sourceQuery = String(query || '').trim();
-            if (!sourceQuery) return [];
+            if (!sourceQuery) {
+                console.info('[yuzuki-Memory Vector] 搜索跳过：查询文本为空');
+                return [];
+            }
             const bookIds = Array.isArray(allowedBookIds) ? allowedBookIds : this.getActiveBooks();
-            if (!bookIds.length) return [];
+            if (!bookIds.length) {
+                console.info('[yuzuki-Memory Vector] 搜索跳过：当前会话没有绑定向量书');
+                return [];
+            }
             const targetCount = Math.max(1, Number.parseInt(settings.recallLimit, 10) || 6);
             const recallCount = rerankSettings.enabled ? targetCount * 2 : targetCount;
             const initialThreshold = rerankSettings.enabled ? 0.1 : settings.threshold;
@@ -507,9 +516,21 @@
             const candidates = results
                 .sort((a, b) => b.score - a.score)
                 .slice(0, recallCount);
+            console.info('[yuzuki-Memory Vector] 向量初筛完成', {
+                books: bookIds.length,
+                candidates: candidates.length,
+                rawMatches: results.length,
+                initialThreshold,
+                rerank: rerankSettings.enabled === true,
+            });
 
             if (rerankSettings.enabled && candidates.length && YuzukiMemory.RerankClient?.rerank) {
                 try {
+                    console.info('[yuzuki-Memory Vector] 开始 rerank', {
+                        candidates: candidates.length,
+                        topN: targetCount,
+                        model: rerankSettings.model || '',
+                    });
                     const scores = await YuzukiMemory.RerankClient.rerank(
                         sourceQuery,
                         candidates.map((item) => item.text),
@@ -524,15 +545,29 @@
                         });
                         candidates.sort((a, b) => b.score - a.score);
                     }
+                    console.info('[yuzuki-Memory Vector] rerank 完成', {
+                        candidates: candidates.length,
+                        topScore: Number(candidates[0]?.score || 0).toFixed(4),
+                    });
                 } catch (error) {
-                    console.warn('[yuzuki-Memory] Rerank skipped, using vector order.', error);
+                    console.warn('[yuzuki-Memory Vector] rerank 失败，改用向量顺序', error);
                 }
+            } else if (rerankSettings.enabled && !candidates.length) {
+                console.info('[yuzuki-Memory Vector] rerank 跳过：初筛没有候选内容');
+            } else if (rerankSettings.enabled && !YuzukiMemory.RerankClient?.rerank) {
+                console.warn('[yuzuki-Memory Vector] rerank 跳过：RerankClient 未加载');
             }
 
             const finalThreshold = rerankSettings.enabled ? 0.001 : settings.threshold;
-            return candidates
+            const finalResults = candidates
                 .filter((item) => item.score >= finalThreshold)
                 .slice(0, targetCount);
+            console.info('[yuzuki-Memory Vector] 搜索输出', {
+                count: finalResults.length,
+                finalThreshold,
+                topScore: Number(finalResults[0]?.score || 0).toFixed(4),
+            });
+            return finalResults;
         }
 
         async deleteBook(bookId) {

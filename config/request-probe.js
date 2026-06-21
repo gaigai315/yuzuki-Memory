@@ -129,24 +129,74 @@
         return collected.join('\n').slice(-6000);
     }
 
+    function logVectorInfo(message, detail = null, level = 'info') {
+        const method = level === 'warn' ? 'warn' : 'info';
+        if (detail === null || detail === undefined) {
+            console[method](`[yuzuki-Memory Vector] ${message}`);
+        } else {
+            console[method](`[yuzuki-Memory Vector] ${message}`, detail);
+        }
+    }
+
     async function getVectorInjectionText(body) {
         const store = YuzukiMemory.VectorStore;
         const client = YuzukiMemory.EmbeddingClient;
-        if (!store || !client?.loadSettings) return '';
-        if (window.isSummarizing) return '';
+        if (!store || !client?.loadSettings) {
+            logVectorInfo('跳过：向量模块未加载', null, 'warn');
+            return '';
+        }
+        if (window.isSummarizing) {
+            logVectorInfo('跳过：当前正在总结');
+            return '';
+        }
         const settings = client.loadSettings();
-        if (!settings.enabled) return '';
+        if (!settings.enabled) {
+            logVectorInfo('跳过：新版向量召回未启用');
+            return '';
+        }
+        const activeBooks = typeof store.getActiveBooks === 'function' ? store.getActiveBooks() : [];
+        if (!activeBooks.length) {
+            logVectorInfo('跳过：当前会话未绑定向量书');
+            return '';
+        }
         const query = extractSearchText(body);
-        if (!query) return '';
+        if (!query) {
+            logVectorInfo('跳过：没有可用于检索的聊天上下文');
+            return '';
+        }
         try {
+            const rerankSettings = YuzukiMemory.RerankClient?.loadSettings?.() || { enabled: false };
+            logVectorInfo('开始检索', {
+                activeBooks: activeBooks.length,
+                queryLength: query.length,
+                threshold: settings.threshold,
+                recallLimit: settings.recallLimit,
+                rerank: rerankSettings.enabled === true,
+            });
             const searchPromise = store.search(query);
             const timeoutPromise = new Promise((_, reject) => {
                 window.setTimeout(() => reject(new Error('向量检索超时')), 20000);
             });
             const results = await Promise.race([searchPromise, timeoutPromise]);
-            return Array.isArray(results) && results.length ? results.map((item) => item.text).join('\n\n') : '';
+            if (!Array.isArray(results) || !results.length) {
+                logVectorInfo('检索完成：没有命中内容', {
+                    activeBooks: activeBooks.length,
+                    threshold: settings.threshold,
+                    rerank: rerankSettings.enabled === true,
+                });
+                return '';
+            }
+            const vectorText = results.map((item) => item.text).join('\n\n');
+            logVectorInfo('检索完成', {
+                count: results.length,
+                contentLength: vectorText.length,
+                topScore: Number(results[0]?.score || 0).toFixed(4),
+                topSource: results[0]?.source || '',
+                rerank: rerankSettings.enabled === true,
+            });
+            return vectorText;
         } catch (error) {
-            console.warn('[yuzuki-Memory] Vector search skipped.', error);
+            logVectorInfo('检索失败，已跳过', String(error?.message || error || ''), 'warn');
             return '';
         }
     }
@@ -192,6 +242,15 @@
         return lastRequestData;
     }
 
+    function bodyContainsYuzukiVector(body) {
+        const target = getRequestArray(body);
+        if (!target) return false;
+        return target.items.some((item) => {
+            if (item?.isYuzukiVector === true) return true;
+            return getMessageText(item).includes('【系统检索到的历史记忆片段】');
+        });
+    }
+
     function isRequestLike(value) {
         return typeof Request !== 'undefined' && value instanceof Request;
     }
@@ -213,6 +272,13 @@
             ? await YuzukiMemory.VariableInjector.processBody(rawBody, { getVectorText: getVectorInjectionText })
             : rawBody;
         const nextBody = JSON.stringify(body);
+        if (bodyContainsYuzukiVector(body)) {
+            console.info('[yuzuki-Memory Vector] 最终请求体已包含新版向量记忆');
+        } else if (nextBody.includes('{{VECTOR_MEMORY}}')) {
+            console.warn('[yuzuki-Memory Vector] 最终请求体仍包含 {{VECTOR_MEMORY}}，说明变量没有被替换');
+        } else {
+            console.info('[yuzuki-Memory Vector] 最终请求体没有新版向量记忆');
+        }
         captureFromBody(body, url);
         if (requestSource) {
             return [new Request(requestSource, { body: nextBody })];

@@ -1065,6 +1065,10 @@
     border: 1px dashed rgba(101, 121, 218, 0.68);
 }
 
+#yzm-memory-root .yzm-vector-book-row-bound {
+    border-color: rgba(232, 145, 44, 0.72);
+}
+
 #yzm-memory-root .yzm-vector-book-check {
     display: inline-flex;
     align-items: center;
@@ -2283,8 +2287,16 @@
     box-shadow: none;
 }
 
+#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row-bound {
+    border: 1px dashed rgba(232, 145, 44, 0.82);
+}
+
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row-active .yzm-vector-book-icon {
     color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row-bound .yzm-vector-book-icon {
+    color: #d98324;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-character-info,

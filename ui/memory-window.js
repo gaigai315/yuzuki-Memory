@@ -2129,7 +2129,11 @@
     function createVectorBookRow(book) {
         const row = document.createElement('button');
         row.type = 'button';
-        row.className = book.selected ? 'yzm-vector-book-row yzm-vector-book-row-active' : 'yzm-vector-book-row';
+        row.className = [
+            'yzm-vector-book-row',
+            book.selected ? 'yzm-vector-book-row-active' : '',
+            book.active ? 'yzm-vector-book-row-bound' : '',
+        ].filter(Boolean).join(' ');
         row.dataset.yzmVectorBookId = book.id;
         row.title = book.name;
         row.setAttribute('aria-label', book.name);
