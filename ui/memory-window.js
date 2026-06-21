@@ -1690,6 +1690,20 @@
         const menu = document.createElement('div');
         menu.className = 'yzm-record-action-menu yzm-vector-book-action-menu';
 
+        const isBoundToCurrentChat = store.getActiveBooks().includes(bookId);
+        const bindButton = createIconButton(
+            isBoundToCurrentChat ? '取消绑定当前会话' : '绑定当前会话',
+            isBoundToCurrentChat ? 'fa-solid fa-link-slash' : 'fa-solid fa-link',
+            'yzm-record-action-delete yzm-record-action-hide'
+        );
+        bindButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            store.toggleActiveBook(bookId, !isBoundToCurrentChat);
+            closeRecordActionMenu(root);
+            renderVectorWorkspace(root);
+        });
+
         const vectorizeButton = createIconButton('向量化', 'fa-solid fa-wand-magic-sparkles', 'yzm-record-action-delete yzm-record-action-muted');
         vectorizeButton.disabled = false;
         vectorizeButton.addEventListener('click', async (event) => {
@@ -1710,7 +1724,7 @@
             closeRecordActionMenu(root);
         });
 
-        menu.append(vectorizeButton, deleteButton);
+        menu.append(bindButton, vectorizeButton, deleteButton);
         shell.appendChild(menu);
 
         const shellRect = shell.getBoundingClientRect();
