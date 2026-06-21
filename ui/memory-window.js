@@ -348,6 +348,18 @@
         return state.records[tableId];
     }
 
+    function getVisibleRecords(tableId = getActiveTable()?.id) {
+        return getRecords(tableId).filter((record) => !record.hidden);
+    }
+
+    function getPrimaryDisplayRecords(tableId = getActiveTable()?.id) {
+        const records = getRecords(tableId);
+        return [
+            ...records.filter((record) => !record.hidden),
+            ...records.filter((record) => record.hidden),
+        ];
+    }
+
     function getActiveRecordId(tableId = getActiveTable()?.id) {
         const state = getState();
         state.activeRecordIds = state.activeRecordIds && typeof state.activeRecordIds === 'object' ? state.activeRecordIds : {};
@@ -432,7 +444,9 @@
         if (!table) return null;
         if (table.id === 'plot_summary') return getPlotSummaryRecord({ save: false });
         const activeRecordId = getActiveRecordId(table.id);
-        return getRecords(table.id).find((record) => record.id === activeRecordId) || getRecords(table.id)[0] || null;
+        const records = getRecords(table.id);
+        const visibleRecords = getVisibleRecords(table.id);
+        return records.find((record) => record.id === activeRecordId) || visibleRecords[0] || records[0] || null;
     }
 
     function getRecordValue(record, field) {
@@ -818,6 +832,7 @@
     function createRecord(table) {
         return {
             id: `record_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+            hidden: false,
             values: Object.fromEntries((table?.columns || []).map((column) => [column, ''])),
         };
     }
@@ -881,7 +896,7 @@
         const nextRecords = records.filter((record) => record.id !== recordId);
         getState().records[table.id] = nextRecords;
         if (getActiveRecordId(table.id) === recordId) {
-            setActiveRecordId(table.id, nextRecords[0]?.id || '');
+            setActiveRecordId(table.id, nextRecords.find((record) => !record.hidden)?.id || '');
         }
         saveState();
         closeRecordActionMenu(root);
@@ -911,6 +926,132 @@
         saveState();
         renderPanelState(root);
         closeMoreMenu(root);
+    }
+
+    function resetManualPointers(options = {}) {
+        const state = getState();
+        state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+        const current = getManualPointerSettings();
+        state.settings.manualPointers = {
+            ...current,
+            ...(options.trace ? { trace: 0 } : {}),
+            ...(options.summary ? { summary: 0 } : {}),
+        };
+    }
+
+    function clearRecordContent(root, mode) {
+        const state = getState();
+        state.records = state.records && typeof state.records === 'object' ? state.records : {};
+        state.activeRecordIds = state.activeRecordIds && typeof state.activeRecordIds === 'object' ? state.activeRecordIds : {};
+        const activeTable = getActiveTable();
+
+        if (mode === 'current') {
+            if (!activeTable) return false;
+            state.records[activeTable.id] = [];
+            delete state.activeRecordIds[activeTable.id];
+        } else if (mode === 'without-summary') {
+            getTables().forEach((table) => {
+                if (table.id === 'memory_summary') return;
+                state.records[table.id] = [];
+                delete state.activeRecordIds[table.id];
+            });
+            resetManualPointers({ trace: true });
+        } else if (mode === 'all') {
+            getTables().forEach((table) => {
+                state.records[table.id] = [];
+            });
+            state.activeRecordIds = {};
+            resetManualPointers({ trace: true, summary: true });
+        } else {
+            return false;
+        }
+
+        const saved = saveState();
+        if (!saved) {
+            window.alert('当前会话尚未就绪，清表操作未保存。');
+            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+            return false;
+        }
+
+        closeRecordActionMenu(root);
+        setMobileDetailOpen(root, false);
+        renderPanelState(root);
+        return true;
+    }
+
+    function createClearTableOption(mode, iconClassName, titleText, descText, danger = false) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = danger ? 'yzm-clear-option yzm-clear-option-danger' : 'yzm-clear-option';
+        button.dataset.yzmClearMode = mode;
+
+        const icon = createIconNode(iconClassName, 'yzm-clear-option-icon');
+        const text = document.createElement('span');
+        text.className = 'yzm-clear-option-text';
+        const title = document.createElement('strong');
+        title.textContent = titleText;
+        const desc = document.createElement('small');
+        desc.textContent = descText;
+        text.append(title, desc);
+
+        button.append(icon, text);
+        return button;
+    }
+
+    function openClearTableDialog(root) {
+        const table = getActiveTable();
+        if (!table) return;
+
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-clear-table-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-clear-table-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-clear-table-dialog';
+        dialog.setAttribute('aria-label', '清表选项');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = '清表选项';
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭清表选项');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const options = document.createElement('div');
+        options.className = 'yzm-clear-options';
+        options.append(
+            createClearTableOption('current', 'fa-regular fa-trash-can', `清理当前表：${table.name}`, '只清理当前表的所有内容，不清理追溯或总结进度指针。'),
+            createClearTableOption('without-summary', 'fa-solid fa-eraser', '清理非总结内容', '清理所有非总结表的内容，并将追溯进度指针归零。'),
+            createClearTableOption('all', 'fa-solid fa-triangle-exclamation', '清理全部内容', '清理所有表内容，包括总结，并将追溯和总结进度全部归零。', true)
+        );
+
+        const hint = document.createElement('div');
+        hint.className = 'yzm-structure-hint';
+        hint.textContent = '清表只作用于当前会话窗口，不会影响其他会话，也不会写入全局配置。';
+
+        dialog.append(header, options, hint);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const target = event.target instanceof Element ? event.target : null;
+            const option = target?.closest('[data-yzm-clear-mode]');
+            if (!option) return;
+            if (clearRecordContent(root, option.dataset.yzmClearMode)) closeModal();
+        });
     }
 
     function clearSidebarActionActive(root) {
@@ -960,6 +1101,7 @@
         moreList.append(
             createIconButton('新增', 'fa-solid fa-plus', 'yzm-top-more-item yzm-top-add-record'),
             createIconButton('清表', 'fa-solid fa-eraser', 'yzm-top-more-item yzm-top-clear-table'),
+            createIconButton('整理', 'fa-solid fa-layer-group', 'yzm-top-more-item yzm-top-organize-structure'),
             createIconButton('导出', 'fa-solid fa-file-export', 'yzm-top-more-item'),
             createIconButton('导入', 'fa-solid fa-file-import', 'yzm-top-more-item'),
             createThemeButton(shell, 'yzm-top-more-item yzm-theme-button'),
@@ -967,10 +1109,7 @@
         );
 
         moreMenu.append(moreButton, moreList);
-        actions.append(
-            createIconButton('隐藏', 'fa-solid fa-ghost', 'yzm-top-action-button'),
-            moreMenu
-        );
+        actions.append(moreMenu);
 
         return actions;
     }
@@ -1594,7 +1733,12 @@
             return;
         }
 
-        list.replaceChildren(...getRecords(table.id).map((record) => {
+        const records = getPrimaryDisplayRecords(table.id);
+        const nodes = [];
+        records.forEach((record, index) => {
+            if (record.hidden && records[index - 1] && !records[index - 1].hidden) {
+                nodes.push(createPrimaryHiddenDivider());
+            }
             let item;
             if (table.id === 'character_profile') {
                 item = createCharacterPrimaryItem(table, record, activeRecordId === record.id);
@@ -1605,39 +1749,71 @@
             } else {
                 item = createButton(getRecordTitle(table, record), activeRecordId === record.id ? 'yzm-primary-item yzm-primary-item-active' : 'yzm-primary-item');
             }
+            item.classList.toggle('yzm-primary-item-hidden', !!record.hidden);
             item.dataset.yzmRecordId = record.id;
-            return item;
-        }));
+            nodes.push(item);
+        });
+        list.replaceChildren(...nodes);
     }
 
     function renderSummaryPrimaryList(list, table, activeRecordId) {
-        const records = getRecords(table.id);
+        const records = getPrimaryDisplayRecords(table.id);
+        const visibleRecords = records.filter((record) => !record.hidden);
+        const hiddenRecords = records.filter((record) => record.hidden);
         const sortedRecords = [
-            ...records.filter((record) => getSummaryKind(record) === 'main'),
-            ...records.filter((record) => getSummaryKind(record) === 'branch'),
+            ...visibleRecords.filter((record) => getSummaryKind(record) === 'main'),
+            ...visibleRecords.filter((record) => getSummaryKind(record) === 'branch'),
+            ...hiddenRecords.filter((record) => getSummaryKind(record) === 'main'),
+            ...hiddenRecords.filter((record) => getSummaryKind(record) === 'branch'),
         ];
 
-        list.replaceChildren(...sortedRecords.map((record) => {
+        const nodes = [];
+        sortedRecords.forEach((record, index) => {
+            if (record.hidden && sortedRecords[index - 1] && !sortedRecords[index - 1].hidden) {
+                nodes.push(createPrimaryHiddenDivider());
+            }
             const item = createSummaryPrimaryItem(table, record, activeRecordId === record.id);
+            item.classList.toggle('yzm-primary-item-hidden', !!record.hidden);
             item.dataset.yzmRecordId = record.id;
-            return item;
-        }));
+            nodes.push(item);
+        });
+        list.replaceChildren(...nodes);
+    }
+
+    function createPrimaryHiddenDivider() {
+        const divider = document.createElement('div');
+        divider.className = 'yzm-primary-hidden-divider';
+        divider.setAttribute('aria-hidden', 'true');
+        return divider;
     }
 
     function renderPlotPrimaryList(list) {
         const record = getPlotSummaryRecord({ save: false });
         const mainCount = getPlotSummaryItems(getRecordValue(record, '主线')).length;
         const branchCount = getPlotSummaryItems(getRecordValue(record, '支线')).length;
+        const entries = [
+            { kind: 'main', title: '主线摘要', icon: 'fa-solid fa-timeline', count: mainCount, hidden: isPlotSummaryKindHidden(record, 'main') },
+            { kind: 'branch', title: '支线摘要', icon: 'fa-solid fa-code-branch', count: branchCount, hidden: isPlotSummaryKindHidden(record, 'branch') },
+        ];
+        const displayEntries = [
+            ...entries.filter((entry) => !entry.hidden),
+            ...entries.filter((entry) => entry.hidden),
+        ];
+        const nodes = [];
+        displayEntries.forEach((entry, index) => {
+            if (entry.hidden && displayEntries[index - 1] && !displayEntries[index - 1].hidden) {
+                nodes.push(createPrimaryHiddenDivider());
+            }
+            nodes.push(createPlotPrimaryItem(entry.kind, entry.title, entry.icon, entry.count, entry.hidden));
+        });
 
-        list.replaceChildren(
-            createPlotPrimaryItem('main', '主线摘要', 'fa-solid fa-timeline', mainCount),
-            createPlotPrimaryItem('branch', '支线摘要', 'fa-solid fa-code-branch', branchCount)
-        );
+        list.replaceChildren(...nodes);
     }
 
-    function createPlotPrimaryItem(kind, titleText, iconClassName, count) {
+    function createPlotPrimaryItem(kind, titleText, iconClassName, count, hidden = false) {
         const item = createButton('', activePlotSummaryKind === kind ? 'yzm-primary-item yzm-primary-character-item yzm-primary-plot-summary-item yzm-primary-item-active yzm-plot-primary-item-active' : 'yzm-primary-item yzm-primary-character-item yzm-primary-plot-summary-item');
         item.classList.add(kind === 'branch' ? 'yzm-plot-primary-branch' : 'yzm-plot-primary-main');
+        item.classList.toggle('yzm-primary-item-hidden', !!hidden);
         item.dataset.yzmPlotKind = kind;
 
         const avatar = document.createElement('div');
@@ -2482,6 +2658,83 @@
 
     function getSummaryKind(record) {
         return /支线/.test(getRecordValue(record, '总结标题')) ? 'branch' : 'main';
+    }
+
+    function getPlotSummaryKindKey(kind = activePlotSummaryKind) {
+        return kind === 'branch' ? 'branch' : 'main';
+    }
+
+    function getPlotSummaryField(kind = activePlotSummaryKind) {
+        return getPlotSummaryKindKey(kind) === 'branch' ? '支线' : '主线';
+    }
+
+    function getPlotSummaryLabel(kind = activePlotSummaryKind) {
+        return getPlotSummaryKindKey(kind) === 'branch' ? '支线摘要' : '主线摘要';
+    }
+
+    function getPlotSummaryLines(record, kind = activePlotSummaryKind) {
+        return String(getRecordValue(record, getPlotSummaryField(kind)) || '')
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+    }
+
+    function normalizePlotItemHiddenStates(record, kind = activePlotSummaryKind, count = getPlotSummaryLines(record, kind).length) {
+        if (!record) return [];
+        const key = getPlotSummaryKindKey(kind);
+        record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+        let states = Array.isArray(record.hiddenPlotItems[key]) ? record.hiddenPlotItems[key].map(Boolean) : null;
+        if (!states) {
+            const legacyHidden = !!record.hiddenKinds?.[key];
+            states = Array.from({ length: count }, () => legacyHidden);
+        }
+        if (states.length < count) {
+            states = states.concat(Array.from({ length: count - states.length }, () => false));
+        } else if (states.length > count) {
+            states = states.slice(0, count);
+        }
+        record.hiddenPlotItems[key] = states;
+        if (record.hiddenKinds && typeof record.hiddenKinds === 'object') record.hiddenKinds[key] = false;
+        return states;
+    }
+
+    function setPlotItemHiddenStates(record, kind, states) {
+        if (!record) return;
+        const key = getPlotSummaryKindKey(kind);
+        record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+        record.hiddenPlotItems[key] = (states || []).map(Boolean);
+        if (record.hiddenKinds && typeof record.hiddenKinds === 'object') record.hiddenKinds[key] = false;
+    }
+
+    function isPlotSummaryKindHidden(record, kind) {
+        const count = getPlotSummaryLines(record, kind).length;
+        if (!record || !count) return false;
+        return normalizePlotItemHiddenStates(record, kind, count).every(Boolean);
+    }
+
+    function setPlotSummaryKindHidden(record, kind, hidden) {
+        const count = getPlotSummaryLines(record, kind).length;
+        setPlotItemHiddenStates(record, kind, Array.from({ length: count }, () => !!hidden));
+    }
+
+    function getPlotSummaryItemEntries(record, kind = activePlotSummaryKind) {
+        const normalizedKind = getPlotSummaryKindKey(kind);
+        const lines = getPlotSummaryLines(record, normalizedKind);
+        const items = getPlotSummaryItems(lines.join('\n'));
+        const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, items.length);
+        return items.map((item, index) => ({
+            ...item,
+            id: `plot:${normalizedKind}:${index}`,
+            kind: normalizedKind,
+            raw: lines[index] || item.raw,
+            hidden: !!hiddenStates[index],
+        }));
+    }
+
+    function getPlotOrganizerEntryIndex(id = '') {
+        const match = String(id || '').match(/^plot:(main|branch):(\d+)$/);
+        if (!match) return -1;
+        return Number.parseInt(match[2], 10);
     }
 
     function getSummaryPrimaryTitle(table, record) {
@@ -4894,7 +5147,7 @@
     function createCharacterProfileView(table) {
         const record = getActiveRecord(table);
         const view = document.createElement('div');
-        view.className = 'yzm-character-view';
+        view.className = record?.hidden ? 'yzm-character-view yzm-detail-view-hidden' : 'yzm-character-view';
 
         const left = document.createElement('section');
         left.className = 'yzm-character-card yzm-character-main-card';
@@ -4962,12 +5215,9 @@
         }
 
         valueNode.classList.add('yzm-character-gender-value');
-        const iconClassName = normalized === '男' ? 'fa-solid fa-mars' : 'fa-solid fa-venus';
         const genderClassName = normalized === '男' ? 'yzm-character-gender-male' : 'yzm-character-gender-female';
-        valueNode.append(
-            createIconNode(iconClassName, genderClassName),
-            document.createTextNode(normalized)
-        );
+        valueNode.classList.add(genderClassName);
+        valueNode.textContent = normalized;
     }
 
     function createCharacterPanel(title, iconClassName, colorClassName, text = '') {
@@ -4989,7 +5239,7 @@
     function createItemTrackingView(table) {
         const record = getActiveRecord(table);
         const view = document.createElement('div');
-        view.className = 'yzm-item-view';
+        view.className = record?.hidden ? 'yzm-item-view yzm-detail-view-hidden' : 'yzm-item-view';
 
         const card = document.createElement('section');
         card.className = 'yzm-item-detail-card';
@@ -5073,7 +5323,7 @@
     function createWorldSettingView(table) {
         const record = getActiveRecord(table);
         const view = document.createElement('div');
-        view.className = 'yzm-world-view';
+        view.className = record?.hidden ? 'yzm-world-view yzm-detail-view-hidden' : 'yzm-world-view';
 
         const card = document.createElement('section');
         card.className = 'yzm-world-detail-card';
@@ -5238,10 +5488,9 @@
     function createPlotSummaryView(table) {
         const record = getPlotSummaryRecord({ save: false });
         const kind = activePlotSummaryKind === 'branch' ? 'branch' : 'main';
-        const field = kind === 'branch' ? '支线' : '主线';
-        const label = kind === 'branch' ? '支线摘要' : '主线摘要';
+        const label = getPlotSummaryLabel(kind);
         const icon = kind === 'branch' ? 'fa-solid fa-code-branch' : 'fa-solid fa-timeline';
-        const items = getPlotSummaryItems(getRecordValue(record, field));
+        const items = getPlotSummaryItemEntries(record, kind);
 
         const view = document.createElement('div');
         view.className = 'yzm-plot-view';
@@ -5265,7 +5514,16 @@
         const list = document.createElement('div');
         list.className = 'yzm-plot-list';
         if (items.length) {
-            items.forEach((item) => list.appendChild(createPlotSummaryCard(item, kind)));
+            const displayItems = [
+                ...items.filter((item) => !item.hidden),
+                ...items.filter((item) => item.hidden),
+            ];
+            displayItems.forEach((item, index) => {
+                if (item.hidden && displayItems[index - 1] && !displayItems[index - 1].hidden) {
+                    list.appendChild(createPrimaryHiddenDivider());
+                }
+                list.appendChild(createPlotSummaryCard(item, kind, item.hidden));
+            });
         } else {
             const empty = document.createElement('div');
             empty.className = 'yzm-plot-empty';
@@ -5278,9 +5536,9 @@
         return view;
     }
 
-    function createPlotSummaryCard(item, kind) {
+    function createPlotSummaryCard(item, kind, hidden = false) {
         const card = document.createElement('article');
-        card.className = 'yzm-plot-card';
+        card.className = hidden ? 'yzm-plot-card yzm-plot-card-hidden' : 'yzm-plot-card';
 
         const marker = document.createElement('button');
         marker.type = 'button';
@@ -5351,7 +5609,7 @@
     function createMemorySummaryView(table) {
         const record = getActiveRecord(table);
         const view = document.createElement('div');
-        view.className = 'yzm-summary-view';
+        view.className = record?.hidden ? 'yzm-summary-view yzm-summary-view-hidden' : 'yzm-summary-view';
 
         const header = document.createElement('div');
         header.className = 'yzm-summary-hero';
@@ -5564,6 +5822,426 @@
             event.stopPropagation();
         });
         document.addEventListener('keydown', handleKeydown);
+    }
+
+    function setActiveRecordAfterRecordListChange(table) {
+        if (!table || table.id === 'plot_summary') return;
+        const activeRecordId = getActiveRecordId(table.id);
+        const records = getRecords(table.id);
+        if (records.some((record) => record.id === activeRecordId)) return;
+
+        getState().activeRecordIds = getState().activeRecordIds && typeof getState().activeRecordIds === 'object' ? getState().activeRecordIds : {};
+        getState().activeRecordIds[table.id] = records.find((record) => !record.hidden)?.id || records[0]?.id || '';
+    }
+
+    function refreshAfterRecordOrganizerChange(root, table) {
+        setActiveRecordAfterRecordListChange(table);
+        const saved = saveState();
+        if (!saved) {
+            window.alert('当前会话尚未就绪，整理操作未保存。');
+            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+        }
+        renderWorkspaceList(root);
+        renderTableWorkspace(root);
+        bindPanelInteractions(root);
+        return saved;
+    }
+
+    function getRecordOrganizerMeta(table, record) {
+        const columns = table?.columns || [];
+        const primaryColumn = getPrimaryColumn(table);
+        const secondary = columns
+            .filter((column) => column !== primaryColumn)
+            .map((column) => getRecordValue(record, column).trim())
+            .filter(Boolean)
+            .slice(0, 2)
+            .join(' · ');
+        return secondary || `ID: ${record.id}`;
+    }
+
+    function createRecordOrganizerRow(table, record, index) {
+        const row = document.createElement('div');
+        row.className = record.hidden ? 'yzm-organizer-row yzm-organizer-row-hidden' : 'yzm-organizer-row';
+        row.dataset.yzmOrganizerRecordId = record.id;
+
+        const checkbox = document.createElement('input');
+        checkbox.className = 'yzm-organizer-check';
+        checkbox.type = 'checkbox';
+        checkbox.setAttribute('aria-label', `选择 ${getRecordTitle(table, record)}`);
+
+        const indexNode = document.createElement('span');
+        indexNode.className = 'yzm-organizer-index';
+        indexNode.textContent = String(index + 1);
+
+        const text = document.createElement('div');
+        text.className = 'yzm-organizer-text';
+        const title = document.createElement('strong');
+        title.textContent = getRecordTitle(table, record);
+        const meta = document.createElement('span');
+        meta.textContent = getRecordOrganizerMeta(table, record);
+        text.append(title, meta);
+
+        const handle = createIconButton('拖动排序', 'fa-solid fa-grip-lines', 'yzm-organizer-drag-handle');
+        handle.dataset.yzmOrganizerDragHandle = 'true';
+        handle.setAttribute('aria-label', `拖动 ${getRecordTitle(table, record)} 排序`);
+
+        row.append(checkbox, indexNode, text, handle);
+        return row;
+    }
+
+    function createPlotOrganizerRow(entry, index) {
+        const row = document.createElement('div');
+        row.className = entry.hidden ? 'yzm-organizer-row yzm-organizer-row-hidden' : 'yzm-organizer-row';
+        row.dataset.yzmOrganizerRecordId = entry.id;
+
+        const checkbox = document.createElement('input');
+        checkbox.className = 'yzm-organizer-check';
+        checkbox.type = 'checkbox';
+        checkbox.setAttribute('aria-label', `选择 ${entry.title}`);
+
+        const indexNode = document.createElement('span');
+        indexNode.className = 'yzm-organizer-index';
+        indexNode.textContent = String(index + 1);
+
+        const text = document.createElement('div');
+        text.className = 'yzm-organizer-text';
+        const title = document.createElement('strong');
+        title.textContent = entry.date || entry.title;
+        const meta = document.createElement('span');
+        meta.textContent = entry.text || entry.raw || '未填写事件概要';
+        text.append(title, meta);
+
+        const handle = createIconButton('拖动排序', 'fa-solid fa-grip-lines', 'yzm-organizer-drag-handle');
+        handle.dataset.yzmOrganizerDragHandle = 'true';
+        handle.setAttribute('aria-label', `拖动 ${entry.date || entry.title} 排序`);
+
+        row.append(checkbox, indexNode, text, handle);
+        return row;
+    }
+
+    function renderRecordOrganizerList(list, table) {
+        if (table?.id === 'plot_summary') {
+            const record = getPlotSummaryRecord({ save: false });
+            const entries = getPlotSummaryItemEntries(record, activePlotSummaryKind);
+            if (!entries.length) {
+                const empty = document.createElement('div');
+                empty.className = 'yzm-organizer-empty';
+                empty.append(createIconNode('fa-regular fa-folder-open', ''), document.createTextNode(`当前${getPlotSummaryLabel(activePlotSummaryKind)}暂无条目`));
+                list.replaceChildren(empty);
+                return;
+            }
+            list.replaceChildren(...entries.map((entry, index) => createPlotOrganizerRow(entry, index)));
+            return;
+        }
+
+        const records = getRecords(table.id);
+        if (!records.length) {
+            const empty = document.createElement('div');
+            empty.className = 'yzm-organizer-empty';
+            empty.append(createIconNode('fa-regular fa-folder-open', ''), document.createTextNode('当前表暂无条目'));
+            list.replaceChildren(empty);
+            return;
+        }
+
+        list.replaceChildren(...records.map((record, index) => createRecordOrganizerRow(table, record, index)));
+    }
+
+    function bindRecordOrganizerDrag(root, table, list, rerenderOrganizer) {
+        if (list.dataset.yzmDragBound === 'true') return;
+        list.dataset.yzmDragBound = 'true';
+
+        let dragState = null;
+        const getRowIds = () => [...list.querySelectorAll('.yzm-organizer-row')]
+            .map((row) => row.dataset.yzmOrganizerRecordId)
+            .filter(Boolean);
+        const saveDomOrder = () => {
+            const orderedIds = getRowIds();
+            const originalIds = dragState?.originalIds || [];
+            if (orderedIds.join('\u0001') === originalIds.join('\u0001')) return false;
+
+            if (table?.id === 'plot_summary') {
+                const record = getPlotSummaryRecord({ save: false });
+                const kind = activePlotSummaryKind;
+                const field = getPlotSummaryField(kind);
+                const lines = getPlotSummaryLines(record, kind);
+                const hiddenStates = normalizePlotItemHiddenStates(record, kind, lines.length);
+                const indexes = orderedIds
+                    .map((id) => getPlotOrganizerEntryIndex(id))
+                    .filter((index) => index > -1 && index < lines.length);
+                record.values = record.values && typeof record.values === 'object' ? record.values : {};
+                record.values[field] = indexes.map((index) => lines[index]).filter(Boolean).join('\n');
+                setPlotItemHiddenStates(record, kind, indexes.map((index) => hiddenStates[index]));
+                activePlotSummaryKind = getPlotSummaryKindKey(kind);
+                return true;
+            }
+
+            const recordMap = new Map(getRecords(table.id).map((record) => [record.id, record]));
+            getState().records[table.id] = orderedIds
+                .map((id) => recordMap.get(id))
+                .filter(Boolean);
+            return true;
+        };
+
+        list.addEventListener('pointerdown', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            const handle = target?.closest('[data-yzm-organizer-drag-handle]');
+            const row = handle?.closest('.yzm-organizer-row');
+            if (!handle || !row) return;
+
+            event.preventDefault();
+            event.stopPropagation();
+            row.classList.add('yzm-organizer-row-dragging');
+            handle.setPointerCapture?.(event.pointerId);
+            dragState = {
+                pointerId: event.pointerId,
+                row,
+                handle,
+                originalIds: getRowIds(),
+            };
+        });
+
+        list.addEventListener('pointermove', (event) => {
+            if (!dragState || event.pointerId !== dragState.pointerId) return;
+            event.preventDefault();
+
+            const row = dragState.row;
+            const rows = [...list.querySelectorAll('.yzm-organizer-row:not(.yzm-organizer-row-dragging)')];
+            let placed = false;
+            rows.some((targetRow) => {
+                const rect = targetRow.getBoundingClientRect();
+                if (event.clientY < rect.top + rect.height / 2) {
+                    list.insertBefore(row, targetRow);
+                    placed = true;
+                    return true;
+                }
+                return false;
+            });
+            if (!placed) list.appendChild(row);
+        });
+
+        const finishDrag = (event) => {
+            if (!dragState || event.pointerId !== dragState.pointerId) return;
+            event.preventDefault();
+
+            const { row, handle } = dragState;
+            handle.releasePointerCapture?.(event.pointerId);
+            row.classList.remove('yzm-organizer-row-dragging');
+
+            if (saveDomOrder()) {
+                refreshAfterRecordOrganizerChange(root, table);
+                rerenderOrganizer();
+            }
+            dragState = null;
+        };
+
+        list.addEventListener('pointerup', finishDrag);
+        list.addEventListener('pointercancel', (event) => {
+            if (!dragState || event.pointerId !== dragState.pointerId) return;
+            event.preventDefault();
+            dragState.handle.releasePointerCapture?.(event.pointerId);
+            dragState.row.classList.remove('yzm-organizer-row-dragging');
+            dragState = null;
+        });
+    }
+
+    function getSelectedOrganizerRecordIds(dialog) {
+        return [...dialog.querySelectorAll('.yzm-organizer-row .yzm-organizer-check:checked')]
+            .map((checkbox) => checkbox.closest('.yzm-organizer-row')?.dataset?.yzmOrganizerRecordId)
+            .filter(Boolean);
+    }
+
+    function getOrganizerToggleMode(table, ids) {
+        if (table?.id === 'plot_summary') {
+            const idSet = new Set(ids);
+            const record = getPlotSummaryRecord({ save: false });
+            const entries = getPlotSummaryItemEntries(record, activePlotSummaryKind).filter((entry) => idSet.has(entry.id));
+            if (!entries.length) return 'hide';
+            return entries.some((entry) => !entry.hidden) ? 'hide' : 'show';
+        }
+
+        const idSet = new Set(ids);
+        const records = getRecords(table.id).filter((record) => idSet.has(record.id));
+        if (!records.length) return 'hide';
+        return records.some((record) => !record.hidden) ? 'hide' : 'show';
+    }
+
+    function applyPlotOrganizerBatch(root, table, action, ids) {
+        const record = getPlotSummaryRecord({ save: false });
+        if (!record || !ids.length) return;
+
+        const kind = getPlotSummaryKindKey(activePlotSummaryKind);
+        const field = getPlotSummaryField(kind);
+        const lines = getPlotSummaryLines(record, kind);
+        const hiddenStates = normalizePlotItemHiddenStates(record, kind, lines.length);
+        const selectedIndexes = [...new Set(ids
+            .map((id) => getPlotOrganizerEntryIndex(id))
+            .filter((index) => index > -1 && index < lines.length))]
+            .sort((a, b) => a - b);
+        if (!selectedIndexes.length) return;
+
+        if (action === 'delete') {
+            if (!window.confirm(`确定删除选中的 ${selectedIndexes.length} 个${getPlotSummaryLabel(kind)}条目吗？`)) return;
+            record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            const selectedSet = new Set(selectedIndexes);
+            record.values[field] = lines.filter((_, index) => !selectedSet.has(index)).join('\n');
+            setPlotItemHiddenStates(record, kind, hiddenStates.filter((_, index) => !selectedSet.has(index)));
+        } else {
+            const nextAction = action === 'toggle' ? getOrganizerToggleMode(table, ids) : action;
+            selectedIndexes.forEach((index) => {
+                hiddenStates[index] = nextAction === 'hide';
+            });
+            setPlotItemHiddenStates(record, kind, hiddenStates);
+        }
+
+        activePlotSummaryKind = kind;
+        refreshAfterRecordOrganizerChange(root, table);
+    }
+
+    function updateRecordOrganizerSelection(dialog) {
+        const table = getActiveTable();
+        const rows = [...dialog.querySelectorAll('.yzm-organizer-row')];
+        const selectedCount = rows.filter((row) => row.querySelector('.yzm-organizer-check')?.checked).length;
+        const count = dialog.querySelector('.yzm-organizer-selected-count');
+        const selectAll = dialog.querySelector('.yzm-organizer-select-all');
+        const batchButtons = dialog.querySelectorAll('[data-yzm-organizer-batch]');
+        const toggleButton = dialog.querySelector('[data-yzm-organizer-batch="toggle"]');
+
+        if (count) count.textContent = `已选 ${selectedCount} 项`;
+        if (selectAll) {
+            selectAll.checked = rows.length > 0 && selectedCount === rows.length;
+            selectAll.indeterminate = selectedCount > 0 && selectedCount < rows.length;
+        }
+        batchButtons.forEach((button) => {
+            button.disabled = selectedCount === 0;
+        });
+        if (toggleButton && table) {
+            const mode = getOrganizerToggleMode(table, getSelectedOrganizerRecordIds(dialog));
+            const icon = toggleButton.querySelector('i');
+            const label = toggleButton.querySelector('span');
+            if (icon) {
+                icon.classList.toggle('fa-eye', mode === 'show');
+                icon.classList.toggle('fa-eye-slash', mode === 'hide');
+            }
+            if (label) label.textContent = '显/隐';
+            toggleButton.title = mode === 'show' ? '显示选中条目' : '隐藏选中条目';
+            toggleButton.setAttribute('aria-label', toggleButton.title);
+        }
+    }
+
+    function openRecordOrganizer(root) {
+        const table = getActiveTable();
+        if (!table) return;
+
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-record-organizer-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-record-organizer-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-record-organizer-dialog';
+        dialog.setAttribute('aria-label', '条目整理');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = table.id === 'plot_summary' ? `${getPlotSummaryLabel(activePlotSummaryKind)} · 条目整理` : `${table.name} · 条目整理`;
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭条目整理');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const toolbar = document.createElement('div');
+        toolbar.className = 'yzm-organizer-toolbar';
+
+        const selectLabel = document.createElement('label');
+        selectLabel.className = 'yzm-organizer-select-label';
+        const selectAll = document.createElement('input');
+        selectAll.className = 'yzm-organizer-select-all';
+        selectAll.type = 'checkbox';
+        const selectedCount = document.createElement('span');
+        selectedCount.className = 'yzm-organizer-selected-count';
+        selectedCount.textContent = '已选 0 项';
+        selectLabel.append(selectAll, selectedCount);
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-organizer-actions';
+        const toggleButton = createIconButton('显/隐', 'fa-solid fa-eye-slash', 'yzm-organizer-action yzm-organizer-toggle');
+        toggleButton.dataset.yzmOrganizerBatch = 'toggle';
+        const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-organizer-action yzm-organizer-danger');
+        deleteButton.dataset.yzmOrganizerBatch = 'delete';
+        actions.append(toggleButton, deleteButton);
+        toolbar.append(selectLabel, actions);
+
+        const list = document.createElement('div');
+        list.className = 'yzm-organizer-list';
+        renderRecordOrganizerList(list, table);
+
+        const hint = document.createElement('div');
+        hint.className = 'yzm-structure-hint';
+        hint.textContent = '隐藏只影响当前会话当前表的展示，不会删除条目，也不会写入全局配置。';
+
+        dialog.append(header, toolbar, list, hint);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+        updateRecordOrganizerSelection(dialog);
+
+        const closeModal = () => overlay.remove();
+        const rerenderOrganizer = () => {
+            renderRecordOrganizerList(list, table);
+            updateRecordOrganizerSelection(dialog);
+        };
+        bindRecordOrganizerDrag(root, table, list, rerenderOrganizer);
+        const applyBatch = (action, ids) => {
+            if (!ids.length) return;
+            if (table.id === 'plot_summary') {
+                applyPlotOrganizerBatch(root, table, action, ids);
+                rerenderOrganizer();
+                return;
+            }
+
+            const idSet = new Set(ids);
+            const records = getRecords(table.id);
+
+            if (action === 'delete') {
+                if (!window.confirm(`确定删除选中的 ${ids.length} 个条目吗？`)) return;
+                getState().records[table.id] = records.filter((record) => !idSet.has(record.id));
+            } else {
+                const nextAction = action === 'toggle' ? getOrganizerToggleMode(table, ids) : action;
+                records.forEach((record) => {
+                    if (idSet.has(record.id)) record.hidden = nextAction === 'hide';
+                });
+            }
+
+            refreshAfterRecordOrganizerChange(root, table);
+            rerenderOrganizer();
+        };
+
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const target = event.target instanceof Element ? event.target : null;
+            const batchButton = target?.closest('[data-yzm-organizer-batch]');
+            if (batchButton) {
+                applyBatch(batchButton.dataset.yzmOrganizerBatch, getSelectedOrganizerRecordIds(dialog));
+                return;
+            }
+        });
+        dialog.addEventListener('change', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (target?.classList.contains('yzm-organizer-select-all')) {
+                dialog.querySelectorAll('.yzm-organizer-row .yzm-organizer-check').forEach((checkbox) => {
+                    checkbox.checked = target.checked;
+                });
+            }
+            updateRecordOrganizerSelection(dialog);
+        });
     }
 
     function openAddTableDialog(root) {
@@ -5926,15 +6604,21 @@
             const timeInput = fields.querySelector('[data-yzm-record-field="时间"]');
             const contentInput = fields.querySelector(`[data-yzm-record-field="${field}"]`);
             const nextValue = formatPlotSummaryEditorValue(timeInput?.value, contentInput?.value);
+            const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, currentLines.length);
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
             if (isAppend) {
                 record.values[field] = [getRecordValue(record, field).trim(), nextValue].filter(Boolean).join('\n');
+                setPlotItemHiddenStates(record, normalizedKind, nextValue ? hiddenStates.concat(false) : hiddenStates);
             } else if (editIndex > -1) {
                 const nextLines = currentLines.slice();
                 nextLines[editIndex] = nextValue;
+                const nextHiddenStates = hiddenStates.slice();
+                if (!nextValue) nextHiddenStates.splice(editIndex, 1);
                 record.values[field] = nextLines.filter(Boolean).join('\n');
+                setPlotItemHiddenStates(record, normalizedKind, nextHiddenStates);
             } else {
                 record.values[field] = nextValue;
+                setPlotItemHiddenStates(record, normalizedKind, nextValue ? [false] : []);
             }
             setActiveRecordId(table.id, record.id);
             activePlotSummaryKind = normalizedKind;
@@ -6128,6 +6812,28 @@
                 event.preventDefault();
                 event.stopPropagation();
                 resetCurrentChatState(root);
+            });
+        }
+
+        const clearTableButton = root.querySelector('.yzm-top-clear-table');
+        if (clearTableButton && clearTableButton.dataset.yzmBound !== 'true') {
+            clearTableButton.dataset.yzmBound = 'true';
+            clearTableButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                closeMoreMenu(root);
+                openClearTableDialog(root);
+            });
+        }
+
+        const organizeStructureButton = root.querySelector('.yzm-top-organize-structure');
+        if (organizeStructureButton && organizeStructureButton.dataset.yzmBound !== 'true') {
+            organizeStructureButton.dataset.yzmBound = 'true';
+            organizeStructureButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                closeMoreMenu(root);
+                openRecordOrganizer(root);
             });
         }
 
