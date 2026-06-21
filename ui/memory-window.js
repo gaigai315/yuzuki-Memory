@@ -4409,9 +4409,8 @@
 
         const actions = document.createElement('div');
         actions.className = 'yzm-record-actions';
-        const cancel = createButton('取消', 'yzm-api-button');
         const confirm = createButton('确定', 'yzm-add-table-confirm');
-        actions.append(cancel, confirm);
+        actions.append(confirm);
 
         dialog.append(header, input, actions);
         overlay.appendChild(dialog);
@@ -4435,7 +4434,6 @@
         };
 
         close.onclick = closeModal;
-        cancel.onclick = closeModal;
         confirm.onclick = createPreset;
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -4611,8 +4609,8 @@
             return;
         }
 
-        const modalHost = getModalHost(root);
-        removeModal(root, '.yzm-api-model-modal');
+        const modalHost = root;
+        root.querySelector('.yzm-api-model-modal')?.remove();
 
         const overlay = document.createElement('div');
         overlay.className = 'yzm-structure-modal yzm-api-model-modal';
