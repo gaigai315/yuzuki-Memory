@@ -11,7 +11,10 @@
     const LLM_API_MODE_STORAGE_KEY = 'yzm_memory_global_llm_api_mode';
     const LLM_API_ACTIVE_PRESET_STORAGE_KEY = 'yzm_memory_global_llm_api_active_preset';
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
+    const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
+    const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
     const AUTO_SUMMARY_SETTINGS_STORAGE_KEY = 'yzm_memory_global_auto_summary_settings';
+    const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
     let autoSummaryBound = false;
@@ -51,6 +54,13 @@
     function getActiveTagPreset() {
         const presets = parseJsonStorage(TAG_PRESETS_STORAGE_KEY, []);
         return Array.isArray(presets) ? presets.find((preset) => preset && (preset.blacklist?.length || preset.whitelist?.length)) || null : null;
+    }
+
+    function getPluginSettings() {
+        const settings = parseJsonStorage(PLUGIN_SETTINGS_STORAGE_KEY, {});
+        return {
+            fillMode: settings?.fillMode === 'batch' ? 'batch' : 'realtime',
+        };
     }
 
     function escapeRegExp(value) {
@@ -125,6 +135,17 @@
             : null;
     }
 
+    function getCurrentCharacterPromptKey() {
+        const ctx = getContext() || {};
+        if (ctx.groupId) return `group:${ctx.groupId}`;
+        const character = Array.isArray(ctx.characters) ? ctx.characters[ctx.characterId] : null;
+        const characterId = ctx.characterId;
+        const raw = characterId !== undefined && characterId !== null && String(characterId) !== ''
+            ? characterId
+            : (character?.avatar || character?.name || ctx.name2 || ctx.characterName || '');
+        return raw !== '' ? `char:${raw}` : '';
+    }
+
     function getChatText(message) {
         const swipeId = Number(message?.swipe_id ?? 0);
         if (Array.isArray(message?.swipes) && message.swipes.length > swipeId) return String(message.swipes[swipeId] || '');
@@ -145,16 +166,17 @@
         const tagPreset = options.tagPreset === false ? null : getActiveTagPreset();
         const messages = [];
 
-        chat.slice(from, to).forEach((message) => {
+        chat.slice(from, to).forEach((message, offset) => {
             if (!message || message.role === 'system' || message.is_system === true || isPluginMessage(message)) return;
             let content = stripImages(stripMemoryTags(getChatText(message)));
             content = filterContentByTags(content, tagPreset);
             if (!content.trim()) return;
             const isUser = message.is_user === true || message.role === 'user';
             const name = message.name || (isUser ? userName : charName);
+            const floor = from + offset;
             messages.push({
                 role: isUser ? 'user' : 'assistant',
-                content: `${name}: ${content}`,
+                content: `[楼层 ${floor}] ${name}: ${content}`,
             });
         });
 
@@ -174,8 +196,16 @@
         return Array.isArray(records) ? records : [];
     }
 
+    function cleanColumnName(column) {
+        return String(column || '').trim().replace(/^#/, '').trim();
+    }
+
+    function isAppendColumn(column) {
+        return String(column || '').trim().startsWith('#');
+    }
+
     function getPrimaryColumn(table) {
-        return table?.columns?.[0] || '名称';
+        return cleanColumnName(table?.columns?.[0]) || '名称';
     }
 
     function recordTitle(table, record) {
@@ -187,8 +217,9 @@
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const body = (table.columns || [])
             .map((column) => {
-                const value = String(values[column] || '').trim();
-                return value ? `${column}: ${value}` : '';
+                const name = cleanColumnName(column);
+                const value = String(values[name] ?? values[column] ?? '').trim();
+                return value ? `${name}: ${value}` : '';
             })
             .filter(Boolean)
             .join('；');
@@ -215,12 +246,12 @@
             .filter((table) => !table.hidden && table.id !== FIXED_SUMMARY_TABLE_ID)
             .filter((table) => !options.tableId || table.id === options.tableId)
             .map((table) => {
-                const columns = (table.columns || []).map((column) => String(column || '').trim()).filter(Boolean);
+                const columns = (table.columns || []).map(cleanColumnName).filter(Boolean);
                 const fields = columns.map((column, index) => index === 0 ? `${column}(主键)` : column).join(', ');
                 return `#${table.name}：包含 ${fields}`;
             })
             .filter(Boolean);
-        return compactLines(['【数据库结构定义】', ...lines]);
+        return compactLines(lines);
     }
 
     function resolveTaskPromptVariables(text, state, options = {}) {
@@ -228,14 +259,22 @@
         return String(text || '')
             .replace(/\{\{user\}\}/g, names.user)
             .replace(/\{\{char\}\}/g, names.char)
-            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS)\}\}/gi, () => buildDatabaseSchemaText(state, options));
+            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS)\}\}/gi, () => buildDatabaseSchemaText(state, options))
+            .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName) || '')
+            .replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => YuzukiMemory.VariableInjector?.buildSpecificSummaryText?.(state, summaryKey) || '')
+            .replace(/\{\{MEMORY_TABLE\}\}/gi, () => YuzukiMemory.VariableInjector?.buildAllTablesText?.(state) || tablesToReferenceText(state, options))
+            .replace(/\{\{MEMORY_SUMMARY\}\}/gi, () => YuzukiMemory.VariableInjector?.buildSummaryText?.(state) || '')
+            .replace(/\{\{MEMORY_PROMPT\}\}/gi, '')
+            .replace(/\{\{MEMORY\}\}/gi, () => YuzukiMemory.VariableInjector?.buildMemoryText?.(state) || compactLines([YuzukiMemory.VariableInjector?.buildSummaryText?.(state), tablesToReferenceText(state, options)]));
     }
 
     function getActivePromptScheme(state) {
         const schemes = parseJsonStorage(PROMPT_SCHEMES_STORAGE_KEY, []);
-        const sourceSchemes = Array.isArray(schemes) && schemes.length
-            ? schemes
-            : [YuzukiMemory.PromptLibrary?.getDefaultScheme?.()].filter(Boolean);
+        const defaultScheme = YuzukiMemory.PromptLibrary?.getDefaultScheme?.();
+        const sourceSchemes = [
+            defaultScheme,
+            ...(Array.isArray(schemes) ? schemes : []),
+        ].filter((scheme, index, list) => scheme && list.findIndex((entry) => entry?.id === scheme.id) === index);
         const normalized = sourceSchemes.map((scheme) => {
             const prompts = YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.(scheme)
                 || (scheme?.prompts && typeof scheme.prompts === 'object' ? scheme.prompts : {});
@@ -243,14 +282,24 @@
                 ...scheme,
                 prompts: {
                     historian: String(prompts.historian || ''),
-                    trace: String(prompts.trace ?? prompts.table ?? ''),
+                    traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
+                    traceBatch: String(prompts.traceBatch ?? ''),
+                    trace: String(prompts.trace ?? prompts.traceRealtime ?? prompts.table ?? ''),
                     traceOptimize: String(prompts.traceOptimize ?? prompts.table ?? ''),
                     summary: String(prompts.summary ?? prompts.summaryOptimize ?? ''),
                     summaryOptimize: String(prompts.summaryOptimize ?? prompts.summary ?? ''),
                 },
             };
         });
-        const activeId = String(state?.promptPresetId || '');
+        const bindings = parseJsonStorage(PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY, {});
+        const characterKey = getCurrentCharacterPromptKey();
+        const characterId = characterKey && bindings && typeof bindings === 'object'
+            ? String(bindings[characterKey] || '')
+            : '';
+        const globalId = String(YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY, '')
+            ?? localStorage.getItem(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY)
+            ?? '');
+        const activeId = characterId || globalId || String(state?.promptPresetId || '');
         return normalized.find((scheme) => scheme.id === activeId)
             || normalized[0]
             || { prompts: YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.({ prompts: {} }) || {} };
@@ -315,6 +364,19 @@
             }));
     }
 
+    function parseTraceResponse(text = '') {
+        try {
+            return parseJsonBlock(text);
+        } catch (error) {
+            const parser = YuzukiMemory.MemoryTagParser;
+            const rows = parser?.extractMemoryRows?.(text) || [];
+            if (rows.length) return { memoryRows: rows };
+            const fallbackRows = parser?.parseMemoryText?.(text) || [];
+            if (fallbackRows.length) return { memoryRows: fallbackRows };
+            throw error;
+        }
+    }
+
     function normalizeSummaryPayload(parsed) {
         const source = parsed && typeof parsed === 'object' ? parsed : {};
         return {
@@ -340,6 +402,17 @@
     }
 
     function getTracePreview(rows) {
+        if (rows?.memoryRows) {
+            return rows.memoryRows
+                .map((row, index) => {
+                    const values = Object.entries(row.values || {})
+                        .filter(([, value]) => String(value || '').trim())
+                        .map(([key, value]) => `${key}: ${value}`)
+                        .join('；');
+                    return `${index + 1}. ${row.table || '未指定表格'} - ${row.primaryValue || '未命名'}${values ? `；${values}` : ''}`;
+                })
+                .join('\n');
+        }
         return normalizeTaskRows(rows)
             .map((row, index) => {
                 const values = Object.entries(row.values || {})
@@ -355,7 +428,10 @@
         return {
             id: `record_${Date.now()}_${Math.random().toString(16).slice(2)}`,
             hidden: false,
-            values: Object.fromEntries((table?.columns || []).map((column) => [column, String(values[column] ?? '')])),
+            values: Object.fromEntries((table?.columns || []).map((column) => {
+                const name = cleanColumnName(column);
+                return [name, String(values[name] ?? values[column] ?? '')];
+            })),
         };
     }
 
@@ -374,7 +450,10 @@
         state.records[table.id] = Array.isArray(state.records[table.id]) ? state.records[table.id] : [];
         const records = state.records[table.id];
         const primary = getPrimaryColumn(table);
-        const normalizedValues = Object.fromEntries((table.columns || []).map((column) => [column, String(values[column] ?? values[column.toLowerCase()] ?? '')]));
+        const normalizedValues = Object.fromEntries((table.columns || []).map((column) => {
+            const name = cleanColumnName(column);
+            return [name, String(values[name] ?? values[column] ?? values[name.toLowerCase()] ?? '')];
+        }));
         const primaryValue = String(normalizedValues[primary] || values[primary] || values.name || values.title || '').trim();
         if (primaryValue) normalizedValues[primary] = primaryValue;
         if (!normalizedValues[primary]) normalizedValues[primary] = `${primary}${records.length + 1}`;
@@ -384,7 +463,17 @@
             record = createRecord(table, normalizedValues);
             records.push(record);
         } else {
-            record.values = { ...(record.values || {}), ...normalizedValues };
+            record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            record.values[primary] = normalizedValues[primary];
+            (table.columns || []).forEach((column) => {
+                const name = cleanColumnName(column);
+                if (name === primary) return;
+                const nextValue = String(normalizedValues[name] || '').trim();
+                if (!nextValue) return;
+                record.values[name] = isAppendColumn(column)
+                    ? [String(record.values[name] || '').trim(), nextValue].filter(Boolean).join('；')
+                    : nextValue;
+            });
         }
         return record;
     }
@@ -413,7 +502,7 @@
 
     function getRangeLabel(range) {
         const normalized = getRangeMeta(range);
-        return normalized ? `${normalized.start}-${normalized.end}` : '';
+        return normalized ? `${normalized.start}-${normalized.end}（不含${normalized.end}）` : '';
     }
 
     function upsertSummaryRecord(state, payload, meta = {}) {
@@ -474,6 +563,9 @@
     }
 
     function applyTraceResult(state, resultRows) {
+        if (resultRows?.memoryRows && YuzukiMemory.MemoryTagParser?.applyRowsToState) {
+            return YuzukiMemory.MemoryTagParser.applyRowsToState(state, resultRows.memoryRows);
+        }
         const rows = normalizeTaskRows(resultRows);
         let count = 0;
         rows.forEach((row) => {
@@ -512,6 +604,11 @@
 {"kind":"main","title":"总结标题","content":"总结正文","timeline":"时间线","unresolved":"未解决问题","remark":"备注"}`;
     }
 
+    function getTracePromptFromScheme(scheme) {
+        const prompts = scheme?.prompts || {};
+        return String(prompts.traceBatch || '');
+    }
+
     function getDefaultOptimizePrompt(kind = 'trace') {
         if (kind === 'summary') {
             return `你是总结优化助手。请整理现有总结，合并重复、修正冲突、补齐时间线。只输出 JSON，格式同总结任务。`;
@@ -519,16 +616,29 @@
         return `你是记忆表格优化助手。请整理现有表格内容，合并重复、修正冲突。只输出 JSON，格式同追溯任务。`;
     }
 
+    function buildTaskRangeText(range, kind = 'trace') {
+        const start = Math.max(0, Math.round(Number(range?.start) || 0));
+        const end = Math.max(start, Math.round(Number(range?.end) || 0));
+        const label = kind === 'summary' ? '总结' : '追溯填表';
+        return compactLines([
+            `【本次${label}任务】`,
+            `处理楼层范围：${start} ~ ${end}（左闭右开，不含 ${end}）`,
+            `实际聊天条目数：${Array.isArray(range?.messages) ? range.messages.length : 0}`,
+            '聊天内容已按原始楼层编号标注为 [楼层 N]。',
+        ]);
+    }
+
     function buildTraceMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
-        const prompt = resolveTaskPromptVariables(compactLines([scheme?.prompts?.historian, scheme?.prompts?.trace || getDefaultTracePrompt(state, options)]), state, options);
+        const prompt = resolveTaskPromptVariables(compactLines([scheme?.prompts?.historian, getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options)]), state, options);
         const messages = [
             { role: 'system', content: prompt },
+            { role: 'system', content: buildTaskRangeText(range, 'trace') },
             { role: 'system', content: `【已归档记忆，仅供参考】\n${tablesToReferenceText(state, options) || '（暂无）'}` },
             { role: 'system', content: `【背景资料】\n角色: ${range.charName}\n用户: ${range.userName}` },
             ...range.messages,
-            { role: 'user', content: '请根据以上聊天记录执行追溯填表。只输出 JSON。' },
+            { role: 'user', content: `请根据以上 ${range.start} ~ ${range.end}（不含 ${range.end}）楼层聊天记录执行追溯填表。严格按系统提示词要求的结果格式输出。` },
         ].filter((message) => message.content && message.content.trim());
         return { messages, range };
     }
@@ -539,9 +649,10 @@
         const prompt = resolveTaskPromptVariables(compactLines([scheme?.prompts?.historian, scheme?.prompts?.summary || getDefaultSummaryPrompt()]), state, options);
         const messages = [
             { role: 'system', content: prompt },
+            { role: 'system', content: buildTaskRangeText(range, 'summary') },
             { role: 'system', content: `【背景资料】\n角色: ${range.charName}\n用户: ${range.userName}` },
             ...range.messages,
-            { role: 'user', content: '请总结以上范围。只输出 JSON。' },
+            { role: 'user', content: `请总结以上 ${range.start} ~ ${range.end}（不含 ${range.end}）楼层范围。只输出 JSON。` },
         ].filter((message) => message.content && message.content.trim());
         return { messages, range };
     }
@@ -551,7 +662,7 @@
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
         const response = await generate(built.messages, options);
         if (!response.success) return response;
-        const parsed = parseJsonBlock(response.text);
+        const parsed = parseTraceResponse(response.text);
         const result = { success: true, kind: 'trace', parsed, preview: getTracePreview(parsed), text: response.text, range: built.range };
         return options.previewOnly ? result : commitTraceResult(state, result);
     }
@@ -582,11 +693,11 @@
         const prompt = resolveTaskPromptVariables(compactLines([getActivePromptScheme(state)?.prompts?.traceOptimize, getDefaultOptimizePrompt('trace'), options.note]), state, options);
         const messages = [
             { role: 'system', content: prompt },
-            { role: 'user', content: `【待优化表格】\n${tablesToReferenceText(state, options) || '（暂无）'}\n\n请输出优化后的 JSON records。` },
+            { role: 'user', content: `【待优化表格】\n${tablesToReferenceText(state, options) || '（暂无）'}\n\n请按系统提示词要求输出优化后的结果。` },
         ];
         const response = await generate(messages, options);
         if (!response.success) return response;
-        const parsed = parseJsonBlock(response.text);
+        const parsed = parseTraceResponse(response.text);
         const result = { success: true, kind: 'trace', parsed, preview: getTracePreview(parsed), text: response.text };
         return options.previewOnly ? result : commitTraceResult(state, result);
     }
@@ -664,7 +775,7 @@
             return callbacks.confirmAutoTask(task);
         }
         if (typeof window.confirm !== 'function') return { action: 'confirm', postpone: 0 };
-        const ok = window.confirm(`${task.title}已达到触发条件。\n当前楼层：${task.currentCount}\n上次指针：${task.lastIndex}\n触发阈值：${task.threshold}\n处理范围：${task.start}-${task.end}\n\n是否执行？`);
+        const ok = window.confirm(`${task.title}已达到触发条件。\n当前楼层：${task.currentCount}\n上次指针：${task.lastIndex}\n触发阈值：${task.threshold}\n处理范围：${task.start}-${task.end}（不含${task.end}）\n\n是否执行？`);
         return { action: ok ? 'confirm' : 'cancel', postpone: 0 };
     }
 

@@ -17,6 +17,8 @@
     const LLM_API_MODE_STORAGE_KEY = 'yzm_memory_global_llm_api_mode';
     const LLM_API_ACTIVE_PRESET_STORAGE_KEY = 'yzm_memory_global_llm_api_active_preset';
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
+    const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
+    const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
     const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
     const AUTO_SUMMARY_SETTINGS_STORAGE_KEY = 'yzm_memory_global_auto_summary_settings';
     const LAYOUT_DEFAULTS = {
@@ -124,7 +126,7 @@
         { id: 'trace', label: '追溯提示词', icon: 'fa-regular fa-clipboard' },
         { id: 'summary', label: '总结提示词', icon: 'fa-regular fa-clipboard' },
     ];
-    const PROMPT_SCHEME_PROMPT_IDS = ['historian', 'trace', 'traceOptimize', 'summary', 'summaryOptimize'];
+    const PROMPT_SCHEME_PROMPT_IDS = ['historian', 'traceRealtime', 'traceBatch', 'trace', 'traceOptimize', 'summary', 'summaryOptimize'];
     const PROMPT_SCHEME_MODE_OPTIONS = {
         trace: [
             { id: 'realtime', label: '实时填表' },
@@ -145,6 +147,11 @@
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
         enableFloatingIcon: false,
+        fillMode: 'realtime',
+        traceBatchEnabled: true,
+        traceBatchSize: 40,
+        summaryBatchEnabled: true,
+        summaryBatchSize: 40,
     };
     const DEFAULT_AUTO_SUMMARY_SETTINGS = {
         summaryEnabled: true,
@@ -165,7 +172,7 @@
             id: 'plot_summary',
             name: '剧情摘要',
             icon: 'timeline',
-            columns: ['主线', '支线'],
+            columns: ['#主线', '#支线'],
         },
         {
             id: 'character_profile',
@@ -197,6 +204,12 @@
     let extensionRetryTimer = null;
     let floatingResizeController = null;
     let floatingVisibilityTimer = null;
+    let chatContextRefreshBound = false;
+    let taskRunnerBusy = false;
+    let taskRunnerStopRequested = false;
+    let taskRunnerActiveAction = '';
+    let taskRunnerProgressLabel = '';
+    let taskRunnerAbortController = null;
     let activeWorkspaceView = 'table';
     let activeConfigSectionId = 'plugin';
     let activeApiSectionId = 'llm';
@@ -256,6 +269,16 @@
 
     function getStorage() {
         return YuzukiMemory.Storage;
+    }
+
+    function getContext() {
+        try {
+            return typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
+                ? SillyTavern.getContext()
+                : null;
+        } catch (_error) {
+            return null;
+        }
     }
 
     function getVectorStore() {
@@ -319,7 +342,7 @@
         }
         closeRecordActionMenu(root);
         setMobileDetailOpen(root, false);
-        renderPanelState(root);
+        refreshActiveWorkspace(root);
     }
 
     function setTableHiddenById(root, tableId, hidden) {
@@ -339,11 +362,21 @@
         }
         closeRecordActionMenu(root);
         setMobileDetailOpen(root, false);
-        renderPanelState(root);
+        refreshActiveWorkspace(root);
     }
 
     function getPrimaryColumn(table = getActiveTable()) {
-        return table?.columns?.[0] || '名称';
+        return cleanColumnName(table?.columns?.[0]) || '名称';
+    }
+
+    function cleanColumnName(column) {
+        return String(column || '').trim().replace(/^#/, '').trim();
+    }
+
+    function normalizeColumnDefinition(column) {
+        const value = String(column || '').trim();
+        if (!value) return '';
+        return value.startsWith('#') ? `#${value.slice(1).trim()}` : value;
     }
 
     function getRecords(tableId = getActiveTable()?.id) {
@@ -457,7 +490,8 @@
     }
 
     function getRecordValue(record, field) {
-        return String(record?.values?.[field] || '');
+        const name = cleanColumnName(field);
+        return String(record?.values?.[name] ?? record?.values?.[field] ?? '');
     }
 
     function getRecordTitle(table, record) {
@@ -466,12 +500,12 @@
 
     function getCharacterMainColumns(table) {
         const primaryColumn = getPrimaryColumn(table);
-        return (table?.columns || []).filter((column) => column !== primaryColumn && CHARACTER_MAIN_FIELDS.includes(column));
+        return (table?.columns || []).map(cleanColumnName).filter((column) => column !== primaryColumn && CHARACTER_MAIN_FIELDS.includes(column));
     }
 
     function getCharacterDetailColumns(table) {
         const primaryColumn = getPrimaryColumn(table);
-        return (table?.columns || []).filter((column) => column !== primaryColumn && !CHARACTER_MAIN_FIELDS.includes(column));
+        return (table?.columns || []).map(cleanColumnName).filter((column) => column !== primaryColumn && !CHARACTER_MAIN_FIELDS.includes(column));
     }
 
     function getCharacterFieldIcon(column) {
@@ -739,7 +773,9 @@
             name: String(name || '').trim(),
             prompts: {
                 historian: String(defaults.historian || ''),
-                trace: String(defaults.trace || ''),
+                traceRealtime: String(defaults.traceRealtime || defaults.trace || ''),
+                traceBatch: String(defaults.traceBatch || ''),
+                trace: String(defaults.trace || defaults.traceRealtime || ''),
                 traceOptimize: String(defaults.traceOptimize || ''),
                 summary: String(defaults.summary || ''),
                 summaryOptimize: String(defaults.summaryOptimize || ''),
@@ -762,7 +798,9 @@
             builtin: rawScheme.builtin === true,
             prompts: {
                 historian: String(prompts.historian || ''),
-                trace: String(prompts.trace ?? prompts.table ?? ''),
+                traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
+                traceBatch: String(prompts.traceBatch ?? ''),
+                trace: String(prompts.trace ?? prompts.traceRealtime ?? prompts.table ?? ''),
                 traceOptimize: String(prompts.traceOptimize ?? prompts.table ?? ''),
                 summary: String(prompts.summary ?? prompts.summaryOptimize ?? ''),
                 summaryOptimize: String(prompts.summaryOptimize ?? prompts.summary ?? ''),
@@ -801,10 +839,155 @@
         return normalized;
     }
 
+    function getCurrentCharacterPromptKey() {
+        const context = getContext() || {};
+        if (context.groupId) return `group:${context.groupId}`;
+        const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
+        const characterId = context.characterId;
+        const raw = characterId !== undefined && characterId !== null && String(characterId) !== ''
+            ? characterId
+            : (character?.avatar || character?.name || context.name2 || context.characterName || '');
+        return raw !== '' ? `char:${raw}` : '';
+    }
+
+    function getCurrentCharacterPromptLabel() {
+        const context = getContext() || {};
+        const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
+        return String(character?.name || context.name2 || context.characterName || '当前角色');
+    }
+
+    function getPromptSchemeBindings() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY, {})
+                ?? JSON.parse(localStorage.getItem(PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY) || '{}');
+            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+            return Object.fromEntries(Object.entries(raw)
+                .map(([key, value]) => [String(key || ''), String(value || '')])
+                .filter(([key, value]) => key && value));
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load prompt scheme bindings.', error);
+            return {};
+        }
+    }
+
+    function savePromptSchemeBindings(bindings) {
+        const normalized = Object.fromEntries(Object.entries(bindings || {})
+            .map(([key, value]) => [String(key || ''), String(value || '')])
+            .filter(([key, value]) => key && value));
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY, JSON.stringify(normalized));
+        }
+        return normalized;
+    }
+
+    function getGlobalPromptSchemeId() {
+        return String(YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY, '')
+            ?? localStorage.getItem(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY)
+            ?? '');
+    }
+
+    function saveGlobalPromptSchemeId(schemeId) {
+        const normalized = String(schemeId || '');
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY, normalized);
+        }
+        return normalized;
+    }
+
+    function findPromptSchemeById(schemeId) {
+        const schemes = getPromptSchemes();
+        return schemes.find((scheme) => scheme.id === schemeId) || null;
+    }
+
+    function getCharacterPromptSchemeId() {
+        const key = getCurrentCharacterPromptKey();
+        if (!key) return '';
+        const schemeId = String(getPromptSchemeBindings()[key] || '');
+        return findPromptSchemeById(schemeId) ? schemeId : '';
+    }
+
+    function isCharacterPromptSchemeAutoloadEnabled() {
+        return !!getCharacterPromptSchemeId();
+    }
+
+    function getFallbackPromptSchemeId(options = {}) {
+        const schemes = getPromptSchemes();
+        const globalId = getGlobalPromptSchemeId();
+        if (schemes.some((scheme) => scheme.id === globalId)) return globalId;
+        if (options.includeState !== false) {
+            const stateId = String(getState().promptPresetId || '');
+            if (schemes.some((scheme) => scheme.id === stateId)) return stateId;
+        }
+        return schemes[0]?.id || '';
+    }
+
+    function getUnboundPromptSchemeId() {
+        return getFallbackPromptSchemeId({ includeState: false });
+    }
+
+    function getResolvedPromptSchemeId() {
+        return getCharacterPromptSchemeId() || getFallbackPromptSchemeId();
+    }
+
+    function ensureGlobalPromptSchemeIdFromState() {
+        if (getCharacterPromptSchemeId() || getGlobalPromptSchemeId()) return;
+        const fallbackId = getFallbackPromptSchemeId();
+        if (fallbackId) saveGlobalPromptSchemeId(fallbackId);
+    }
+
+    function bindPromptSchemeToCurrentCharacter(schemeId) {
+        const key = getCurrentCharacterPromptKey();
+        if (!key || !findPromptSchemeById(schemeId)) return false;
+        savePromptSchemeBindings({
+            ...getPromptSchemeBindings(),
+            [key]: schemeId,
+        });
+        return true;
+    }
+
+    function unbindPromptSchemeFromCurrentCharacter() {
+        const key = getCurrentCharacterPromptKey();
+        if (!key) return false;
+        const bindings = getPromptSchemeBindings();
+        delete bindings[key];
+        savePromptSchemeBindings(bindings);
+        return true;
+    }
+
+    function cleanupPromptSchemeBindings(deletedSchemeId) {
+        const target = String(deletedSchemeId || '');
+        if (!target) return;
+        const bindings = getPromptSchemeBindings();
+        let changed = false;
+        Object.entries(bindings).forEach(([key, schemeId]) => {
+            if (schemeId === target) {
+                delete bindings[key];
+                changed = true;
+            }
+        });
+        if (changed) savePromptSchemeBindings(bindings);
+    }
+
+    function applyResolvedPromptSchemeToState(options = {}) {
+        ensureGlobalPromptSchemeIdFromState();
+        const schemeId = getResolvedPromptSchemeId();
+        if (!schemeId) return;
+        const state = getState();
+        if (state.promptPresetId !== schemeId) {
+            state.promptPresetId = schemeId;
+            if (options.save !== false) saveState();
+        }
+        activePromptSchemeDraft = null;
+    }
+
     function getActivePromptSchemeDraft() {
         if (!activePromptSchemeDraft) {
             const schemes = getPromptSchemes();
-            const activeId = String(getState().promptPresetId || '');
+            const activeId = getResolvedPromptSchemeId();
             activePromptSchemeDraft = schemes.find((scheme) => scheme.id === activeId) || schemes[0] || createEmptyPromptScheme('');
         }
         return activePromptSchemeDraft;
@@ -862,6 +1045,11 @@
             hideFloorsEnabled: typeof source.hideFloorsEnabled === 'boolean' ? source.hideFloorsEnabled : DEFAULT_PLUGIN_SETTINGS.hideFloorsEnabled,
             hiddenFloorCount: Math.round(normalizeNumberSetting(source.hiddenFloorCount, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0)),
             enableFloatingIcon: typeof source.enableFloatingIcon === 'boolean' ? source.enableFloatingIcon : DEFAULT_PLUGIN_SETTINGS.enableFloatingIcon,
+            fillMode: source.fillMode === 'batch' ? 'batch' : DEFAULT_PLUGIN_SETTINGS.fillMode,
+            traceBatchEnabled: typeof source.traceBatchEnabled === 'boolean' ? source.traceBatchEnabled : DEFAULT_PLUGIN_SETTINGS.traceBatchEnabled,
+            traceBatchSize: Math.round(normalizeNumberSetting(source.traceBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchSize, 0)),
+            summaryBatchEnabled: typeof source.summaryBatchEnabled === 'boolean' ? source.summaryBatchEnabled : DEFAULT_PLUGIN_SETTINGS.summaryBatchEnabled,
+            summaryBatchSize: Math.round(normalizeNumberSetting(source.summaryBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.summaryBatchSize, 0)),
         };
     }
 
@@ -1211,7 +1399,7 @@
         return {
             id: `record_${Date.now()}_${Math.random().toString(16).slice(2)}`,
             hidden: false,
-            values: Object.fromEntries((table?.columns || []).map((column) => [column, ''])),
+            values: Object.fromEntries((table?.columns || []).map((column) => [cleanColumnName(column), ''])),
         };
     }
 
@@ -1302,7 +1490,7 @@
 
         memoryState = createDefaultState();
         saveState();
-        renderPanelState(root);
+        refreshActiveWorkspace(root);
         closeMoreMenu(root);
     }
 
@@ -1354,7 +1542,7 @@
 
         closeRecordActionMenu(root);
         setMobileDetailOpen(root, false);
-        renderPanelState(root);
+        refreshActiveWorkspace(root);
         return true;
     }
 
@@ -1534,6 +1722,19 @@
         renderWorkspaceList(root);
         renderTableWorkspace(root);
         renderActiveTableTitle(root);
+        bindPanelInteractions(root);
+    }
+
+    function refreshActiveWorkspace(root) {
+        if (!root) return;
+        renderPanelState(root);
+        if (activeWorkspaceView === 'config') renderConfigWorkspace(root);
+        else if (activeWorkspaceView === 'api') renderApiWorkspace(root);
+        else if (activeWorkspaceView === 'trace') renderTraceWorkspace(root);
+        else if (activeWorkspaceView === 'summaryTool') renderSummaryToolWorkspace(root);
+        else if (activeWorkspaceView === 'scheme') renderPromptSchemeWorkspace(root);
+        else if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
+        updateWorkspaceMode(root);
         bindPanelInteractions(root);
     }
 
@@ -3343,7 +3544,8 @@
     }
 
     function createManualTracePanel() {
-        const totalFloors = getApproximateChatFloorCount();
+        const chatFloorCount = getApproximateChatFloorCount();
+        const lastFloorNumber = getLastChatFloorNumber(chatFloorCount);
         const pointers = getManualPointerSettings();
         const panel = document.createElement('section');
         panel.className = 'yzm-trace-panel';
@@ -3351,15 +3553,15 @@
         const topGrid = document.createElement('div');
         topGrid.className = 'yzm-trace-top-grid';
         topGrid.append(
-            createTraceStatCard('当前总楼层', `${totalFloors}`, '层', '', 'fa-solid fa-layer-group'),
+            createTraceStatCard('当前末楼层', `${lastFloorNumber}`, '层', `共 ${chatFloorCount} 层`, 'fa-solid fa-layer-group'),
             createTraceStatCard('追溯指针位置', `${pointers.trace}`, '层', '', 'fa-solid fa-crosshairs', 'tracePointer')
         );
 
         panel.append(
             topGrid,
-            createTraceRangeCard(totalFloors),
+            createTraceRangeCard(chatFloorCount),
             createTraceTargetCard(),
-            createTraceExecutionCard(),
+            createTraceExecutionCard({ taskKind: 'trace' }),
             createTraceStartButton('开始分析并生成', 'trace')
         );
         return panel;
@@ -3382,6 +3584,7 @@
                 note,
             ]),
             createTraceExecutionCard({
+                taskKind: 'trace',
                 includeBatch: false,
                 confirmLabel: '弹窗确认（推荐）',
                 confirmDesc: '优化前弹窗确认，便于检查目标记忆与改动',
@@ -3393,7 +3596,8 @@
     }
 
     function createManualSummaryPanel() {
-        const totalFloors = getApproximateChatFloorCount();
+        const chatFloorCount = getApproximateChatFloorCount();
+        const lastFloorNumber = getLastChatFloorNumber(chatFloorCount);
         const pointers = getManualPointerSettings();
         const panel = document.createElement('section');
         panel.className = 'yzm-trace-panel yzm-summary-tool-panel';
@@ -3401,14 +3605,15 @@
         const topGrid = document.createElement('div');
         topGrid.className = 'yzm-trace-top-grid';
         topGrid.append(
-            createTraceStatCard('当前总楼层', `${totalFloors}`, '层', '', 'fa-solid fa-layer-group'),
+            createTraceStatCard('当前末楼层', `${lastFloorNumber}`, '层', `共 ${chatFloorCount} 层`, 'fa-solid fa-layer-group'),
             createTraceStatCard('总结指针位置', `${pointers.summary}`, '层', '', 'fa-solid fa-crosshairs', 'summaryPointer')
         );
 
         panel.append(
             topGrid,
-            createSummaryRangeCard(totalFloors),
+            createSummaryRangeCard(chatFloorCount),
             createTraceExecutionCard({
+                taskKind: 'summary',
                 radioName: 'yzm-summary-run-mode',
                 confirmDesc: '每批总结后弹窗确认，便于检查结果与进度',
                 silentDesc: '自动完成全部总结批次，完成后仅显示最终结果',
@@ -3435,6 +3640,7 @@
             ]),
             note,
             createTraceExecutionCard({
+                taskKind: 'summary',
                 includeBatch: false,
                 radioName: 'yzm-summary-run-mode',
                 confirmLabel: '弹窗确认（推荐）',
@@ -3447,15 +3653,16 @@
     }
 
     function createSummaryRangeCard(totalFloors) {
+        const lastFloorNumber = getLastChatFloorNumber(totalFloors);
         const startInput = createTraceNumberInput('0', 'start');
         const endInput = createTraceNumberInput(String(totalFloors), 'end');
         return createApiCard('总结范围', 'fa-regular fa-calendar', [
             createTraceRangeRow(
                 createApiField('起始楼层', createTraceUnitInput(startInput, '层')),
                 createIconNode('fa-solid fa-arrow-right', 'yzm-trace-range-arrow'),
-                createApiField('结束楼层', createTraceUnitInput(endInput, '层'))
+                createApiField('结束楼层（不含）', createTraceUnitInput(endInput, '层'))
             ),
-            createTraceHint(`建议范围：0 ~ ${totalFloors}（共 ${totalFloors} 层）`),
+            createTraceHint(`范围按左闭右开计算：0 ~ 40 表示处理 0-39；当前末楼层 ${lastFloorNumber}，完整范围 0 ~ ${totalFloors}`),
         ]);
     }
 
@@ -3466,10 +3673,12 @@
     }
 
     function getApproximateChatFloorCount() {
-        const context = typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
-            ? SillyTavern.getContext()
-            : null;
+        const context = getContext();
         return Array.isArray(context?.chat) ? context.chat.length : 0;
+    }
+
+    function getLastChatFloorNumber(totalFloors = getApproximateChatFloorCount()) {
+        return Math.max(0, Math.round(Number(totalFloors) || 0) - 1);
     }
 
     function createTraceStatCard(title, value, unit, desc, iconClassName, action = '') {
@@ -3504,15 +3713,16 @@
     }
 
     function createTraceRangeCard(totalFloors) {
+        const lastFloorNumber = getLastChatFloorNumber(totalFloors);
         const startInput = createTraceNumberInput('0', 'start');
         const endInput = createTraceNumberInput(String(totalFloors), 'end');
         return createApiCard('追溯范围', 'fa-regular fa-calendar', [
             createTraceRangeRow(
                 createApiField('起始楼层', createTraceUnitInput(startInput, '层')),
                 createIconNode('fa-solid fa-arrow-right', 'yzm-trace-range-arrow'),
-                createApiField('结束楼层', createTraceUnitInput(endInput, '层'))
+                createApiField('结束楼层（不含）', createTraceUnitInput(endInput, '层'))
             ),
-            createTraceHint(`建议范围：0 ~ ${totalFloors}（共 ${totalFloors} 层）`),
+            createTraceHint(`范围按左闭右开计算：0 ~ 40 表示处理 0-39；当前末楼层 ${lastFloorNumber}，完整范围 0 ~ ${totalFloors}`),
         ]);
     }
 
@@ -3528,7 +3738,7 @@
     function createTraceExecutionCard(options = {}) {
         const includeBatch = options.includeBatch !== false;
         const content = includeBatch
-            ? [createTraceExecutionGrid(createTraceBatchSettings(), createTraceRunModeSettings(options))]
+            ? [createTraceExecutionGrid(createTraceBatchSettings(options.taskKind || 'trace'), createTraceRunModeSettings(options))]
             : [createTraceRunModeSettings(options)];
         const card = createApiCard('执行设置', 'fa-solid fa-gear', content);
         card.classList.add('yzm-trace-execution-card');
@@ -3538,15 +3748,27 @@
         return card;
     }
 
-    function createTraceBatchSettings() {
+    function createTraceBatchSettings(taskKind = 'trace') {
+        const settings = getPluginSettings();
+        const isSummary = taskKind === 'summary';
+        const enabledKey = isSummary ? 'summaryBatchEnabled' : 'traceBatchEnabled';
+        const sizeKey = isSummary ? 'summaryBatchSize' : 'traceBatchSize';
         const block = document.createElement('div');
         block.className = 'yzm-trace-setting-block';
         const row = document.createElement('div');
         row.className = 'yzm-trace-switch-row';
-        row.append(createConfigSwitch(true), document.createTextNode('分批执行（推荐范围 > 50 层）'));
+        const switchButton = createConfigSwitch(settings[enabledKey], enabledKey);
+        switchButton.dataset.yzmTaskBatchEnabled = enabledKey;
+        row.append(switchButton, document.createTextNode('分批执行（推荐范围 > 50 层）'));
+        const batchInput = createTraceNumberInput(String(settings[sizeKey] || DEFAULT_PLUGIN_SETTINGS[sizeKey]));
+        const input = batchInput.querySelector('.yzm-api-input');
+        if (input) {
+            input.dataset.yzmTaskBatchSize = sizeKey;
+            input.disabled = !settings[enabledKey];
+        }
         block.append(
             row,
-            createApiField('每批处理楼层数', createTraceUnitInput(createTraceNumberInput('40'), '层')),
+            createApiField('每批处理楼层数', createTraceUnitInput(batchInput, '层')),
             createTraceTextBlock('建议值：30-50 层。批次间会自动冷却 5 秒，避免 API 限流。')
         );
         return block;
@@ -3671,16 +3893,19 @@
     function createTraceStartButton(label, action = '') {
         const button = createIconButton(label, 'fa-solid fa-wand-magic-sparkles', 'yzm-trace-start-button');
         button.dataset.yzmTaskAction = action;
+        syncTaskButtonRunningState(button);
         return button;
     }
 
     function getTaskPanelRange(panel) {
         const totalFloors = getApproximateChatFloorCount();
-        const start = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="start"]')?.value, 0, totalFloors, 0, 0));
-        const end = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="end"]')?.value, 0, totalFloors, totalFloors, 0));
+        const startFloor = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="start"]')?.value, 0, totalFloors, 0, 0));
+        const endFloor = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="end"]')?.value, 0, totalFloors, totalFloors, 0));
+        const fromFloor = Math.min(startFloor, endFloor);
+        const toFloor = Math.max(startFloor, endFloor);
         return {
-            start: Math.min(start, end),
-            end: Math.max(start, end),
+            start: fromFloor,
+            end: toFloor,
         };
     }
 
@@ -3688,28 +3913,77 @@
         const targetTable = String(panel?.querySelector('[data-yzm-trace-target-table]')?.value || 'all');
         const note = String(panel?.querySelector('[data-yzm-task-note]')?.value || '').trim();
         const silent = !!panel?.querySelector('.yzm-trace-radio-active input')?.closest('.yzm-trace-radio')?.textContent?.includes('静默');
+        const batchSizeInput = panel?.querySelector('[data-yzm-task-batch-size]');
+        const batchSizeKey = batchSizeInput?.dataset.yzmTaskBatchSize || '';
+        const batchEnabledKey = batchSizeKey === 'summaryBatchSize' ? 'summaryBatchEnabled' : 'traceBatchEnabled';
+        const settings = getPluginSettings();
         return {
             ...getTaskPanelRange(panel),
             tableId: targetTable === 'all' ? '' : targetTable,
             note,
             silent,
+            batchEnabled: !!settings[batchEnabledKey],
+            batchSize: Math.round(normalizeNumberSetting(batchSizeInput?.value, 1, 9999, settings[batchSizeKey] || 40, 0)),
         };
+    }
+
+    function updateTaskBatchEnabled(button) {
+        const key = button?.dataset?.yzmTaskBatchEnabled;
+        if (!key) return;
+        const isOn = toggleConfigSwitch(button);
+        updatePluginSetting(key, isOn);
+        const input = button.closest('.yzm-trace-setting-block')?.querySelector('[data-yzm-task-batch-size]');
+        if (input) input.disabled = !isOn;
+    }
+
+    function updateTaskBatchSize(input) {
+        const key = input?.dataset?.yzmTaskBatchSize;
+        if (!key) return;
+        const value = Math.round(normalizeNumberSetting(input.value, 1, 9999, DEFAULT_PLUGIN_SETTINGS[key] || 40, 0));
+        input.value = String(value);
+        updatePluginSetting(key, value);
     }
 
     function setTaskButtonRunning(button, isRunning, label = '') {
         if (!button) return;
         if (isRunning) {
-            button.dataset.yzmOriginalText = button.querySelector('span')?.textContent || '';
-            button.disabled = true;
+            if (!button.dataset.yzmOriginalText) button.dataset.yzmOriginalText = button.querySelector('span')?.textContent || '';
+            button.disabled = false;
             const span = button.querySelector('span');
-            if (span) span.textContent = label || '执行中...';
+            if (span) span.textContent = label || '停止任务';
+            button.dataset.yzmTaskStop = 'true';
             button.classList.add('yzm-api-button-loading');
+            button.classList.add('yzm-trace-start-button-stop');
             return;
         }
         button.disabled = false;
         const span = button.querySelector('span');
         if (span && button.dataset.yzmOriginalText) span.textContent = button.dataset.yzmOriginalText;
+        delete button.dataset.yzmTaskStop;
         button.classList.remove('yzm-api-button-loading');
+        button.classList.remove('yzm-trace-start-button-stop');
+    }
+
+    function syncTaskButtonRunningState(button) {
+        if (!button) return;
+        const action = button.dataset.yzmTaskAction || '';
+        if (taskRunnerBusy && action === taskRunnerActiveAction) {
+            setTaskButtonRunning(button, true, taskRunnerProgressLabel || '停止任务');
+        }
+    }
+
+    function syncVisibleTaskButtons(root = document.getElementById(ROOT_ID)) {
+        root?.querySelectorAll?.('[data-yzm-task-action]').forEach((button) => {
+            syncTaskButtonRunningState(button);
+        });
+    }
+
+    function requestStopTaskRunner(root = document.getElementById(ROOT_ID)) {
+        if (!taskRunnerBusy) return;
+        taskRunnerStopRequested = true;
+        taskRunnerAbortController?.abort?.();
+        taskRunnerProgressLabel = '正在停止...';
+        syncVisibleTaskButtons(root);
     }
 
     function getTaskActionLabel(action) {
@@ -3814,7 +4088,7 @@
 
             const info = document.createElement('div');
             info.className = 'yzm-auto-task-info';
-            info.textContent = `当前 ${task.currentCount} 层，上次指针 ${task.lastIndex}，阈值 ${task.threshold} 层。本次处理 ${task.start}-${task.end} 层，延迟的 ${task.delay} 层保留给后续上下文。`;
+            info.textContent = `当前 ${task.currentCount} 层，上次指针 ${task.lastIndex}，阈值 ${task.threshold} 层。本次处理 ${task.start}-${task.end}（不含 ${task.end}），延迟的 ${task.delay} 层保留给后续上下文。`;
 
             const postponeRow = document.createElement('label');
             postponeRow.className = 'yzm-auto-task-postpone';
@@ -3875,11 +4149,121 @@
         if (activeWorkspaceView === 'trace') renderTraceWorkspace(root);
         if (activeWorkspaceView === 'summaryTool') renderSummaryToolWorkspace(root);
         bindPanelInteractions(root);
+        syncVisibleTaskButtons(root);
+    }
+
+    function buildTaskBatches(options) {
+        const start = Math.max(0, Math.round(Number(options.start) || 0));
+        const end = Math.max(start, Math.round(Number(options.end) || 0));
+        const size = Math.max(1, Math.round(Number(options.batchSize) || 40));
+        if (!options.batchEnabled || end - start <= size) return [{ start, end }];
+        const batches = [];
+        for (let cursor = start; cursor < end; cursor += size) {
+            batches.push({ start: cursor, end: Math.min(cursor + size, end) });
+        }
+        return batches;
+    }
+
+    function waitForTaskCooldown(ms = 5000) {
+        return new Promise((resolve) => window.setTimeout(resolve, ms));
+    }
+
+    async function waitForTaskBuffer(label = '等待数据完全写入', seconds = 6) {
+        console.log(`[yuzuki-Memory Task] ${label} (${seconds}s)...`);
+        for (let remaining = Math.max(1, Math.round(Number(seconds) || 1)); remaining > 0; remaining -= 1) {
+            if (taskRunnerStopRequested) return false;
+            taskRunnerProgressLabel = `${label} ${remaining}s`;
+            syncVisibleTaskButtons();
+            await waitForTaskCooldown(1000);
+        }
+        return !taskRunnerStopRequested;
+    }
+
+    function mergeTaskResults(results, action) {
+        const successful = results.filter((result) => result?.success);
+        const last = successful[successful.length - 1] || null;
+        const totalCount = successful.reduce((sum, result) => sum + (Number(result.count) || 0), 0);
+        return {
+            ...(last || { success: true }),
+            success: true,
+            kind: last?.kind || (action === 'summary' ? 'summary' : 'trace'),
+            count: totalCount,
+            batches: successful.length,
+            range: successful.length
+                ? { start: successful[0].range?.start ?? 0, end: last?.range?.end ?? 0 }
+                : undefined,
+        };
+    }
+
+    async function runSingleTaskBatch(state, action, options) {
+        const taskOptions = { ...options, previewOnly: !options.silent };
+        let result;
+        if (action === 'trace') result = await YuzukiMemory.TaskRunner.runTrace(state, taskOptions);
+        else if (action === 'summary') result = await YuzukiMemory.TaskRunner.runSummary(state, taskOptions);
+        else if (action === 'traceOptimize') result = await YuzukiMemory.TaskRunner.runTraceOptimize(state, taskOptions);
+        else if (action === 'summaryOptimize') result = await YuzukiMemory.TaskRunner.runSummaryOptimize(state, taskOptions);
+        else return { success: false, error: '未知任务类型。' };
+
+        if (!result?.success) return result;
+        if (!options.silent) {
+            const approved = await openTaskResultConfirmDialog(ensureRoot(), {
+                title: `${getTaskActionLabel(action)}结果确认`,
+                description: options.batchIndex
+                    ? `第 ${options.batchIndex}/${options.batchTotal} 批，范围 ${options.start}-${options.end}（不含 ${options.end}）。确认后才会写入插件记忆。`
+                    : '非静默模式下，确认后才会写入插件记忆。',
+                result,
+            });
+            if (!approved) return { success: false, cancelled: true, error: '用户取消写入。' };
+            result = commitTaskResult(action, state, result);
+        }
+        return result;
+    }
+
+    async function runTaskBatchWithRetry(state, action, options, retries = 1) {
+        let lastResult = null;
+        let lastError = null;
+        for (let attempt = 0; attempt <= retries; attempt += 1) {
+            if (taskRunnerStopRequested) return { success: false, cancelled: true, aborted: true, error: '任务已停止。' };
+            taskRunnerAbortController = new AbortController();
+            try {
+                const result = await runSingleTaskBatch(state, action, {
+                    ...options,
+                    signal: taskRunnerAbortController.signal,
+                });
+                lastResult = result;
+                if (result?.aborted || taskRunnerStopRequested) return { ...result, success: false, cancelled: true, aborted: true, error: '任务已停止。' };
+                if (result?.success || result?.cancelled) return result;
+                lastError = new Error(result?.error || '任务执行失败。');
+            } catch (error) {
+                if (taskRunnerAbortController.signal.aborted || taskRunnerStopRequested || error?.name === 'AbortError') {
+                    return { success: false, cancelled: true, aborted: true, error: '任务已停止。' };
+                }
+                lastError = error;
+            } finally {
+                taskRunnerAbortController = null;
+            }
+
+            if (attempt < retries) {
+                console.warn(`[yuzuki-Memory Task] 第 ${options.batchIndex || 1} 批失败，5 秒后重试。`, lastError);
+                if (!await waitForTaskBuffer('连接不稳定，等待后重试', 5)) {
+                    return { success: false, cancelled: true, aborted: true, error: '任务已停止。' };
+                }
+            }
+        }
+        return lastResult || { success: false, error: String(lastError?.message || lastError || '任务执行失败。') };
     }
 
     async function runTaskFromPanel(root, button, action) {
         if (!YuzukiMemory.TaskRunner) {
             window.alert('任务执行模块尚未加载。');
+            return;
+        }
+        if (button?.dataset?.yzmTaskStop === 'true') {
+            requestStopTaskRunner(root);
+            return;
+        }
+        if (taskRunnerBusy) {
+            window.alert('当前已有追溯/总结任务正在执行，请等待完成后再开始。');
             return;
         }
         const panel = button.closest('.yzm-trace-panel');
@@ -3888,47 +4272,78 @@
             window.alert('请选择有效的楼层范围。');
             return;
         }
-        if (!options.silent && !window.confirm('即将调用 LLM 执行任务。模型返回后会先弹窗确认，再写入记忆。是否继续？')) return;
-
         setTaskButtonRunning(button, true);
+        taskRunnerBusy = true;
+        taskRunnerStopRequested = false;
+        taskRunnerActiveAction = action;
+        taskRunnerProgressLabel = '停止任务';
         try {
             const state = getState();
-            const taskOptions = { ...options, previewOnly: !options.silent };
-            let result;
-            if (action === 'trace') result = await YuzukiMemory.TaskRunner.runTrace(state, taskOptions);
-            else if (action === 'summary') result = await YuzukiMemory.TaskRunner.runSummary(state, taskOptions);
-            else if (action === 'traceOptimize') result = await YuzukiMemory.TaskRunner.runTraceOptimize(state, taskOptions);
-            else if (action === 'summaryOptimize') result = await YuzukiMemory.TaskRunner.runSummaryOptimize(state, taskOptions);
-            else return;
+            const canBatch = action === 'trace' || action === 'summary';
+            const batches = canBatch ? buildTaskBatches(options) : [{ start: options.start, end: options.end }];
+            const results = [];
+            for (let index = 0; index < batches.length; index += 1) {
+                if (taskRunnerStopRequested) break;
+                const batch = batches[index];
+                taskRunnerProgressLabel = batches.length > 1 ? `停止 (${index + 1}/${batches.length})` : '停止任务';
+                setTaskButtonRunning(button, true, taskRunnerProgressLabel);
+                const result = await runTaskBatchWithRetry(state, action, {
+                    ...options,
+                    ...batch,
+                    batchIndex: batches.length > 1 ? index + 1 : 0,
+                    batchTotal: batches.length,
+                }, action === 'trace' ? 1 : 0);
+                if (taskRunnerStopRequested) break;
+                if (!result?.success) {
+                    if (result?.cancelled) return;
+                    const shouldContinue = index < batches.length - 1
+                        ? window.confirm(`第 ${index + 1} 批执行失败：\n${result?.error || '未知错误'}\n\n是否继续后续批次？`)
+                        : false;
+                    if (!shouldContinue) {
+                        window.alert(result?.error || `第 ${index + 1} 批执行失败。`);
+                        return;
+                    }
+                    if (!await waitForTaskBuffer('批次失败后缓冲，等待状态稳定', 6)) break;
+                    if (index < batches.length - 1 && !await waitForTaskBuffer('批次间冷却，避免触发限流', 5)) break;
+                    continue;
+                }
+                results.push(result);
+                if (action === 'trace' && result.range?.end !== undefined) updateManualPointerSetting('trace', result.range.end);
+                if (action === 'summary' && result.range?.end !== undefined) updateManualPointerSetting('summary', result.range.end);
+                refreshAfterTask(root);
+                if (!await waitForTaskBuffer('等待数据完全写入', 6)) break;
+                if (index < batches.length - 1 && !await waitForTaskBuffer('批次间冷却，避免触发限流', 5)) break;
+            }
 
-            if (!result?.success) {
-                window.alert(result?.error || '任务执行失败。');
+            if (taskRunnerStopRequested) {
+                refreshAfterTask(root);
+                window.alert(results.length ? `任务已停止，已完成 ${results.length} 批。` : '任务已停止。');
                 return;
             }
 
-            if (!options.silent) {
-                const approved = await openTaskResultConfirmDialog(root, {
-                    title: `${getTaskActionLabel(action)}结果确认`,
-                    description: '非静默模式下，确认后才会写入插件记忆。',
-                    result,
-                });
-                if (!approved) return;
-                result = commitTaskResult(action, state, result);
-                if (!result?.success) {
-                    window.alert(result?.error || '写入失败。');
-                    return;
-                }
+            if (!results.length) {
+                window.alert('任务结束，但没有任何批次成功写入。');
+                return;
             }
 
-            if (action === 'trace' && result.range?.end !== undefined) updateManualPointerSetting('trace', result.range.end);
-            if (action === 'summary' && result.range?.end !== undefined) updateManualPointerSetting('summary', result.range.end);
+            const result = mergeTaskResults(results, action);
             refreshAfterTask(root);
-            if (!options.silent) window.alert(`执行完成，写入 ${result.count || 0} 条。`);
+            if (action === 'summary' && getAutoSummarySettings().autoVectorizeAfterHistory === true) {
+                await syncSummaryToVectorBook({ vectorize: true });
+            }
+            await waitForTaskBuffer('最终缓冲，等待数据完全落盘', 2);
+            if (!options.silent) window.alert(`执行完成，共 ${results.length} 批，写入 ${result.count || 0} 条。`);
         } catch (error) {
             console.error('[yuzuki-Memory] Task failed.', error);
             window.alert(`任务执行失败：${String(error?.message || error || '未知错误')}`);
         } finally {
+            taskRunnerAbortController = null;
+            taskRunnerBusy = false;
             setTaskButtonRunning(button, false);
+            taskRunnerStopRequested = false;
+            taskRunnerActiveAction = '';
+            taskRunnerProgressLabel = '';
+            refreshAfterTask(root);
         }
     }
 
@@ -4048,8 +4463,9 @@
         desc.textContent = getPromptSchemeDescription(section.id);
         header.append(title, desc);
 
+        const tracePromptField = getActivePromptSchemeDraft().modes?.trace === 'batch' ? 'traceBatch' : 'traceRealtime';
         const fields = section.id === 'trace'
-            ? ['trace', 'traceOptimize']
+            ? [tracePromptField, 'traceOptimize']
             : ['summary', 'summaryOptimize'];
         panel.append(header, ...fields.map((fieldId) => createPromptSchemeEditorCard(fieldId)));
         return panel;
@@ -4067,7 +4483,7 @@
         const expand = createSchemeExpandButton();
         const actions = document.createElement('div');
         actions.className = 'yzm-scheme-card-actions';
-        const modeGroup = createPromptSchemeModeGroup(fieldId);
+        const modeGroup = createPromptSchemeModeGroup(fieldId === 'traceRealtime' || fieldId === 'traceBatch' ? 'trace' : fieldId);
         if (modeGroup) actions.appendChild(modeGroup);
         actions.appendChild(expand);
         cardHeader.append(cardTitle, actions);
@@ -4254,10 +4670,31 @@
         const title = document.createElement('strong');
         title.textContent = '角色专用自动加载';
         const desc = document.createElement('span');
-        desc.textContent = '开启后，当前角色进入时自动使用指定方案。';
+        desc.textContent = `开启后，${getCurrentCharacterPromptLabel()} 会自动使用当前方案；关闭后恢复普通当前方案。`;
         text.append(title, desc);
-        row.append(text, createConfigSwitch(true));
+        const toggle = createConfigSwitch(isCharacterPromptSchemeAutoloadEnabled());
+        toggle.dataset.yzmSchemeAutoloadToggle = 'true';
+        row.append(text, toggle);
         return row;
+    }
+
+    function togglePromptSchemeAutoLoad(root, isOn) {
+        const currentScheme = getActivePromptSchemeDraft();
+        if (isOn) {
+            const schemeId = currentScheme.id || getFallbackPromptSchemeId();
+            if (!schemeId || !bindPromptSchemeToCurrentCharacter(schemeId)) {
+                window.alert('当前未识别到可绑定的角色卡。');
+                return;
+            }
+            getState().promptPresetId = schemeId;
+        } else {
+            unbindPromptSchemeFromCurrentCharacter();
+            const fallbackId = getUnboundPromptSchemeId();
+            getState().promptPresetId = fallbackId;
+        }
+        activePromptSchemeDraft = null;
+        saveState();
+        renderPromptSchemeWorkspace(root);
     }
 
     function startNewPromptScheme(root) {
@@ -4305,6 +4742,8 @@
         }
         setActivePromptSchemeDraft(savePromptSchemes(schemes).find((scheme) => scheme.id === draft.id) || draft);
         getState().promptPresetId = draft.id;
+        if (isCharacterPromptSchemeAutoloadEnabled()) bindPromptSchemeToCurrentCharacter(draft.id);
+        else saveGlobalPromptSchemeId(draft.id);
         saveState();
         renderPromptSchemeWorkspace(root);
     }
@@ -4320,13 +4759,111 @@
             renderPromptSchemeWorkspace(root);
             return;
         }
+        cleanupPromptSchemeBindings(draft.id);
         const schemes = savePromptSchemes(getPromptSchemes().filter((scheme) => scheme.id !== draft.id));
         setActivePromptSchemeDraft(schemes[0] || createEmptyPromptScheme(''));
         getState().promptPresetId = activePromptSchemeDraft?.id || '';
+        saveGlobalPromptSchemeId(getState().promptPresetId);
         saveState();
         activePromptSchemeSectionId = 'info';
         renderPromptSchemeWorkspace(root);
         refreshPromptSchemeNav(root);
+    }
+
+    function deletePromptSchemeById(root, schemeId) {
+        const scheme = getPromptSchemes().find((entry) => entry.id === schemeId);
+        if (!scheme || scheme.builtin) return false;
+        if (!window.confirm(`确定删除整套方案「${scheme.name}」吗？`)) return false;
+        const wasActive = getActivePromptSchemeDraft().id === scheme.id || getState().promptPresetId === scheme.id;
+        cleanupPromptSchemeBindings(scheme.id);
+        const schemes = savePromptSchemes(getPromptSchemes().filter((entry) => entry.id !== scheme.id));
+        if (wasActive) {
+            const nextScheme = schemes[0] || getPromptSchemes()[0] || null;
+            setActivePromptSchemeDraft(nextScheme || createEmptyPromptScheme(''));
+            getState().promptPresetId = activePromptSchemeDraft?.id || '';
+            saveGlobalPromptSchemeId(getState().promptPresetId);
+            saveState();
+        }
+        renderPromptSchemeWorkspace(root);
+        refreshPromptSchemeNav(root);
+        return true;
+    }
+
+    function createPromptSchemeOrganizerRow(scheme, index) {
+        const row = document.createElement('div');
+        row.className = 'yzm-scheme-organizer-row';
+        row.dataset.yzmSchemeOrganizerId = scheme.id;
+
+        const text = document.createElement('div');
+        text.className = 'yzm-scheme-organizer-name';
+        text.textContent = scheme.name || '未命名方案';
+
+        const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-organizer-action yzm-organizer-danger');
+        deleteButton.dataset.yzmSchemeOrganizerDelete = scheme.id;
+        deleteButton.hidden = scheme.builtin === true;
+
+        row.append(text, deleteButton);
+        return row;
+    }
+
+    function openPromptSchemeOrganizer(root) {
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-scheme-organizer-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-scheme-organizer-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-record-organizer-dialog';
+        dialog.setAttribute('aria-label', '方案整理');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = '记忆方案 · 整理';
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭方案整理');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const list = document.createElement('div');
+        list.className = 'yzm-organizer-list';
+        const renderList = () => {
+            list.replaceChildren(...getPromptSchemes().map((scheme, index) => createPromptSchemeOrganizerRow(scheme, index)));
+            if (!list.children.length) {
+                const empty = document.createElement('div');
+                empty.className = 'yzm-organizer-empty';
+                empty.textContent = '暂无方案。';
+                list.appendChild(empty);
+            }
+        };
+        renderList();
+
+        const hint = document.createElement('div');
+        hint.className = 'yzm-structure-hint';
+        hint.textContent = '内置默认方案不能删除，用户方案可整套删除。';
+
+        dialog.append(header, list, hint);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => overlay.remove();
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => {
+            event.stopPropagation();
+            const target = event.target instanceof Element ? event.target : null;
+            const deleteButton = target?.closest('[data-yzm-scheme-organizer-delete]');
+            if (!deleteButton) return;
+            if (deletePromptSchemeById(root, deleteButton.dataset.yzmSchemeOrganizerDelete || '')) {
+                renderList();
+            }
+        });
     }
 
     function applyPromptSchemeSelection(root, schemeId) {
@@ -4334,6 +4871,8 @@
         if (!scheme) return;
         setActivePromptSchemeDraft(scheme);
         getState().promptPresetId = scheme.id;
+        if (isCharacterPromptSchemeAutoloadEnabled()) bindPromptSchemeToCurrentCharacter(scheme.id);
+        else saveGlobalPromptSchemeId(scheme.id);
         saveState();
         renderPromptSchemeWorkspace(root);
     }
@@ -4354,6 +4893,8 @@
 
     function getPromptSchemeFieldLabel(fieldId) {
         if (fieldId === 'historian') return '史官破限（System Pre-Prompt）';
+        if (fieldId === 'traceRealtime') return '实时填表提示词';
+        if (fieldId === 'traceBatch') return '批量填表提示词';
         if (fieldId === 'trace') return '追溯填表提示词';
         if (fieldId === 'traceOptimize') return '追溯优化提示词';
         if (fieldId === 'summary') return '总结提示词';
@@ -4362,6 +4903,8 @@
 
     function getPromptSchemePlaceholder(sectionId) {
         if (sectionId === 'historian') return '填写史官破限提示词...';
+        if (sectionId === 'traceRealtime') return '填写实时填表提示词...';
+        if (sectionId === 'traceBatch') return '填写批量填表提示词...';
         if (sectionId === 'trace') return '填写追溯填表提示词...';
         if (sectionId === 'traceOptimize') return '填写追溯优化提示词...';
         if (sectionId === 'summary') return '填写总结提示词...';
@@ -4369,6 +4912,11 @@
     }
 
     function getPromptSchemeDraftValue(sectionId) {
+        if (sectionId === 'traceRealtime') {
+            const prompts = getActivePromptSchemeDraft().prompts || {};
+            return prompts.traceRealtime || prompts.trace || '';
+        }
+        if (sectionId === 'traceBatch') return getActivePromptSchemeDraft().prompts?.traceBatch || '';
         return getActivePromptSchemeDraft().prompts?.[sectionId] || '';
     }
 
@@ -6447,6 +6995,7 @@
     }
 
     function createFillModePanel() {
+        const settings = getPluginSettings();
         const card = document.createElement('section');
         card.className = 'yzm-config-card yzm-fill-mode-card';
 
@@ -6457,8 +7006,8 @@
         const modeRow = document.createElement('div');
         modeRow.className = 'yzm-fill-mode-row';
         modeRow.append(
-            createModeChoice('实时填表', 'fa-solid fa-bolt', '酒馆正文一起返回', true),
-            createModeChoice('批量填表', 'fa-solid fa-layer-group', '按楼层批量处理，API单独请求。', false)
+            createModeChoice('实时填表', 'fa-solid fa-bolt', '酒馆正文一起返回', settings.fillMode === 'realtime', 'realtime'),
+            createModeChoice('批量填表', 'fa-solid fa-layer-group', '按楼层批量处理，API单独请求。', settings.fillMode === 'batch', 'batch')
         );
 
         card.append(titleNode, modeRow);
@@ -6491,10 +7040,11 @@
         return spacer;
     }
 
-    function createModeChoice(title, iconClassName, description, isActive) {
+    function createModeChoice(title, iconClassName, description, isActive, mode = '') {
         const button = document.createElement('button');
         button.type = 'button';
         button.className = isActive ? 'yzm-fill-mode-choice yzm-fill-mode-choice-active' : 'yzm-fill-mode-choice';
+        button.dataset.yzmFillMode = mode;
         button.innerHTML = `<i class="${iconClassName}" aria-hidden="true"></i><span>${title}</span><small>${description}</small>`;
         return button;
     }
@@ -6655,12 +7205,13 @@
         const rows = document.createElement('div');
         rows.className = 'yzm-item-detail-rows';
         const columns = (table.columns || []).filter((column) => (
-            column !== getPrimaryColumn(table)
-            && column !== '状态'
-            && column !== '备注'
+            cleanColumnName(column) !== getPrimaryColumn(table)
+            && cleanColumnName(column) !== '状态'
+            && cleanColumnName(column) !== '备注'
         ));
         columns.forEach((column) => {
-            rows.appendChild(createItemDetailRow(column, getRecordValueByCandidates(record, column === '物品位置' ? ['物品位置', '当前位置'] : [column])));
+            const name = cleanColumnName(column);
+            rows.appendChild(createItemDetailRow(name, getRecordValueByCandidates(record, name === '物品位置' ? ['物品位置', '当前位置'] : [name])));
         });
 
         const note = document.createElement('div');
@@ -6733,7 +7284,7 @@
 
         const rows = document.createElement('div');
         rows.className = 'yzm-world-detail-rows';
-        const columns = (table.columns || []).filter((column) => column !== getPrimaryColumn(table) && column !== '类型');
+        const columns = (table.columns || []).map(cleanColumnName).filter((column) => column !== getPrimaryColumn(table) && column !== '类型');
         columns.forEach((column) => {
             rows.appendChild(createWorldDetailRow(column, getRecordValue(record, column)));
         });
@@ -7127,7 +7678,7 @@
 
         const columnsInput = document.createElement('textarea');
         columnsInput.className = 'yzm-structure-columns-input';
-        columnsInput.value = table.columns.map((column) => `#${column}`).join(', ');
+        columnsInput.value = table.columns.join(', ');
         columnsInput.setAttribute('aria-label', '列名列表');
 
         const iconPicker = document.createElement('div');
@@ -7143,7 +7694,7 @@
 
         const hint = document.createElement('div');
         hint.className = 'yzm-structure-hint';
-        hint.textContent = '列名用逗号分隔，# 可保留或省略。';
+        hint.textContent = '列名用逗号分隔；列名前加 # 表示该列更新时追加到原内容，不加 # 表示覆盖更新。';
 
         const actions = document.createElement('div');
         actions.className = 'yzm-structure-actions';
@@ -7172,7 +7723,7 @@
             table.icon = nextIcon;
             table.columns = columnsInput.value
                 .split(/[,，\n]/)
-                .map((column) => column.trim().replace(/^#/, ''))
+                .map(normalizeColumnDefinition)
                 .filter(Boolean);
 
             item.querySelector('[data-yzm-table-name]')?.replaceChildren(createTableIcon(table), document.createTextNode(nextName));
@@ -8050,7 +8601,8 @@
         const fields = document.createElement('div');
         fields.className = 'yzm-record-fields';
         table.columns.forEach((column) => {
-            fields.appendChild(createRecordInput(column, getRecordValue(record, column), isRecordEditorMultilineField(table, column)));
+            const name = cleanColumnName(column);
+            fields.appendChild(createRecordInput(name, getRecordValue(record, name), isRecordEditorMultilineField(table, name)));
         });
 
         const actions = document.createElement('div');
@@ -8081,7 +8633,10 @@
                 return;
             }
 
-            record.values = Object.fromEntries((table.columns || []).map((column) => [column, values[column] || '']));
+            record.values = Object.fromEntries((table.columns || []).map((column) => {
+                const name = cleanColumnName(column);
+                return [name, values[name] || ''];
+            }));
             const records = getRecords(table.id);
             if (isNewRecord) records.push(record);
             setActiveRecordId(table.id, record.id);
@@ -8216,6 +8771,10 @@
                 event.preventDefault();
                 event.stopPropagation();
                 closeMoreMenu(root);
+                if (activeWorkspaceView === 'scheme') {
+                    openPromptSchemeOrganizer(root);
+                    return;
+                }
                 openRecordOrganizer(root);
             });
         }
@@ -8614,14 +9173,23 @@
                 const target = event.target instanceof Element ? event.target : null;
                 const actionButton = target?.closest('[data-yzm-trace-action]');
                 const taskButton = target?.closest('[data-yzm-task-action]');
-                if (!actionButton && !taskButton) return;
+                const batchSwitch = target?.closest('[data-yzm-task-batch-enabled]');
+                if (!actionButton && !taskButton && !batchSwitch) return;
                 event.preventDefault();
                 event.stopPropagation();
                 if (actionButton?.dataset.yzmTraceAction === 'editPointer') openTracePointerDialog(root);
+                if (batchSwitch) {
+                    updateTaskBatchEnabled(batchSwitch);
+                    return;
+                }
                 if (taskButton) void runTaskFromPanel(root, taskButton, taskButton.dataset.yzmTaskAction || '');
             });
             traceView.addEventListener('change', (event) => {
                 const target = event.target instanceof HTMLInputElement ? event.target : null;
+                if (target?.matches('[data-yzm-task-batch-size]')) {
+                    updateTaskBatchSize(target);
+                    return;
+                }
                 if (!target || target.name !== 'yzm-trace-run-mode') return;
                 const panel = target.closest('.yzm-trace-panel');
                 panel?.querySelectorAll('.yzm-trace-radio-active').forEach((node) => {
@@ -8629,6 +9197,10 @@
                 });
                 target.closest('.yzm-trace-radio')?.classList.add('yzm-trace-radio-active');
             });
+            traceView.addEventListener('blur', (event) => {
+                const target = event.target instanceof HTMLInputElement ? event.target : null;
+                if (target?.matches('[data-yzm-task-batch-size]')) updateTaskBatchSize(target);
+            }, true);
         }
 
         const summaryToolView = root.querySelector('.yzm-summary-tool-view');
@@ -8638,14 +9210,23 @@
                 const target = event.target instanceof Element ? event.target : null;
                 const actionButton = target?.closest('[data-yzm-trace-action]');
                 const taskButton = target?.closest('[data-yzm-task-action]');
-                if (!actionButton && !taskButton) return;
+                const batchSwitch = target?.closest('[data-yzm-task-batch-enabled]');
+                if (!actionButton && !taskButton && !batchSwitch) return;
                 event.preventDefault();
                 event.stopPropagation();
                 if (actionButton?.dataset.yzmTraceAction === 'editSummaryPointer') openSummaryPointerDialog(root);
+                if (batchSwitch) {
+                    updateTaskBatchEnabled(batchSwitch);
+                    return;
+                }
                 if (taskButton) void runTaskFromPanel(root, taskButton, taskButton.dataset.yzmTaskAction || '');
             });
             summaryToolView.addEventListener('change', (event) => {
                 const target = event.target instanceof HTMLInputElement ? event.target : null;
+                if (target?.matches('[data-yzm-task-batch-size]')) {
+                    updateTaskBatchSize(target);
+                    return;
+                }
                 if (!target || target.name !== 'yzm-summary-run-mode') return;
                 const panel = target.closest('.yzm-summary-tool-panel');
                 panel?.querySelectorAll('.yzm-trace-radio-active').forEach((node) => {
@@ -8653,6 +9234,10 @@
                 });
                 target.closest('.yzm-trace-radio')?.classList.add('yzm-trace-radio-active');
             });
+            summaryToolView.addEventListener('blur', (event) => {
+                const target = event.target instanceof HTMLInputElement ? event.target : null;
+                if (target?.matches('[data-yzm-task-batch-size]')) updateTaskBatchSize(target);
+            }, true);
         }
 
         root.querySelectorAll('.yzm-scheme-nav-item').forEach((item) => {
@@ -8676,7 +9261,15 @@
                 const menuButton = target?.closest('[data-yzm-scheme-menu]');
                 const schemeAction = target?.closest('[data-yzm-scheme-action]');
                 const modeButton = target?.closest('[data-yzm-scheme-mode]');
+                const autoLoadToggle = target?.closest('[data-yzm-scheme-autoload-toggle]');
                 const expandButton = target?.closest('[data-yzm-scheme-expand]');
+                if (autoLoadToggle) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const isOn = toggleConfigSwitch(autoLoadToggle);
+                    togglePromptSchemeAutoLoad(root, isOn);
+                    return;
+                }
                 if (modeButton) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -8685,6 +9278,7 @@
                     modeButton.closest('[data-yzm-scheme-mode-group]')?.querySelectorAll('.yzm-scheme-mode-button').forEach((button) => {
                         button.classList.toggle('yzm-scheme-mode-button-active', button === modeButton);
                     });
+                    renderPromptSchemeWorkspace(root);
                     return;
                 }
                 if (schemeAction && !menuButton) {
@@ -8855,6 +9449,7 @@
                 const deleteButton = target?.closest?.('.yzm-preset-delete');
                 const addButton = target?.closest?.('.yzm-tag-chip-add');
                 const tagChip = target?.closest?.('[data-yzm-tag-chip]');
+                const fillModeButton = target?.closest?.('[data-yzm-fill-mode]');
                 const configSwitch = target?.closest?.('.yzm-config-switch');
                 const autoSummarySave = target?.closest?.('.yzm-auto-summary-save');
                 const autoSummaryReset = target?.closest?.('.yzm-auto-summary-reset');
@@ -8888,6 +9483,15 @@
 
                 if (tagChip) {
                     tagChip.remove();
+                    return;
+                }
+
+                if (fillModeButton) {
+                    const mode = fillModeButton.dataset.yzmFillMode === 'batch' ? 'batch' : 'realtime';
+                    updatePluginSetting('fillMode', mode);
+                    root.querySelectorAll('[data-yzm-fill-mode]').forEach((button) => {
+                        button.classList.toggle('yzm-fill-mode-choice-active', button === fillModeButton);
+                    });
                     return;
                 }
 
@@ -9182,19 +9786,54 @@
         }
 
         memoryState = createDefaultState();
-        renderPanelState(root);
+        refreshActiveWorkspace(root);
 
         window.setTimeout(() => {
             loadedSessionId = nextSessionId || getStorage()?.getCurrentSessionId?.() || null;
             memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
-            renderPanelState(root);
-            if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
+            applyResolvedPromptSchemeToState({ save: false });
+            refreshActiveWorkspace(root);
+            scheduleSessionWorkspaceRefresh(root, loadedSessionId);
             getStorage()?.endSessionSwitch?.();
         }, 220);
 
         window.setTimeout(() => {
             getStorage()?.endSessionSwitch?.();
         }, 1200);
+    }
+
+    function reloadStateFromStorage() {
+        const root = ensureRoot();
+        loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
+        memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+        applyResolvedPromptSchemeToState({ save: false });
+        refreshActiveWorkspace(root);
+    }
+
+    function scheduleSessionWorkspaceRefresh(root, sessionId) {
+        [650, 1300].forEach((delay) => {
+            window.setTimeout(() => {
+                const currentSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
+                if (sessionId && currentSessionId && sessionId !== currentSessionId) return;
+                refreshActiveWorkspace(root);
+            }, delay);
+        });
+    }
+
+    function bindChatContextRefresh() {
+        if (chatContextRefreshBound) return;
+        const context = getContext();
+        const eventSource = context?.eventSource || window.eventSource;
+        const eventTypes = context?.event_types || window.event_types;
+        if (!eventSource || !eventTypes?.CHAT_CHANGED || typeof eventSource.on !== 'function') return;
+
+        chatContextRefreshBound = true;
+        eventSource.on(eventTypes.CHAT_CHANGED, () => {
+            const root = document.getElementById(ROOT_ID);
+            if (!root) return;
+            window.setTimeout(() => refreshActiveWorkspace(root), 80);
+            window.setTimeout(() => refreshActiveWorkspace(root), 420);
+        });
     }
 
     function toggleShell(forceOpen = false) {
@@ -9285,6 +9924,7 @@
 
     function mount() {
         ensureRoot();
+        applyResolvedPromptSchemeToState({ save: false });
         syncFloatingIcon();
         YuzukiMemory.TaskRunner?.bindAutoSummary?.({
             getState,
@@ -9313,6 +9953,11 @@
         getStorage()?.bindSessionChange?.((nextSessionId, previousSessionId) => {
             reloadStateForCurrentSession(nextSessionId, previousSessionId);
         });
+        bindChatContextRefresh();
+        if (!window.yzmMemoryStateUpdateBound) {
+            window.yzmMemoryStateUpdateBound = true;
+            window.addEventListener('yzm-memory-state-updated', reloadStateFromStorage);
+        }
         getVectorStore()?.whenReady?.().then(() => {
             const root = document.getElementById(ROOT_ID);
             if (root) renderVectorWorkspace(root);

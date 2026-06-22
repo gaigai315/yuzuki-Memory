@@ -3,6 +3,8 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
+    const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
+    const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const DEFAULT_STATE_REVISION = 12;
@@ -19,7 +21,7 @@
             id: 'plot_summary',
             name: '剧情摘要',
             icon: 'timeline',
-            columns: ['主线', '支线'],
+            columns: ['#主线', '#支线'],
         },
         {
             id: 'character_profile',
@@ -106,6 +108,17 @@
         };
     }
 
+    function getCurrentCharacterPromptKey() {
+        const context = getContext() || {};
+        if (context.groupId) return `group:${context.groupId}`;
+        const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
+        const characterId = context.characterId;
+        const raw = characterId !== undefined && characterId !== null && String(characterId) !== ''
+            ? characterId
+            : (character?.avatar || character?.name || context.name2 || context.characterName || '');
+        return raw !== '' ? `char:${raw}` : '';
+    }
+
     function resolveRuntimeVariables(text) {
         const names = getRuntimeNames();
         return String(text || '')
@@ -120,11 +133,13 @@
             return {
                 injectMemoryTable: settings.injectMemoryTable !== false,
                 injectVectorMemory: settings.injectVectorMemory === true,
+                fillMode: settings.fillMode === 'batch' ? 'batch' : 'realtime',
             };
         } catch (_error) {
             return {
                 injectMemoryTable: true,
                 injectVectorMemory: false,
+                fillMode: 'realtime',
             };
         }
     }
@@ -145,10 +160,15 @@
             name,
             prompts: {
                 historian: String(prompts.historian || ''),
-                trace: String(prompts.trace ?? prompts.table ?? ''),
+                traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
+                traceBatch: String(prompts.traceBatch ?? ''),
+                trace: String(prompts.trace ?? prompts.traceRealtime ?? prompts.table ?? ''),
                 traceOptimize: String(prompts.traceOptimize ?? prompts.table ?? ''),
                 summary: String(prompts.summary ?? prompts.summaryOptimize ?? ''),
                 summaryOptimize: String(prompts.summaryOptimize ?? prompts.summary ?? ''),
+            },
+            modes: {
+                trace: String(rawScheme.modes?.trace || rawScheme.modes?.table || 'realtime'),
             },
         };
     }
@@ -158,21 +178,38 @@
             const raw = YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEMES_STORAGE_KEY, [])
                 ?? JSON.parse(localStorage.getItem(PROMPT_SCHEMES_STORAGE_KEY) || '[]');
             const schemes = Array.isArray(raw) ? raw.map(normalizePromptScheme).filter(Boolean) : [];
-            if (!schemes.length) {
-                const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
-                return defaultScheme ? [defaultScheme] : [];
-            }
-            return schemes;
+            const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
+            return [defaultScheme, ...schemes].filter((scheme, index, list) => (
+                scheme && list.findIndex((entry) => entry?.id === scheme.id) === index
+            ));
         } catch (_error) {
             const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
             return defaultScheme ? [defaultScheme] : [];
         }
     }
 
+    function getPromptSchemeBindings() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY, {})
+                ?? JSON.parse(localStorage.getItem(PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY) || '{}');
+            return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+        } catch (_error) {
+            return {};
+        }
+    }
+
     function getActivePromptScheme(state = getCurrentState()) {
         const schemes = getPromptSchemes();
         if (!schemes.length) return null;
-        const activeId = String(state?.promptPresetId || '');
+        const bindings = getPromptSchemeBindings();
+        const characterKey = getCurrentCharacterPromptKey();
+        const characterId = characterKey && bindings && typeof bindings === 'object'
+            ? String(bindings[characterKey] || '')
+            : '';
+        const globalId = String(YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY, '')
+            ?? localStorage.getItem(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY)
+            ?? '');
+        const activeId = characterId || globalId || String(state?.promptPresetId || '');
         return schemes.find((scheme) => scheme.id === activeId) || schemes[0] || null;
     }
 
@@ -193,8 +230,12 @@
         return Array.isArray(records) ? records : [];
     }
 
+    function cleanColumnName(column) {
+        return String(column || '').trim().replace(/^#/, '').trim();
+    }
+
     function getPrimaryColumn(table) {
-        return table?.columns?.[0] || '名称';
+        return cleanColumnName(table?.columns?.[0]) || '名称';
     }
 
     function isRecordVisible(record) {
@@ -206,8 +247,9 @@
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const lines = (Array.isArray(table.columns) ? table.columns : [])
             .map((column) => {
-                const value = String(values[column] || '').trim();
-                return value ? `${column}: ${value}` : '';
+                const name = cleanColumnName(column);
+                const value = String(values[name] ?? values[column] ?? '').trim();
+                return value ? `${name}: ${value}` : '';
             })
             .filter(Boolean);
         return lines.length ? `- ${lines.join('；')}` : '';
@@ -269,14 +311,14 @@
             .filter((table) => !options.tableId || table.id === options.tableId);
         const lines = tables.map((table) => {
             const columns = (Array.isArray(table.columns) ? table.columns : [])
-                .map((column) => String(column || '').trim())
+                .map(cleanColumnName)
                 .filter(Boolean);
             if (!columns.length) return `#${table.name}：包含`;
             const primary = columns[0];
             const fields = columns.map((column, index) => index === 0 ? `${column}(主键)` : column).join(', ');
             return `#${table.name}：包含 ${fields}`;
         }).filter(Boolean);
-        return compactLines(['【数据库结构定义】', ...lines]);
+        return compactLines(lines);
     }
 
     function summaryRecordToText(table, record) {
@@ -285,6 +327,7 @@
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const title = String(values[primary] || '').trim();
         const body = (Array.isArray(table.columns) ? table.columns : [])
+            .map(cleanColumnName)
             .filter((column) => column !== primary)
             .map((column) => {
                 const value = String(values[column] || '').trim();
@@ -348,10 +391,24 @@
         }));
     }
 
+    function resolvePromptTemplateVariables(text, state = getCurrentState()) {
+        return resolveRuntimeVariables(String(text || '')
+            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS)\}\}/gi, () => buildDatabaseSchemaText(state))
+            .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => buildSpecificTableText(state, tableName))
+            .replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => buildSpecificSummaryText(state, summaryKey))
+            .replace(/\{\{MEMORY_TABLE\}\}/gi, () => buildAllTablesText(state))
+            .replace(/\{\{MEMORY_SUMMARY\}\}/gi, () => buildSummaryText(state))
+            .replace(/\{\{MEMORY_PROMPT\}\}/gi, '')
+            .replace(/\{\{MEMORY\}\}/gi, () => compactLines([buildSummaryText(state), buildAllTablesText(state)]))
+            .replace(/\{\{VECTOR_MEMORY\}\}/gi, ''));
+    }
+
     function buildMemoryPromptText(state = getCurrentState()) {
+        if (getPluginSettings().fillMode !== 'realtime') return '';
         const scheme = getActivePromptScheme(state);
         const prompts = YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.(scheme || { prompts: {} }) || scheme?.prompts || {};
-        return resolveRuntimeVariables(compactLines([prompts.historian, prompts.trace || prompts.table]));
+        const tracePrompt = prompts.traceRealtime || prompts.trace;
+        return resolvePromptTemplateVariables(compactLines([tracePrompt]), state);
     }
 
     function buildMemoryText(state = getCurrentState()) {

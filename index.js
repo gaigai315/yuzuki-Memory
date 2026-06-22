@@ -13,6 +13,7 @@
     const MODULES = [
         'config/global-settings.js',
         'config/storage.js',
+        'config/memory-tag-parser.js',
         'config/prompt-library.js',
         'config/llm-client.js',
         'config/task-runner.js',

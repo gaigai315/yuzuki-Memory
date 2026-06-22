@@ -2485,6 +2485,7 @@
 
 #yzm-memory-root .yzm-table-content-view {
     min-height: 100%;
+    height: auto;
 }
 
 #yzm-memory-root .yzm-config-primary-header,
@@ -2978,6 +2979,15 @@
 
 #yzm-memory-root .yzm-trace-start-button i {
     color: var(--yzm-icon-active);
+}
+
+#yzm-memory-root .yzm-trace-start-button-stop {
+    background: linear-gradient(135deg, #e05252, #c93636);
+    box-shadow: 0 10px 20px rgba(201, 54, 54, 0.24);
+}
+
+#yzm-memory-root .yzm-trace-start-button-stop i {
+    color: #fff;
 }
 
 #yzm-memory-root .yzm-scheme-nav-item {
@@ -5121,7 +5131,7 @@
     gap: 18px;
     min-width: 0;
     min-height: 100%;
-    height: 100%;
+    height: auto;
     padding: 16px;
     box-sizing: border-box;
 }
@@ -5163,6 +5173,7 @@
     display: grid;
     grid-template-rows: 40px 86px 30px minmax(0, 1fr);
     min-height: 100%;
+    height: auto;
 }
 
 #yzm-memory-root .yzm-character-card-title,
@@ -5294,13 +5305,12 @@
 
 #yzm-memory-root .yzm-character-side {
     display: grid;
-    grid-auto-rows: minmax(112px, 1fr);
+    grid-auto-rows: minmax(112px, auto);
     gap: 16px;
     min-width: 0;
     min-height: 0;
-    overflow: auto;
+    overflow: visible;
     padding-right: 4px;
-    overscroll-behavior: contain;
 }
 
 #yzm-memory-root .yzm-character-panel {
@@ -5345,7 +5355,7 @@
 #yzm-memory-root .yzm-item-view {
     min-width: 0;
     min-height: 100%;
-    height: 100%;
+    height: auto;
     padding: 10px;
     box-sizing: border-box;
 }
@@ -5355,13 +5365,13 @@
     flex-direction: column;
     min-width: 0;
     min-height: 100%;
-    height: 100%;
+    height: auto;
     padding: 16px 18px;
     background: var(--yzm-surface);
     border: 1px solid var(--yzm-border);
     border-radius: 12px;
     box-sizing: border-box;
-    overflow: hidden;
+    overflow: visible;
 }
 
 #yzm-memory-root .yzm-item-detail-header {
@@ -5419,8 +5429,7 @@
 #yzm-memory-root .yzm-item-detail-rows {
     flex: 1 1 auto;
     min-height: 0;
-    overflow: auto;
-    overscroll-behavior: contain;
+    overflow: visible;
 }
 
 #yzm-memory-root .yzm-item-detail-row {
@@ -5496,7 +5505,7 @@
 #yzm-memory-root .yzm-world-view {
     min-width: 0;
     min-height: 100%;
-    height: 100%;
+    height: auto;
     padding: 10px;
     box-sizing: border-box;
 }
@@ -5506,13 +5515,13 @@
     flex-direction: column;
     min-width: 0;
     min-height: 100%;
-    height: 100%;
+    height: auto;
     padding: 16px 18px;
     background: var(--yzm-surface);
     border: 1px solid var(--yzm-border);
     border-radius: 12px;
     box-sizing: border-box;
-    overflow: hidden;
+    overflow: visible;
 }
 
 #yzm-memory-root .yzm-world-detail-header {
@@ -5570,8 +5579,7 @@
 #yzm-memory-root .yzm-world-detail-rows {
     flex: 1 1 auto;
     min-height: 0;
-    overflow: auto;
-    overscroll-behavior: contain;
+    overflow: visible;
 }
 
 #yzm-memory-root .yzm-world-detail-row {
@@ -5622,7 +5630,7 @@
 #yzm-memory-root .yzm-plot-view {
     min-width: 0;
     min-height: 100%;
-    height: 100%;
+    height: auto;
     padding: 8px;
     box-sizing: border-box;
 }
@@ -5632,12 +5640,12 @@
     flex-direction: column;
     min-width: 0;
     min-height: 100%;
-    height: 100%;
+    height: auto;
     background: var(--yzm-surface);
     border: 1px solid var(--yzm-border);
     border-radius: 12px;
     box-sizing: border-box;
-    overflow: hidden;
+    overflow: visible;
 }
 
 #yzm-memory-root .yzm-plot-header {
@@ -5684,13 +5692,12 @@
 #yzm-memory-root .yzm-plot-list {
     position: relative;
     display: flex;
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     flex-direction: column;
     gap: 7px;
     min-height: 0;
     padding: 8px 10px 10px;
-    overflow: auto;
-    overscroll-behavior: contain;
+    overflow: visible;
 }
 
 #yzm-memory-root .yzm-plot-list::before {
@@ -5904,11 +5911,11 @@
 
 #yzm-memory-root .yzm-summary-view {
     display: grid;
-    grid-template-rows: auto minmax(150px, 0.72fr) minmax(190px, 1fr);
+    grid-template-rows: auto minmax(150px, auto) minmax(190px, auto);
     gap: 12px;
     min-width: 0;
     min-height: 100%;
-    height: 100%;
+    height: auto;
     padding: 10px 12px 12px;
     box-sizing: border-box;
 }
@@ -5989,7 +5996,7 @@
     border: 1px solid var(--yzm-border);
     border-radius: 12px;
     box-sizing: border-box;
-    overflow: hidden;
+    overflow: visible;
 }
 
 #yzm-memory-root .yzm-summary-card-title {
@@ -6016,8 +6023,7 @@
     flex-direction: column;
     min-height: 0;
     padding: 8px 13px 12px;
-    overflow: auto;
-    overscroll-behavior: contain;
+    overflow: visible;
 }
 
 #yzm-memory-root .yzm-summary-timeline-row {
@@ -6083,7 +6089,7 @@
 #yzm-memory-root .yzm-summary-card-grid {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: minmax(86px, 0.92fr) minmax(76px, 0.78fr);
+    grid-template-rows: minmax(86px, auto) minmax(76px, auto);
     gap: 12px;
     min-width: 0;
     min-height: 0;
@@ -6094,17 +6100,16 @@
 }
 
 #yzm-memory-root .yzm-summary-text-body {
-    flex: 1 1 auto;
+    flex: 0 0 auto;
     min-height: 0;
     padding: 11px 13px;
     color: var(--yzm-text);
     box-sizing: border-box;
     font-size: 13px;
     line-height: 1.6;
-    overflow: auto;
+    overflow: visible;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    overscroll-behavior: contain;
 }
 
 #yzm-memory-root .yzm-structure-modal {
@@ -6549,6 +6554,30 @@
     border: 1px dashed var(--yzm-border);
     border-radius: 10px;
     box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-scheme-organizer-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    min-height: 46px;
+    padding: 8px 10px;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 10px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-scheme-organizer-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--yzm-title);
+    font-size: 14px;
+    font-weight: 600;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 #yzm-memory-root .yzm-vector-book-dialog {

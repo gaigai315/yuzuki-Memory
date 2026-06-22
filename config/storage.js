@@ -44,6 +44,35 @@
         return JSON.parse(JSON.stringify(value));
     }
 
+    function cleanColumnName(column) {
+        return String(column || '').trim().replace(/^#/, '').trim();
+    }
+
+    function normalizeColumnDefinition(column) {
+        const value = String(column || '').trim();
+        if (!value) return '';
+        return value.startsWith('#') ? `#${value.slice(1).trim()}` : value;
+    }
+
+    function normalizeTableColumns(table, fallback) {
+        const rawColumns = Array.isArray(table?.columns)
+            ? table.columns.map(normalizeColumnDefinition).filter(Boolean)
+            : ['名称', '内容'];
+        const fallbackTable = Array.isArray(fallback?.tables)
+            ? fallback.tables.find((entry) => entry.id === table?.id)
+            : null;
+        if (!fallbackTable) return rawColumns;
+
+        const fallbackColumns = Array.isArray(fallbackTable.columns) ? fallbackTable.columns : [];
+        const rawNames = rawColumns.map(cleanColumnName);
+        const fallbackNames = fallbackColumns.map(cleanColumnName);
+        const matchesDefaultShape = rawNames.length === fallbackNames.length
+            && rawNames.every((name, index) => name === fallbackNames[index]);
+        if (table?.id === 'plot_summary' && matchesDefaultShape) return [...fallbackColumns];
+        const allRawColumnsPrefixed = rawColumns.length > 0 && rawColumns.every((column) => column.startsWith('#'));
+        return matchesDefaultShape && allRawColumnsPrefixed ? [...fallbackColumns] : rawColumns;
+    }
+
     function normalizeState(rawState, fallbackState) {
         const fallback = clone(fallbackState);
         if (!rawState || typeof rawState !== 'object') return fallback;
@@ -59,9 +88,7 @@
                     id: String(table.id || `table_${index}_${Date.now()}`),
                     name: String(table.name || `未命名表${index + 1}`),
                     icon: String(table.icon || 'summary'),
-                    columns: Array.isArray(table.columns)
-                        ? table.columns.map((column) => String(column || '').trim()).filter(Boolean)
-                        : ['名称', '内容'],
+                    columns: normalizeTableColumns(table, fallback),
                     hidden: !!table.hidden,
                 }))
             : fallback.tables;
