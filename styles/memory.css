@@ -4532,7 +4532,6 @@
     border-radius: 999px;
     box-sizing: border-box;
     cursor: pointer;
-    transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 #yzm-memory-root .yzm-config-switch span {
@@ -4546,6 +4545,13 @@
     border-radius: 999px;
     box-shadow: 0 3px 8px rgba(40, 54, 110, 0.16);
     transform: translate3d(0, -50%, 0);
+}
+
+#yzm-memory-root .yzm-config-switch-animating {
+    transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
+}
+
+#yzm-memory-root .yzm-config-switch-animating span {
     transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), background 180ms ease, border-color 180ms ease;
 }
 

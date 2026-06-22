@@ -109,7 +109,7 @@
         return String(text || '')
             .replace(/<Memory>[\s\S]*?<\/Memory>/gi, '')
             .replace(/<GaigaiMemory>[\s\S]*?<\/GaigaiMemory>/gi, '')
-            .replace(/\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/gi, '')
+            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/gi, '')
             .trim();
     }
 
@@ -205,6 +205,30 @@
             })
             .filter(Boolean)
             .join('\n\n');
+    }
+
+    function buildDatabaseSchemaText(state, options = {}) {
+        if (YuzukiMemory.VariableInjector?.buildDatabaseSchemaText) {
+            return YuzukiMemory.VariableInjector.buildDatabaseSchemaText(state, options);
+        }
+        const lines = stateTables(state)
+            .filter((table) => !table.hidden && table.id !== FIXED_SUMMARY_TABLE_ID)
+            .filter((table) => !options.tableId || table.id === options.tableId)
+            .map((table) => {
+                const columns = (table.columns || []).map((column) => String(column || '').trim()).filter(Boolean);
+                const fields = columns.map((column, index) => index === 0 ? `${column}(主键)` : column).join(', ');
+                return `#${table.name}：包含 ${fields}`;
+            })
+            .filter(Boolean);
+        return compactLines(['【数据库结构定义】', ...lines]);
+    }
+
+    function resolveTaskPromptVariables(text, state, options = {}) {
+        const names = getRuntimeNames();
+        return String(text || '')
+            .replace(/\{\{user\}\}/g, names.user)
+            .replace(/\{\{char\}\}/g, names.char)
+            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS)\}\}/gi, () => buildDatabaseSchemaText(state, options));
     }
 
     function getActivePromptScheme(state) {
@@ -475,17 +499,11 @@
     }
 
     function getDefaultTracePrompt(state, options = {}) {
-        const tableInfo = stateTables(state)
-            .filter((table) => !table.hidden && table.id !== FIXED_SUMMARY_TABLE_ID)
-            .filter((table) => !options.tableId || table.id === options.tableId)
-            .map((table) => `- ${table.name} (id: ${table.id}) 字段: ${(table.columns || []).join(', ')}`)
-            .join('\n');
         return `你是记忆表格追溯助手。请阅读聊天记录，提取应该写入记忆表格的信息。
 只输出 JSON，不要解释。格式：
 {"records":[{"table":"表名或表ID","values":{"字段名":"字段值"}}]}
 
-可用表格：
-${tableInfo || '无'}`;
+{{DATABASE_SCHEMA}}`;
     }
 
     function getDefaultSummaryPrompt() {
@@ -504,7 +522,7 @@ ${tableInfo || '无'}`;
     function buildTraceMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
-        const prompt = compactLines([scheme?.prompts?.historian, scheme?.prompts?.trace || getDefaultTracePrompt(state, options)]);
+        const prompt = resolveTaskPromptVariables(compactLines([scheme?.prompts?.historian, scheme?.prompts?.trace || getDefaultTracePrompt(state, options)]), state, options);
         const messages = [
             { role: 'system', content: prompt },
             { role: 'system', content: `【已归档记忆，仅供参考】\n${tablesToReferenceText(state, options) || '（暂无）'}` },
@@ -518,7 +536,7 @@ ${tableInfo || '无'}`;
     function buildSummaryMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
-        const prompt = compactLines([scheme?.prompts?.historian, scheme?.prompts?.summary || getDefaultSummaryPrompt()]);
+        const prompt = resolveTaskPromptVariables(compactLines([scheme?.prompts?.historian, scheme?.prompts?.summary || getDefaultSummaryPrompt()]), state, options);
         const messages = [
             { role: 'system', content: prompt },
             { role: 'system', content: `【背景资料】\n角色: ${range.charName}\n用户: ${range.userName}` },
@@ -561,7 +579,7 @@ ${tableInfo || '无'}`;
     }
 
     async function runTraceOptimize(state, options = {}) {
-        const prompt = compactLines([getActivePromptScheme(state)?.prompts?.traceOptimize, getDefaultOptimizePrompt('trace'), options.note]);
+        const prompt = resolveTaskPromptVariables(compactLines([getActivePromptScheme(state)?.prompts?.traceOptimize, getDefaultOptimizePrompt('trace'), options.note]), state, options);
         const messages = [
             { role: 'system', content: prompt },
             { role: 'user', content: `【待优化表格】\n${tablesToReferenceText(state, options) || '（暂无）'}\n\n请输出优化后的 JSON records。` },
@@ -575,7 +593,7 @@ ${tableInfo || '无'}`;
 
     async function runSummaryOptimize(state, options = {}) {
         const summaries = stateRecords(state, FIXED_SUMMARY_TABLE_ID).map((record) => recordToText(stateTables(state).find((table) => table.id === FIXED_SUMMARY_TABLE_ID), record)).filter(Boolean).join('\n');
-        const prompt = compactLines([getActivePromptScheme(state)?.prompts?.summaryOptimize, getDefaultOptimizePrompt('summary'), options.note]);
+        const prompt = resolveTaskPromptVariables(compactLines([getActivePromptScheme(state)?.prompts?.summaryOptimize, getDefaultOptimizePrompt('summary'), options.note]), state, options);
         const messages = [
             { role: 'system', content: prompt },
             { role: 'user', content: `【待优化总结】\n${summaries || '（暂无）'}\n\n请输出优化后的 JSON。` },

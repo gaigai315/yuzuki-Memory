@@ -6,9 +6,9 @@
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const DEFAULT_STATE_REVISION = 12;
-    const MEMORY_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\}\}/g;
-    const ANCHOR_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/;
-    const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/g;
+    const MEMORY_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\}\}/g;
+    const ANCHOR_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/;
+    const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/g;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/g;
     const MEMORY_CONTENT_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/;
     const VECTOR_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/;
@@ -262,6 +262,23 @@
         return buildTableText(state, table);
     }
 
+    function buildDatabaseSchemaText(state = getCurrentState(), options = {}) {
+        const tables = (Array.isArray(state?.tables) ? state.tables : [])
+            .filter((table) => table && !table.hidden)
+            .filter((table) => options.includeSummary === true || table.id !== FIXED_SUMMARY_TABLE_ID)
+            .filter((table) => !options.tableId || table.id === options.tableId);
+        const lines = tables.map((table) => {
+            const columns = (Array.isArray(table.columns) ? table.columns : [])
+                .map((column) => String(column || '').trim())
+                .filter(Boolean);
+            if (!columns.length) return `#${table.name}：包含`;
+            const primary = columns[0];
+            const fields = columns.map((column, index) => index === 0 ? `${column}(主键)` : column).join(', ');
+            return `#${table.name}：包含 ${fields}`;
+        }).filter(Boolean);
+        return compactLines(['【数据库结构定义】', ...lines]);
+    }
+
     function summaryRecordToText(table, record) {
         if (!table || !record || !isRecordVisible(record)) return '';
         const primary = getPrimaryColumn(table);
@@ -486,6 +503,9 @@
         if (match === '{{MEMORY_PROMPT}}') {
             node.isGaigaiPrompt = true;
             if (!node.name && !node.identifier) node.name = 'SYSTEM (提示词)';
+        } else if (match === '{{DATABASE_SCHEMA}}' || match === '{{TABLE_DEFINITIONS}}') {
+            node.isGaigaiPrompt = true;
+            if (!node.name && !node.identifier) node.name = 'SYSTEM (数据库结构)';
         } else if (match === '{{VECTOR_MEMORY}}') {
             node.isYuzukiVector = true;
             node.isGaigaiVector = true;
@@ -569,6 +589,8 @@
             '{{MEMORY_SUMMARY}}': settings.injectMemoryTable ? resolveRuntimeVariables(buildSummaryText(state)) : '{{MEMORY_SUMMARY}}',
             '{{MEMORY_TABLE}}': settings.injectMemoryTable ? resolveRuntimeVariables(buildAllTablesText(state)) : '{{MEMORY_TABLE}}',
             '{{MEMORY_PROMPT}}': settings.injectMemoryTable ? buildMemoryPromptText(state) : '{{MEMORY_PROMPT}}',
+            '{{DATABASE_SCHEMA}}': settings.injectMemoryTable ? buildDatabaseSchemaText(state) : '{{DATABASE_SCHEMA}}',
+            '{{TABLE_DEFINITIONS}}': settings.injectMemoryTable ? buildDatabaseSchemaText(state) : '{{TABLE_DEFINITIONS}}',
             '{{VECTOR_MEMORY}}': settings.injectVectorMemory ? resolveRuntimeVariables(vectorText) : '{{VECTOR_MEMORY}}',
             '{{user}}': names.user,
             '{{char}}': names.char,
@@ -666,6 +688,7 @@
         buildSummaryText,
         buildSpecificSummaryText,
         buildSummaryMessages,
+        buildDatabaseSchemaText,
         buildAllTablesText,
         buildSpecificTableText,
         buildTableMessages,

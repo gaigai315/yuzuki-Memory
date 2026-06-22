@@ -5977,6 +5977,17 @@
         return button;
     }
 
+    function toggleConfigSwitch(button) {
+        if (!button) return false;
+        button.classList.add('yzm-config-switch-animating');
+        window.setTimeout(() => {
+            button.classList.remove('yzm-config-switch-animating');
+        }, 220);
+        const isOn = button.classList.toggle('yzm-config-switch-on');
+        button.setAttribute('aria-pressed', String(isOn));
+        return isOn;
+    }
+
     function createConfigNumberInput(value, settingKey = '') {
         const input = document.createElement('input');
         input.className = 'yzm-config-number-input';
@@ -8754,8 +8765,7 @@
                 }
 
                 if (configSwitch) {
-                    const isOn = configSwitch.classList.toggle('yzm-config-switch-on');
-                    configSwitch.setAttribute('aria-pressed', String(isOn));
+                    toggleConfigSwitch(configSwitch);
                     return;
                 }
 
@@ -8930,8 +8940,7 @@
                 }
 
                 if (configSwitch) {
-                    const isOn = configSwitch.classList.toggle('yzm-config-switch-on');
-                    configSwitch.setAttribute('aria-pressed', String(isOn));
+                    const isOn = toggleConfigSwitch(configSwitch);
                     const autoSummarySettingKey = configSwitch.dataset.yzmAutoSummarySetting;
                     const pluginSettingKey = configSwitch.dataset.yzmPluginSetting;
                     if (autoSummarySettingKey) {
