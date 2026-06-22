@@ -1475,16 +1475,6 @@
     border-top: 1px solid var(--yzm-border-soft);
 }
 
-#yzm-memory-root .yzm-vector-complete-actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 12px;
-}
-
-#yzm-memory-root .yzm-vector-complete-button {
-    min-height: 34px;
-}
-
 #yzm-memory-root .yzm-vector-stat {
     min-width: 0;
 }
@@ -6520,7 +6510,9 @@
 #yzm-memory-root .yzm-record-action-menu {
     position: absolute;
     z-index: 30;
+    width: max-content;
     min-width: 86px;
+    max-width: min(240px, calc(100vw - 24px));
     padding: 6px;
     background: var(--yzm-surface-strong);
     border: 1px solid var(--yzm-border);
@@ -6545,6 +6537,7 @@
     font: inherit;
     font-size: 13px;
     text-align: left;
+    white-space: nowrap;
 }
 
 #yzm-memory-root .yzm-record-action-delete i {
@@ -6972,15 +6965,6 @@
         gap: 6px;
         margin-top: 8px;
         padding-top: 8px;
-    }
-
-    #yzm-memory-root .yzm-vector-complete-actions {
-        justify-content: stretch;
-        margin-top: 8px;
-    }
-
-    #yzm-memory-root .yzm-vector-complete-button {
-        width: 100%;
     }
 
     #yzm-memory-root .yzm-vector-stat span {

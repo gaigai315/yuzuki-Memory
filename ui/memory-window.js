@@ -2342,13 +2342,7 @@
             ['进度', `${bookStats.progress}%`],
             ['更新时间', formatVectorDate(book.updateTime)],
         ].forEach(([label, value]) => statsGrid.appendChild(createVectorStat(label, value)));
-        const actions = document.createElement('div');
-        actions.className = 'yzm-vector-complete-actions';
-        const vectorizeButton = createIconButton(isDone ? '重新向量化' : '开始向量化', 'fa-solid fa-wand-magic-sparkles', 'yzm-api-button yzm-api-button-primary yzm-vector-complete-button');
-        vectorizeButton.dataset.yzmVectorAction = 'vectorize-current-book';
-        vectorizeButton.disabled = bookStats.total <= 0;
-        actions.appendChild(vectorizeButton);
-        card.append(status, desc, statsGrid, actions);
+        card.append(status, desc, statsGrid);
         return card;
     }
 

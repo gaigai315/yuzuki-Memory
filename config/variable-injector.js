@@ -7,6 +7,7 @@
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const DEFAULT_STATE_REVISION = 12;
     const MEMORY_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\}\}/g;
+    const ANCHOR_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/;
     const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT)\}\}/g;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/g;
     const MEMORY_CONTENT_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT)\}\}/;
@@ -322,12 +323,40 @@
         return true;
     }
 
-    function replaceVariablesInNode(node, replacements) {
+    function getAnchorVariableKey(match) {
+        const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/);
+        if (tableMatch) return `{{MEMORY_TABLE_${tableMatch[1]}}}`;
+        return match;
+    }
+
+    function getAnchorReplacement(match, replacements) {
+        if (Object.prototype.hasOwnProperty.call(replacements, match)) return replacements[match];
+        const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/);
+        if (tableMatch) return replacements.__table(tableMatch[1]);
+        return '';
+    }
+
+    function markInjectionContainer(node, match) {
+        if (!node || typeof node !== 'object') return;
+        if (match === '{{MEMORY_PROMPT}}') {
+            node.isGaigaiPrompt = true;
+            if (!node.name && !node.identifier) node.name = 'SYSTEM (提示词)';
+        } else if (match === '{{VECTOR_MEMORY}}') {
+            node.isYuzukiVector = true;
+            node.isGaigaiVector = true;
+            if (!node.name && !node.identifier) node.name = 'SYSTEM (向量化)';
+        } else if (match === '{{MEMORY}}' || match === '{{MEMORY_SUMMARY}}' || match === '{{MEMORY_TABLE}}' || match.startsWith('{{MEMORY_TABLE_')) {
+            node.isGaigaiData = true;
+            if (!node.name && !node.identifier) node.name = 'MEMORY';
+        }
+    }
+
+    function replaceVariablesInNode(node, replacements, anchorState = null) {
         if (!node) return false;
         let replaced = false;
         if (Array.isArray(node)) {
             node.forEach((item) => {
-                if (replaceVariablesInNode(item, replacements)) replaced = true;
+                if (replaceVariablesInNode(item, replacements, anchorState)) replaced = true;
             });
             return replaced;
         }
@@ -336,13 +365,22 @@
             if (typeof node[key] === 'string') {
                 const previous = node[key];
                 node[key] = previous.replace(MEMORY_VARIABLE_PATTERN, (match) => {
+                    if (ANCHOR_VARIABLE_PATTERN.test(match)) {
+                        const anchorKey = getAnchorVariableKey(match);
+                        const replacement = getAnchorReplacement(match, replacements);
+                        if (anchorState) {
+                            anchorState.seen.add(anchorKey);
+                            if (anchorState.injected.has(anchorKey)) return '';
+                            anchorState.injected.add(anchorKey);
+                            if (replacement && replacement !== match) markInjectionContainer(node, match);
+                        }
+                        return replacement;
+                    }
                     if (Object.prototype.hasOwnProperty.call(replacements, match)) return replacements[match];
-                    const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/);
-                    if (tableMatch) return replacements.__table(tableMatch[1]);
                     return '';
                 });
                 if (node[key] !== previous) replaced = true;
-            } else if (node[key] && typeof node[key] === 'object' && replaceVariablesInNode(node[key], replacements)) {
+            } else if (node[key] && typeof node[key] === 'object' && replaceVariablesInNode(node[key], replacements, anchorState)) {
                 replaced = true;
             }
         });
@@ -446,11 +484,9 @@
         const vectorText = settings.injectVectorMemory && typeof options.getVectorText === 'function' && !hasOwnVectorMarker
             ? await options.getVectorText(body)
             : '';
-        const markedVectorVariable = settings.injectVectorMemory && vectorText && hadVectorVariable
-            ? markVectorVariableContainers(body)
-            : false;
         const replacements = buildVariableReplacements(state, vectorText, settings);
-        replaceVariablesInNode(body, replacements);
+        const anchorState = { seen: new Set(), injected: new Set() };
+        replaceVariablesInNode(body, replacements, anchorState);
 
         if (settings.injectVectorMemory && vectorText && !hasYuzukiVectorMarker(body) && !hadVectorVariable) {
             insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(vectorText)}`, {
@@ -462,7 +498,7 @@
         } else if (settings.injectVectorMemory && vectorText && hadVectorVariable) {
             logVectorInfo('已替换 {{VECTOR_MEMORY}} 变量', {
                 contentLength: vectorText.length,
-                marked: markedVectorVariable,
+                replaced: anchorState.injected.has('{{VECTOR_MEMORY}}'),
             });
         }
 
