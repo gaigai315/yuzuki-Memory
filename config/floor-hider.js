@@ -20,7 +20,8 @@
 
     function loadSettings() {
         try {
-            const source = JSON.parse(localStorage.getItem(PLUGIN_SETTINGS_KEY) || '{}');
+            const source = YuzukiMemory.GlobalSettings?.get?.(PLUGIN_SETTINGS_KEY, {})
+                ?? JSON.parse(localStorage.getItem(PLUGIN_SETTINGS_KEY) || '{}');
             return {
                 injectMemoryTable: typeof source.injectMemoryTable === 'boolean' ? source.injectMemoryTable : DEFAULT_SETTINGS.injectMemoryTable,
                 smartCalculationLinkage: typeof source.smartCalculationLinkage === 'boolean' ? source.smartCalculationLinkage : DEFAULT_SETTINGS.smartCalculationLinkage,

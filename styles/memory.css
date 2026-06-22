@@ -3056,6 +3056,10 @@
     gap: 9px;
 }
 
+#yzm-memory-root .yzm-scheme-editor-card + .yzm-scheme-editor-card {
+    margin-top: 12px;
+}
+
 #yzm-memory-root .yzm-scheme-card-header {
     display: flex;
     align-items: center;
@@ -4516,6 +4520,9 @@
 
 #yzm-memory-root .yzm-config-switch {
     position: relative;
+    --yzm-switch-knob-size: 20px;
+    --yzm-switch-knob-offset: 3px;
+    --yzm-switch-travel: 21px;
     width: 48px;
     min-width: 48px;
     height: 26px;
@@ -4525,19 +4532,21 @@
     border-radius: 999px;
     box-sizing: border-box;
     cursor: pointer;
+    transition: background 180ms ease, border-color 180ms ease, box-shadow 180ms ease;
 }
 
 #yzm-memory-root .yzm-config-switch span {
     position: absolute;
-    left: 3px;
+    left: var(--yzm-switch-knob-offset);
     top: 50%;
-    width: 20px;
-    height: 20px;
+    width: var(--yzm-switch-knob-size);
+    height: var(--yzm-switch-knob-size);
     background: var(--yzm-surface);
     border: 1px solid var(--yzm-border-soft);
     border-radius: 999px;
     box-shadow: 0 3px 8px rgba(40, 54, 110, 0.16);
-    transform: translateY(-50%);
+    transform: translate3d(0, -50%, 0);
+    transition: transform 180ms cubic-bezier(0.2, 0.8, 0.2, 1), background 180ms ease, border-color 180ms ease;
 }
 
 #yzm-memory-root .yzm-config-switch-on {
@@ -4546,25 +4555,17 @@
 }
 
 #yzm-memory-root .yzm-config-switch-on span {
-    left: auto;
-    right: 3px;
     background: #ffffff;
+    transform: translate3d(var(--yzm-switch-travel), -50%, 0);
 }
 
 #yzm-memory-root .yzm-plugin-config-card .yzm-config-switch {
+    --yzm-switch-knob-size: 16px;
+    --yzm-switch-knob-offset: 2px;
+    --yzm-switch-travel: 22px;
     width: 42px;
     min-width: 42px;
     height: 22px;
-}
-
-#yzm-memory-root .yzm-plugin-config-card .yzm-config-switch span {
-    left: 2px;
-    width: 16px;
-    height: 16px;
-}
-
-#yzm-memory-root .yzm-plugin-config-card .yzm-config-switch-on span {
-    right: 2px;
 }
 
 #yzm-memory-root .yzm-config-number-input {
@@ -6146,6 +6147,53 @@
     width: 40px;
     height: 40px;
     font-size: 22px;
+}
+
+#yzm-memory-root .yzm-task-result-dialog,
+#yzm-memory-root .yzm-auto-task-dialog {
+    width: min(520px, 100%);
+}
+
+#yzm-memory-root .yzm-task-result-meta,
+#yzm-memory-root .yzm-auto-task-info {
+    color: var(--yzm-muted);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+#yzm-memory-root .yzm-task-result-preview {
+    width: 100%;
+    min-height: 220px;
+    padding: 10px;
+    color: inherit;
+    background: var(--yzm-input-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 9px;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.45;
+    resize: vertical;
+}
+
+#yzm-memory-root .yzm-auto-task-postpone {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--yzm-text);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-auto-task-postpone .yzm-config-number-input {
+    width: 84px;
+}
+
+#yzm-memory-root .yzm-task-result-actions,
+#yzm-memory-root .yzm-auto-task-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 #yzm-memory-root .yzm-structure-name-input,
@@ -7860,6 +7908,10 @@
         padding: 10px;
     }
 
+    #yzm-memory-root .yzm-scheme-editor-card + .yzm-scheme-editor-card {
+        margin-top: 4px;
+    }
+
     #yzm-memory-root .yzm-scheme-card-header {
         display: grid;
         grid-template-columns: minmax(0, 1fr);
@@ -7921,7 +7973,7 @@
     }
 
     #yzm-memory-root .yzm-scheme-textarea {
-        min-height: 120px;
+        min-height: 92px;
         padding: 8px;
         border-radius: 8px;
         font-size: 11px;
@@ -8197,19 +8249,12 @@
     }
 
     #yzm-memory-root .yzm-config-switch {
+        --yzm-switch-knob-size: 14px;
+        --yzm-switch-knob-offset: 2px;
+        --yzm-switch-travel: 14px;
         width: 34px;
         min-width: 34px;
         height: 20px;
-    }
-
-    #yzm-memory-root .yzm-config-switch span {
-        left: 2px;
-        width: 14px;
-        height: 14px;
-    }
-
-    #yzm-memory-root .yzm-config-switch-on span {
-        right: 2px;
     }
 
     #yzm-memory-root .yzm-config-number-input {
@@ -8307,19 +8352,12 @@
     }
 
     #yzm-memory-root .yzm-auto-summary-panel .yzm-config-switch {
+        --yzm-switch-knob-size: 13px;
+        --yzm-switch-knob-offset: 2px;
+        --yzm-switch-travel: 15px;
         width: 32px;
         min-width: 32px;
         height: 18px;
-    }
-
-    #yzm-memory-root .yzm-auto-summary-panel .yzm-config-switch span {
-        left: 2px;
-        width: 13px;
-        height: 13px;
-    }
-
-    #yzm-memory-root .yzm-auto-summary-panel .yzm-config-switch-on span {
-        right: 2px;
     }
 
     #yzm-memory-root .yzm-auto-summary-check-row {
@@ -8547,6 +8585,56 @@
         font-size: 11px;
     }
 
+    #yzm-memory-root .yzm-scheme-view {
+        padding: 5px;
+    }
+
+    #yzm-memory-root .yzm-scheme-content {
+        gap: 5px;
+        margin-top: 3px;
+    }
+
+    #yzm-memory-root .yzm-scheme-panel {
+        gap: 6px;
+    }
+
+    #yzm-memory-root .yzm-scheme-header {
+        gap: 3px;
+    }
+
+    #yzm-memory-root .yzm-scheme-title {
+        font-size: 13px;
+    }
+
+    #yzm-memory-root .yzm-scheme-desc {
+        font-size: 9px;
+        line-height: 1.3;
+    }
+
+    #yzm-memory-root .yzm-scheme-editor-card {
+        gap: 6px;
+        padding: 7px;
+        border-radius: 9px;
+    }
+
+    #yzm-memory-root .yzm-scheme-card-header {
+        gap: 4px;
+    }
+
+    #yzm-memory-root .yzm-scheme-card-header .yzm-scheme-card-title {
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-scheme-textarea {
+        min-height: 76px;
+        padding: 7px;
+        font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-scheme-historian-textarea {
+        min-height: 108px;
+    }
+
     #yzm-memory-root .yzm-api-input,
     #yzm-memory-root .yzm-api-select {
         min-height: 24px;
@@ -8589,14 +8677,12 @@
     }
 
     #yzm-memory-root .yzm-config-switch {
+        --yzm-switch-knob-size: 12px;
+        --yzm-switch-knob-offset: 2px;
+        --yzm-switch-travel: 14px;
         width: 30px;
         min-width: 30px;
         height: 18px;
-    }
-
-    #yzm-memory-root .yzm-config-switch span {
-        width: 12px;
-        height: 12px;
     }
 
     #yzm-memory-root .yzm-config-number-input {

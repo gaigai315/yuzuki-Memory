@@ -32,7 +32,9 @@
 
     function loadSettings() {
         try {
-            return normalizeSettings(JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'));
+            const raw = YuzukiMemory.GlobalSettings?.get?.(SETTINGS_KEY, {})
+                ?? JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+            return normalizeSettings(raw);
         } catch (_error) {
             return normalizeSettings();
         }
@@ -40,7 +42,11 @@
 
     function saveSettings(nextSettings = {}) {
         const normalized = normalizeSettings({ ...loadSettings(), ...nextSettings });
-        localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(SETTINGS_KEY, normalized);
+        } else {
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
+        }
         return normalized;
     }
 

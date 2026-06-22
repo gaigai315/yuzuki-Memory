@@ -45,7 +45,7 @@
         },
     };
     const DEFAULT_SETTINGS = {
-        enabled: true,
+        enabled: false,
         provider: 'siliconflow',
         baseUrl: '',
         apiKey: '',
@@ -73,7 +73,7 @@
         const provider = PROVIDERS[raw.provider] ? raw.provider : DEFAULT_SETTINGS.provider;
         const meta = getProviderMeta(provider);
         return {
-            enabled: raw.enabled !== false,
+            enabled: raw.enabled === true,
             provider,
             baseUrl: String(raw.baseUrl || raw.apiUrl || meta.defaultUrl || '').trim(),
             apiKey: String(raw.apiKey || '').trim(),
@@ -86,7 +86,9 @@
 
     function loadSettings() {
         try {
-            return normalizeSettings(JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'));
+            const raw = YuzukiMemory.GlobalSettings?.get?.(SETTINGS_KEY, {})
+                ?? JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+            return normalizeSettings(raw);
         } catch (_error) {
             return normalizeSettings();
         }
@@ -94,7 +96,11 @@
 
     function saveSettings(nextSettings = {}) {
         const normalized = normalizeSettings({ ...loadSettings(), ...nextSettings });
-        localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(SETTINGS_KEY, normalized);
+        } else {
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
+        }
         return normalized;
     }
 

@@ -6,11 +6,11 @@
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const DEFAULT_STATE_REVISION = 12;
-    const MEMORY_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\}\}/g;
-    const ANCHOR_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/;
-    const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT)\}\}/g;
+    const MEMORY_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\}\}/g;
+    const ANCHOR_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/;
+    const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/g;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/g;
-    const MEMORY_CONTENT_VARIABLE_PATTERN = /\{\{(?:MEMORY|MEMORY_SUMMARY|MEMORY_TABLE(?:_[^{}]+)?|MEMORY_PROMPT)\}\}/;
+    const MEMORY_CONTENT_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/;
     const VECTOR_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/;
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
 
@@ -115,15 +115,16 @@
 
     function getPluginSettings() {
         try {
-            const settings = JSON.parse(localStorage.getItem(PLUGIN_SETTINGS_KEY) || '{}');
+            const settings = YuzukiMemory.GlobalSettings?.get?.(PLUGIN_SETTINGS_KEY, {})
+                ?? JSON.parse(localStorage.getItem(PLUGIN_SETTINGS_KEY) || '{}');
             return {
                 injectMemoryTable: settings.injectMemoryTable !== false,
-                injectVectorMemory: settings.injectVectorMemory !== false,
+                injectVectorMemory: settings.injectVectorMemory === true,
             };
         } catch (_error) {
             return {
                 injectMemoryTable: true,
-                injectVectorMemory: true,
+                injectVectorMemory: false,
             };
         }
     }
@@ -137,24 +138,34 @@
         if (!rawScheme || typeof rawScheme !== 'object') return null;
         const name = String(rawScheme.name || '').trim();
         if (!name) return null;
-        const prompts = rawScheme.prompts && typeof rawScheme.prompts === 'object' ? rawScheme.prompts : {};
+        const prompts = YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.(rawScheme)
+            || (rawScheme.prompts && typeof rawScheme.prompts === 'object' ? rawScheme.prompts : {});
         return {
             id: String(rawScheme.id || ''),
             name,
             prompts: {
                 historian: String(prompts.historian || ''),
-                table: String(prompts.table || ''),
-                summaryOptimize: String(prompts.summaryOptimize || ''),
+                trace: String(prompts.trace ?? prompts.table ?? ''),
+                traceOptimize: String(prompts.traceOptimize ?? prompts.table ?? ''),
+                summary: String(prompts.summary ?? prompts.summaryOptimize ?? ''),
+                summaryOptimize: String(prompts.summaryOptimize ?? prompts.summary ?? ''),
             },
         };
     }
 
     function getPromptSchemes() {
         try {
-            const raw = JSON.parse(localStorage.getItem(PROMPT_SCHEMES_STORAGE_KEY) || '[]');
-            return Array.isArray(raw) ? raw.map(normalizePromptScheme).filter(Boolean) : [];
+            const raw = YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEMES_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(PROMPT_SCHEMES_STORAGE_KEY) || '[]');
+            const schemes = Array.isArray(raw) ? raw.map(normalizePromptScheme).filter(Boolean) : [];
+            if (!schemes.length) {
+                const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
+                return defaultScheme ? [defaultScheme] : [];
+            }
+            return schemes;
         } catch (_error) {
-            return [];
+            const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
+            return defaultScheme ? [defaultScheme] : [];
         }
     }
 
@@ -167,6 +178,14 @@
 
     function compactLines(lines) {
         return lines.map((line) => String(line || '').trim()).filter(Boolean).join('\n');
+    }
+
+    function normalizeAnchorName(value) {
+        return String(value || '')
+            .normalize('NFKC')
+            .replace(/\s+/g, '')
+            .trim()
+            .toLowerCase();
     }
 
     function tableRecords(state, tableId) {
@@ -201,6 +220,26 @@
         return compactLines([`【${table.name}】`, ...rows]);
     }
 
+    function buildTableMemoryMessage(state, table) {
+        const tableText = buildTableText(state, table);
+        if (!tableText) return null;
+        return {
+            role: 'system',
+            content: `【记忆只读数据库 - ${table.name}】\n(历史存档，仅作背景参考，请勿复述或重演)\n${tableText}`,
+            name: `SYSTEM (${table.name})`,
+            isGaigaiData: true,
+            yzmMemoryInjectionType: 'table',
+            yzmMemoryTableId: table.id,
+        };
+    }
+
+    function buildTableMessages(state = getCurrentState()) {
+        return (Array.isArray(state?.tables) ? state.tables : [])
+            .filter((table) => table.id !== FIXED_SUMMARY_TABLE_ID)
+            .map((table) => buildTableMemoryMessage(state, table))
+            .filter(Boolean);
+    }
+
     function buildAllTablesText(state = getCurrentState()) {
         const tables = Array.isArray(state?.tables) ? state.tables : [];
         return tables
@@ -213,41 +252,89 @@
     function buildSpecificTableText(state, tableName) {
         const requestedName = String(tableName || '').trim();
         if (!requestedName) return '';
+        const requestedKey = normalizeAnchorName(requestedName);
         const tables = Array.isArray(state?.tables) ? state.tables : [];
         const table = tables.find((entry) => entry.name === requestedName)
             || tables.find((entry) => entry.id === requestedName)
+            || tables.find((entry) => normalizeAnchorName(entry.name) === requestedKey)
+            || tables.find((entry) => normalizeAnchorName(entry.id) === requestedKey)
             || tables.find((entry) => entry.name.includes(requestedName));
         return buildTableText(state, table);
     }
 
-    function buildSummaryText(state = getCurrentState()) {
-        const table = (Array.isArray(state?.tables) ? state.tables : []).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
-        if (!table || table.hidden) return '';
+    function summaryRecordToText(table, record) {
+        if (!table || !record || !isRecordVisible(record)) return '';
         const primary = getPrimaryColumn(table);
-        const rows = tableRecords(state, FIXED_SUMMARY_TABLE_ID)
-            .map((record) => {
-                if (!isRecordVisible(record)) return '';
+        const values = record.values && typeof record.values === 'object' ? record.values : {};
+        const title = String(values[primary] || '').trim();
+        const body = (Array.isArray(table.columns) ? table.columns : [])
+            .filter((column) => column !== primary)
+            .map((column) => {
+                const value = String(values[column] || '').trim();
+                return value ? `${column}: ${value}` : '';
+            })
+            .filter(Boolean)
+            .join('\n');
+        if (!title && !body) return '';
+        return compactLines([title ? `【${title}】` : '', body]);
+    }
+
+    function getSummaryEntries(state = getCurrentState()) {
+        const table = (Array.isArray(state?.tables) ? state.tables : []).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
+        if (!table || table.hidden) return [];
+        return tableRecords(state, FIXED_SUMMARY_TABLE_ID)
+            .map((record, index) => {
+                const text = summaryRecordToText(table, record);
+                if (!text) return null;
                 const values = record.values && typeof record.values === 'object' ? record.values : {};
-                const title = String(values[primary] || '').trim();
-                const body = (Array.isArray(table.columns) ? table.columns : [])
-                    .filter((column) => column !== primary)
-                    .map((column) => {
-                        const value = String(values[column] || '').trim();
-                        return value ? `${column}: ${value}` : '';
-                    })
-                    .filter(Boolean)
-                    .join('\n');
-                if (!title && !body) return '';
-                return compactLines([title ? `【${title}】` : '', body]);
+                const title = String(values[getPrimaryColumn(table)] || '').trim();
+                return {
+                    table,
+                    record,
+                    index,
+                    number: index + 1,
+                    title,
+                    text,
+                };
             })
             .filter(Boolean);
-        return rows.join('\n\n');
+    }
+
+    function buildSummaryText(state = getCurrentState()) {
+        return getSummaryEntries(state).map((entry) => entry.text).join('\n\n');
+    }
+
+    function buildSpecificSummaryText(state, summaryKey) {
+        const requested = String(summaryKey || '').trim();
+        if (!requested) return '';
+        const requestedKey = normalizeAnchorName(requested);
+        const entries = getSummaryEntries(state);
+        const entry = entries.find((item) => item.record?.id === requested)
+            || entries.find((item) => item.title === requested)
+            || entries.find((item) => normalizeAnchorName(item.record?.id) === requestedKey)
+            || entries.find((item) => normalizeAnchorName(item.title) === requestedKey)
+            || entries.find((item) => String(item.number) === requested)
+            || entries.find((item) => normalizeAnchorName(`总结${item.number}`) === requestedKey)
+            || entries.find((item) => normalizeAnchorName(`剧情总结${item.number}`) === requestedKey)
+            || entries.find((item) => item.title && item.title.includes(requested));
+        return entry?.text || '';
+    }
+
+    function buildSummaryMessages(state = getCurrentState()) {
+        return getSummaryEntries(state).map((entry) => ({
+            role: 'system',
+            content: `【前情提要 - ${entry.title || `总结 ${entry.number}`}】\n${entry.text}`,
+            name: `SYSTEM(总结${entry.number})`,
+            isGaigaiData: true,
+            yzmMemoryInjectionType: 'summary',
+            yzmMemorySummaryId: entry.record?.id || '',
+        }));
     }
 
     function buildMemoryPromptText(state = getCurrentState()) {
         const scheme = getActivePromptScheme(state);
-        const prompts = scheme?.prompts || {};
-        return resolveRuntimeVariables(compactLines([prompts.historian, prompts.table]));
+        const prompts = YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.(scheme || { prompts: {} }) || scheme?.prompts || {};
+        return resolveRuntimeVariables(compactLines([prompts.historian, prompts.trace || prompts.table]));
     }
 
     function buildMemoryText(state = getCurrentState()) {
@@ -256,6 +343,25 @@
             buildSummaryText(state),
             buildAllTablesText(state),
         ]));
+    }
+
+    function buildMemoryMessages(state = getCurrentState()) {
+        const promptText = buildMemoryPromptText(state);
+        const messages = [];
+        if (promptText) {
+            messages.push({
+                role: 'system',
+                content: promptText,
+                name: 'SYSTEM (提示词)',
+                isGaigaiPrompt: true,
+                yzmMemoryInjectionType: 'prompt',
+            });
+        }
+        messages.push(...buildSummaryMessages(state), ...buildTableMessages(state));
+        return messages.map((message) => ({
+            ...message,
+            content: resolveRuntimeVariables(message.content),
+        }));
     }
 
     function getRequestArray(body) {
@@ -323,9 +429,46 @@
         return true;
     }
 
+    function createMessageForTarget(targetKey, sourceMessage) {
+        const content = resolveRuntimeVariables(sourceMessage?.content || '');
+        if (!content) return null;
+        if (targetKey === 'contents') {
+            return {
+                role: sourceMessage.role === 'assistant' ? 'model' : 'user',
+                parts: [{ text: content }],
+                name: sourceMessage.name || 'MEMORY',
+                isGaigaiData: !!sourceMessage.isGaigaiData,
+                isGaigaiPrompt: !!sourceMessage.isGaigaiPrompt,
+                yzmMemoryInjectionType: sourceMessage.yzmMemoryInjectionType || '',
+                yzmMemoryTableId: sourceMessage.yzmMemoryTableId || '',
+                yzmMemorySummaryId: sourceMessage.yzmMemorySummaryId || '',
+            };
+        }
+        return {
+            role: sourceMessage.role || 'system',
+            content,
+            name: sourceMessage.name || 'MEMORY',
+            isGaigaiData: !!sourceMessage.isGaigaiData,
+            isGaigaiPrompt: !!sourceMessage.isGaigaiPrompt,
+            yzmMemoryInjectionType: sourceMessage.yzmMemoryInjectionType || '',
+            yzmMemoryTableId: sourceMessage.yzmMemoryTableId || '',
+            yzmMemorySummaryId: sourceMessage.yzmMemorySummaryId || '',
+        };
+    }
+
+    function insertInjectedMessages(body, messages = []) {
+        const target = getRequestArray(body);
+        const normalized = messages.map((message) => createMessageForTarget(target?.key, message)).filter(Boolean);
+        if (!target || !normalized.length) return false;
+        target.items.splice(findInsertionIndex(target.items), 0, ...normalized);
+        return true;
+    }
+
     function getAnchorVariableKey(match) {
         const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/);
         if (tableMatch) return `{{MEMORY_TABLE_${tableMatch[1]}}}`;
+        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/);
+        if (summaryMatch) return `{{MEMORY_SUMMARY_${summaryMatch[1]}}}`;
         return match;
     }
 
@@ -333,6 +476,8 @@
         if (Object.prototype.hasOwnProperty.call(replacements, match)) return replacements[match];
         const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/);
         if (tableMatch) return replacements.__table(tableMatch[1]);
+        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/);
+        if (summaryMatch) return replacements.__summary(summaryMatch[1]);
         return '';
     }
 
@@ -345,7 +490,7 @@
             node.isYuzukiVector = true;
             node.isGaigaiVector = true;
             if (!node.name && !node.identifier) node.name = 'SYSTEM (向量化)';
-        } else if (match === '{{MEMORY}}' || match === '{{MEMORY_SUMMARY}}' || match === '{{MEMORY_TABLE}}' || match.startsWith('{{MEMORY_TABLE_')) {
+        } else if (match === '{{MEMORY}}' || match === '{{MEMORY_SUMMARY}}' || match === '{{MEMORY_TABLE}}' || match.startsWith('{{MEMORY_TABLE_') || match.startsWith('{{MEMORY_SUMMARY_')) {
             node.isGaigaiData = true;
             if (!node.name && !node.identifier) node.name = 'MEMORY';
         }
@@ -430,6 +575,9 @@
             __table: (tableName) => settings.injectMemoryTable
                 ? resolveRuntimeVariables(buildSpecificTableText(state, tableName))
                 : `{{MEMORY_TABLE_${tableName}}}`,
+            __summary: (summaryKey) => settings.injectMemoryTable
+                ? resolveRuntimeVariables(buildSpecificSummaryText(state, summaryKey))
+                : `{{MEMORY_SUMMARY_${summaryKey}}}`,
         };
     }
 
@@ -503,13 +651,7 @@
         }
 
         if (settings.injectMemoryTable && !hadMemoryContentVariable && !requestBodyContainsInjection(body, 'isGaigaiData')) {
-            const memoryText = buildMemoryText(state);
-            if (memoryText) {
-                insertInjectedMessage(body, memoryText, {
-                    isGaigaiData: true,
-                    name: 'MEMORY',
-                });
-            }
+            insertInjectedMessages(body, buildMemoryMessages(state));
         }
 
         cleanupVariablesInNode(body, settings);
@@ -522,10 +664,14 @@
         getRequestArray,
         getMessageText,
         buildSummaryText,
+        buildSpecificSummaryText,
+        buildSummaryMessages,
         buildAllTablesText,
         buildSpecificTableText,
+        buildTableMessages,
         buildMemoryPromptText,
         buildMemoryText,
+        buildMemoryMessages,
         processBody,
     });
 })();

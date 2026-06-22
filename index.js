@@ -11,8 +11,11 @@
     const baseUrl = new URL('./', import.meta.url).href;
 
     const MODULES = [
+        'config/global-settings.js',
         'config/storage.js',
+        'config/prompt-library.js',
         'config/llm-client.js',
+        'config/task-runner.js',
         'config/embedding-client.js',
         'config/rerank-client.js',
         'config/vector-store.js',

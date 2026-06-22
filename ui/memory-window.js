@@ -121,18 +121,14 @@
     const PROMPT_SCHEME_SECTIONS = [
         { id: 'info', label: '方案信息', icon: 'fa-regular fa-clipboard' },
         { id: 'historian', label: '史官破限', icon: 'fa-regular fa-clipboard' },
-        { id: 'table', label: '填表提示词', icon: 'fa-regular fa-clipboard' },
-        { id: 'summaryOptimize', label: '总结/优化提示词', icon: 'fa-regular fa-clipboard' },
+        { id: 'trace', label: '追溯提示词', icon: 'fa-regular fa-clipboard' },
+        { id: 'summary', label: '总结提示词', icon: 'fa-regular fa-clipboard' },
     ];
-    const PROMPT_SCHEME_PROMPT_IDS = ['historian', 'table', 'summaryOptimize'];
+    const PROMPT_SCHEME_PROMPT_IDS = ['historian', 'trace', 'traceOptimize', 'summary', 'summaryOptimize'];
     const PROMPT_SCHEME_MODE_OPTIONS = {
-        table: [
+        trace: [
             { id: 'realtime', label: '实时填表' },
             { id: 'batch', label: '批量填表' },
-        ],
-        summaryOptimize: [
-            { id: 'summary', label: '聊天总结' },
-            { id: 'optimize', label: '总结优化' },
         ],
     };
     const VECTOR_BOOK_PAGE_SIZE = 10;
@@ -144,7 +140,7 @@
     };
     const DEFAULT_PLUGIN_SETTINGS = {
         injectMemoryTable: true,
-        injectVectorMemory: true,
+        injectVectorMemory: false,
         smartCalculationLinkage: false,
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
@@ -415,15 +411,17 @@
             : {};
         const pointers = state.settings.manualPointers;
         const normalized = {
+            ...pointers,
             trace: Math.round(normalizeNumberSetting(pointers.trace, 0, 999999, 0, 0)),
             summary: Math.round(normalizeNumberSetting(pointers.summary, 0, 999999, 0, 0)),
+            historySummary: Math.round(normalizeNumberSetting(pointers.historySummary ?? pointers.bigSummary, 0, 999999, 0, 0)),
         };
         state.settings.manualPointers = normalized;
         return normalized;
     }
 
     function updateManualPointerSetting(key, value) {
-        if (key !== 'trace' && key !== 'summary') return getManualPointerSettings();
+        if (key !== 'trace' && key !== 'summary' && key !== 'historySummary') return getManualPointerSettings();
         const state = getState();
         state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
         const current = getManualPointerSettings();
@@ -598,7 +596,8 @@
 
     function getTagPresets() {
         try {
-            const raw = JSON.parse(localStorage.getItem(TAG_PRESETS_STORAGE_KEY) || '[]');
+            const raw = YuzukiMemory.GlobalSettings?.get?.(TAG_PRESETS_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(TAG_PRESETS_STORAGE_KEY) || '[]');
             return Array.isArray(raw) ? raw.map(normalizeTagPreset).filter(Boolean) : [];
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to load tag presets.', error);
@@ -608,7 +607,11 @@
 
     function saveTagPresets(presets) {
         const normalized = (Array.isArray(presets) ? presets : []).map(normalizeTagPreset).filter(Boolean);
-        localStorage.setItem(TAG_PRESETS_STORAGE_KEY, JSON.stringify(normalized));
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(TAG_PRESETS_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(TAG_PRESETS_STORAGE_KEY, JSON.stringify(normalized));
+        }
         return normalized;
     }
 
@@ -635,7 +638,8 @@
 
     function getLlmApiPresets() {
         try {
-            const raw = JSON.parse(localStorage.getItem(LLM_API_PRESETS_STORAGE_KEY) || '[]');
+            const raw = YuzukiMemory.GlobalSettings?.get?.(LLM_API_PRESETS_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(LLM_API_PRESETS_STORAGE_KEY) || '[]');
             return Array.isArray(raw) ? raw.map(normalizeLlmApiPreset).filter(Boolean) : [];
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to load LLM API presets.', error);
@@ -645,30 +649,50 @@
 
     function saveLlmApiPresets(presets) {
         const normalized = (Array.isArray(presets) ? presets : []).map(normalizeLlmApiPreset).filter(Boolean);
-        localStorage.setItem(LLM_API_PRESETS_STORAGE_KEY, JSON.stringify(normalized));
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(LLM_API_PRESETS_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(LLM_API_PRESETS_STORAGE_KEY, JSON.stringify(normalized));
+        }
         return normalized;
     }
 
     function getGlobalLlmApiMode() {
-        return localStorage.getItem(LLM_API_MODE_STORAGE_KEY) === 'custom' ? 'custom' : 'tavern';
+        const mode = YuzukiMemory.GlobalSettings?.get?.(LLM_API_MODE_STORAGE_KEY, null)
+            ?? localStorage.getItem(LLM_API_MODE_STORAGE_KEY);
+        return mode === 'custom' ? 'custom' : 'tavern';
     }
 
     function saveGlobalLlmApiMode(mode) {
         const normalized = mode === 'custom' ? 'custom' : 'tavern';
-        localStorage.setItem(LLM_API_MODE_STORAGE_KEY, normalized);
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(LLM_API_MODE_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(LLM_API_MODE_STORAGE_KEY, normalized);
+        }
         return normalized;
     }
 
     function getActiveLlmApiPresetId() {
-        return String(localStorage.getItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY) || '');
+        return String(YuzukiMemory.GlobalSettings?.get?.(LLM_API_ACTIVE_PRESET_STORAGE_KEY, '')
+            ?? localStorage.getItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY)
+            ?? '');
     }
 
     function saveActiveLlmApiPresetId(presetId = '') {
         const normalized = String(presetId || '');
         if (normalized) {
-            localStorage.setItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY, normalized);
+            if (YuzukiMemory.GlobalSettings?.set) {
+                YuzukiMemory.GlobalSettings.set(LLM_API_ACTIVE_PRESET_STORAGE_KEY, normalized);
+            } else {
+                localStorage.setItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY, normalized);
+            }
         } else {
-            localStorage.removeItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY);
+            if (YuzukiMemory.GlobalSettings?.remove) {
+                YuzukiMemory.GlobalSettings.remove(LLM_API_ACTIVE_PRESET_STORAGE_KEY);
+            } else {
+                localStorage.removeItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY);
+            }
         }
         return normalized;
     }
@@ -709,17 +733,19 @@
     }
 
     function createEmptyPromptScheme(name = '') {
+        const defaults = YuzukiMemory.PromptLibrary?.getAll?.() || {};
         return {
             id: '',
             name: String(name || '').trim(),
             prompts: {
-                historian: '',
-                table: '',
-                summaryOptimize: '',
+                historian: String(defaults.historian || ''),
+                trace: String(defaults.trace || ''),
+                traceOptimize: String(defaults.traceOptimize || ''),
+                summary: String(defaults.summary || ''),
+                summaryOptimize: String(defaults.summaryOptimize || ''),
             },
             modes: {
-                table: 'realtime',
-                summaryOptimize: 'summary',
+                trace: 'realtime',
             },
         };
     }
@@ -728,35 +754,50 @@
         if (!rawScheme || typeof rawScheme !== 'object') return null;
         const name = String(rawScheme.name || '').trim();
         if (!name) return null;
-        const prompts = rawScheme.prompts && typeof rawScheme.prompts === 'object' ? rawScheme.prompts : {};
+        const prompts = YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.(rawScheme)
+            || (rawScheme.prompts && typeof rawScheme.prompts === 'object' ? rawScheme.prompts : {});
         return {
             id: String(rawScheme.id || createPromptSchemeId()),
             name,
+            builtin: rawScheme.builtin === true,
             prompts: {
                 historian: String(prompts.historian || ''),
-                table: String(prompts.table || ''),
-                summaryOptimize: String(prompts.summaryOptimize || ''),
+                trace: String(prompts.trace ?? prompts.table ?? ''),
+                traceOptimize: String(prompts.traceOptimize ?? prompts.table ?? ''),
+                summary: String(prompts.summary ?? prompts.summaryOptimize ?? ''),
+                summaryOptimize: String(prompts.summaryOptimize ?? prompts.summary ?? ''),
             },
             modes: {
-                table: String(rawScheme.modes?.table || 'realtime'),
-                summaryOptimize: String(rawScheme.modes?.summaryOptimize || 'summary'),
+                trace: String(rawScheme.modes?.trace || rawScheme.modes?.table || 'realtime'),
             },
         };
     }
 
     function getPromptSchemes() {
+        const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
         try {
-            const raw = JSON.parse(localStorage.getItem(PROMPT_SCHEMES_STORAGE_KEY) || '[]');
-            return Array.isArray(raw) ? raw.map(normalizePromptScheme).filter(Boolean) : [];
+            const raw = YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEMES_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(PROMPT_SCHEMES_STORAGE_KEY) || '[]');
+            const schemes = Array.isArray(raw)
+                ? raw.map(normalizePromptScheme).filter((scheme) => scheme && !scheme.builtin && scheme.id !== defaultScheme?.id)
+                : [];
+            return defaultScheme ? [defaultScheme, ...schemes] : schemes;
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to load prompt schemes.', error);
-            return [];
+            return defaultScheme ? [defaultScheme] : [];
         }
     }
 
     function savePromptSchemes(schemes) {
-        const normalized = (Array.isArray(schemes) ? schemes : []).map(normalizePromptScheme).filter(Boolean);
-        localStorage.setItem(PROMPT_SCHEMES_STORAGE_KEY, JSON.stringify(normalized));
+        const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
+        const normalized = (Array.isArray(schemes) ? schemes : [])
+            .map(normalizePromptScheme)
+            .filter((scheme) => scheme && !scheme.builtin && scheme.id !== defaultScheme?.id);
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(PROMPT_SCHEMES_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(PROMPT_SCHEMES_STORAGE_KEY, JSON.stringify(normalized));
+        }
         return normalized;
     }
 
@@ -774,9 +815,28 @@
         return activePromptSchemeDraft;
     }
 
-    function updateActivePromptSchemeDraftPrompt(promptId, value) {
+    function forkBuiltinPromptSchemeDraft(name = '') {
         const draft = getActivePromptSchemeDraft();
+        if (!draft.builtin) return draft;
+        const fork = setActivePromptSchemeDraft({
+            ...draft,
+            id: createPromptSchemeId(),
+            name: String(name || '').trim() || `${draft.name}（自定义）`,
+            builtin: false,
+            prompts: { ...(draft.prompts || {}) },
+            modes: { ...(draft.modes || {}) },
+        });
+        getState().promptPresetId = fork.id;
+        return fork;
+    }
+
+    function updateActivePromptSchemeDraftPrompt(promptId, value) {
+        let draft = getActivePromptSchemeDraft();
         if (!PROMPT_SCHEME_PROMPT_IDS.includes(promptId)) return draft;
+        const nextValue = String(value || '');
+        if (draft.builtin && String(draft.prompts?.[promptId] || '') !== nextValue) {
+            draft = forkBuiltinPromptSchemeDraft();
+        }
         draft.prompts[promptId] = String(value || '');
         return draft;
     }
@@ -784,7 +844,10 @@
     function updateActivePromptSchemeMode(sectionId, modeId) {
         const options = PROMPT_SCHEME_MODE_OPTIONS[sectionId] || [];
         if (!options.some((option) => option.id === modeId)) return getActivePromptSchemeDraft();
-        const draft = getActivePromptSchemeDraft();
+        let draft = getActivePromptSchemeDraft();
+        if (draft.builtin && String(draft.modes?.[sectionId] || '') !== modeId) {
+            draft = forkBuiltinPromptSchemeDraft();
+        }
         draft.modes = draft.modes || {};
         draft.modes[sectionId] = modeId;
         return draft;
@@ -804,7 +867,9 @@
 
     function getPluginSettings() {
         try {
-            return normalizePluginSettings(JSON.parse(localStorage.getItem(PLUGIN_SETTINGS_STORAGE_KEY) || '{}'));
+            const raw = YuzukiMemory.GlobalSettings?.get?.(PLUGIN_SETTINGS_STORAGE_KEY, {})
+                ?? JSON.parse(localStorage.getItem(PLUGIN_SETTINGS_STORAGE_KEY) || '{}');
+            return normalizePluginSettings(raw);
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to load plugin settings.', error);
             return normalizePluginSettings();
@@ -813,7 +878,11 @@
 
     function savePluginSettings(nextSettings) {
         const normalized = normalizePluginSettings(nextSettings);
-        localStorage.setItem(PLUGIN_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(PLUGIN_SETTINGS_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(PLUGIN_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+        }
         return normalized;
     }
 
@@ -1097,7 +1166,9 @@
 
     function getAutoSummarySettings() {
         try {
-            return normalizeAutoSummarySettings(JSON.parse(localStorage.getItem(AUTO_SUMMARY_SETTINGS_STORAGE_KEY) || '{}'));
+            const raw = YuzukiMemory.GlobalSettings?.get?.(AUTO_SUMMARY_SETTINGS_STORAGE_KEY, {})
+                ?? JSON.parse(localStorage.getItem(AUTO_SUMMARY_SETTINGS_STORAGE_KEY) || '{}');
+            return normalizeAutoSummarySettings(raw);
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to load auto summary settings.', error);
             return normalizeAutoSummarySettings();
@@ -1106,7 +1177,11 @@
 
     function saveAutoSummarySettings(nextSettings) {
         const normalized = normalizeAutoSummarySettings(nextSettings);
-        localStorage.setItem(AUTO_SUMMARY_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(AUTO_SUMMARY_SETTINGS_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(AUTO_SUMMARY_SETTINGS_STORAGE_KEY, JSON.stringify(normalized));
+        }
         return normalized;
     }
 
@@ -1124,7 +1199,11 @@
     }
 
     function resetAutoSummarySettings() {
-        localStorage.removeItem(AUTO_SUMMARY_SETTINGS_STORAGE_KEY);
+        if (YuzukiMemory.GlobalSettings?.remove) {
+            YuzukiMemory.GlobalSettings.remove(AUTO_SUMMARY_SETTINGS_STORAGE_KEY);
+        } else {
+            localStorage.removeItem(AUTO_SUMMARY_SETTINGS_STORAGE_KEY);
+        }
         return getAutoSummarySettings();
     }
 
@@ -1235,6 +1314,7 @@
             ...current,
             ...(options.trace ? { trace: 0 } : {}),
             ...(options.summary ? { summary: 0 } : {}),
+            ...(options.summary ? { historySummary: 0 } : {}),
         };
     }
 
@@ -1640,7 +1720,7 @@
             nav.appendChild(createSidebarTableItem(table, table.id === getState().activeTableId));
         });
 
-        const tableSearch = createSearchBox('搜索表格', 'yzm-table-search');
+        const tableSearch = createSearchBox('搜索记忆', 'yzm-table-search');
 
         const sidebarMain = document.createElement('div');
         sidebarMain.className = 'yzm-sidebar-main';
@@ -3280,7 +3360,7 @@
             createTraceRangeCard(totalFloors),
             createTraceTargetCard(),
             createTraceExecutionCard(),
-            createTraceStartButton('开始分析并生成')
+            createTraceStartButton('开始分析并生成', 'trace')
         );
         return panel;
     }
@@ -3288,14 +3368,18 @@
     function createTraceOptimizePanel() {
         const panel = document.createElement('section');
         panel.className = 'yzm-trace-panel';
+        const targetSelect = createApiSelect('all', [{ label: '全部记忆', value: 'all' }, ...getTables().map((table) => ({ label: table.name, value: table.id }))]);
+        targetSelect.querySelector('.yzm-api-select')?.setAttribute('data-yzm-trace-target-table', 'true');
+        const note = createTraceTextarea('例如：重点关注角色关系变化；统一时间格式为 YYYY-MM-DD；合并相似地点名称...');
+        note.dataset.yzmTaskNote = 'true';
         panel.append(
             createTraceHeaderCard('追溯优化', '对已有追溯结果进行整理、合并与冲突修正。', 'fa-solid fa-wand-magic-sparkles'),
             createApiCard('当前目标记忆', 'fa-solid fa-table-cells-large', [
-                createApiField('', createApiSelect('all', [{ label: '全部记忆', value: 'all' }, ...getTables().map((table) => ({ label: table.name, value: table.id }))])),
+                createApiField('', targetSelect),
                 createTraceTextBlock('将对当前选定记忆中的追溯内容进行优化。'),
             ]),
             createApiCard('重点优化建议（可选）', 'fa-regular fa-lightbulb', [
-                createTraceTextarea('例如：重点关注角色关系变化；统一时间格式为 YYYY-MM-DD；合并相似地点名称...'),
+                note,
             ]),
             createTraceExecutionCard({
                 includeBatch: false,
@@ -3303,7 +3387,7 @@
                 confirmDesc: '优化前弹窗确认，便于检查目标记忆与改动',
                 silentDesc: '自动完成当前表格优化，完成后仅显示最终结果',
             }),
-            createTraceStartButton('开始优化')
+            createTraceStartButton('开始优化', 'traceOptimize')
         );
         return panel;
     }
@@ -3329,7 +3413,7 @@
                 confirmDesc: '每批总结后弹窗确认，便于检查结果与进度',
                 silentDesc: '自动完成全部总结批次，完成后仅显示最终结果',
             }),
-            createTraceStartButton('开始总结')
+            createTraceStartButton('开始总结', 'summary')
         );
         return panel;
     }
@@ -3337,6 +3421,8 @@
     function createSummaryOptimizePanel() {
         const panel = document.createElement('section');
         panel.className = 'yzm-trace-panel yzm-summary-tool-panel';
+        const note = createSummaryPromptCard('重点优化建议（可选）', '例如：压缩重复内容；补全时间线；统一称呼；保留未解决问题...');
+        note.querySelector('.yzm-trace-textarea')?.setAttribute('data-yzm-task-note', 'true');
         panel.append(
             createTraceHeaderCard('总结优化', '对已有总结内容进行整理、合并与冲突修正。', 'fa-solid fa-wand-magic-sparkles'),
             createApiCard('当前目标总结', 'fa-solid fa-book-open', [
@@ -3347,7 +3433,7 @@
                 ])),
                 createTraceTextBlock('将对当前选定的总结内容进行优化。'),
             ]),
-            createSummaryPromptCard('重点优化建议（可选）', '例如：压缩重复内容；补全时间线；统一称呼；保留未解决问题...'),
+            note,
             createTraceExecutionCard({
                 includeBatch: false,
                 radioName: 'yzm-summary-run-mode',
@@ -3355,14 +3441,14 @@
                 confirmDesc: '优化前弹窗确认，便于检查目标总结与改动',
                 silentDesc: '自动完成当前总结优化，完成后仅显示最终结果',
             }),
-            createTraceStartButton('开始优化')
+            createTraceStartButton('开始优化', 'summaryOptimize')
         );
         return panel;
     }
 
     function createSummaryRangeCard(totalFloors) {
-        const startInput = createTraceNumberInput('0');
-        const endInput = createTraceNumberInput(String(totalFloors));
+        const startInput = createTraceNumberInput('0', 'start');
+        const endInput = createTraceNumberInput(String(totalFloors), 'end');
         return createApiCard('总结范围', 'fa-regular fa-calendar', [
             createTraceRangeRow(
                 createApiField('起始楼层', createTraceUnitInput(startInput, '层')),
@@ -3418,8 +3504,8 @@
     }
 
     function createTraceRangeCard(totalFloors) {
-        const startInput = createTraceNumberInput('0');
-        const endInput = createTraceNumberInput(String(totalFloors));
+        const startInput = createTraceNumberInput('0', 'start');
+        const endInput = createTraceNumberInput(String(totalFloors), 'end');
         return createApiCard('追溯范围', 'fa-regular fa-calendar', [
             createTraceRangeRow(
                 createApiField('起始楼层', createTraceUnitInput(startInput, '层')),
@@ -3431,8 +3517,10 @@
     }
 
     function createTraceTargetCard() {
+        const selectWrap = createApiSelect('all', [{ label: '全部记忆', value: 'all' }, ...getTables().map((table) => ({ label: table.name, value: table.id }))]);
+        selectWrap.querySelector('.yzm-api-select')?.setAttribute('data-yzm-trace-target-table', 'true');
         return createApiCard('目标记忆', 'fa-solid fa-table-cells-large', [
-            createApiField('', createApiSelect('all', [{ label: '全部记忆', value: 'all' }, ...getTables().map((table) => ({ label: table.name, value: table.id }))])),
+            createApiField('', selectWrap),
             createTraceTextBlock('系统将尝试将提取的内容分配到所有可用记忆中'),
         ]);
     }
@@ -3508,7 +3596,7 @@
         return grid;
     }
 
-    function createTraceNumberInput(value) {
+    function createTraceNumberInput(value, rangeRole = '') {
         const wrap = createApiInput(value, 'number');
         wrap.classList.add('yzm-trace-number-input');
         const input = wrap.querySelector('.yzm-api-input');
@@ -3516,6 +3604,7 @@
             input.value = value;
             input.min = '0';
             input.step = '1';
+            if (rangeRole) input.dataset.yzmTraceRange = rangeRole;
         }
         return wrap;
     }
@@ -3579,8 +3668,268 @@
         return option;
     }
 
-    function createTraceStartButton(label) {
-        return createIconButton(label, 'fa-solid fa-wand-magic-sparkles', 'yzm-trace-start-button');
+    function createTraceStartButton(label, action = '') {
+        const button = createIconButton(label, 'fa-solid fa-wand-magic-sparkles', 'yzm-trace-start-button');
+        button.dataset.yzmTaskAction = action;
+        return button;
+    }
+
+    function getTaskPanelRange(panel) {
+        const totalFloors = getApproximateChatFloorCount();
+        const start = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="start"]')?.value, 0, totalFloors, 0, 0));
+        const end = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="end"]')?.value, 0, totalFloors, totalFloors, 0));
+        return {
+            start: Math.min(start, end),
+            end: Math.max(start, end),
+        };
+    }
+
+    function getTaskPanelOptions(panel) {
+        const targetTable = String(panel?.querySelector('[data-yzm-trace-target-table]')?.value || 'all');
+        const note = String(panel?.querySelector('[data-yzm-task-note]')?.value || '').trim();
+        const silent = !!panel?.querySelector('.yzm-trace-radio-active input')?.closest('.yzm-trace-radio')?.textContent?.includes('静默');
+        return {
+            ...getTaskPanelRange(panel),
+            tableId: targetTable === 'all' ? '' : targetTable,
+            note,
+            silent,
+        };
+    }
+
+    function setTaskButtonRunning(button, isRunning, label = '') {
+        if (!button) return;
+        if (isRunning) {
+            button.dataset.yzmOriginalText = button.querySelector('span')?.textContent || '';
+            button.disabled = true;
+            const span = button.querySelector('span');
+            if (span) span.textContent = label || '执行中...';
+            button.classList.add('yzm-api-button-loading');
+            return;
+        }
+        button.disabled = false;
+        const span = button.querySelector('span');
+        if (span && button.dataset.yzmOriginalText) span.textContent = button.dataset.yzmOriginalText;
+        button.classList.remove('yzm-api-button-loading');
+    }
+
+    function getTaskActionLabel(action) {
+        if (action === 'trace') return '手动追溯';
+        if (action === 'summary') return '手动总结';
+        if (action === 'traceOptimize') return '追溯优化';
+        if (action === 'summaryOptimize') return '总结优化';
+        return '记忆任务';
+    }
+
+    function formatTaskPreview(result) {
+        const preview = String(result?.preview || result?.text || '').trim();
+        return preview || '模型返回了可写入结果。';
+    }
+
+    function openTaskResultConfirmDialog(root, options = {}) {
+        return new Promise((resolve) => {
+            const modalHost = getModalHost(root);
+            removeModal(root, '.yzm-task-result-modal');
+
+            const overlay = document.createElement('div');
+            overlay.className = 'yzm-structure-modal yzm-task-result-modal';
+
+            const dialog = document.createElement('section');
+            dialog.className = 'yzm-structure-dialog yzm-task-result-dialog';
+            dialog.setAttribute('aria-label', options.title || '任务结果确认');
+
+            const header = document.createElement('div');
+            header.className = 'yzm-structure-header';
+            const title = document.createElement('strong');
+            title.className = 'yzm-structure-title';
+            title.textContent = options.title || '确认写入结果';
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'yzm-structure-close';
+            close.setAttribute('aria-label', '关闭任务结果');
+            close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+            header.append(title, close);
+
+            const meta = document.createElement('div');
+            meta.className = 'yzm-task-result-meta';
+            meta.textContent = options.description || '请确认模型结果是否写入插件记忆。';
+
+            const preview = document.createElement('textarea');
+            preview.className = 'yzm-task-result-preview';
+            preview.value = formatTaskPreview(options.result);
+            preview.readOnly = true;
+
+            const actions = document.createElement('div');
+            actions.className = 'yzm-structure-actions yzm-task-result-actions';
+            const cancel = createButton('取消写入', 'yzm-api-button');
+            const confirm = createButton('确认写入', 'yzm-add-table-confirm');
+            actions.append(cancel, confirm);
+
+            dialog.append(header, meta, preview, actions);
+            overlay.appendChild(dialog);
+            modalHost.appendChild(overlay);
+
+            const closeWith = (value) => {
+                overlay.remove();
+                document.removeEventListener('keydown', handleKeydown);
+                resolve(value);
+            };
+            const handleKeydown = (event) => {
+                if (event.key === 'Escape') closeWith(false);
+            };
+            close.onclick = () => closeWith(false);
+            cancel.onclick = () => closeWith(false);
+            confirm.onclick = () => closeWith(true);
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) closeWith(false);
+            });
+            dialog.addEventListener('click', (event) => event.stopPropagation());
+            document.addEventListener('keydown', handleKeydown);
+            preview.focus();
+        });
+    }
+
+    function openAutoTaskConfirmDialog(root, task) {
+        return new Promise((resolve) => {
+            const modalHost = getModalHost(root);
+            removeModal(root, '.yzm-auto-task-modal');
+
+            const overlay = document.createElement('div');
+            overlay.className = 'yzm-structure-modal yzm-auto-task-modal';
+
+            const dialog = document.createElement('section');
+            dialog.className = 'yzm-structure-dialog yzm-auto-task-dialog';
+            dialog.setAttribute('aria-label', `${task.title}触发确认`);
+
+            const header = document.createElement('div');
+            header.className = 'yzm-structure-header';
+            const title = document.createElement('strong');
+            title.className = 'yzm-structure-title';
+            title.textContent = `${task.title}触发`;
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'yzm-structure-close';
+            close.setAttribute('aria-label', '关闭自动任务确认');
+            close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+            header.append(title, close);
+
+            const info = document.createElement('div');
+            info.className = 'yzm-auto-task-info';
+            info.textContent = `当前 ${task.currentCount} 层，上次指针 ${task.lastIndex}，阈值 ${task.threshold} 层。本次处理 ${task.start}-${task.end} 层，延迟的 ${task.delay} 层保留给后续上下文。`;
+
+            const postponeRow = document.createElement('label');
+            postponeRow.className = 'yzm-auto-task-postpone';
+            const postponeInput = document.createElement('input');
+            postponeInput.className = 'yzm-config-number-input';
+            postponeInput.type = 'number';
+            postponeInput.min = '1';
+            postponeInput.max = '9999';
+            postponeInput.step = '1';
+            postponeInput.value = '1';
+            postponeRow.append(document.createTextNode('顺延'), postponeInput, document.createTextNode('层后再提醒'));
+
+            const actions = document.createElement('div');
+            actions.className = 'yzm-structure-actions yzm-auto-task-actions';
+            const cancel = createButton('取消', 'yzm-api-button');
+            const postpone = createButton('顺延', 'yzm-api-button');
+            const confirm = createButton('执行', 'yzm-add-table-confirm');
+            actions.append(cancel, postpone, confirm);
+
+            dialog.append(header, info, postponeRow, actions);
+            overlay.appendChild(dialog);
+            modalHost.appendChild(overlay);
+
+            const closeWith = (value) => {
+                overlay.remove();
+                document.removeEventListener('keydown', handleKeydown);
+                resolve(value);
+            };
+            const readPostpone = () => Math.max(1, Math.round(Number(postponeInput.value) || 1));
+            const handleKeydown = (event) => {
+                if (event.key === 'Escape') closeWith({ action: 'cancel', postpone: 0 });
+                if (event.key === 'Enter') closeWith({ action: 'confirm', postpone: 0 });
+            };
+            close.onclick = () => closeWith({ action: 'cancel', postpone: 0 });
+            cancel.onclick = () => closeWith({ action: 'cancel', postpone: 0 });
+            postpone.onclick = () => closeWith({ action: 'confirm', postpone: readPostpone() });
+            confirm.onclick = () => closeWith({ action: 'confirm', postpone: 0 });
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) closeWith({ action: 'cancel', postpone: 0 });
+            });
+            dialog.addEventListener('click', (event) => event.stopPropagation());
+            document.addEventListener('keydown', handleKeydown);
+            postponeInput.focus();
+            postponeInput.select();
+        });
+    }
+
+    function commitTaskResult(action, state, result) {
+        if (action === 'trace' || action === 'traceOptimize') return YuzukiMemory.TaskRunner.commitTraceResult(state, result);
+        if (action === 'summary' || action === 'summaryOptimize') return YuzukiMemory.TaskRunner.commitSummaryResult(state, result);
+        return result;
+    }
+
+    function refreshAfterTask(root) {
+        saveState();
+        renderWorkspaceList(root);
+        renderTableWorkspace(root);
+        if (activeWorkspaceView === 'trace') renderTraceWorkspace(root);
+        if (activeWorkspaceView === 'summaryTool') renderSummaryToolWorkspace(root);
+        bindPanelInteractions(root);
+    }
+
+    async function runTaskFromPanel(root, button, action) {
+        if (!YuzukiMemory.TaskRunner) {
+            window.alert('任务执行模块尚未加载。');
+            return;
+        }
+        const panel = button.closest('.yzm-trace-panel');
+        const options = getTaskPanelOptions(panel);
+        if (options.end <= options.start && (action === 'trace' || action === 'summary')) {
+            window.alert('请选择有效的楼层范围。');
+            return;
+        }
+        if (!options.silent && !window.confirm('即将调用 LLM 执行任务。模型返回后会先弹窗确认，再写入记忆。是否继续？')) return;
+
+        setTaskButtonRunning(button, true);
+        try {
+            const state = getState();
+            const taskOptions = { ...options, previewOnly: !options.silent };
+            let result;
+            if (action === 'trace') result = await YuzukiMemory.TaskRunner.runTrace(state, taskOptions);
+            else if (action === 'summary') result = await YuzukiMemory.TaskRunner.runSummary(state, taskOptions);
+            else if (action === 'traceOptimize') result = await YuzukiMemory.TaskRunner.runTraceOptimize(state, taskOptions);
+            else if (action === 'summaryOptimize') result = await YuzukiMemory.TaskRunner.runSummaryOptimize(state, taskOptions);
+            else return;
+
+            if (!result?.success) {
+                window.alert(result?.error || '任务执行失败。');
+                return;
+            }
+
+            if (!options.silent) {
+                const approved = await openTaskResultConfirmDialog(root, {
+                    title: `${getTaskActionLabel(action)}结果确认`,
+                    description: '非静默模式下，确认后才会写入插件记忆。',
+                    result,
+                });
+                if (!approved) return;
+                result = commitTaskResult(action, state, result);
+                if (!result?.success) {
+                    window.alert(result?.error || '写入失败。');
+                    return;
+                }
+            }
+
+            if (action === 'trace' && result.range?.end !== undefined) updateManualPointerSetting('trace', result.range.end);
+            if (action === 'summary' && result.range?.end !== undefined) updateManualPointerSetting('summary', result.range.end);
+            refreshAfterTask(root);
+            if (!options.silent) window.alert(`执行完成，写入 ${result.count || 0} 条。`);
+        } catch (error) {
+            console.error('[yuzuki-Memory] Task failed.', error);
+            window.alert(`任务执行失败：${String(error?.message || error || '未知错误')}`);
+        } finally {
+            setTaskButtonRunning(button, false);
+        }
     }
 
     function openTracePointerDialog(root) {
@@ -3699,6 +4048,14 @@
         desc.textContent = getPromptSchemeDescription(section.id);
         header.append(title, desc);
 
+        const fields = section.id === 'trace'
+            ? ['trace', 'traceOptimize']
+            : ['summary', 'summaryOptimize'];
+        panel.append(header, ...fields.map((fieldId) => createPromptSchemeEditorCard(fieldId)));
+        return panel;
+    }
+
+    function createPromptSchemeEditorCard(fieldId) {
         const editorCard = document.createElement('section');
         editorCard.className = 'yzm-config-card yzm-scheme-editor-card';
         editorCard.dataset.yzmSchemeEditorCard = 'true';
@@ -3706,25 +4063,23 @@
         cardHeader.className = 'yzm-scheme-card-header';
         const cardTitle = document.createElement('div');
         cardTitle.className = 'yzm-config-card-title yzm-scheme-card-title';
-        cardTitle.append(createIconNode('fa-regular fa-pen-to-square', ''), document.createTextNode('提示词内容'));
+        cardTitle.append(createIconNode('fa-regular fa-pen-to-square', ''), document.createTextNode(getPromptSchemeFieldLabel(fieldId)));
         const expand = createSchemeExpandButton();
         const actions = document.createElement('div');
         actions.className = 'yzm-scheme-card-actions';
-        const modeGroup = createPromptSchemeModeGroup(section.id);
+        const modeGroup = createPromptSchemeModeGroup(fieldId);
         if (modeGroup) actions.appendChild(modeGroup);
         actions.appendChild(expand);
         cardHeader.append(cardTitle, actions);
         const textarea = document.createElement('textarea');
         textarea.className = 'yzm-scheme-textarea';
-        textarea.placeholder = getPromptSchemePlaceholder(section.id);
-        textarea.value = getPromptSchemeDraftValue(section.id);
+        textarea.placeholder = getPromptSchemePlaceholder(fieldId);
+        textarea.value = getPromptSchemeDraftValue(fieldId);
         textarea.spellcheck = false;
-        textarea.dataset.yzmSchemeField = section.id;
-        textarea.dataset.yzmSchemeTitle = section.label;
+        textarea.dataset.yzmSchemeField = fieldId;
+        textarea.dataset.yzmSchemeTitle = getPromptSchemeFieldLabel(fieldId);
         editorCard.append(cardHeader, textarea);
-
-        panel.append(header, editorCard);
-        return panel;
+        return editorCard;
     }
 
     function createHistorianPromptSchemePanel(section) {
@@ -3869,15 +4224,22 @@
         }
 
         const schemeOptions = getPromptSchemes().map((scheme) => ({ label: scheme.name, value: scheme.id }));
-        if (!schemeOptions.length && draft.name) schemeOptions.push({ label: draft.name, value: draft.id });
+        if (draft.id && !schemeOptions.some((option) => option.value === draft.id)) {
+            schemeOptions.push({ label: `${draft.name || '未保存方案'}（未保存）`, value: draft.id });
+        } else if (!schemeOptions.length && draft.name) {
+            schemeOptions.push({ label: draft.name, value: draft.id });
+        }
         const select = createApiSelect(draft.id || '', schemeOptions.length ? schemeOptions : [{ label: draft.name || '未保存方案', value: draft.id || '' }], 'schemeName');
         select.querySelector('.yzm-api-select')?.setAttribute('data-yzm-scheme-select', 'true');
         card.append(header, createApiGrid([
             createApiField('方案名称', select),
         ]));
+        if (draft.builtin) {
+            card.appendChild(createApiInlineWarning('内置默认方案会跟随插件更新，编辑或重命名会自动另存为你的自定义方案。'));
+        }
         if (activePromptSchemeSectionId === 'info') {
             card.appendChild(createApiActions([
-                ['保存整套方案', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveScheme'],
+                [draft.builtin ? '另存为我的方案' : '保存整套方案', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveScheme'],
             ]));
             card.querySelector('[data-yzm-api-action="saveScheme"]')?.setAttribute('data-yzm-scheme-action', 'save');
         }
@@ -3916,16 +4278,24 @@
         const name = window.prompt('请输入方案名称：', draft.name || '');
         const normalizedName = String(name || '').trim();
         if (!normalizedName) return;
-        draft.name = normalizedName;
+        if (draft.builtin) {
+            forkBuiltinPromptSchemeDraft(normalizedName);
+        } else {
+            draft.name = normalizedName;
+        }
         renderPromptSchemeWorkspace(root);
     }
 
     function saveActivePromptScheme(root) {
-        const draft = getActivePromptSchemeDraft();
+        let draft = getActivePromptSchemeDraft();
         const name = String(draft.name || '').trim() || String(window.prompt('请输入方案名称：', '') || '').trim();
         if (!name) return;
-        draft.name = name;
-        draft.id = draft.id || createPromptSchemeId();
+        if (draft.builtin) {
+            draft = forkBuiltinPromptSchemeDraft(`${name}（自定义）`);
+        } else {
+            draft.name = name;
+            draft.id = draft.id || createPromptSchemeId();
+        }
         const schemes = getPromptSchemes();
         const index = schemes.findIndex((scheme) => scheme.id === draft.id);
         if (index >= 0) {
@@ -3941,6 +4311,10 @@
 
     function deleteActivePromptScheme(root) {
         const draft = getActivePromptSchemeDraft();
+        if (draft.builtin) {
+            window.alert('内置默认方案不能删除。');
+            return;
+        }
         if (!draft.id) {
             setActivePromptSchemeDraft(createEmptyPromptScheme(''));
             renderPromptSchemeWorkspace(root);
@@ -3974,14 +4348,24 @@
     function getPromptSchemeDescription(sectionId) {
         if (sectionId === 'info') return '管理记忆方案的基础信息、自动加载与导入导出。';
         if (sectionId === 'historian') return '控制史官视角、叙事边界和破限输出规则。';
-        if (sectionId === 'table') return '控制正文内容如何被提取并写入记忆表格。';
-        return '控制小总结、大总结和总结优化时的输出格式。';
+        if (sectionId === 'trace') return '控制追溯填表与追溯优化的提示词。';
+        return '控制手动/自动总结与总结优化的提示词。';
+    }
+
+    function getPromptSchemeFieldLabel(fieldId) {
+        if (fieldId === 'historian') return '史官破限（System Pre-Prompt）';
+        if (fieldId === 'trace') return '追溯填表提示词';
+        if (fieldId === 'traceOptimize') return '追溯优化提示词';
+        if (fieldId === 'summary') return '总结提示词';
+        return '总结优化提示词';
     }
 
     function getPromptSchemePlaceholder(sectionId) {
         if (sectionId === 'historian') return '填写史官破限提示词...';
-        if (sectionId === 'table') return '填写填表提示词...';
-        return '填写总结/优化提示词...';
+        if (sectionId === 'trace') return '填写追溯填表提示词...';
+        if (sectionId === 'traceOptimize') return '填写追溯优化提示词...';
+        if (sectionId === 'summary') return '填写总结提示词...';
+        return '填写总结优化提示词...';
     }
 
     function getPromptSchemeDraftValue(sectionId) {
@@ -4074,7 +4458,7 @@
         const clientSettings = YuzukiMemory.EmbeddingClient?.loadSettings?.();
         if (clientSettings) return clientSettings;
         return {
-            enabled: true,
+            enabled: false,
             provider: 'siliconflow',
             baseUrl: '',
             apiKey: '',
@@ -4095,7 +4479,7 @@
         const meta = YuzukiMemory.EmbeddingClient?.getProviderMeta?.(searchSettings.provider) || {};
         const fetchModelButton = createApiMiniButton('拉取模型', 'fa-solid fa-cloud-arrow-down');
         fetchModelButton.dataset.yzmApiAction = 'fetchEmbeddingModels';
-        const enabledSwitch = createConfigSwitch(searchSettings.enabled !== false);
+        const enabledSwitch = createConfigSwitch(searchSettings.enabled === true);
         enabledSwitch.classList.add('yzm-embedding-enabled-switch');
         return createApiPagePanel('向量化 API 配置', '配置书籍分段向量化与相似度检索所使用的 Embedding 模型。', 'fa-solid fa-diagram-project', [
             createApiCard('连接配置', 'fa-solid fa-link', [
@@ -4409,7 +4793,7 @@
         const recallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="recallLimit"]');
         const depthInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="contextDepth"]');
         return {
-            enabled: root.querySelector('.yzm-api-view .yzm-embedding-enabled-switch')?.classList.contains('yzm-config-switch-on') !== false,
+            enabled: root.querySelector('.yzm-api-view .yzm-embedding-enabled-switch')?.classList.contains('yzm-config-switch-on') === true,
             provider: getApiFieldValue(root, 'embeddingProvider'),
             baseUrl: getApiFieldValue(root, 'embeddingBaseUrl'),
             apiKey: getApiFieldValue(root, 'embeddingApiKey'),
@@ -4428,8 +4812,8 @@
         setApiFieldValue(root, 'embeddingModel', normalized.model);
         const enabledSwitch = root.querySelector('.yzm-api-view .yzm-embedding-enabled-switch');
         if (enabledSwitch) {
-            enabledSwitch.classList.toggle('yzm-config-switch-on', normalized.enabled !== false);
-            enabledSwitch.setAttribute('aria-pressed', String(normalized.enabled !== false));
+            enabledSwitch.classList.toggle('yzm-config-switch-on', normalized.enabled === true);
+            enabledSwitch.setAttribute('aria-pressed', String(normalized.enabled === true));
         }
         const thresholdInput = root.querySelector('.yzm-api-view .yzm-api-range-number');
         const threshold = Number(clampNumber(normalized.threshold, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold).toFixed(2));
@@ -5532,7 +5916,7 @@
 
         card.append(
             createPluginConfigHeader(),
-            createPluginConfigRow('注入记忆', '开启后处理表格、总结与 {{MEMORY}} 等旧变量。只用新版向量化时可以关闭。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
+            createPluginConfigRow('注入记忆', '处理 {{MEMORY}}、{{MEMORY_TABLE_表名}}、{{MEMORY_SUMMARY_标题或序号}} 等变量，并按表/总结分消息注入。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
             createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
             createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标，点击即可打开记忆插件。拖动后会记住位置。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon')),
@@ -8218,10 +8602,12 @@
             traceView.addEventListener('click', (event) => {
                 const target = event.target instanceof Element ? event.target : null;
                 const actionButton = target?.closest('[data-yzm-trace-action]');
-                if (!actionButton) return;
+                const taskButton = target?.closest('[data-yzm-task-action]');
+                if (!actionButton && !taskButton) return;
                 event.preventDefault();
                 event.stopPropagation();
-                if (actionButton.dataset.yzmTraceAction === 'editPointer') openTracePointerDialog(root);
+                if (actionButton?.dataset.yzmTraceAction === 'editPointer') openTracePointerDialog(root);
+                if (taskButton) void runTaskFromPanel(root, taskButton, taskButton.dataset.yzmTaskAction || '');
             });
             traceView.addEventListener('change', (event) => {
                 const target = event.target instanceof HTMLInputElement ? event.target : null;
@@ -8240,10 +8626,12 @@
             summaryToolView.addEventListener('click', (event) => {
                 const target = event.target instanceof Element ? event.target : null;
                 const actionButton = target?.closest('[data-yzm-trace-action]');
-                if (!actionButton) return;
+                const taskButton = target?.closest('[data-yzm-task-action]');
+                if (!actionButton && !taskButton) return;
                 event.preventDefault();
                 event.stopPropagation();
-                if (actionButton.dataset.yzmTraceAction === 'editSummaryPointer') openSummaryPointerDialog(root);
+                if (actionButton?.dataset.yzmTraceAction === 'editSummaryPointer') openSummaryPointerDialog(root);
+                if (taskButton) void runTaskFromPanel(root, taskButton, taskButton.dataset.yzmTaskAction || '');
             });
             summaryToolView.addEventListener('change', (event) => {
                 const target = event.target instanceof HTMLInputElement ? event.target : null;
@@ -8889,6 +9277,29 @@
     function mount() {
         ensureRoot();
         syncFloatingIcon();
+        YuzukiMemory.TaskRunner?.bindAutoSummary?.({
+            getState,
+            saveState,
+            confirmAutoTask(task) {
+                const root = document.getElementById(ROOT_ID);
+                if (!root) return Promise.resolve({ action: 'cancel', postpone: 0 });
+                return openAutoTaskConfirmDialog(root, task);
+            },
+            confirmTaskResult(result, task) {
+                const root = document.getElementById(ROOT_ID);
+                if (!root) return Promise.resolve(false);
+                return openTaskResultConfirmDialog(root, {
+                    title: `${task?.title || '自动总结'}结果确认`,
+                    description: '完成模式未勾选静默保存，确认后才会写入插件记忆。',
+                    result,
+                });
+            },
+            onUpdate() {
+                const root = document.getElementById(ROOT_ID);
+                if (!root) return;
+                refreshAfterTask(root);
+            },
+        });
         watchExtensionMenuButton();
         getStorage()?.bindSessionChange?.((nextSessionId, previousSessionId) => {
             reloadStateForCurrentSession(nextSessionId, previousSessionId);
