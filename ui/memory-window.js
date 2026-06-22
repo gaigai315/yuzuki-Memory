@@ -6,9 +6,12 @@
     const EXTENSION_ENTRY_ID = 'yzm-memory-extension-entry';
     const EXTENSION_ROW_ID = 'yzm-memory-extension-row';
     const EXTENSION_ICON_ID = 'yzm-memory-extension-icon';
+    const FLOATING_ROOT_ID = 'yzm-memory-floating-root';
+    const FLOATING_BUTTON_ID = 'yzm-memory-floating-button';
     const DISPLAY_NAME = '柚月の记忆';
     const THEME_STORAGE_KEY = 'yzm_memory_theme';
     const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
+    const FLOATING_POSITION_STORAGE_KEY = 'yzm_memory_global_floating_icon_position';
     const TAG_PRESETS_STORAGE_KEY = 'yzm_memory_global_tag_presets';
     const LLM_API_PRESETS_STORAGE_KEY = 'yzm_memory_global_llm_api_presets';
     const LLM_API_MODE_STORAGE_KEY = 'yzm_memory_global_llm_api_mode';
@@ -145,6 +148,7 @@
         smartCalculationLinkage: false,
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
+        enableFloatingIcon: false,
     };
     const DEFAULT_AUTO_SUMMARY_SETTINGS = {
         summaryEnabled: true,
@@ -195,6 +199,8 @@
     let memoryState = null;
     let loadedSessionId = null;
     let extensionRetryTimer = null;
+    let floatingResizeController = null;
+    let floatingVisibilityTimer = null;
     let activeWorkspaceView = 'table';
     let activeConfigSectionId = 'plugin';
     let activeApiSectionId = 'llm';
@@ -792,6 +798,7 @@
             smartCalculationLinkage: typeof source.smartCalculationLinkage === 'boolean' ? source.smartCalculationLinkage : DEFAULT_PLUGIN_SETTINGS.smartCalculationLinkage,
             hideFloorsEnabled: typeof source.hideFloorsEnabled === 'boolean' ? source.hideFloorsEnabled : DEFAULT_PLUGIN_SETTINGS.hideFloorsEnabled,
             hiddenFloorCount: Math.round(normalizeNumberSetting(source.hiddenFloorCount, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0)),
+            enableFloatingIcon: typeof source.enableFloatingIcon === 'boolean' ? source.enableFloatingIcon : DEFAULT_PLUGIN_SETTINGS.enableFloatingIcon,
         };
     }
 
@@ -820,6 +827,9 @@
         if (key === 'hideFloorsEnabled' && value === true) {
             updateAutoSummarySetting('hideSummaryFloors', false);
         }
+        if (key === 'enableFloatingIcon') {
+            syncFloatingIcon();
+        }
         return nextSettings;
     }
 
@@ -830,6 +840,243 @@
             force: options.force === true,
             keepFloors: settings.hiddenFloorCount,
         });
+    }
+
+    function getFloatingIconRoot() {
+        let root = document.getElementById(FLOATING_ROOT_ID);
+        if (root) return root;
+
+        const memoryRoot = document.getElementById(ROOT_ID) || ensureRoot();
+        root = document.createElement('div');
+        root.id = FLOATING_ROOT_ID;
+        root.className = 'yzm-floating-root';
+        memoryRoot.appendChild(root);
+        return root;
+    }
+
+    function getSavedFloatingIconPosition() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(FLOATING_POSITION_STORAGE_KEY) || 'null');
+            const left = Number(parsed?.left);
+            const top = Number(parsed?.top);
+            if (!Number.isFinite(left) || !Number.isFinite(top)) return null;
+            return { left, top };
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load floating icon position.', error);
+            return null;
+        }
+    }
+
+    function saveFloatingIconPosition(left, top) {
+        localStorage.setItem(FLOATING_POSITION_STORAGE_KEY, JSON.stringify({
+            left: Math.round(left),
+            top: Math.round(top),
+        }));
+    }
+
+    function clampFloatingIconPosition(left, top, button = null) {
+        const rect = button?.getBoundingClientRect?.();
+        const size = Math.max(24, Math.round(Math.max(rect?.width || 0, rect?.height || 0, 52)));
+        const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || size;
+        const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || size;
+        const minEdge = 8;
+        const maxLeft = Math.max(minEdge, viewportWidth - size - minEdge);
+        const maxTop = Math.max(minEdge, viewportHeight - size - minEdge);
+        return {
+            left: Math.max(minEdge, Math.min(maxLeft, Number(left) || minEdge)),
+            top: Math.max(minEdge, Math.min(maxTop, Number(top) || minEdge)),
+        };
+    }
+
+    function applyFloatingIconPosition(button, left, top, options = {}) {
+        if (!button) return;
+        const next = clampFloatingIconPosition(left, top, button);
+        button.style.left = `${next.left}px`;
+        button.style.top = `${next.top}px`;
+        button.style.right = 'auto';
+        button.style.bottom = 'auto';
+        if (options.persist) saveFloatingIconPosition(next.left, next.top);
+    }
+
+    function positionFloatingIcon(button) {
+        const saved = getSavedFloatingIconPosition();
+        if (saved) {
+            applyFloatingIconPosition(button, saved.left, saved.top, { persist: false });
+            return;
+        }
+
+        const rect = button?.getBoundingClientRect?.();
+        const size = Math.max(24, Math.round(Math.max(rect?.width || 0, rect?.height || 0, 52)));
+        const margin = 14;
+        const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || size;
+        const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || size;
+        let left = viewportWidth - size - margin;
+        const top = Math.round(viewportHeight * 0.72);
+        const chatArea = document.querySelector('#sheld') || document.querySelector('#chat');
+        if (chatArea) {
+            const rect = chatArea.getBoundingClientRect();
+            if (rect.width > 0 && rect.right > size && rect.right <= viewportWidth + 1) {
+                left = rect.right - size - margin;
+            }
+        }
+        applyFloatingIconPosition(button, left, top, { persist: false });
+    }
+
+    function ensureFloatingIconVisible(button) {
+        if (!button?.isConnected) return;
+        if (isMemoryShellOpen()) return;
+        const rect = button.getBoundingClientRect();
+        const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || rect.width;
+        const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || rect.height;
+        const outside = rect.right < 0 || rect.left > viewportWidth || rect.bottom < 0 || rect.top > viewportHeight;
+        if (outside) {
+            const saved = getSavedFloatingIconPosition();
+            if (saved) applyFloatingIconPosition(button, saved.left, saved.top, { persist: true });
+            else positionFloatingIcon(button);
+        } else {
+            applyFloatingIconPosition(button, rect.left, rect.top, { persist: false });
+        }
+    }
+
+    function bindFloatingIconDrag(button) {
+        let pointerId = null;
+        let startX = 0;
+        let startY = 0;
+        let startLeft = 0;
+        let startTop = 0;
+        let moved = false;
+        let lastTapAt = 0;
+
+        const finish = (event, cancelled = false) => {
+            if (pointerId === null || event.pointerId !== pointerId) return;
+            button.releasePointerCapture?.(pointerId);
+            pointerId = null;
+            button.classList.remove('yzm-floating-button-dragging');
+
+            if (moved && !cancelled) {
+                const rect = button.getBoundingClientRect();
+                applyFloatingIconPosition(button, rect.left, rect.top, { persist: true });
+            } else if (!cancelled) {
+                const now = Date.now();
+                if (now - lastTapAt > 500) {
+                    lastTapAt = now;
+                    toggleShell(true);
+                }
+            }
+
+            window.setTimeout(() => {
+                moved = false;
+            }, 40);
+        };
+
+        button.addEventListener('pointerdown', (event) => {
+            if (event.button !== undefined && event.button !== 0) return;
+            pointerId = event.pointerId;
+            startX = event.clientX;
+            startY = event.clientY;
+            const rect = button.getBoundingClientRect();
+            startLeft = rect.left;
+            startTop = rect.top;
+            moved = false;
+            button.classList.add('yzm-floating-button-dragging');
+            button.setPointerCapture?.(pointerId);
+        });
+
+        button.addEventListener('pointermove', (event) => {
+            if (pointerId === null || event.pointerId !== pointerId) return;
+            const deltaX = event.clientX - startX;
+            const deltaY = event.clientY - startY;
+            if (!moved && Math.hypot(deltaX, deltaY) > 8) {
+                moved = true;
+            }
+            if (!moved) return;
+            event.preventDefault();
+            applyFloatingIconPosition(button, startLeft + deltaX, startTop + deltaY, { persist: false });
+        });
+
+        button.addEventListener('pointerup', (event) => finish(event));
+        button.addEventListener('pointercancel', (event) => finish(event, true));
+        button.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+        });
+        button.addEventListener('dragstart', (event) => event.preventDefault());
+    }
+
+    function isMemoryShellOpen() {
+        const shell = document.getElementById(ROOT_ID)?.querySelector('.yzm-shell');
+        return !!shell && !shell.hidden;
+    }
+
+    function updateFloatingIconVisibility() {
+        const button = document.getElementById(FLOATING_BUTTON_ID);
+        if (!button) return;
+        const shouldHide = isMemoryShellOpen();
+        button.hidden = shouldHide;
+        button.setAttribute('aria-hidden', String(shouldHide));
+        if (!shouldHide) ensureFloatingIconVisible(button);
+    }
+
+    function createFloatingIconButton() {
+        const button = document.createElement('button');
+        button.id = FLOATING_BUTTON_ID;
+        button.type = 'button';
+        button.className = 'yzm-floating-button';
+        button.title = '打开柚月の记忆';
+        button.setAttribute('aria-label', '打开柚月の记忆');
+
+        const icon = document.createElement('img');
+        icon.className = 'yzm-floating-button-image';
+        icon.src = new URL('ui/xftb.png', YuzukiMemory.baseUrl || './').href;
+        icon.alt = '';
+        icon.draggable = false;
+        icon.setAttribute('aria-hidden', 'true');
+
+        button.appendChild(icon);
+        bindFloatingIconDrag(button);
+        return button;
+    }
+
+    function mountFloatingIcon() {
+        const root = getFloatingIconRoot();
+        let button = document.getElementById(FLOATING_BUTTON_ID);
+        if (!button) {
+            button = createFloatingIconButton();
+            root.appendChild(button);
+            positionFloatingIcon(button);
+        } else if (button.parentElement !== root) {
+            root.appendChild(button);
+        }
+
+        if (!floatingResizeController) {
+            floatingResizeController = new AbortController();
+            const reposition = () => ensureFloatingIconVisible(button);
+            window.addEventListener('resize', reposition, { passive: true, signal: floatingResizeController.signal });
+            window.visualViewport?.addEventListener?.('resize', reposition, { passive: true, signal: floatingResizeController.signal });
+            window.visualViewport?.addEventListener?.('scroll', reposition, { passive: true, signal: floatingResizeController.signal });
+        }
+
+        window.clearInterval(floatingVisibilityTimer);
+        floatingVisibilityTimer = window.setInterval(() => ensureFloatingIconVisible(button), 3000);
+        updateFloatingIconVisibility();
+    }
+
+    function unmountFloatingIcon() {
+        floatingResizeController?.abort?.();
+        floatingResizeController = null;
+        window.clearInterval(floatingVisibilityTimer);
+        floatingVisibilityTimer = null;
+        document.getElementById(FLOATING_BUTTON_ID)?.remove();
+        const root = document.getElementById(FLOATING_ROOT_ID);
+        if (root && !root.childElementCount) root.remove();
+    }
+
+    function syncFloatingIcon() {
+        if (getPluginSettings().enableFloatingIcon) {
+            mountFloatingIcon();
+        } else {
+            unmountFloatingIcon();
+        }
     }
 
     function normalizeAutoSummarySettings(rawSettings) {
@@ -5288,6 +5535,7 @@
             createPluginConfigRow('注入记忆', '开启后处理表格、总结与 {{MEMORY}} 等旧变量。只用新版向量化时可以关闭。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
             createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
+            createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标，点击即可打开记忆插件。拖动后会记住位置。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon')),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled')))
         );
         return card;
@@ -8523,6 +8771,7 @@
 
         close.addEventListener('click', () => {
             shell.hidden = true;
+            updateFloatingIconVisibility();
         });
 
         bindPanelInteractions(root);
@@ -8551,11 +8800,12 @@
         }, 1200);
     }
 
-    function toggleShell() {
+    function toggleShell(forceOpen = false) {
         const root = ensureRoot();
         const shell = root.querySelector('.yzm-shell');
         if (!shell) return;
-        shell.hidden = !shell.hidden;
+        shell.hidden = forceOpen ? false : !shell.hidden;
+        updateFloatingIconVisibility();
     }
 
     function getExtensionMenuHost() {
@@ -8638,6 +8888,7 @@
 
     function mount() {
         ensureRoot();
+        syncFloatingIcon();
         watchExtensionMenuButton();
         getStorage()?.bindSessionChange?.((nextSessionId, previousSessionId) => {
             reloadStateForCurrentSession(nextSessionId, previousSessionId);

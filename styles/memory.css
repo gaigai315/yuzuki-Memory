@@ -72,6 +72,70 @@
     display: none !important;
 }
 
+#yzm-memory-root .yzm-floating-root {
+    position: fixed;
+    inset: 0;
+    z-index: 30001;
+    width: 100vw;
+    height: 100vh;
+    pointer-events: none;
+    transform: none;
+    contain: none;
+}
+
+#yzm-memory-root .yzm-floating-button {
+    position: fixed;
+    left: auto;
+    top: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    overflow: visible;
+    background: transparent;
+    border: 0;
+    border-radius: 999px;
+    box-sizing: border-box;
+    cursor: pointer;
+    filter: drop-shadow(0 6px 13px rgba(83, 106, 198, 0.24));
+    opacity: 0.92;
+    outline: 0;
+    pointer-events: auto;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    transition: opacity 160ms ease, filter 160ms ease, transform 160ms ease;
+}
+
+#yzm-memory-root .yzm-floating-button[hidden] {
+    display: none !important;
+}
+
+#yzm-memory-root .yzm-floating-button:hover,
+#yzm-memory-root .yzm-floating-button:focus-visible {
+    filter: drop-shadow(0 8px 18px rgba(83, 106, 198, 0.36));
+    opacity: 1;
+    transform: translateY(-1px);
+}
+
+#yzm-memory-root .yzm-floating-button-dragging {
+    filter: drop-shadow(0 10px 22px rgba(83, 106, 198, 0.42));
+    opacity: 1;
+    transition: none;
+}
+
+#yzm-memory-root .yzm-floating-button-image {
+    display: block;
+    width: 52px;
+    height: 52px;
+    object-fit: contain;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+
 #yzm-memory-root .yzm-shell {
     position: relative;
     width: min(980px, 100%);
@@ -4369,6 +4433,7 @@
 }
 
 #yzm-memory-root .yzm-plugin-config-card {
+    width: min(100%, 560px);
     padding: 0;
     overflow: hidden;
 }
@@ -4376,14 +4441,14 @@
 #yzm-memory-root .yzm-plugin-config-header {
     display: flex;
     align-items: center;
-    gap: 10px;
-    min-height: 54px;
-    padding: 0 18px;
+    gap: 8px;
+    min-height: 42px;
+    padding: 0 14px;
     color: var(--yzm-title);
     background: var(--yzm-surface-strong);
     border-bottom: 1px solid var(--yzm-border);
     box-sizing: border-box;
-    font-size: 17px;
+    font-size: 15px;
     font-weight: 700;
 }
 
@@ -4393,11 +4458,11 @@
 
 #yzm-memory-root .yzm-plugin-config-row {
     display: grid;
-    grid-template-columns: 48px minmax(0, 1fr) auto;
+    grid-template-columns: 34px minmax(0, 1fr) auto;
     align-items: center;
-    gap: 14px;
-    min-height: 104px;
-    padding: 18px 22px;
+    gap: 11px;
+    min-height: 64px;
+    padding: 10px 16px;
     border-bottom: 1px solid var(--yzm-border-soft);
     box-sizing: border-box;
 }
@@ -4406,31 +4471,31 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 48px;
-    height: 48px;
+    width: 34px;
+    height: 34px;
     color: var(--yzm-icon);
     background: var(--yzm-input-bg);
     border: 1px solid var(--yzm-border-soft);
     border-radius: 999px;
     box-sizing: border-box;
-    font-size: 18px;
+    font-size: 14px;
 }
 
 #yzm-memory-root .yzm-plugin-config-title {
     min-width: 0;
     color: var(--yzm-title);
-    font-size: 17px;
+    font-size: 14px;
     font-weight: 700;
-    line-height: 1.35;
+    line-height: 1.3;
 }
 
 #yzm-memory-root .yzm-plugin-config-title span {
     display: block;
-    margin-top: 5px;
+    margin-top: 3px;
     color: var(--yzm-muted);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 400;
-    line-height: 1.45;
+    line-height: 1.35;
 }
 
 #yzm-memory-root .yzm-plugin-config-row-body {
@@ -4486,6 +4551,22 @@
     background: #ffffff;
 }
 
+#yzm-memory-root .yzm-plugin-config-card .yzm-config-switch {
+    width: 42px;
+    min-width: 42px;
+    height: 22px;
+}
+
+#yzm-memory-root .yzm-plugin-config-card .yzm-config-switch span {
+    left: 2px;
+    width: 16px;
+    height: 16px;
+}
+
+#yzm-memory-root .yzm-plugin-config-card .yzm-config-switch-on span {
+    right: 2px;
+}
+
 #yzm-memory-root .yzm-config-number-input {
     width: 82px;
     min-height: 34px;
@@ -4500,6 +4581,12 @@
     outline: 0;
     appearance: textfield;
     -moz-appearance: textfield;
+}
+
+#yzm-memory-root .yzm-plugin-config-card .yzm-config-number-input {
+    width: 72px;
+    min-height: 30px;
+    font-size: 13px;
 }
 
 #yzm-memory-root .yzm-config-number-input::-webkit-outer-spin-button,
@@ -6510,6 +6597,9 @@
 #yzm-memory-root .yzm-record-action-menu {
     position: absolute;
     z-index: 30;
+    display: inline-grid;
+    grid-template-columns: max-content;
+    gap: 2px;
     width: max-content;
     min-width: 86px;
     max-width: min(240px, calc(100vw - 24px));
@@ -6525,7 +6615,8 @@
     align-items: center;
     justify-content: flex-start;
     gap: 8px;
-    width: 100%;
+    width: auto;
+    max-width: 100%;
     min-height: 32px;
     padding: 0 10px;
     color: #ff6f87;
@@ -6611,6 +6702,12 @@
     #yzm-memory-root {
         display: block;
         padding: 0;
+    }
+
+    #yzm-memory-root .yzm-floating-button,
+    #yzm-memory-root .yzm-floating-button-image {
+        width: 34px;
+        height: 34px;
     }
 
     #yzm-memory-root .yzm-shell {
@@ -8345,7 +8442,7 @@
     }
 
     #yzm-memory-root .yzm-trace-stat-card {
-        grid-template-columns: 30px max-content;
+        grid-template-columns: minmax(0, 1fr);
         justify-content: center;
         min-height: 56px;
         padding: 7px 8px;
@@ -8354,10 +8451,21 @@
     }
 
     #yzm-memory-root .yzm-trace-stat-icon {
+        position: absolute;
+        left: 8px;
+        top: 50%;
         width: 30px;
         height: 30px;
         border-radius: 9px;
         font-size: 13px;
+        transform: translateY(-50%);
+    }
+
+    #yzm-memory-root .yzm-trace-stat-body {
+        grid-column: 1 / -1;
+        width: 100%;
+        padding: 0 34px;
+        box-sizing: border-box;
     }
 
     #yzm-memory-root .yzm-trace-stat-body strong {
@@ -8519,16 +8627,21 @@
     }
 
     #yzm-memory-root .yzm-trace-stat-card {
-        grid-template-columns: 24px max-content;
+        grid-template-columns: minmax(0, 1fr);
         min-height: 48px;
         padding: 6px;
         gap: 6px;
     }
 
     #yzm-memory-root .yzm-trace-stat-icon {
+        left: 6px;
         width: 24px;
         height: 24px;
         font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-trace-stat-body {
+        padding: 0 28px;
     }
 
     #yzm-memory-root .yzm-trace-stat-body strong {
