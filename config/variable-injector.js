@@ -15,6 +15,7 @@
     const MEMORY_CONTENT_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/;
     const VECTOR_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/;
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
+    const SUMMARY_INJECTION_EXCLUDED_COLUMNS = new Set(['未解决问题']);
 
     const DEFAULT_TABLES = [
         {
@@ -334,6 +335,7 @@
         const body = (Array.isArray(table.columns) ? table.columns : [])
             .map(cleanColumnName)
             .filter((column) => column !== primary && !['核心角色', '楼层数'].includes(column))
+            .filter((column) => !SUMMARY_INJECTION_EXCLUDED_COLUMNS.has(column))
             .map((column) => {
                 const value = String(values[column] || '').trim();
                 return value ? `${column}: ${value}` : '';
