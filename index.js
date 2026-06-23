@@ -23,6 +23,7 @@
         'config/vector-store.js',
         'config/floor-hider.js',
         'config/variable-injector.js',
+        'config/prompt-ready-injector.js',
         'config/request-probe.js',
         'config/log-viewer.js',
         'ui/memory-window.js',

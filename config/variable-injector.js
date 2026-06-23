@@ -595,6 +595,15 @@
         return message;
     }
 
+    function createFragmentForAnchor(targetKey, anchorMessage, text) {
+        const message = cloneMessageWithText(targetKey, anchorMessage, text);
+        if (!message || typeof message !== 'object' || targetKey === 'contents') return message;
+        const role = getAnchorInjectionRole(anchorMessage, message.role || 'system');
+        message.role = role;
+        syncRoleFlags(message, role);
+        return message;
+    }
+
     function insertInjectedMessages(body, messages = []) {
         const target = getRequestArray(body);
         const normalized = messages.map((message) => createMessageForTarget(target?.key, message)).filter(Boolean);
@@ -802,7 +811,7 @@
             let match = anchorPattern.exec(text);
             while (match) {
                 const before = text.slice(cursor, match.index);
-                const beforeMessage = cloneMessageWithText(target.key, item, before);
+                const beforeMessage = createFragmentForAnchor(target.key, item, before);
                 if (beforeMessage) nextItems.push(beforeMessage);
 
                 consumeAnchor(match[0])
@@ -814,7 +823,7 @@
                 match = anchorPattern.exec(text);
             }
 
-            const afterMessage = cloneMessageWithText(target.key, item, text.slice(cursor));
+            const afterMessage = createFragmentForAnchor(target.key, item, text.slice(cursor));
             if (afterMessage) nextItems.push(afterMessage);
         });
 
@@ -938,6 +947,15 @@
         };
     }
 
+    function getEffectiveSettings(options = {}) {
+        const settings = getPluginSettings();
+        return {
+            ...settings,
+            injectMemoryTable: settings.injectMemoryTable && options.disableMemoryInjection !== true,
+            injectVectorMemory: settings.injectVectorMemory && options.disableVectorInjection !== true,
+        };
+    }
+
     function cleanupVariablesInNode(node, settings = getPluginSettings()) {
         if (!node) return;
         if (Array.isArray(node)) {
@@ -970,7 +988,7 @@
 
     async function processBody(body, options = {}) {
         if (!body || typeof body !== 'object') return body;
-        const settings = getPluginSettings();
+        const settings = getEffectiveSettings(options);
         if (!settings.injectMemoryTable && !settings.injectVectorMemory) {
             return body;
         }
