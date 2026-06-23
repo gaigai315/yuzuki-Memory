@@ -5,6 +5,8 @@
     const STORAGE_BOOK_NAME = 'Yuzuki_Memory_Vector_Library';
     const ACTIVE_BOOKS_KEY = 'yzm_memory_active_vector_books';
     const BACKUP_HEADER = '=== Yuzuki Memory Vector Library ===';
+    const LEGACY_BACKUP_HEADER = '=== Gaigai 向量缓存文件 (图书馆版) ===';
+    const LEGACY_LIBRARY_MARKER = '>>> 图书馆 <<<';
     const DEFAULT_SEPARATOR = '===';
 
     class VectorStore {
@@ -611,6 +613,9 @@
 
         async importLibrary(fileOrText) {
             const text = typeof fileOrText === 'string' ? fileOrText : await this.readFile(fileOrText);
+            if (this.isLegacyLibraryBackup(text)) {
+                return this.importLegacyLibrary(text);
+            }
             const jsonText = text.startsWith(BACKUP_HEADER) ? text.slice(BACKUP_HEADER.length).trim() : text.trim();
             const parsed = JSON.parse(jsonText);
             const nextLibrary = this.normalizeLibrary(parsed.library || parsed);
@@ -618,6 +623,168 @@
             this.selectedBookId = Object.keys(nextLibrary)[0] || this.selectedBookId;
             await this.saveLibrary();
             return { success: true, bookCount: Object.keys(nextLibrary).length };
+        }
+
+        isLegacyLibraryBackup(text) {
+            const source = String(text || '');
+            return source.includes(LEGACY_BACKUP_HEADER) ||
+                source.includes(LEGACY_LIBRARY_MARKER) ||
+                (/Gaigai/i.test(source) && source.includes('ID: ') && source.includes('---'));
+        }
+
+        decodeLegacyVector(base64Text) {
+            const source = String(base64Text || '').trim();
+            if (!source) return null;
+            try {
+                const binary = atob(source);
+                let encoded = '';
+                for (let index = 0; index < binary.length; index += 1) {
+                    encoded += `%${binary.charCodeAt(index).toString(16).padStart(2, '0')}`;
+                }
+                const vector = JSON.parse(decodeURIComponent(encoded));
+                return Array.isArray(vector) ? vector : null;
+            } catch (error) {
+                console.warn('[yuzuki-Memory] Legacy vector decode failed.', error);
+                return null;
+            }
+        }
+
+        parseLegacyLibraryBackup(text) {
+            const lines = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+            const imported = {};
+            let inLibrary = false;
+            let mode = 'header';
+            let currentBookId = '';
+            let currentBook = null;
+            let currentChunkIndex = -1;
+            let vectorBuffer = '';
+
+            const flushVector = () => {
+                if (!currentBook || currentChunkIndex < 0 || !vectorBuffer.trim()) return;
+                const vector = this.decodeLegacyVector(vectorBuffer);
+                currentBook.vectors[currentChunkIndex] = vector;
+                currentBook.vectorized[currentChunkIndex] = Array.isArray(vector);
+                vectorBuffer = '';
+            };
+
+            const flushBook = () => {
+                flushVector();
+                if (!currentBookId || !currentBook?.name) return;
+                imported[currentBookId] = this.normalizeBook(currentBook, currentBook.name);
+            };
+
+            lines.forEach((rawLine) => {
+                const trimmed = rawLine.trim();
+                const isLibraryMarker = trimmed === LEGACY_LIBRARY_MARKER || /^>>>.*<<<$/.test(trimmed);
+                const isBookInfoMarker = trimmed === '=== 书籍信息 ===' || (/^===.*===$/.test(trimmed) && (trimmed.includes('书籍信息') || /book\s*info/i.test(trimmed)));
+                const isSectionMarker = /^===.*===$/.test(trimmed);
+                const isVectorMarker = trimmed === '--- 向量 (Base64) ---' || (/^---.*---$/.test(trimmed) && /Base64/i.test(trimmed));
+                const isUnvectorizedMarker = trimmed === '--- 向量: 未向量化 ---' || (/^---.*---$/.test(trimmed) && (trimmed.includes('未向量化') || /unvectorized/i.test(trimmed)));
+                const chunkMatch = (!isVectorMarker && !isUnvectorizedMarker)
+                    ? trimmed.match(/^---.*?(\d+).*?---$/)
+                    : null;
+
+                if (isLibraryMarker) {
+                    inLibrary = true;
+                    mode = 'library';
+                    return;
+                }
+                if (!inLibrary && (isBookInfoMarker || trimmed.startsWith('ID: '))) {
+                    inLibrary = true;
+                }
+                if (!inLibrary) return;
+
+                if (isBookInfoMarker || (isSectionMarker && mode !== 'chunk_text' && mode !== 'chunk_vector')) {
+                    flushBook();
+                    currentBookId = '';
+                    currentBook = { chunks: [], vectors: [], vectorized: [], createTime: Date.now(), updateTime: Date.now() };
+                    currentChunkIndex = -1;
+                    mode = 'book_meta';
+                    return;
+                }
+
+                if (!currentBook && trimmed.startsWith('ID: ')) {
+                    currentBook = { chunks: [], vectors: [], vectorized: [], createTime: Date.now(), updateTime: Date.now() };
+                    currentChunkIndex = -1;
+                    mode = 'book_meta';
+                }
+
+                if (!currentBook) return;
+
+                if (trimmed.startsWith('ID: ') && currentBookId && currentBook?.name) {
+                    flushBook();
+                    currentBook = { chunks: [], vectors: [], vectorized: [], createTime: Date.now(), updateTime: Date.now() };
+                    currentChunkIndex = -1;
+                    mode = 'book_meta';
+                }
+
+                if (chunkMatch) {
+                    flushVector();
+                    currentChunkIndex = Number.parseInt(chunkMatch[1], 10);
+                    currentBook.chunks[currentChunkIndex] = '';
+                    currentBook.vectors[currentChunkIndex] = null;
+                    currentBook.vectorized[currentChunkIndex] = false;
+                    mode = 'chunk_text';
+                    return;
+                }
+
+                if (isVectorMarker) {
+                    flushVector();
+                    vectorBuffer = '';
+                    mode = 'chunk_vector';
+                    return;
+                }
+
+                if (isUnvectorizedMarker) {
+                    flushVector();
+                    currentBook.vectors[currentChunkIndex] = null;
+                    currentBook.vectorized[currentChunkIndex] = false;
+                    mode = 'chunk_unvectorized';
+                    return;
+                }
+
+                if (mode === 'book_meta') {
+                    if (trimmed.startsWith('ID: ')) {
+                        currentBookId = trimmed.slice(4).trim();
+                    } else if (trimmed.startsWith('书名: ')) {
+                        currentBook.name = trimmed.slice(4).trim();
+                    } else if (/^book\s*name\s*:/i.test(trimmed)) {
+                        currentBook.name = trimmed.replace(/^book\s*name\s*:/i, '').trim();
+                    } else if (trimmed.startsWith('创建时间:')) {
+                        const timestamp = Number.parseInt(trimmed.replace('创建时间:', '').trim(), 10);
+                        currentBook.createTime = Number.isFinite(timestamp) ? timestamp : Date.now();
+                        currentBook.updateTime = currentBook.createTime;
+                    } else if (/^create\s*time\s*:/i.test(trimmed)) {
+                        const timestamp = Number.parseInt(trimmed.replace(/^create\s*time\s*:/i, '').trim(), 10);
+                        currentBook.createTime = Number.isFinite(timestamp) ? timestamp : Date.now();
+                        currentBook.updateTime = currentBook.createTime;
+                    }
+                    return;
+                }
+
+                if (mode === 'chunk_text') {
+                    if (!trimmed) return;
+                    currentBook.chunks[currentChunkIndex] += currentBook.chunks[currentChunkIndex]
+                        ? `\n${rawLine}`
+                        : rawLine;
+                    return;
+                }
+
+                if (mode === 'chunk_vector') {
+                    if (trimmed) vectorBuffer += trimmed;
+                }
+            });
+
+            flushBook();
+            return imported;
+        }
+
+        async importLegacyLibrary(text) {
+            const nextLibrary = this.parseLegacyLibraryBackup(text);
+            Object.assign(this.library, nextLibrary);
+            this.selectedBookId = Object.keys(nextLibrary)[0] || this.selectedBookId;
+            await this.saveLibrary();
+            return { success: true, bookCount: Object.keys(nextLibrary).length, legacy: true };
         }
 
         downloadBackup(bookIds = null) {

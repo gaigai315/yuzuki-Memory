@@ -794,21 +794,23 @@
     }
 
     function getSummaryRecordTitle(payload, records = [], table = null, meta = {}) {
-        const autoTaskType = String(meta?.autoTaskType || '').trim();
-        const rangeValue = getRangeFloorValue(meta?.range);
-        if (autoTaskType === 'summary' || autoTaskType === 'history') {
-            const taskLabel = autoTaskType === 'history' ? '大总结' : '小总结';
-            if (payload.kind === 'branch') {
-                const character = String(payload.character || '').trim() || '未命名支线';
-                return rangeValue ? `支线${taskLabel} - ${character} - ${rangeValue}` : `支线${taskLabel} - ${character}`;
-            }
-            return rangeValue ? `主线${taskLabel} - ${rangeValue}` : `主线${taskLabel}`;
-        }
-        if (payload.kind === 'branch') {
-            const character = String(payload.character || '').trim();
-            return character ? `支线总结 - ${character}` : getNextSummaryTitle(table, records, '支线总结');
-        }
-        return payload.title || '主线总结';
+        const label = payload.kind === 'branch' ? '支线总结' : '主线总结';
+        return getNextSummaryTitle(table, records, label);
+    }
+
+    function isBlankSummaryRecord(record) {
+        const values = record?.values || {};
+        return !String(values.总结内容 || values.summary || '').trim()
+            && !String(values.未解决问题 || values.unresolved || '').trim()
+            && !String(values.备注 || values.remark || '').trim()
+            && !String(values.楼层数 || values.range || '').trim();
+    }
+
+    function findReusableSummaryPlaceholder(records = [], primary = '总结标题', label = '主线总结') {
+        return (Array.isArray(records) ? records : []).find((record) => {
+            const title = String(record?.values?.[primary] || '').trim();
+            return title === label && isBlankSummaryRecord(record) && !record?.meta?.yzmMemoryTask;
+        }) || null;
     }
 
     function upsertSummaryRecord(state, payload, meta = {}) {
@@ -831,6 +833,10 @@
         };
         const primary = getPrimaryColumn(table);
         let record = records.find((entry) => String(entry?.values?.[primary] || '').trim() === title);
+        if (!record) {
+            const label = payload.kind === 'branch' ? '支线总结' : '主线总结';
+            record = findReusableSummaryPlaceholder(records, primary, label);
+        }
         if (record) {
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
             record.values[primary] = title;
@@ -867,10 +873,16 @@
 
     function getNextSummaryTitle(table, records = [], label = '主线总结') {
         const primary = getPrimaryColumn(table);
-        const count = (Array.isArray(records) ? records : [])
-            .filter((record) => String(record?.values?.[primary] || '').trim().startsWith(label))
-            .length;
-        return `${label}（${count + 1}）`;
+        const escapedLabel = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const numberedTitlePattern = new RegExp(`^${escapedLabel}（(\\d+)）$`);
+        const maxIndex = (Array.isArray(records) ? records : []).reduce((max, record) => {
+            const title = String(record?.values?.[primary] || '').trim();
+            const numberedMatch = title.match(numberedTitlePattern);
+            if (numberedMatch) return Math.max(max, Number(numberedMatch[1]) || 0);
+            if (title === label && !isBlankSummaryRecord(record)) return Math.max(max, 1);
+            return max;
+        }, 0);
+        return `${label}（${maxIndex + 1}）`;
     }
 
     function getSummaryRecordTaskMeta(record) {
@@ -949,8 +961,7 @@
 3. 同一天内多段内容只在第一段写 YYYY年MM月DD日，后续同日段落只写 HH:mm-HH:mm；跨天时再写新的日期。
 4. kind 只能是 main 或 branch；主线对象不要输出 character 字段。
 5. 支线对象必须输出 character，且必须是具体角色名、组织名或事件名；不要写“集团外部势力”“外部势力”“其他NPC”“未知势力”这类分类名。
-6. 同一个具体 character 的支线会合并进同一条支线总结；主线会合并进同一条主线总结。
-7. 主线和支线不要记录同一事件。`;
+6. 主线和支线不要记录同一事件。`;
     }
 
     function getTracePromptFromScheme(scheme) {

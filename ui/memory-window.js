@@ -502,6 +502,26 @@
         return getRecordValue(record, getPrimaryColumn(table)) || '未命名';
     }
 
+    function isBlankSummaryRecord(record) {
+        return !getRecordValue(record, '总结内容').trim()
+            && !getRecordValue(record, '未解决问题').trim()
+            && !getRecordValue(record, '备注').trim()
+            && !getRecordValue(record, '楼层数').trim();
+    }
+
+    function getNextSummaryTitle(table, kind) {
+        const label = kind === 'branch' ? '支线总结' : '主线总结';
+        const pattern = new RegExp(`^${label}（(\\d+)）$`);
+        const maxIndex = getRecords(table.id).reduce((max, record) => {
+            const title = getRecordTitle(table, record).trim();
+            const match = title.match(pattern);
+            if (match) return Math.max(max, Number(match[1]) || 0);
+            if (title === label && !isBlankSummaryRecord(record)) return Math.max(max, 1);
+            return max;
+        }, 0);
+        return `${label}（${maxIndex + 1}）`;
+    }
+
     function getCharacterMainColumns(table) {
         const primaryColumn = getPrimaryColumn(table);
         return (table?.columns || []).map(cleanColumnName).filter((column) => column !== primaryColumn && CHARACTER_MAIN_FIELDS.includes(column));
@@ -1486,9 +1506,7 @@
     function createSummaryRecord(table, kind) {
         const record = createRecord(table);
         const primaryColumn = getPrimaryColumn(table);
-        const label = kind === 'branch' ? '支线总结' : '主线总结';
-        const sameKindCount = getRecords(table.id).filter((entry) => getRecordTitle(table, entry).includes(label)).length;
-        record.values[primaryColumn] = `${label}（${sameKindCount + 1}）`;
+        record.values[primaryColumn] = getNextSummaryTitle(table, kind);
         if (kind === 'branch' && Object.prototype.hasOwnProperty.call(record.values, '核心角色')) record.values['核心角色'] = '';
         return record;
     }
