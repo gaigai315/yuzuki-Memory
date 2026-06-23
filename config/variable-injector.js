@@ -459,6 +459,7 @@
     function getRequestArray(body) {
         if (!body || typeof body !== 'object') return null;
         if (Array.isArray(body.messages)) return { key: 'messages', items: body.messages };
+        if (Array.isArray(body.chat)) return { key: 'chat', items: body.chat };
         if (Array.isArray(body.prompt)) return { key: 'prompt', items: body.prompt };
         if (Array.isArray(body.contents)) return { key: 'contents', items: body.contents };
         return null;
