@@ -13,6 +13,7 @@
     const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/g;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/g;
     const MEMORY_DATA_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/;
+    const MEMORY_DATA_ANCHOR_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/gi;
     const MEMORY_PROMPT_VARIABLE_PATTERN = /\{\{MEMORY_PROMPT\}\}/;
     const VECTOR_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/;
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
@@ -279,11 +280,15 @@
         };
     }
 
-    function buildTableMessages(state = getCurrentState()) {
+    function buildTableMessageEntries(state = getCurrentState()) {
         return (Array.isArray(state?.tables) ? state.tables : [])
             .filter((table) => table.id !== FIXED_SUMMARY_TABLE_ID)
-            .map((table) => buildTableMemoryMessage(state, table))
-            .filter(Boolean);
+            .map((table) => ({ table, message: buildTableMemoryMessage(state, table) }))
+            .filter((entry) => entry.message);
+    }
+
+    function buildTableMessages(state = getCurrentState()) {
+        return buildTableMessageEntries(state).map((entry) => entry.message);
     }
 
     function buildAllTablesText(state = getCurrentState()) {
@@ -558,20 +563,224 @@
     }
 
     function getAnchorVariableKey(match) {
-        const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/);
+        const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/i);
         if (tableMatch) return `{{MEMORY_TABLE_${tableMatch[1]}}}`;
-        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/);
+        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/i);
         if (summaryMatch) return `{{MEMORY_SUMMARY_${summaryMatch[1]}}}`;
         return match;
     }
 
     function getAnchorReplacement(match, replacements) {
         if (Object.prototype.hasOwnProperty.call(replacements, match)) return replacements[match];
-        const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/);
+        const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/i);
         if (tableMatch) return replacements.__table(tableMatch[1]);
-        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/);
+        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/i);
         if (summaryMatch) return replacements.__summary(summaryMatch[1]);
         return '';
+    }
+
+    function removeInjectionFlags(message) {
+        if (!message || typeof message !== 'object') return message;
+        delete message.isGaigaiData;
+        delete message.isGaigaiPrompt;
+        delete message.isYuzukiVector;
+        delete message.isGaigaiVector;
+        delete message.yzmMemoryInjectionType;
+        delete message.yzmMemoryTableId;
+        delete message.yzmMemorySummaryId;
+        return message;
+    }
+
+    function cloneMessageWithText(targetKey, sourceMessage, text) {
+        const content = String(text || '');
+        if (!content.trim()) return null;
+        if (!sourceMessage || typeof sourceMessage !== 'object') return content;
+
+        const clone = removeInjectionFlags({ ...sourceMessage });
+        if (targetKey === 'contents' || Array.isArray(clone.parts)) {
+            clone.parts = [{ text: content }];
+            delete clone.content;
+            delete clone.mes;
+            delete clone.text;
+            return clone;
+        }
+        if (typeof clone.mes === 'string') {
+            clone.mes = content;
+            return clone;
+        }
+        if (typeof clone.text === 'string') {
+            clone.text = content;
+            return clone;
+        }
+        if (Array.isArray(clone.content)) {
+            clone.content = [{ type: 'text', text: content }];
+            return clone;
+        }
+        clone.content = content;
+        return clone;
+    }
+
+    function matchesTableAnchor(table, requestedName, requestedKey) {
+        if (!table) return false;
+        return table.name === requestedName
+            || table.id === requestedName
+            || normalizeAnchorName(table.name) === requestedKey
+            || normalizeAnchorName(table.id) === requestedKey
+            || (requestedName && String(table.name || '').includes(requestedName));
+    }
+
+    function takeSpecificTableMessage(tableEntries, tableName) {
+        const requestedName = String(tableName || '').trim();
+        if (!requestedName) return null;
+        const requestedKey = normalizeAnchorName(requestedName);
+        const index = tableEntries.findIndex((entry) => matchesTableAnchor(entry.table, requestedName, requestedKey));
+        if (index < 0) return null;
+        return tableEntries.splice(index, 1)[0]?.message || null;
+    }
+
+    function summaryMessageMatches(message, summaryKey) {
+        const requested = String(summaryKey || '').trim();
+        if (!requested) return false;
+        const requestedKey = normalizeAnchorName(requested);
+        const title = String(message?.content || '').match(/^【前情提要 - (.+?)】/)?.[1] || '';
+        const number = String(message?.name || '').match(/总结(\d+)/)?.[1] || '';
+        return message?.yzmMemorySummaryId === requested
+            || title === requested
+            || number === requested
+            || normalizeAnchorName(message?.yzmMemorySummaryId) === requestedKey
+            || normalizeAnchorName(title) === requestedKey
+            || normalizeAnchorName(`总结${number}`) === requestedKey
+            || normalizeAnchorName(`剧情总结${number}`) === requestedKey
+            || (title && title.includes(requested));
+    }
+
+    function takeSpecificSummaryMessage(summaryMessages, summaryKey) {
+        const index = summaryMessages.findIndex((message) => summaryMessageMatches(message, summaryKey));
+        if (index < 0) return null;
+        return summaryMessages.splice(index, 1)[0] || null;
+    }
+
+    function createPromptMemoryMessage(state) {
+        const promptText = buildMemoryPromptText(state);
+        if (!promptText) return null;
+        return {
+            role: 'system',
+            content: promptText,
+            name: 'SYSTEM (提示词)',
+            isGaigaiPrompt: true,
+            yzmMemoryInjectionType: 'prompt',
+        };
+    }
+
+    function takeAllTableMessages(tableEntries) {
+        return tableEntries.splice(0).map((entry) => entry.message).filter(Boolean);
+    }
+
+    function takeAllSummaryMessages(summaryMessages) {
+        return summaryMessages.splice(0).filter(Boolean);
+    }
+
+    function reserveSpecificAnchorMessages(items, tableEntries, summaryMessages) {
+        const reservedTables = new Map();
+        const reservedSummaries = new Map();
+        items.forEach((item) => {
+            const text = getMessageText(item);
+            String(text || '').replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => {
+                const key = normalizeAnchorName(tableName);
+                if (key && !reservedTables.has(key)) {
+                    reservedTables.set(key, takeSpecificTableMessage(tableEntries, tableName));
+                }
+                return '';
+            });
+            String(text || '').replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => {
+                const key = normalizeAnchorName(summaryKey);
+                if (key && !reservedSummaries.has(key)) {
+                    reservedSummaries.set(key, takeSpecificSummaryMessage(summaryMessages, summaryKey));
+                }
+                return '';
+            });
+        });
+        return { reservedTables, reservedSummaries };
+    }
+
+    function takeReservedAnchorMessage(reservedMessages, anchorName) {
+        const key = normalizeAnchorName(anchorName);
+        if (!key || !reservedMessages.has(key)) return null;
+        const message = reservedMessages.get(key);
+        reservedMessages.delete(key);
+        return message || null;
+    }
+
+    function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState()) {
+        const target = getRequestArray(body);
+        if (!target) return false;
+
+        const tableEntries = buildTableMessageEntries(state);
+        const summaryMessages = buildSummaryMessages(state);
+        const { reservedTables, reservedSummaries } = reserveSpecificAnchorMessages(target.items, tableEntries, summaryMessages);
+        let changed = false;
+
+        function consumeAnchor(match) {
+            const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/i);
+            if (tableMatch) {
+                const message = takeReservedAnchorMessage(reservedTables, tableMatch[1]);
+                return message ? [message] : [];
+            }
+
+            const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/i);
+            if (summaryMatch) {
+                const message = takeReservedAnchorMessage(reservedSummaries, summaryMatch[1]);
+                return message ? [message] : [];
+            }
+
+            if (/^\{\{MEMORY_SUMMARY\}\}$/i.test(match)) return takeAllSummaryMessages(summaryMessages);
+            if (/^\{\{MEMORY_TABLE\}\}$/i.test(match)) return takeAllTableMessages(tableEntries);
+            if (/^\{\{MEMORY\}\}$/i.test(match)) {
+                return [
+                    createPromptMemoryMessage(state),
+                    ...takeAllSummaryMessages(summaryMessages),
+                    ...takeAllTableMessages(tableEntries),
+                ].filter(Boolean);
+            }
+
+            return [];
+        }
+
+        const nextItems = [];
+        target.items.forEach((item) => {
+            const text = getMessageText(item);
+            const anchorPattern = new RegExp(MEMORY_DATA_ANCHOR_PATTERN.source, 'gi');
+            if (!anchorPattern.test(text)) {
+                nextItems.push(item);
+                return;
+            }
+
+            changed = true;
+            anchorPattern.lastIndex = 0;
+            let cursor = 0;
+            let match = anchorPattern.exec(text);
+            while (match) {
+                const before = text.slice(cursor, match.index);
+                const beforeMessage = cloneMessageWithText(target.key, item, before);
+                if (beforeMessage) nextItems.push(beforeMessage);
+
+                consumeAnchor(match[0])
+                    .map((message) => createMessageForTarget(target.key, message))
+                    .filter(Boolean)
+                    .forEach((message) => nextItems.push(message));
+
+                cursor = match.index + match[0].length;
+                match = anchorPattern.exec(text);
+            }
+
+            const afterMessage = cloneMessageWithText(target.key, item, text.slice(cursor));
+            if (afterMessage) nextItems.push(afterMessage);
+        });
+
+        if (changed) {
+            target.items.splice(0, target.items.length, ...nextItems);
+        }
+        return changed;
     }
 
     function markInjectionContainer(node, match) {
@@ -742,6 +951,7 @@
             : '';
         const replacements = buildVariableReplacements(state, vectorText, settings);
         const anchorState = { seen: new Set(), injected: new Set() };
+        if (settings.injectMemoryTable) replaceMemoryDataAnchorsInRequest(body, state);
         replaceVariablesInNode(body, replacements, anchorState);
 
         if (settings.injectVectorMemory && vectorText && !hasYuzukiVectorMarker(body) && !hadVectorVariable) {
