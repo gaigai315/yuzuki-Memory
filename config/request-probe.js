@@ -10,6 +10,8 @@
     const EXCLUDED_GENERATE_TYPES = ['/api/sd/', '/api/tts/', '/api/images/'];
     let lastRequestData = null;
     let originalFetch = null;
+    let activeChatRequestCount = 0;
+    let lastChatRequestFinishedAt = 0;
 
     function clone(value) {
         try {
@@ -46,6 +48,22 @@
         if (url.includes('xiaomimimo.com')) return false;
         if (url.includes('/generate') && EXCLUDED_GENERATE_TYPES.some((entry) => url.includes(entry))) return false;
         return REQUEST_TYPES.some((entry) => url.includes(entry));
+    }
+
+    function isExternalTextGenerationRequest(url, options) {
+        return isTextGenerationRequest(url, options) && !isPhoneInternalRequest(options);
+    }
+
+    function markChatRequestStarted() {
+        activeChatRequestCount += 1;
+        window.yzmMemoryChatRequestActiveCount = activeChatRequestCount;
+    }
+
+    function markChatRequestFinished() {
+        activeChatRequestCount = Math.max(0, activeChatRequestCount - 1);
+        lastChatRequestFinishedAt = Date.now();
+        window.yzmMemoryChatRequestActiveCount = activeChatRequestCount;
+        window.yzmMemoryLastChatRequestFinishedAt = lastChatRequestFinishedAt;
     }
 
     function getRequestArray(body) {
@@ -265,7 +283,7 @@
 
     async function processJsonBody(url, options, bodyText, requestSource = null) {
         if (!isTextGenerationRequest(url, options) || typeof bodyText !== 'string' || !bodyText.trim()) return null;
-        const hideResult = await YuzukiMemory.FloorHider?.applyContextLimitHiding?.();
+        const hideResult = await YuzukiMemory.FloorHider?.applyConfiguredHiding?.();
         const rawBody = JSON.parse(bodyText);
         removeHiddenMessagesFromBody(rawBody, hideResult?.hiddenTexts || YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || []);
         const body = YuzukiMemory.VariableInjector?.processBody
@@ -311,7 +329,17 @@
         originalFetch = window.fetch;
         window.fetch = async function (...args) {
             const nextArgs = await processFetchArgs(args);
-            return originalFetch.apply(this, nextArgs);
+            const input = nextArgs[0];
+            const requestInput = isRequestLike(input) ? input : null;
+            const url = requestInput ? requestInput.url : (input ? input.toString() : '');
+            const options = nextArgs[1] || {};
+            const shouldTrack = isExternalTextGenerationRequest(url, options);
+            if (shouldTrack) markChatRequestStarted();
+            try {
+                return await originalFetch.apply(this, nextArgs);
+            } finally {
+                if (shouldTrack) markChatRequestFinished();
+            }
         };
         YuzukiMemory.RequestProbe.installed = true;
     }
@@ -325,6 +353,10 @@
         captureFromBody,
         processFetchArgs,
         getLastRequestData,
+        getChatRequestState: () => ({
+            activeCount: activeChatRequestCount,
+            lastFinishedAt: lastChatRequestFinishedAt,
+        }),
     });
 
     installFetchProbe();

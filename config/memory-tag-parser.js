@@ -9,8 +9,9 @@
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const MEMORY_TAG_PATTERN = /<(Memory|GaigaiMemory|memory|tableEdit|gaigaimemory|tableedit)>([\s\S]*?)<\/\1>/gi;
     const COMMENT_PATTERN = /<!--|-->/g;
-    const DEFAULT_STATE_REVISION = 12;
+    const DEFAULT_STATE_REVISION = 13;
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
+    const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
     let bound = false;
     let applying = false;
     let bindRetryTimer = null;
@@ -22,7 +23,7 @@
         { id: 'character_profile', name: '角色档案', icon: 'person', columns: ['角色名', '年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理', '人际关系', '着装', '待办事项', '约定'] },
         { id: 'item_tracking', name: '物品追踪', icon: 'item', columns: ['物品名称', '物品描述', '物品位置', '持有者', '状态', '备注'] },
         { id: 'world_setting', name: '世界设定', icon: 'world', columns: ['设定名', '类型', '详细说明', '影响范围'] },
-        { id: 'memory_summary', name: '记忆总结', icon: 'memory_book', columns: ['总结标题', '总结内容', '时间线', '未解决问题', '备注'] },
+        { id: 'memory_summary', name: '记忆总结', icon: 'memory_book', columns: ['总结标题', '核心角色', '楼层数', '总结内容', '未解决问题', '备注'] },
     ];
 
     function createDefaultState() {
@@ -39,8 +40,8 @@
             activeRecordIds: {},
             records: {
                 memory_summary: [
-                    { id: 'summary_main_default', values: { 总结标题: '主线总结', 总结内容: '', 时间线: '', 未解决问题: '', 备注: '' } },
-                    { id: 'summary_branch_default', values: { 总结标题: '支线总结', 总结内容: '', 时间线: '', 未解决问题: '', 备注: '' } },
+                    { id: 'summary_main_default', values: { 总结标题: '主线总结', 核心角色: '', 楼层数: '', 总结内容: '', 未解决问题: '', 备注: '' } },
+                    { id: 'summary_branch_default', values: { 总结标题: '支线总结', 核心角色: '', 楼层数: '', 总结内容: '', 未解决问题: '', 备注: '' } },
                 ],
             },
             promptPresetId: '',
@@ -113,16 +114,90 @@
         };
     }
 
+    function getPlotKind(value = '') {
+        return /支线/.test(String(value || '')) ? 'branch' : (/主线/.test(String(value || '')) ? 'main' : '');
+    }
+
+    function normalizePlotField(field = '') {
+        const key = normalizeName(field);
+        if (key === '标题' || key === '名称' || key === '摘要名称') return '摘要名称';
+        if (key === '日期' || key === '时间') return '日期';
+        if (key === '内容' || key === '摘要内容' || key === '总结内容') return '摘要内容';
+        return String(field || '').trim();
+    }
+
+    function parsePlotValues(source = '', fallbackTitle = '') {
+        const values = {};
+        if (fallbackTitle) values['摘要名称'] = fallbackTitle;
+        splitSegments(String(source || '').replace(/^[|:：]\s*/, '')).forEach((segment) => {
+            const parsed = parseFieldSegment(segment);
+            if (!parsed || !parsed.field) return;
+            values[normalizePlotField(parsed.field)] = parsed.value;
+        });
+
+        const loosePattern = /(摘要名称|标题|名称|日期|时间|摘要内容|总结内容|内容)\s*[:：]\s*([\s\S]*?)(?=(?:[，,；;]\s*)?(?:摘要名称|标题|名称|日期|时间|摘要内容|总结内容|内容)\s*[:：]|$)/g;
+        let match;
+        while ((match = loosePattern.exec(String(source || ''))) !== null) {
+            const field = normalizePlotField(match[1]);
+            const value = String(match[2] || '').replace(/^[，,；;\s]+|[，,；;\s]+$/g, '').trim();
+            if (value) values[field] = value;
+        }
+        return values;
+    }
+
+    function createPlotRow(kind, source = '', fallbackTitle = '') {
+        const normalizedKind = kind === 'branch' ? 'branch' : 'main';
+        const values = parsePlotValues(source, fallbackTitle);
+        if (!values['摘要内容'] && String(source || '').trim() && !Object.keys(values).length) {
+            values['摘要内容'] = String(source || '').trim();
+        }
+        return {
+            table: '剧情摘要',
+            primaryValue: normalizedKind === 'branch' ? '支线摘要' : '主线摘要',
+            values,
+        };
+    }
+
+    function splitPlotTimeAndContent(text = '') {
+        const source = String(text || '').trim();
+        if (!source) return { time: '', content: '' };
+        const pattern = /^(.+?(?:\d{1,2}[:：]\d{2})(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?)\s*[，,、:：\s]\s*([\s\S]+)$/;
+        const match = source.match(pattern);
+        if (!match) return { time: '', content: source };
+        const time = match[1].replace(/：/g, ':').trim();
+        const content = match[2].trim();
+        return { time, content };
+    }
+
     function parseMemoryText(text) {
         const cleanText = String(text || '').replace(COMMENT_PATTERN, '\n');
         const rows = [];
         let currentTable = '';
+        let currentPlotKind = '';
         cleanText.split(/\r?\n/).forEach((rawLine) => {
             const line = rawLine.trim();
             if (!line) return;
             if (line.startsWith('#')) {
+                const plotHeaderMatch = line.match(/^#+\s*(主线摘要|支线摘要)([\s\S]*)$/);
+                if (plotHeaderMatch) {
+                    currentTable = '剧情摘要';
+                    currentPlotKind = getPlotKind(plotHeaderMatch[1]);
+                    const rest = String(plotHeaderMatch[2] || '').trim();
+                    if (rest) rows.push(createPlotRow(currentPlotKind, rest));
+                    return;
+                }
                 currentTable = line.replace(/^#+/, '').trim();
+                currentPlotKind = getPlotKind(currentTable);
                 return;
+            }
+            if (normalizeName(currentTable) === normalizeName('剧情摘要')) {
+                const keyMatch = line.match(/^\[([^\]]+)\]\s*(?:\||$)([\s\S]*)$/);
+                const linePlotKind = getPlotKind(keyMatch ? keyMatch[1] : '');
+                const targetKind = linePlotKind || currentPlotKind;
+                if (targetKind) {
+                    rows.push(createPlotRow(targetKind, keyMatch ? keyMatch[2] : line, keyMatch && !linePlotKind ? keyMatch[1].trim() : ''));
+                    return;
+                }
             }
             const keyMatch = line.match(/^\[([^\]]+)\]\s*(?:\||$)([\s\S]*)$/);
             if (!keyMatch || !currentTable) return;
@@ -169,9 +244,48 @@
         return `${currentText}；${nextText}`;
     }
 
+    function appendMultilineValue(current, next) {
+        const currentText = String(current || '').trim();
+        const nextText = String(next || '').trim();
+        if (!nextText) return currentText;
+        if (!currentText) return nextText;
+        return `${currentText}\n${nextText}`;
+    }
+
+    function plotRowToText(row) {
+        const values = row?.values || {};
+        let title = String(values['摘要名称'] || values['标题'] || '').trim();
+        if (/^(主线|支线)摘要$/.test(title)) title = '';
+        let date = String(values['日期'] || values['时间'] || '').replace(/：/g, ':').trim();
+        let content = String(values['摘要内容'] || values['内容'] || values['总结内容'] || '').trim();
+        if (!date && content) {
+            const parsed = splitPlotTimeAndContent(content);
+            date = parsed.time;
+            content = parsed.content;
+        }
+        const body = [title, content].filter(Boolean).join('：');
+        return [date, body].filter(Boolean).join('\t').trim();
+    }
+
     function applyMemoryRow(state, row) {
         const table = findTable(state, row.table);
         if (!table || table.id === FIXED_SUMMARY_TABLE_ID) return false;
+
+        if (table.id === PLOT_SUMMARY_TABLE_ID) {
+            const field = getPlotKind(row.primaryValue) === 'branch' ? '支线' : '主线';
+            const text = plotRowToText(row);
+            if (!text) return false;
+            state.records = state.records && typeof state.records === 'object' ? state.records : {};
+            state.records[table.id] = Array.isArray(state.records[table.id]) ? state.records[table.id] : [];
+            let record = state.records[table.id][0];
+            if (!record) {
+                record = createRecord(table, {});
+                state.records[table.id].push(record);
+            }
+            record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            record.values[field] = appendMultilineValue(record.values[field], text);
+            return true;
+        }
 
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
         state.records[table.id] = Array.isArray(state.records[table.id]) ? state.records[table.id] : [];

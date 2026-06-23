@@ -7,7 +7,7 @@
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
-    const DEFAULT_STATE_REVISION = 12;
+    const DEFAULT_STATE_REVISION = 13;
     const MEMORY_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\}\}/g;
     const ANCHOR_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/;
     const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/g;
@@ -45,7 +45,7 @@
             id: 'memory_summary',
             name: '记忆总结',
             icon: 'memory_book',
-            columns: ['总结标题', '总结内容', '时间线', '未解决问题', '备注'],
+            columns: ['总结标题', '核心角色', '楼层数', '总结内容', '未解决问题', '备注'],
         },
     ];
 
@@ -67,8 +67,9 @@
                         id: 'summary_main_default',
                         values: {
                             总结标题: '主线总结',
+                            核心角色: '',
+                            楼层数: '',
                             总结内容: '',
-                            时间线: '',
                             未解决问题: '',
                             备注: '',
                         },
@@ -77,8 +78,9 @@
                         id: 'summary_branch_default',
                         values: {
                             总结标题: '支线总结',
+                            核心角色: '',
+                            楼层数: '',
                             总结内容: '',
-                            时间线: '',
                             未解决问题: '',
                             备注: '',
                         },
@@ -310,6 +312,9 @@
             .filter((table) => options.includeSummary === true || table.id !== FIXED_SUMMARY_TABLE_ID)
             .filter((table) => !options.tableId || table.id === options.tableId);
         const lines = tables.map((table) => {
+            if (table.id === 'plot_summary') {
+                return '#剧情摘要：包含 #主线摘要：摘要名称，日期，摘要内容；#支线摘要：日期，摘要内容';
+            }
             const columns = (Array.isArray(table.columns) ? table.columns : [])
                 .map(cleanColumnName)
                 .filter(Boolean);
@@ -328,7 +333,7 @@
         const title = String(values[primary] || '').trim();
         const body = (Array.isArray(table.columns) ? table.columns : [])
             .map(cleanColumnName)
-            .filter((column) => column !== primary)
+            .filter((column) => column !== primary && !['核心角色', '楼层数'].includes(column))
             .map((column) => {
                 const value = String(values[column] || '').trim();
                 return value ? `${column}: ${value}` : '';

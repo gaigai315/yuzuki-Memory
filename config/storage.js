@@ -69,6 +69,9 @@
         const matchesDefaultShape = rawNames.length === fallbackNames.length
             && rawNames.every((name, index) => name === fallbackNames[index]);
         if (table?.id === 'plot_summary' && matchesDefaultShape) return [...fallbackColumns];
+        if (table?.id === 'memory_summary') {
+            return [...fallbackColumns];
+        }
         const allRawColumnsPrefixed = rawColumns.length > 0 && rawColumns.every((column) => column.startsWith('#'));
         return matchesDefaultShape && allRawColumnsPrefixed ? [...fallbackColumns] : rawColumns;
     }
@@ -104,7 +107,20 @@
         });
         const records = {};
         Object.entries(rawState.records || {}).forEach(([tableId, tableRecords]) => {
-            if (tableIds.has(tableId)) records[tableId] = Array.isArray(tableRecords) ? tableRecords : [];
+            const table = tables.find((entry) => entry.id === tableId);
+            if (!tableIds.has(tableId) || !table) return;
+            records[tableId] = Array.isArray(tableRecords)
+                ? tableRecords.map((record) => ({
+                    ...record,
+                    values: Object.fromEntries((table.columns || []).map((column) => {
+                        const name = cleanColumnName(column);
+                        if (table.id === 'memory_summary' && name === '总结内容') {
+                            return [name, String(record?.values?.总结内容 || record?.values?.时间线 || record?.values?.[column] || '')];
+                        }
+                        return [name, String(record?.values?.[name] ?? record?.values?.[column] ?? '')];
+                    })),
+                }))
+                : [];
         });
 
         return {

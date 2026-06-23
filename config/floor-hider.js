@@ -3,11 +3,15 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
+    const AUTO_SUMMARY_SETTINGS_KEY = 'yzm_memory_global_auto_summary_settings';
     const DEFAULT_SETTINGS = {
         injectMemoryTable: true,
         smartCalculationLinkage: false,
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
+    };
+    const DEFAULT_AUTO_SUMMARY_SETTINGS = {
+        hideSummaryFloors: false,
     };
 
     let running = false;
@@ -30,6 +34,20 @@
             };
         } catch (_error) {
             return { ...DEFAULT_SETTINGS };
+        }
+    }
+
+    function loadAutoSummarySettings() {
+        try {
+            const source = YuzukiMemory.GlobalSettings?.get?.(AUTO_SUMMARY_SETTINGS_KEY, {})
+                ?? JSON.parse(localStorage.getItem(AUTO_SUMMARY_SETTINGS_KEY) || '{}');
+            return {
+                hideSummaryFloors: typeof source.hideSummaryFloors === 'boolean'
+                    ? source.hideSummaryFloors
+                    : DEFAULT_AUTO_SUMMARY_SETTINGS.hideSummaryFloors,
+            };
+        } catch (_error) {
+            return { ...DEFAULT_AUTO_SUMMARY_SETTINGS };
         }
     }
 
@@ -116,6 +134,54 @@
         return shouldHide;
     }
 
+    function collectSummaryIndicesToHide(chat, summaryPointer) {
+        if (!Array.isArray(chat)) return [];
+        const rangeEnd = Math.min(chat.length, normalizeNumber(summaryPointer, 0)) - 1;
+        if (rangeEnd < 0) return [];
+
+        const alreadyHidden = getHiddenMessageIndices(chat);
+        let lastHiddenBoundary = -1;
+        for (let index = rangeEnd; index >= 0; index -= 1) {
+            if (alreadyHidden.has(index)) {
+                lastHiddenBoundary = index;
+                break;
+            }
+        }
+
+        const shouldHide = [];
+        if (lastHiddenBoundary >= 0) {
+            const oldRangeEnd = lastHiddenBoundary;
+            const oldRangeSize = oldRangeEnd + 1;
+            let oldRangeHiddenCount = 0;
+            for (let index = 0; index <= oldRangeEnd; index += 1) {
+                if (alreadyHidden.has(index)) oldRangeHiddenCount += 1;
+            }
+
+            if (oldRangeHiddenCount / oldRangeSize < 0.5) {
+                for (let index = 0; index <= oldRangeEnd; index += 1) {
+                    if (!alreadyHidden.has(index)) shouldHide.push(index);
+                }
+            }
+
+            for (let index = lastHiddenBoundary + 1; index <= rangeEnd; index += 1) {
+                if (!alreadyHidden.has(index)) shouldHide.push(index);
+            }
+            return shouldHide;
+        }
+
+        const totalSize = rangeEnd + 1;
+        let totalHiddenCount = 0;
+        for (let index = 0; index <= rangeEnd; index += 1) {
+            if (alreadyHidden.has(index)) totalHiddenCount += 1;
+        }
+
+        if (totalHiddenCount / totalSize >= 0.5) return [];
+        for (let index = 0; index <= rangeEnd; index += 1) {
+            if (!alreadyHidden.has(index)) shouldHide.push(index);
+        }
+        return shouldHide;
+    }
+
     function getCurrentHiddenMessageTexts() {
         const context = getContext();
         const chat = context?.chat;
@@ -147,6 +213,41 @@
         });
     }
 
+    function getSummaryPointer(options = {}) {
+        if (Object.prototype.hasOwnProperty.call(options, 'summaryPointer')) {
+            return normalizeNumber(options.summaryPointer, 0);
+        }
+        const fallback = {
+            defaultRevision: 1,
+            tables: [],
+            activeTableId: '',
+            activeRecordIds: {},
+            records: {},
+            promptPresetId: '',
+            settings: {},
+        };
+        const state = YuzukiMemory.Storage?.loadState?.(fallback);
+        const pointers = state?.settings?.manualPointers && typeof state.settings.manualPointers === 'object'
+            ? state.settings.manualPointers
+            : {};
+        return normalizeNumber(pointers.historySummary ?? pointers.bigSummary, 0);
+    }
+
+    async function hideIndices(chat, indices, label, options = {}) {
+        if (!indices.length) return { success: true, count: 0, indices: [], hiddenTexts: getCurrentHiddenMessageTexts() };
+        const context = options.context || getContext();
+        let count = 0;
+        indices.forEach((index) => {
+            if (!chat[index]) return;
+            chat[index].is_system = true;
+            updateMessageDom(index);
+            count += 1;
+        });
+        await saveChat(context);
+        console.log(`[yuzuki-Memory] ${label}：隐藏 ${count} 条。`);
+        return { success: true, count, indices: [...indices], hiddenTexts: getCurrentHiddenMessageTexts() };
+    }
+
     async function applyContextLimitHiding(options = {}) {
         if (running) return { success: false, skipped: true, reason: 'running' };
         const settings = loadSettings();
@@ -162,16 +263,8 @@
 
         running = true;
         try {
-            let count = 0;
-            indices.forEach((index) => {
-                if (!chat[index]) return;
-                chat[index].is_system = true;
-                updateMessageDom(index);
-                count += 1;
-            });
-            await saveChat(context);
-            console.log(`[yuzuki-Memory] 隐藏楼层完成：保留 ${keepFloors} 层，隐藏 ${count} 条。`);
-            return { success: true, count, indices: [...indices], hiddenTexts: getCurrentHiddenMessageTexts() };
+            const result = await hideIndices(chat, indices, `隐藏楼层完成，保留 ${keepFloors} 层`);
+            return result;
         } catch (error) {
             console.warn('[yuzuki-Memory] 隐藏楼层失败。', error);
             return { success: false, error: String(error?.message || error || '隐藏楼层失败') };
@@ -180,10 +273,51 @@
         }
     }
 
+    async function applySummaryPointerHiding(options = {}) {
+        if (running) return { success: false, skipped: true, reason: 'running' };
+        const settings = loadAutoSummarySettings();
+        if (!options.force && !settings.hideSummaryFloors) return { success: false, skipped: true, reason: 'disabled' };
+
+        const context = getContext();
+        const chat = context?.chat;
+        if (!Array.isArray(chat) || !chat.length) return { success: false, skipped: true, reason: 'no_chat' };
+
+        const summaryPointer = getSummaryPointer(options);
+        if (summaryPointer <= 0) return { success: true, count: 0, indices: [], hiddenTexts: getCurrentHiddenMessageTexts() };
+        const indices = collectSummaryIndicesToHide(chat, summaryPointer);
+        if (!indices.length) return { success: true, count: 0, indices: [], hiddenTexts: getCurrentHiddenMessageTexts() };
+
+        running = true;
+        try {
+            return await hideIndices(chat, indices, `总结后隐藏完成，指针 ${summaryPointer}`);
+        } catch (error) {
+            console.warn('[yuzuki-Memory] 总结后隐藏失败。', error);
+            return { success: false, error: String(error?.message || error || '总结后隐藏失败') };
+        } finally {
+            running = false;
+        }
+    }
+
+    async function applyConfiguredHiding(options = {}) {
+        const settings = loadSettings();
+        if (settings.hideFloorsEnabled || options.mode === 'context') {
+            return applyContextLimitHiding(options);
+        }
+        const autoSettings = loadAutoSummarySettings();
+        if (autoSettings.hideSummaryFloors || options.mode === 'summary') {
+            return applySummaryPointerHiding(options);
+        }
+        return { success: false, skipped: true, reason: 'disabled' };
+    }
+
     YuzukiMemory.FloorHider = Object.assign(YuzukiMemory.FloorHider || {}, {
         loadSettings,
+        loadAutoSummarySettings,
         collectIndicesToHide,
+        collectSummaryIndicesToHide,
         getCurrentHiddenMessageTexts,
         applyContextLimitHiding,
+        applySummaryPointerHiding,
+        applyConfiguredHiding,
     });
 })();
