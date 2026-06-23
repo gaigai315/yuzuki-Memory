@@ -12,7 +12,8 @@
     const ANCHOR_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/;
     const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/g;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/g;
-    const MEMORY_CONTENT_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/;
+    const MEMORY_DATA_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/;
+    const MEMORY_PROMPT_VARIABLE_PATTERN = /\{\{MEMORY_PROMPT\}\}/;
     const VECTOR_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/;
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
     const SUMMARY_INJECTION_EXCLUDED_COLUMNS = new Set(['未解决问题']);
@@ -167,8 +168,8 @@
                 traceBatch: String(prompts.traceBatch ?? ''),
                 trace: String(prompts.trace ?? prompts.traceRealtime ?? prompts.table ?? ''),
                 traceOptimize: String(prompts.traceOptimize ?? prompts.table ?? ''),
-                summary: String(prompts.summary ?? prompts.summaryOptimize ?? ''),
-                summaryOptimize: String(prompts.summaryOptimize ?? prompts.summary ?? ''),
+                summary: String(prompts.summary ?? ''),
+                summaryOptimize: String(prompts.summaryOptimize ?? ''),
             },
             modes: {
                 trace: String(rawScheme.modes?.trace || rawScheme.modes?.table || 'realtime'),
@@ -440,6 +441,16 @@
         }
         messages.push(...buildSummaryMessages(state), ...buildTableMessages(state));
         return messages.map((message) => ({
+            ...message,
+            content: resolveRuntimeVariables(message.content),
+        }));
+    }
+
+    function buildMemoryDataMessages(state = getCurrentState()) {
+        return [
+            ...buildSummaryMessages(state),
+            ...buildTableMessages(state),
+        ].map((message) => ({
             ...message,
             content: resolveRuntimeVariables(message.content),
         }));
@@ -718,7 +729,8 @@
         }
 
         const state = getCurrentState();
-        const hadMemoryContentVariable = settings.injectMemoryTable && nodeContainsPattern(body, MEMORY_CONTENT_VARIABLE_PATTERN);
+        const hadMemoryDataVariable = settings.injectMemoryTable && nodeContainsPattern(body, MEMORY_DATA_VARIABLE_PATTERN);
+        const hadMemoryPromptVariable = settings.injectMemoryTable && nodeContainsPattern(body, MEMORY_PROMPT_VARIABLE_PATTERN);
         const hadVectorVariable = settings.injectVectorMemory && nodeContainsPattern(body, VECTOR_VARIABLE_PATTERN);
         const hasOwnVectorMarker = hasYuzukiVectorMarker(body);
         if (settings.injectVectorMemory && hasOwnVectorMarker) {
@@ -745,8 +757,11 @@
             });
         }
 
-        if (settings.injectMemoryTable && !hadMemoryContentVariable && !requestBodyContainsInjection(body, 'isGaigaiData')) {
-            insertInjectedMessages(body, buildMemoryMessages(state));
+        if (settings.injectMemoryTable && !hadMemoryDataVariable && !requestBodyContainsInjection(body, 'isGaigaiData')) {
+            const messages = hadMemoryPromptVariable || requestBodyContainsInjection(body, 'isGaigaiPrompt')
+                ? buildMemoryDataMessages(state)
+                : buildMemoryMessages(state);
+            insertInjectedMessages(body, messages);
         }
 
         cleanupVariablesInNode(body, settings);
@@ -768,6 +783,7 @@
         buildMemoryPromptText,
         buildMemoryText,
         buildMemoryMessages,
+        buildMemoryDataMessages,
         processBody,
     });
 })();

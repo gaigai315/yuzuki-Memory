@@ -479,8 +479,8 @@
                     traceBatch: String(prompts.traceBatch ?? ''),
                     trace: String(prompts.trace ?? prompts.traceRealtime ?? prompts.table ?? ''),
                     traceOptimize: String(prompts.traceOptimize ?? prompts.table ?? ''),
-                    summary: String(prompts.summary ?? prompts.summaryOptimize ?? ''),
-                    summaryOptimize: String(prompts.summaryOptimize ?? prompts.summary ?? ''),
+                    summary: String(prompts.summary ?? ''),
+                    summaryOptimize: String(prompts.summaryOptimize ?? ''),
                 },
             };
         });
@@ -999,6 +999,55 @@
         return end > start ? { start, end } : null;
     }
 
+    function getSummaryRecordKind(record) {
+        const values = record?.values || {};
+        const title = String(values.总结标题 || values.title || '').trim();
+        return /支线/.test(title) ? 'branch' : 'main';
+    }
+
+    function getSummaryRecordPayload(table, record) {
+        const values = record?.values || {};
+        return {
+            kind: getSummaryRecordKind(record),
+            title: String(values[getPrimaryColumn(table)] || values.总结标题 || '').trim(),
+            character: String(values.核心角色 || values.character || '').trim(),
+            summary: String(values.总结内容 || values.summary || '').trim(),
+            unresolved: String(values.未解决问题 || values.unresolved || '').trim(),
+            remark: String(values.备注 || values.remark || '').trim(),
+        };
+    }
+
+    function summaryRecordToOptimizeText(table, record, index = 0) {
+        const payload = getSummaryRecordPayload(table, record);
+        const floorText = String(record?.values?.楼层数 || '').trim();
+        return compactLines([
+            `【目标 ${index + 1}】`,
+            `recordId: ${record?.id || ''}`,
+            `类型: ${payload.kind === 'branch' ? '支线' : '主线'}`,
+            payload.title ? `标题: ${payload.title}` : '',
+            payload.character ? `核心角色: ${payload.character}` : '',
+            floorText ? `楼层: ${floorText}` : '',
+            payload.summary ? `总结内容:\n${payload.summary}` : '',
+            payload.unresolved ? `未解决问题:\n${payload.unresolved}` : '',
+            payload.remark ? `备注:\n${payload.remark}` : '',
+        ]);
+    }
+
+    function getSummaryOptimizeTargets(state, options = {}) {
+        const table = stateTables(state).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
+        if (!table) return { table: null, records: [] };
+        const selectedIds = new Set((Array.isArray(options.summaryRecordIds) ? options.summaryRecordIds : [])
+            .map((id) => String(id || '').trim())
+            .filter(Boolean));
+        const targetKind = String(options.summaryTarget || options.tableId || 'all');
+        const records = stateRecords(state, FIXED_SUMMARY_TABLE_ID)
+            .filter((record) => record && !record.hidden)
+            .filter((record) => String(record?.values?.总结内容 || record?.values?.summary || '').trim())
+            .filter((record) => !selectedIds.size || selectedIds.has(String(record.id || '')))
+            .filter((record) => selectedIds.size || targetKind === 'all' || getSummaryRecordKind(record) === targetKind);
+        return { table, records };
+    }
+
     function isSmallSummaryRecord(record, table, task) {
         if (task?.kind === 'summary' && task?.summaryType === 'summary') return true;
         if (task?.summaryType && task.summaryType !== 'summary') return false;
@@ -1062,6 +1111,43 @@
         return { ...result, success: true, count: records.length, record: records[0] || null, records };
     }
 
+    function overwriteSummaryRecord(table, record, payload) {
+        if (!table || !record || !payload?.summary) return null;
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        const primary = getPrimaryColumn(table);
+        record.values[primary] = record.values[primary] || payload.title || (payload.kind === 'branch' ? '支线总结' : '主线总结');
+        record.values.核心角色 = payload.kind === 'branch' ? (payload.character || record.values.核心角色 || '') : '';
+        record.values.总结内容 = payload.summary;
+        record.values.未解决问题 = payload.unresolved || '';
+        record.values.备注 = payload.remark || '';
+        return record;
+    }
+
+    function commitSummaryOptimizeResult(state, result) {
+        const targets = Array.isArray(result?.targets) ? result.targets : [];
+        const payloads = (Array.isArray(result?.payloads) ? result.payloads : [result?.payload].filter(Boolean)).filter((payload) => payload?.summary);
+        if (!payloads.length) return { ...result, success: false, error: '优化结果缺少 summary/总结内容。' };
+        const table = stateTables(state).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
+        if (!table) return { ...result, success: false, error: '未找到记忆总结表。' };
+        state.records = state.records && typeof state.records === 'object' ? state.records : {};
+        const records = stateRecords(state, FIXED_SUMMARY_TABLE_ID);
+        if (targets.length <= 1) {
+            const targetId = String(targets[0]?.id || '');
+            const record = records.find((entry) => String(entry?.id || '') === targetId);
+            if (!record) return { ...result, success: false, error: '未找到要覆盖的原总结。' };
+            const updated = overwriteSummaryRecord(table, record, {
+                ...payloads[0],
+                kind: payloads[0].kind || targets[0]?.kind || getSummaryRecordKind(record),
+            });
+            return { ...result, success: true, count: updated ? 1 : 0, record: updated, records: updated ? [updated] : [] };
+        }
+
+        const removeIds = new Set(targets.map((target) => String(target?.id || '')).filter(Boolean));
+        state.records[FIXED_SUMMARY_TABLE_ID] = records.filter((record) => !removeIds.has(String(record?.id || '')));
+        const created = payloads.map((payload) => upsertSummaryRecord(state, payload, { autoTaskType: 'optimize' })).filter(Boolean);
+        return { ...result, success: true, count: created.length, record: created[0] || null, records: created, removedCount: removeIds.size };
+    }
+
     function getDefaultTracePrompt(state, options = {}) {
         return `你是记忆表格追溯助手。请阅读聊天记录，提取应该写入记忆表格的信息。
 只输出 JSON，不要解释。格式：
@@ -1073,13 +1159,13 @@
     function getDefaultSummaryPrompt() {
         return `你是剧情总结助手。请总结给定聊天范围。
 只输出 JSON，不要解释，不要 Markdown。格式：
-{"summaries":[{"kind":"main","title":"","summary":"YYYY年MM月DD日,HH:mm-HH:mm [地点] 事件闭环描述","unresolved":"未解决问题","remark":"备注"},{"kind":"branch","title":"","character":"具体角色名/组织名/事件名","summary":"YYYY年MM月DD日,HH:mm-HH:mm [地点] 事件闭环描述","unresolved":"未解决问题","remark":"备注"}]}
+{"summaries":[{"kind":"main","title":"","summary":"YYYY年MM月DD日,HH:mm-HH:mm [地点] 事件闭环描述","unresolved":"未解决问题","remark":"备注"},{"kind":"branch","title":"","character":"角色名","summary":"YYYY年MM月DD日,HH:mm-HH:mm [地点] 事件闭环描述","unresolved":"未解决问题","remark":"备注"}]}
 规则：
 1. summaries 可以包含多个对象，用于同时输出主线和多个支线。
 2. summary 是记忆总结详情页唯一展示内容；多段剧情用换行分隔，或用字符串数组。
 3. 同一天内多段内容只在第一段写 YYYY年MM月DD日，后续同日段落只写 HH:mm-HH:mm；跨天时再写新的日期。
 4. kind 只能是 main 或 branch；主线对象不要输出 character 字段。
-5. 支线对象必须输出 character，且必须是具体角色名、组织名或事件名；不要写“集团外部势力”“外部势力”“其他NPC”“未知势力”这类分类名。
+5. 支线对象必须输出 character，且只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
 6. 主线和支线不要记录同一事件。`;
     }
 
@@ -1090,9 +1176,26 @@
 
     function getDefaultOptimizePrompt(kind = 'trace') {
         if (kind === 'summary') {
-            return `你是总结优化助手。请整理现有总结，合并重复、修正冲突、补全内容脉络。只输出 JSON，格式同总结任务。`;
+            return `你是总结优化助手。请整理现有总结，合并重复、修正冲突、补全内容脉络。
+只输出 JSON，不要解释，不要 Markdown。
+格式：
+{"summaries":[{"kind":"main","title":"","summary":"优化后的主线总结正文","unresolved":"未解决问题","remark":"备注"},{"kind":"branch","title":"","character":"角色名","summary":"优化后的支线总结正文","unresolved":"未解决问题","remark":"备注"}]}
+规则：
+1. 单条优化只输出一个 summaries 对象，kind 必须与原总结一致。
+2. 多条合并优化可输出一个或多个 summaries 对象，但必须覆盖被选中旧总结里的关键事实，不要只输出增量差异。
+3. 主线对象不要输出 character。
+4. 支线对象必须输出 character，且只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
+5. summary 必须是最终可直接落盘的正文。`;
         }
         return `你是记忆表格优化助手。请整理现有表格内容，合并重复、修正冲突。只输出 JSON，格式同追溯任务。`;
+    }
+
+    function getSummaryOptimizeResponseFormatPrompt() {
+        return `请按以下格式回复，且只输出 JSON，不要解释，不要 Markdown：
+{"summaries":[{"kind":"main","title":"","summary":"优化后的总结正文","unresolved":"未解决问题","remark":"备注"}]}
+或：
+{"summaries":[{"kind":"branch","title":"","character":"角色名","summary":"优化后的支线总结正文","unresolved":"未解决问题","remark":"备注"}]}
+单条优化只输出一个对象；多条合并优化可输出一个或多个对象。summary 必须是最终可直接落盘的正文。支线对象的 character 只能填写一个具体角色名，不要写组织名、势力名、事件名、分类名或多个角色名。`;
     }
 
     function buildTaskRangeText(range, kind = 'trace') {
@@ -1193,12 +1296,29 @@
     }
 
     async function runSummaryOptimize(state, options = {}) {
-        const summaries = stateRecords(state, FIXED_SUMMARY_TABLE_ID).map((record) => recordToText(stateTables(state).find((table) => table.id === FIXED_SUMMARY_TABLE_ID), record)).filter(Boolean).join('\n');
-        const prompt = resolveTaskPromptVariables(compactLines([getActivePromptScheme(state)?.prompts?.summaryOptimize, getDefaultOptimizePrompt('summary'), options.note]), state, options);
+        const targetInfo = getSummaryOptimizeTargets(state, options);
+        if (!targetInfo.records.length) return { success: false, error: '没有可优化的总结内容。' };
+        const summaries = targetInfo.records
+            .map((record, index) => summaryRecordToOptimizeText(targetInfo.table, record, index))
+            .filter(Boolean)
+            .join('\n\n');
+        const note = String(options.note || '').trim();
+        const scheme = getActivePromptScheme(state);
+        const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, {
+            ...options,
+            suppressMemoryTables: true,
+        });
+        const schemePrompt = scheme?.prompts?.summaryOptimize;
+        const promptSource = note
+            ? compactLines([`【本次重点优化建议】\n${note}`, getSummaryOptimizeResponseFormatPrompt()])
+            : (schemePrompt || getDefaultOptimizePrompt('summary'));
+        const prompt = resolveTaskPromptVariables(promptSource, state, options);
         const messages = [
+            { role: 'system', content: historianPrompt },
+            { role: 'user', content: `【待优化总结】\n${summaries || '（暂无）'}` },
             { role: 'system', content: prompt },
-            { role: 'user', content: `【待优化总结】\n${summaries || '（暂无）'}\n\n请输出优化后的 JSON。` },
-        ];
+            { role: 'user', content: '请立即根据以上待优化总结和优化要求输出优化后的 JSON。' },
+        ].filter((message) => message.content && message.content.trim());
         const response = await generate(messages, { ...options, kind: 'summaryOptimize' });
         if (!response.success) return response;
         const payloads = parseSummaryResponse(response.text);
@@ -1210,9 +1330,16 @@
             payloads,
             preview: payloads.map((payload) => getSummaryPreview(payload)).filter(Boolean).join('\n\n'),
             text: response.text,
+            targets: targetInfo.records.map((record) => ({
+                id: record.id,
+                kind: getSummaryRecordKind(record),
+                title: String(record?.values?.[getPrimaryColumn(targetInfo.table)] || record?.values?.总结标题 || '').trim(),
+                oldPayload: getSummaryRecordPayload(targetInfo.table, record),
+                oldText: summaryRecordToOptimizeText(targetInfo.table, record, 0),
+            })),
             meta: { autoTaskType: '' },
         };
-        return options.previewOnly ? result : commitSummaryResult(state, result);
+        return options.previewOnly ? result : commitSummaryOptimizeResult(state, result);
     }
 
     async function runTagDiagnostic(options = {}) {
@@ -1529,6 +1656,7 @@
         runTagDiagnostic,
         commitTraceResult,
         commitSummaryResult,
+        commitSummaryOptimizeResult,
         bindAutoSummary,
         cancelPendingAutoTask,
     });

@@ -2932,6 +2932,81 @@
     opacity: 0.88;
 }
 
+#yzm-memory-root .yzm-summary-optimize-target-list {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    max-height: 260px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+}
+
+#yzm-memory-root .yzm-summary-optimize-count,
+#yzm-memory-root .yzm-summary-optimize-empty {
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-row {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    align-items: start;
+    gap: 9px;
+    min-width: 0;
+    padding: 9px 10px;
+    color: var(--yzm-text);
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 9px;
+    box-sizing: border-box;
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-row:hover {
+    background: var(--yzm-hover);
+    border-color: var(--yzm-border);
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-row input {
+    width: 16px;
+    min-width: 16px;
+    height: 16px;
+    margin: 2px 0 0;
+    accent-color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-body {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-body strong,
+#yzm-memory-root .yzm-summary-optimize-target-body span,
+#yzm-memory-root .yzm-summary-optimize-target-body small {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-body strong {
+    color: var(--yzm-title);
+    font-size: 13px;
+    line-height: 1.25;
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-body span,
+#yzm-memory-root .yzm-summary-optimize-target-body small {
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
 #yzm-memory-root .yzm-trace-execution-grid {
     display: grid;
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -6333,6 +6408,7 @@
     width: 100%;
     min-height: 220px;
     padding: 10px;
+    overflow: auto;
     color: inherit;
     background: var(--yzm-input-bg);
     border: 1px solid var(--yzm-border);
@@ -6342,6 +6418,32 @@
     font-size: 13px;
     line-height: 1.45;
     resize: vertical;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+}
+
+#yzm-memory-root .yzm-task-result-compare {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-task-result-compare-pane {
+    display: grid;
+    gap: 6px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-task-result-compare-pane strong {
+    color: var(--yzm-title);
+    font-size: 13px;
+    line-height: 1.25;
+}
+
+#yzm-memory-root .yzm-task-result-compare-text {
+    min-height: 280px;
 }
 
 #yzm-memory-root .yzm-auto-task-postpone {
@@ -6987,17 +7089,19 @@
 
     #yzm-memory-root .yzm-shell-actions,
     #yzm-memory-root .yzm-top-actions {
-        gap: 2px;
+        gap: 6px;
         justify-content: flex-end;
     }
 
     #yzm-memory-root .yzm-top-action-button {
-        min-width: 24px;
-        min-height: 24px;
-        padding: 0 5px;
-        gap: 2px;
+        width: 28px;
+        min-width: 28px;
+        height: 28px;
+        min-height: 28px;
+        padding: 0;
+        gap: 0;
         border-radius: 8px;
-        font-size: 11px;
+        font-size: 12px;
     }
 
     #yzm-memory-root .yzm-top-action-button span {
@@ -7005,9 +7109,13 @@
     }
 
     #yzm-memory-root .yzm-shell-close {
-        width: 22px;
-        height: 22px;
-        font-size: 11px;
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-task-result-compare {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     #yzm-memory-root .yzm-shell-body {
@@ -8694,6 +8802,10 @@
         max-width: 340px;
     }
 
+    #yzm-memory-root .yzm-summary-optimize-target-list {
+        max-height: min(230px, 38vh);
+    }
+
     #yzm-memory-root .yzm-trace-top-grid,
     #yzm-memory-root .yzm-trace-execution-grid {
         grid-template-columns: minmax(0, 1fr);
@@ -8937,6 +9049,10 @@
     #yzm-memory-root .yzm-trace-panel > *,
     #yzm-memory-root .yzm-trace-panel .yzm-config-card {
         max-width: 260px;
+    }
+
+    #yzm-memory-root .yzm-summary-optimize-target-list {
+        max-height: min(190px, 34vh);
     }
 
     #yzm-memory-root .yzm-trace-stat-card {

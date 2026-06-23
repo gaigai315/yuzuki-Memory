@@ -868,8 +868,8 @@
                 traceBatch: String(prompts.traceBatch ?? ''),
                 trace: String(prompts.trace ?? prompts.traceRealtime ?? prompts.table ?? ''),
                 traceOptimize: String(prompts.traceOptimize ?? prompts.table ?? ''),
-                summary: String(prompts.summary ?? prompts.summaryOptimize ?? ''),
-                summaryOptimize: String(prompts.summaryOptimize ?? prompts.summary ?? ''),
+                summary: String(prompts.summary ?? ''),
+                summaryOptimize: String(prompts.summaryOptimize ?? ''),
             },
             modes: {
                 trace: String(rawScheme.modes?.trace || rawScheme.modes?.table || 'realtime'),
@@ -3767,15 +3767,17 @@
         panel.className = 'yzm-trace-panel yzm-summary-tool-panel';
         const note = createSummaryPromptCard('重点优化建议（可选）', '例如：压缩重复内容；补全内容脉络；统一称呼；保留未解决问题...');
         note.querySelector('.yzm-trace-textarea')?.setAttribute('data-yzm-task-note', 'true');
+        const targetSelect = createApiSelect('all', [
+            { label: '全部总结', value: 'all' },
+            { label: '主线总结', value: 'main' },
+            { label: '支线总结', value: 'branch' },
+        ]);
+        targetSelect.querySelector('.yzm-api-select')?.setAttribute('data-yzm-summary-optimize-target', 'true');
         panel.append(
             createTraceHeaderCard('总结优化', '对已有总结内容进行整理、合并与冲突修正。', 'fa-solid fa-wand-magic-sparkles'),
             createApiCard('当前目标总结', 'fa-solid fa-book-open', [
-                createApiField('', createApiSelect('all', [
-                    { label: '全部总结', value: 'all' },
-                    { label: '主线总结', value: 'main' },
-                    { label: '支线总结', value: 'branch' },
-                ])),
-                createTraceTextBlock('将对当前选定的总结内容进行优化。'),
+                createApiField('', targetSelect),
+                createSummaryOptimizeTargetList('all'),
             ]),
             note,
             createTraceExecutionCard({
@@ -3783,12 +3785,78 @@
                 includeBatch: false,
                 radioName: 'yzm-summary-run-mode',
                 confirmLabel: '弹窗确认（推荐）',
-                confirmDesc: '优化前弹窗确认，便于检查目标总结与改动',
+                confirmDesc: '优化完成后弹窗对比旧内容和新内容，确认后写入',
                 silentDesc: '自动完成当前总结优化，完成后仅显示最终结果',
             }),
             createTraceStartButton('开始优化', 'summaryOptimize')
         );
         return panel;
+    }
+
+    function getSummaryOptimizeCandidateRecords(target = 'all') {
+        const table = getTables().find((entry) => entry.id === FIXED_TABLE_ID);
+        if (!table) return [];
+        return getPrimaryDisplayRecords(table.id)
+            .filter((record) => !record.hidden)
+            .filter((record) => getSummaryValue(record, ['总结内容']).trim())
+            .filter((record) => target === 'all' || getSummaryKind(record) === target)
+            .map((record) => ({ table, record }));
+    }
+
+    function truncateSummaryOptimizeText(text = '', maxLength = 96) {
+        const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+        return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+    }
+
+    function createSummaryOptimizeTargetList(target = 'all') {
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-summary-optimize-target-list';
+        wrap.dataset.yzmSummaryOptimizeTargetList = 'true';
+        const candidates = getSummaryOptimizeCandidateRecords(target);
+        if (!candidates.length) {
+            const empty = document.createElement('div');
+            empty.className = 'yzm-summary-optimize-empty';
+            empty.textContent = '当前分类没有可优化的总结内容。';
+            wrap.appendChild(empty);
+            return wrap;
+        }
+        const selectedCount = document.createElement('div');
+        selectedCount.className = 'yzm-summary-optimize-count';
+        selectedCount.textContent = `已列出 ${candidates.length} 条，默认全选`;
+        wrap.appendChild(selectedCount);
+        candidates.forEach(({ table, record }, index) => {
+            const label = document.createElement('label');
+            label.className = 'yzm-summary-optimize-target-row';
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.checked = true;
+            checkbox.dataset.yzmSummaryOptimizeRecordId = record.id;
+            const body = document.createElement('div');
+            body.className = 'yzm-summary-optimize-target-body';
+            const title = document.createElement('strong');
+            title.textContent = `${index + 1}. ${getSummaryPrimaryTitle(table, record)}`;
+            const meta = document.createElement('span');
+            const floorText = getSummaryFloorText(record);
+            const core = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
+            meta.textContent = [
+                getSummaryKind(record) === 'branch' ? '支线' : '主线',
+                floorText ? `楼层 ${floorText}` : '',
+                core ? `核心 ${core}` : '',
+            ].filter(Boolean).join(' · ');
+            const preview = document.createElement('small');
+            preview.textContent = truncateSummaryOptimizeText(getSummaryValue(record, ['总结内容']));
+            body.append(title, meta, preview);
+            label.append(checkbox, body);
+            wrap.appendChild(label);
+        });
+        return wrap;
+    }
+
+    function refreshSummaryOptimizeTargets(panel) {
+        const select = panel?.querySelector('[data-yzm-summary-optimize-target]');
+        const oldList = panel?.querySelector('[data-yzm-summary-optimize-target-list]');
+        if (!select || !oldList) return;
+        oldList.replaceWith(createSummaryOptimizeTargetList(select.value || 'all'));
     }
 
     function clampPointerToFloorCount(value, totalFloors) {
@@ -4072,6 +4140,10 @@
 
     function getTaskPanelOptions(panel) {
         const targetTable = String(panel?.querySelector('[data-yzm-trace-target-table]')?.value || 'all');
+        const summaryTarget = String(panel?.querySelector('[data-yzm-summary-optimize-target]')?.value || 'all');
+        const summaryRecordIds = Array.from(panel?.querySelectorAll('[data-yzm-summary-optimize-record-id]:checked') || [])
+            .map((input) => input.dataset.yzmSummaryOptimizeRecordId)
+            .filter(Boolean);
         const note = String(panel?.querySelector('[data-yzm-task-note]')?.value || '').trim();
         const silent = panel?.querySelector('.yzm-trace-radio-active input')?.value === 'silent';
         const batchSizeInput = panel?.querySelector('[data-yzm-task-batch-size]');
@@ -4081,6 +4153,8 @@
         return {
             ...getTaskPanelRange(panel),
             tableId: targetTable === 'all' ? '' : targetTable,
+            summaryTarget,
+            summaryRecordIds,
             note,
             silent,
             batchEnabled: !!settings[batchEnabledKey],
@@ -4162,6 +4236,21 @@
         return preview || '模型返回了可写入结果。';
     }
 
+    function formatSummaryOptimizeOldText(result) {
+        return (Array.isArray(result?.targets) ? result.targets : [])
+            .map((target, index) => {
+                const payload = target.oldPayload || {};
+                return [
+                    `【原总结 ${index + 1}】${target.title ? ` ${target.title}` : ''}`,
+                    payload.character ? `核心角色：${payload.character}` : '',
+                    payload.summary ? `总结内容：\n${payload.summary}` : '',
+                    payload.unresolved ? `未解决问题：\n${payload.unresolved}` : '',
+                    payload.remark ? `备注：\n${payload.remark}` : '',
+                ].filter(Boolean).join('\n');
+            })
+            .join('\n\n');
+    }
+
     function openTaskResultConfirmDialog(root, options = {}) {
         return new Promise((resolve) => {
             const modalHost = getModalHost(root);
@@ -4195,12 +4284,37 @@
             preview.value = formatTaskPreview(options.result);
             preview.readOnly = true;
 
+            let compare = null;
+            if (options.compare === true) {
+                compare = document.createElement('div');
+                compare.className = 'yzm-task-result-compare';
+                const oldBlock = document.createElement('textarea');
+                oldBlock.className = 'yzm-task-result-preview yzm-task-result-compare-text';
+                oldBlock.value = formatSummaryOptimizeOldText(options.result) || '（没有旧内容）';
+                oldBlock.readOnly = true;
+                const newBlock = document.createElement('textarea');
+                newBlock.className = 'yzm-task-result-preview yzm-task-result-compare-text';
+                newBlock.value = options.result?.preview || formatTaskPreview(options.result);
+                newBlock.readOnly = true;
+                const oldWrap = document.createElement('div');
+                oldWrap.className = 'yzm-task-result-compare-pane';
+                const oldTitle = document.createElement('strong');
+                oldTitle.textContent = '旧内容';
+                oldWrap.append(oldTitle, oldBlock);
+                const newWrap = document.createElement('div');
+                newWrap.className = 'yzm-task-result-compare-pane';
+                const newTitle = document.createElement('strong');
+                newTitle.textContent = '新内容';
+                newWrap.append(newTitle, newBlock);
+                compare.append(oldWrap, newWrap);
+            }
+
             const actions = document.createElement('div');
             actions.className = 'yzm-structure-actions yzm-task-result-actions';
             const confirm = createButton('确认写入', 'yzm-add-table-confirm');
             actions.append(confirm);
 
-            dialog.append(header, meta, preview, actions);
+            dialog.append(header, meta, compare || preview, actions);
             overlay.appendChild(dialog);
             modalHost.appendChild(overlay);
 
@@ -4219,7 +4333,7 @@
             });
             dialog.addEventListener('click', (event) => event.stopPropagation());
             document.addEventListener('keydown', handleKeydown);
-            preview.focus();
+            (compare?.querySelector('textarea') || preview).focus();
         });
     }
 
@@ -4299,7 +4413,8 @@
 
     function commitTaskResult(action, state, result) {
         if (action === 'trace' || action === 'traceOptimize') return YuzukiMemory.TaskRunner.commitTraceResult(state, result);
-        if (action === 'summary' || action === 'summaryOptimize') return YuzukiMemory.TaskRunner.commitSummaryResult(state, result);
+        if (action === 'summaryOptimize') return YuzukiMemory.TaskRunner.commitSummaryOptimizeResult(state, result);
+        if (action === 'summary') return YuzukiMemory.TaskRunner.commitSummaryResult(state, result);
         return result;
     }
 
@@ -4382,8 +4497,9 @@
                 title: `${getTaskActionLabel(action)}结果确认`,
                 description: options.batchIndex
                     ? `第 ${options.batchIndex}/${options.batchTotal} 批，范围 ${options.start}-${options.end}（不含 ${options.end}）。确认后才会写入插件记忆。`
-                    : '非静默模式下，确认后才会写入插件记忆。',
+                    : (action === 'summaryOptimize' ? '请对比旧内容和新内容，确认后才会写入插件记忆。' : '非静默模式下，确认后才会写入插件记忆。'),
                 result,
+                compare: action === 'summaryOptimize',
             });
             if (!approved) return { success: false, cancelled: true, error: '用户取消写入。' };
             result = commitTaskResult(action, state, result);
@@ -4442,6 +4558,10 @@
         const options = getTaskPanelOptions(panel);
         if (options.end <= options.start && (action === 'trace' || action === 'summary')) {
             window.alert('请选择有效的楼层范围。');
+            return;
+        }
+        if (action === 'summaryOptimize' && !options.summaryRecordIds.length) {
+            window.alert('请至少勾选一条要优化的总结。');
             return;
         }
         setTaskButtonRunning(button, true);
@@ -9686,6 +9806,11 @@
                 if (taskButton) void runTaskFromPanel(root, taskButton, taskButton.dataset.yzmTaskAction || '');
             });
             summaryToolView.addEventListener('change', (event) => {
+                const changed = event.target instanceof Element ? event.target : null;
+                if (changed?.matches('[data-yzm-summary-optimize-target]')) {
+                    refreshSummaryOptimizeTargets(changed.closest('.yzm-summary-tool-panel'));
+                    return;
+                }
                 const target = event.target instanceof HTMLInputElement ? event.target : null;
                 if (target?.matches('[data-yzm-task-batch-size]')) {
                     updateTaskBatchSize(target);
