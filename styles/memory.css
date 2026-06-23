@@ -7779,8 +7779,8 @@
     }
 
     #yzm-memory-root .yzm-summary-timeline-row {
-        grid-template-columns: 98px minmax(0, 1fr);
-        gap: 8px;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 2px;
         min-height: 38px;
         padding-left: 18px;
     }
@@ -7801,9 +7801,27 @@
         font-size: 12px;
     }
 
+    #yzm-memory-root .yzm-summary-timeline-time-wrap {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: 4px 8px;
+        padding: 8px 0 0;
+    }
+
+    #yzm-memory-root .yzm-summary-timeline-event {
+        display: block;
+        width: 100%;
+        padding: 2px 0 8px;
+        white-space: pre-wrap;
+        overflow-wrap: break-word;
+        word-break: normal;
+    }
+
     #yzm-memory-root .yzm-summary-text-body {
         padding: 10px;
         overflow: visible;
+        overflow-wrap: break-word;
+        word-break: normal;
     }
 
     #yzm-memory-root .yzm-empty-table-view {
