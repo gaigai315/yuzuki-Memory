@@ -3703,6 +3703,7 @@
         const lastFloorNumber = getLastChatFloorNumber(chatFloorCount);
         const pointers = getManualPointerSettings();
         const summaryPointer = clampPointerToFloorCount(pointers.summary, chatFloorCount);
+        const historySummaryPointer = clampPointerToFloorCount(pointers.historySummary, chatFloorCount);
         const panel = document.createElement('section');
         panel.className = 'yzm-trace-panel yzm-summary-tool-panel';
 
@@ -3710,7 +3711,8 @@
         topGrid.className = 'yzm-trace-top-grid';
         topGrid.append(
             createTraceStatCard('当前末楼层', `${lastFloorNumber}`, '层', `共 ${chatFloorCount} 层`, 'fa-solid fa-layer-group'),
-            createTraceStatCard('总结指针位置', `${summaryPointer}`, '层', '', 'fa-solid fa-crosshairs', 'summaryPointer')
+            createTraceStatCard('小总结指针', `${summaryPointer}`, '层', '', 'fa-solid fa-crosshairs', 'summaryPointer'),
+            createTraceStatCard('大总结指针', `${historySummaryPointer}`, '层', '', 'fa-solid fa-book-open', 'historySummaryPointer')
         );
 
         panel.append(
@@ -3803,7 +3805,7 @@
         label.textContent = title;
         const number = document.createElement('strong');
         number.append(document.createTextNode(value), createTraceUnit(unit));
-        if (action === 'tracePointer' || action === 'summaryPointer') {
+        if (action === 'tracePointer' || action === 'summaryPointer' || action === 'historySummaryPointer') {
             number.appendChild(createTracePointerButton(action));
         }
         body.append(label, number);
@@ -3818,7 +3820,9 @@
 
     function createTracePointerButton(action = 'tracePointer') {
         const button = createIconButton('修正', 'fa-solid fa-pen', 'yzm-trace-pointer-edit');
-        button.dataset.yzmTraceAction = action === 'summaryPointer' ? 'editSummaryPointer' : 'editPointer';
+        button.dataset.yzmTraceAction = action === 'historySummaryPointer'
+            ? 'editHistorySummaryPointer'
+            : (action === 'summaryPointer' ? 'editSummaryPointer' : 'editPointer');
         return button;
     }
 
@@ -4499,12 +4503,28 @@
         const totalFloors = getApproximateChatFloorCount();
         openPointerFloorDialog(root, {
             modalClassName: 'yzm-summary-pointer-modal',
-            title: '修正总结指针',
-            ariaLabel: '修正总结指针',
+            title: '修正小总结指针',
+            ariaLabel: '修正小总结指针',
             value: clampPointerToFloorCount(pointers.summary, totalFloors),
             max: totalFloors,
             onApply(value) {
                 updateManualPointerSetting('summary', value);
+                renderSummaryToolWorkspace(root);
+            },
+        });
+    }
+
+    function openHistorySummaryPointerDialog(root) {
+        const pointers = getManualPointerSettings();
+        const totalFloors = getApproximateChatFloorCount();
+        openPointerFloorDialog(root, {
+            modalClassName: 'yzm-history-summary-pointer-modal',
+            title: '修正大总结指针',
+            ariaLabel: '修正大总结指针',
+            value: clampPointerToFloorCount(pointers.historySummary, totalFloors),
+            max: totalFloors,
+            onApply(value) {
+                updateManualPointerSetting('historySummary', value);
                 renderSummaryToolWorkspace(root);
             },
         });
@@ -9621,6 +9641,7 @@
                 event.preventDefault();
                 event.stopPropagation();
                 if (actionButton?.dataset.yzmTraceAction === 'editSummaryPointer') openSummaryPointerDialog(root);
+                if (actionButton?.dataset.yzmTraceAction === 'editHistorySummaryPointer') openHistorySummaryPointerDialog(root);
                 if (batchSwitch) {
                     updateTaskBatchEnabled(batchSwitch);
                     return;
@@ -10351,10 +10372,14 @@
                     result,
                 });
             },
+            syncSummaryToVectorBook(options = {}) {
+                return syncSummaryToVectorBook(options);
+            },
             onUpdate() {
                 const root = document.getElementById(ROOT_ID);
                 if (!root) return;
                 refreshAfterTask(root);
+                if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
             },
         });
         watchExtensionMenuButton();

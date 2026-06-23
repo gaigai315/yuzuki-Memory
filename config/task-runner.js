@@ -793,7 +793,17 @@
         return `${currentText}\n${nextText}`;
     }
 
-    function getSummaryRecordTitle(payload, records = [], table = null) {
+    function getSummaryRecordTitle(payload, records = [], table = null, meta = {}) {
+        const autoTaskType = String(meta?.autoTaskType || '').trim();
+        const rangeValue = getRangeFloorValue(meta?.range);
+        if (autoTaskType === 'summary' || autoTaskType === 'history') {
+            const taskLabel = autoTaskType === 'history' ? '大总结' : '小总结';
+            if (payload.kind === 'branch') {
+                const character = String(payload.character || '').trim() || '未命名支线';
+                return rangeValue ? `支线${taskLabel} - ${character} - ${rangeValue}` : `支线${taskLabel} - ${character}`;
+            }
+            return rangeValue ? `主线${taskLabel} - ${rangeValue}` : `主线${taskLabel}`;
+        }
         if (payload.kind === 'branch') {
             const character = String(payload.character || '').trim();
             return character ? `支线总结 - ${character}` : getNextSummaryTitle(table, records, '支线总结');
@@ -807,9 +817,10 @@
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
         state.records[table.id] = Array.isArray(state.records[table.id]) ? state.records[table.id] : [];
         const records = state.records[table.id];
-        const title = getSummaryRecordTitle(payload, records, table);
+        const title = getSummaryRecordTitle(payload, records, table, meta);
         const rangeLabel = getRangeLabel(meta.range);
         const floorValue = getRangeFloorValue(meta.range);
+        const isAutoSummaryRecord = meta.autoTaskType === 'summary' || meta.autoTaskType === 'history';
         const values = {
             [getPrimaryColumn(table)]: title,
             核心角色: payload.kind === 'branch' ? payload.character : '',
@@ -823,11 +834,19 @@
         if (record) {
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
             record.values[primary] = title;
-            record.values.核心角色 = values.核心角色 || record.values.核心角色 || '';
-            record.values.楼层数 = appendMultilineValue(record.values.楼层数, values.楼层数);
-            record.values.总结内容 = appendMultilineValue(record.values.总结内容, values.总结内容);
-            record.values.未解决问题 = appendMultilineValue(record.values.未解决问题, values.未解决问题);
-            record.values.备注 = appendMultilineValue(record.values.备注, values.备注);
+            if (isAutoSummaryRecord) {
+                record.values.核心角色 = values.核心角色;
+                record.values.楼层数 = values.楼层数;
+                record.values.总结内容 = values.总结内容;
+                record.values.未解决问题 = values.未解决问题;
+                record.values.备注 = values.备注;
+            } else {
+                record.values.核心角色 = values.核心角色 || record.values.核心角色 || '';
+                record.values.楼层数 = appendMultilineValue(record.values.楼层数, values.楼层数);
+                record.values.总结内容 = appendMultilineValue(record.values.总结内容, values.总结内容);
+                record.values.未解决问题 = appendMultilineValue(record.values.未解决问题, values.未解决问题);
+                record.values.备注 = appendMultilineValue(record.values.备注, values.备注);
+            }
         } else {
             record = createRecord(table, values);
             records.push(record);
@@ -1114,6 +1133,7 @@
             historyDelay: Math.max(0, Math.round(Number(source.historyDelay) || 3)),
             directTrigger: typeof source.directTrigger === 'boolean' ? source.directTrigger : true,
             autoSave: typeof source.autoSave === 'boolean' ? source.autoSave : true,
+            autoVectorizeAfterHistory: typeof source.autoVectorizeAfterHistory === 'boolean' ? source.autoVectorizeAfterHistory : false,
             hideSummaryFloors: typeof source.hideSummaryFloors === 'boolean' ? source.hideSummaryFloors : false,
         };
     }
@@ -1231,8 +1251,17 @@
             if (settings.hideSummaryFloors) {
                 committed.hideResult = await YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
                     force: true,
-                    summaryPointer: pointers.historySummary,
+                    summaryPointer: pointers.summary,
                 });
+            }
+            callbacks.saveState?.();
+            if (settings.autoVectorizeAfterHistory === true && typeof callbacks.syncSummaryToVectorBook === 'function') {
+                try {
+                    committed.vectorSyncResult = await callbacks.syncSummaryToVectorBook({ vectorize: true });
+                } catch (error) {
+                    committed.vectorSyncResult = { success: false, error: String(error?.message || error || '总结同步向量化失败') };
+                    console.warn('[yuzuki-Memory] Auto history summary vector sync failed:', error);
+                }
             }
         }
         callbacks.saveState?.();

@@ -230,7 +230,7 @@
         const pointers = state?.settings?.manualPointers && typeof state.settings.manualPointers === 'object'
             ? state.settings.manualPointers
             : {};
-        return normalizeNumber(pointers.historySummary ?? pointers.bigSummary, 0);
+        return normalizeNumber(pointers.summary ?? pointers.lastSummaryIndex ?? pointers.historySummary ?? pointers.bigSummary, 0);
     }
 
     async function hideIndices(chat, indices, label, options = {}) {
