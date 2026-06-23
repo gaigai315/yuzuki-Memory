@@ -606,6 +606,22 @@
         }).filter(Boolean);
     }
 
+    function splitSummaryTimelineLine(line) {
+        const timeMatch = line.match(/\d{1,2}[:：]\d{2}(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?/);
+        if (!timeMatch) return null;
+
+        const beforeTime = line.slice(0, timeMatch.index).replace(/[，,\s]+$/g, '').trim();
+        const afterTime = line.slice(timeMatch.index + timeMatch[0].length).replace(/^[，,、；;\s]+/g, '').trim();
+        const isDatePrefix = beforeTime && /(?:年|月|日|纪|历|元|朝|代|季|旬)/.test(beforeTime);
+        const eventPrefix = isDatePrefix ? '' : beforeTime;
+
+        return {
+            date: isDatePrefix ? beforeTime : '',
+            time: timeMatch[0].replace(/：/g, ':').trim(),
+            event: [eventPrefix, afterTime].filter(Boolean).join(' ').trim(),
+        };
+    }
+
     function getSummaryTimelineItems(text = '') {
         let lastDate = '';
         return String(text || '')
@@ -613,15 +629,14 @@
             .map((line) => line.trim())
             .filter(Boolean)
             .map((line) => {
-                const timelineMatch = line.match(/^((?:(?:\d{2,4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日)\s*[，,\s]*)?)(\d{1,2}[:：]\d{2}(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?)\s*(?:[，,、；;]\s*)?([\s\S]*)$/);
-                if (timelineMatch) {
-                    const date = timelineMatch[1].replace(/[，,\s]+$/g, '').trim();
-                    const displayDate = date && date !== lastDate ? date : '';
-                    if (date) lastDate = date;
+                const timelineItem = splitSummaryTimelineLine(line);
+                if (timelineItem) {
+                    const displayDate = timelineItem.date && timelineItem.date !== lastDate ? timelineItem.date : '';
+                    if (timelineItem.date) lastDate = timelineItem.date;
                     return {
                         date: displayDate,
-                        time: timelineMatch[2].replace(/：/g, ':').trim(),
-                        event: timelineMatch[3].trim(),
+                        time: timelineItem.time,
+                        event: timelineItem.event,
                     };
                 }
                 const parts = line.split(/\s*[|｜]\s*/);

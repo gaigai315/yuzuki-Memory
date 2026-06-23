@@ -989,18 +989,38 @@
         return task && typeof task === 'object' ? task : null;
     }
 
-    function cleanupSmallAutoSummaries(state, range, keepRecordId = '') {
+    function getSummaryRecordFloorRange(record) {
+        const values = record?.values || {};
+        const rawRange = String(values.楼层数 || values.range || values['楼层范围'] || values['楼层'] || '').trim();
+        const match = rawRange.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
+        if (!match) return null;
+        const start = Math.max(0, Math.round(Number(match[1]) || 0));
+        const end = Math.max(start, Math.round(Number(match[2]) || 0));
+        return end > start ? { start, end } : null;
+    }
+
+    function isSmallSummaryRecord(record, table, task) {
+        if (task?.kind === 'summary' && task?.summaryType === 'summary') return true;
+        if (task?.summaryType && task.summaryType !== 'summary') return false;
+
+        const primary = getPrimaryColumn(table);
+        const title = String(record?.values?.[primary] || record?.values?.总结标题 || record?.values?.title || '').trim();
+        if (!/^(主线总结|支线总结)(?:（\d+）)?$/.test(title)) return false;
+        return Boolean(getSummaryRecordFloorRange(record));
+    }
+
+    function cleanupSmallAutoSummaries(state, range, keepRecordIds = []) {
         const table = stateTables(state).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
         const records = stateRecords(state, FIXED_SUMMARY_TABLE_ID);
         if (!table || !records.length) return 0;
         const target = getRangeMeta(range);
         if (!target) return 0;
+        const keepIds = new Set((Array.isArray(keepRecordIds) ? keepRecordIds : [keepRecordIds]).filter(Boolean).map(String));
         const nextRecords = records.filter((record) => {
-            if (record?.id === keepRecordId) return true;
+            if (keepIds.has(String(record?.id || ''))) return true;
             const task = getSummaryRecordTaskMeta(record);
-            const recordRange = getRangeMeta(task?.range);
-            const isSmallAutoSummary = task?.kind === 'summary' && task?.summaryType === 'summary';
-            if (!isSmallAutoSummary || !recordRange) return true;
+            const recordRange = getRangeMeta(task?.range) || getSummaryRecordFloorRange(record);
+            if (!isSmallSummaryRecord(record, table, task) || !recordRange) return true;
             return !(recordRange.start >= target.start && recordRange.end <= target.end);
         });
         state.records[table.id] = nextRecords;
@@ -1357,7 +1377,11 @@
         pointers[task.pointerKey] = committed.range?.end || task.end;
         if (task.type === 'history' && pointers.summary < pointers.historySummary) pointers.summary = pointers.historySummary;
         if (task.type === 'history') {
-            committed.cleanupCount = cleanupSmallAutoSummaries(state, { start: task.start, end: task.end }, committed.record?.id);
+            committed.cleanupCount = cleanupSmallAutoSummaries(
+                state,
+                { start: task.start, end: task.end },
+                (Array.isArray(committed.records) ? committed.records : [committed.record]).map((record) => record?.id).filter(Boolean)
+            );
             if (settings.hideSummaryFloors) {
                 committed.hideResult = await YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
                     force: true,
