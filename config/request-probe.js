@@ -286,6 +286,7 @@
         const hideResult = await YuzukiMemory.FloorHider?.applyConfiguredHiding?.();
         const rawBody = JSON.parse(bodyText);
         removeHiddenMessagesFromBody(rawBody, hideResult?.hiddenTexts || YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || []);
+        YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
         const body = YuzukiMemory.VariableInjector?.processBody
             ? await YuzukiMemory.VariableInjector.processBody(rawBody, { getVectorText: getVectorInjectionText })
             : rawBody;

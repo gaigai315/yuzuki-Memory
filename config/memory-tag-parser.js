@@ -324,6 +324,7 @@
 
     function applyMemoryText(text, options = {}) {
         const rows = extractMemoryRows(text);
+        if (options.force !== true && hasProcessedText(text)) return { success: false, count: 0, skipped: true };
         if (!rows.length || applying) return { success: false, count: 0 };
         const state = YuzukiMemory.Storage?.loadState?.(createDefaultState()) || createDefaultState();
         let count = 0;
@@ -332,6 +333,11 @@
             count = applyRowsToState(state, rows);
             if (count) {
                 YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, { allowDuringSwitch: true });
+                const chat = getContext()?.chat;
+                const floor = Number.isFinite(Number(options.floor))
+                    ? Math.round(Number(options.floor))
+                    : (Array.isArray(chat) ? chat.length - 1 : -1);
+                YuzukiMemory.BranchSnapshot?.captureMessageSnapshot?.(floor, { state });
                 if (options.dispatch !== false) {
                     window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', { detail: { source: 'memory-tag-parser', count } }));
                 }
@@ -344,6 +350,8 @@
 
     function getMessageText(message) {
         if (!message || typeof message !== 'object') return String(message || '');
+        const swipeId = Number(message.swipe_id ?? 0);
+        if (Array.isArray(message.swipes) && message.swipes.length > swipeId) return String(message.swipes[swipeId] || '');
         return String(message.mes || message.content || message.text || '');
     }
 
@@ -387,8 +395,7 @@
                 const message = Array.isArray(chat) ? chat[chat.length - 1] : null;
                 if (!isAssistantMessage(message)) return;
                 const text = getMessageText(message);
-                if (hasProcessedText(text)) return;
-                applyMemoryText(text);
+                applyMemoryText(text, { floor: Array.isArray(chat) ? chat.length - 1 : -1 });
             }, 0);
         };
         [
@@ -403,6 +410,7 @@
 
     YuzukiMemory.MemoryTagParser = Object.assign(YuzukiMemory.MemoryTagParser || {}, {
         bind,
+        createDefaultState,
         extractMemoryRows,
         parseMemoryText,
         applyMemoryText,

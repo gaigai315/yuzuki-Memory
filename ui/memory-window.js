@@ -1776,9 +1776,10 @@
         if (!nav) return;
 
         const state = getState();
+        const shouldHighlightTable = activeWorkspaceView === 'table';
         nav.replaceChildren(createOverviewRow());
         getSidebarTables().forEach((table) => {
-            nav.appendChild(createSidebarTableItem(table, table.id === state.activeTableId));
+            nav.appendChild(createSidebarTableItem(table, shouldHighlightTable && table.id === state.activeTableId));
         });
     }
 
@@ -2556,6 +2557,9 @@
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-trace-mode', isTrace);
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-summary-tool-mode', isSummaryTool);
         root.querySelector('.yzm-workspace')?.classList.toggle('yzm-scheme-mode', isScheme);
+        root.querySelectorAll('.yzm-nav-table').forEach((item) => {
+            item.classList.toggle('yzm-nav-table-active', activeWorkspaceView === 'table' && item.dataset.yzmTableId === getState().activeTableId);
+        });
         root.querySelector('.yzm-primary-header')?.toggleAttribute('hidden', isConfig || isVector || isApi || isTrace || isSummaryTool || isScheme);
         root.querySelector('.yzm-primary-search')?.toggleAttribute('hidden', isConfig || isVector || isApi || isTrace || isSummaryTool || isScheme);
         root.querySelector('.yzm-primary-list')?.toggleAttribute('hidden', isConfig || isVector || isApi || isTrace || isSummaryTool || isScheme);
