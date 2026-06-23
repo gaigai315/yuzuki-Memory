@@ -554,6 +554,23 @@
         };
     }
 
+    function createMessageForAnchor(targetKey, anchorMessage, sourceMessage) {
+        if (targetKey === 'contents') return createMessageForTarget(targetKey, sourceMessage);
+        const content = resolveRuntimeVariables(sourceMessage?.content || '');
+        if (!content) return null;
+        const message = cloneMessageWithText(targetKey, anchorMessage, content);
+        if (!message || typeof message !== 'object') return createMessageForTarget(targetKey, sourceMessage);
+
+        if (!message.role) message.role = sourceMessage.role || 'system';
+        message.name = sourceMessage.name || message.name || 'MEMORY';
+        message.isGaigaiData = !!sourceMessage.isGaigaiData;
+        message.isGaigaiPrompt = !!sourceMessage.isGaigaiPrompt;
+        message.yzmMemoryInjectionType = sourceMessage.yzmMemoryInjectionType || '';
+        message.yzmMemoryTableId = sourceMessage.yzmMemoryTableId || '';
+        message.yzmMemorySummaryId = sourceMessage.yzmMemorySummaryId || '';
+        return message;
+    }
+
     function insertInjectedMessages(body, messages = []) {
         const target = getRequestArray(body);
         const normalized = messages.map((message) => createMessageForTarget(target?.key, message)).filter(Boolean);
@@ -765,7 +782,7 @@
                 if (beforeMessage) nextItems.push(beforeMessage);
 
                 consumeAnchor(match[0])
-                    .map((message) => createMessageForTarget(target.key, message))
+                    .map((message) => createMessageForAnchor(target.key, item, message))
                     .filter(Boolean)
                     .forEach((message) => nextItems.push(message));
 
