@@ -554,6 +554,28 @@
         };
     }
 
+    function getAnchorInjectionRole(anchorMessage, fallbackRole = 'system') {
+        const explicitRole = String(anchorMessage?.role || '').trim().toLowerCase();
+        if (anchorMessage?.is_user === true) return 'user';
+        if (anchorMessage?.is_user === false && anchorMessage?.is_system !== true && anchorMessage?.is_system_prompt !== true) {
+            return 'assistant';
+        }
+        return explicitRole || fallbackRole || 'system';
+    }
+
+    function syncRoleFlags(message, role) {
+        if (!message || typeof message !== 'object') return;
+        if (role === 'user') {
+            message.is_user = true;
+            if (Object.prototype.hasOwnProperty.call(message, 'is_system')) message.is_system = false;
+            return;
+        }
+        if (role === 'assistant' || role === 'model') {
+            message.is_user = false;
+            if (Object.prototype.hasOwnProperty.call(message, 'is_system')) message.is_system = false;
+        }
+    }
+
     function createMessageForAnchor(targetKey, anchorMessage, sourceMessage) {
         if (targetKey === 'contents') return createMessageForTarget(targetKey, sourceMessage);
         const content = resolveRuntimeVariables(sourceMessage?.content || '');
@@ -561,7 +583,9 @@
         const message = cloneMessageWithText(targetKey, anchorMessage, content);
         if (!message || typeof message !== 'object') return createMessageForTarget(targetKey, sourceMessage);
 
-        if (!message.role) message.role = sourceMessage.role || 'system';
+        const role = getAnchorInjectionRole(anchorMessage, sourceMessage.role || 'system');
+        message.role = role;
+        syncRoleFlags(message, role);
         message.name = sourceMessage.name || message.name || 'MEMORY';
         message.isGaigaiData = !!sourceMessage.isGaigaiData;
         message.isGaigaiPrompt = !!sourceMessage.isGaigaiPrompt;
