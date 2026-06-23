@@ -6336,7 +6336,12 @@
     function getProbeRoleMeta(message) {
         const role = String(message?.role || '').toLowerCase();
         if (message?.flags?.vector) return { label: message.name || 'SYSTEM (向量化)', className: 'yzm-probe-role-vector', icon: 'fa-solid fa-diagram-project' };
-        if (message?.flags?.memory) return { label: message.name || 'MEMORY', className: 'yzm-probe-role-memory', icon: 'fa-solid fa-table-cells-large' };
+        if (message?.flags?.memory) {
+            const memoryName = String(message.name || 'MEMORY').replace(/^SYSTEM\s*/i, '').trim();
+            if (role === 'assistant' || role === 'model') return { label: `ASSISTANT ${memoryName}`.trim(), className: 'yzm-probe-role-assistant', icon: 'fa-solid fa-circle-check' };
+            if (role === 'user') return { label: `USER ${memoryName}`.trim(), className: 'yzm-probe-role-user', icon: 'fa-solid fa-user' };
+            return { label: message.name || 'MEMORY', className: 'yzm-probe-role-memory', icon: 'fa-solid fa-table-cells-large' };
+        }
         if (message?.flags?.prompt) return { label: message.name || 'PROMPT', className: 'yzm-probe-role-prompt', icon: 'fa-solid fa-thumbtack' };
         if (role === 'user') return { label: 'USER', className: 'yzm-probe-role-user', icon: 'fa-solid fa-user' };
         if (role === 'assistant' || role === 'model') return { label: 'ASSISTANT', className: 'yzm-probe-role-assistant', icon: 'fa-solid fa-circle-check' };

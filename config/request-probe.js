@@ -228,9 +228,10 @@
     function normalizeMessage(message, index) {
         const item = message && typeof message === 'object' ? message : { content: String(message || '') };
         const content = getMessageText(item);
+        const fallbackRole = item.is_user === true ? 'user' : (item.is_user === false ? 'assistant' : 'system');
         return {
             index,
-            role: String(item.role || (item.is_user ? 'user' : 'system')).toLowerCase(),
+            role: String(item.role || fallbackRole).toLowerCase(),
             name: String(item.name || item.identifier || '').trim(),
             content,
             tokens: estimateTokens(content),
