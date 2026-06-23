@@ -629,6 +629,7 @@
             headers,
             body: JSON.stringify(resolveDirectPayload(config, messages, stream)),
             signal: options.signal,
+            yzmMemoryInternalApi: options.yzmMemoryInternalApi === true,
         });
         const contentType = response.headers.get('content-type') || '';
         if (!response.ok) {

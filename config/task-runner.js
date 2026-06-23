@@ -513,6 +513,16 @@
         return presets.find((preset) => preset.id === activeId) || presets[0] || null;
     }
 
+    function buildTaskRequestMeta(options = {}) {
+        return {
+            kind: String(options.kind || options.autoTaskType || 'manual'),
+            range: {
+                start: Math.max(0, Math.round(Number(options.start) || 0)),
+                end: Math.max(0, Math.round(Number(options.end) || 0)),
+            },
+        };
+    }
+
     function captureTaskRequest(messages, options = {}) {
         if (!YuzukiMemory.RequestProbe?.captureFromBody) return;
         const mode = getLlmMode();
@@ -520,13 +530,8 @@
         const body = {
             model: mode === 'custom' ? String(preset?.model || '') : 'SillyTavern',
             messages,
-            yzmMemoryTask: {
-                kind: String(options.kind || options.autoTaskType || 'manual'),
-                range: {
-                    start: Math.max(0, Math.round(Number(options.start) || 0)),
-                    end: Math.max(0, Math.round(Number(options.end) || 0)),
-                },
-            },
+            yzmMemoryTask: buildTaskRequestMeta(options),
+            yzmMemoryInternalApi: true,
         };
         YuzukiMemory.RequestProbe.captureFromBody(body, 'yuzuki-memory://task');
     }
@@ -537,32 +542,118 @@
         window.isSummarizing = true;
         try {
             captureTaskRequest(messages, options);
+            const taskOptions = {
+                ...options,
+                yzmMemoryTask: buildTaskRequestMeta(options),
+                yzmMemoryInternalApi: true,
+            };
             if (getLlmMode() === 'custom') {
                 const preset = getActiveLlmPreset();
                 if (!preset) return { success: false, error: '未选择可用的 LLM API 预设。' };
-                return YuzukiMemory.LlmClient.generateWithCustom(preset, messages, { stream: preset.stream !== false, ...options });
+                return YuzukiMemory.LlmClient.generateWithCustom(preset, messages, { stream: preset.stream !== false, ...taskOptions });
             }
-            return YuzukiMemory.LlmClient.generateWithTavern(messages, { stream: true, ...options });
+            return YuzukiMemory.LlmClient.generateWithTavern(messages, { stream: true, ...taskOptions });
         } finally {
             window.isSummarizing = previousSummarizing;
         }
     }
 
     function parseJsonBlock(text = '') {
+        const blocks = parseJsonBlocks(text);
+        if (blocks.length) return blocks[0];
+        throw new Error('未找到可解析的 JSON 结果。');
+    }
+
+    function parseJsonBlocks(text = '') {
         const source = String(text || '').trim();
-        const fenced = source.match(/```(?:json)?\s*([\s\S]*?)```/i);
-        if (fenced) return JSON.parse(fenced[1].trim());
+        if (!source) return [];
+
         try {
-            return JSON.parse(source);
+            return [JSON.parse(source)];
         } catch {
-            const firstObject = source.indexOf('{');
-            const firstArray = source.indexOf('[');
-            const starts = [firstObject, firstArray].filter((index) => index >= 0);
-            const start = starts.length ? Math.min(...starts) : -1;
-            const end = Math.max(source.lastIndexOf('}'), source.lastIndexOf(']'));
-            if (start >= 0 && end > start) return JSON.parse(source.slice(start, end + 1));
-            throw new Error('未找到可解析的 JSON 结果。');
+            // Continue with tolerant extraction below.
         }
+
+        return extractJsonValues(source)
+            .map((block) => {
+                try {
+                    return JSON.parse(block);
+                } catch (_error) {
+                    return null;
+                }
+            })
+            .filter((block) => block !== null);
+    }
+
+    function extractJsonValues(text = '') {
+        const source = String(text || '');
+        const values = [];
+        let cursor = 0;
+
+        while (cursor < source.length) {
+            const start = findJsonStart(source, cursor);
+            if (start < 0) break;
+
+            const end = findJsonEnd(source, start);
+            if (end > start) {
+                values.push(source.slice(start, end + 1));
+                cursor = end + 1;
+            } else {
+                cursor = start + 1;
+            }
+        }
+
+        return values;
+    }
+
+    function findJsonStart(text, fromIndex = 0) {
+        const objectIndex = text.indexOf('{', fromIndex);
+        const arrayIndex = text.indexOf('[', fromIndex);
+        if (objectIndex < 0) return arrayIndex;
+        if (arrayIndex < 0) return objectIndex;
+        return Math.min(objectIndex, arrayIndex);
+    }
+
+    function findJsonEnd(text, startIndex) {
+        const stack = [text[startIndex]];
+        let inString = false;
+        let escaped = false;
+
+        for (let index = startIndex + 1; index < text.length; index += 1) {
+            const char = text[index];
+
+            if (inString) {
+                if (escaped) {
+                    escaped = false;
+                } else if (char === '\\') {
+                    escaped = true;
+                } else if (char === '"') {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (char === '"') {
+                inString = true;
+                continue;
+            }
+
+            if (char === '{' || char === '[') {
+                stack.push(char);
+                continue;
+            }
+
+            if (char !== '}' && char !== ']') continue;
+
+            const opener = stack[stack.length - 1];
+            const expected = opener === '{' ? '}' : ']';
+            if (char !== expected) return -1;
+
+            stack.pop();
+            if (!stack.length) return index;
+        }
+
+        return -1;
     }
 
     function normalizeTaskRows(parsed) {
@@ -578,7 +669,14 @@
 
     function parseTraceResponse(text = '') {
         try {
-            return parseJsonBlock(text);
+            const parsedBlocks = parseJsonBlocks(text);
+            if (!parsedBlocks.length) throw new Error('未找到可解析的 JSON 结果。');
+            if (parsedBlocks.length === 1) return parsedBlocks[0];
+            const records = parsedBlocks.flatMap((block) => Array.isArray(block?.records) ? block.records : (Array.isArray(block) ? block : []));
+            const memoryRows = parsedBlocks.flatMap((block) => Array.isArray(block?.memoryRows) ? block.memoryRows : []);
+            if (records.length) return { records };
+            if (memoryRows.length) return { memoryRows };
+            return parsedBlocks[0];
         } catch (error) {
             const parser = YuzukiMemory.MemoryTagParser;
             const rows = parser?.extractMemoryRows?.(text) || [];
@@ -624,10 +722,11 @@
     }
 
     function parseSummaryResponse(text = '') {
-        const parsed = parseJsonBlock(text);
-        const payloads = Array.isArray(parsed)
+        const parsedBlocks = parseJsonBlocks(text);
+        if (!parsedBlocks.length) throw new Error('未找到可解析的 JSON 结果。');
+        const payloads = parsedBlocks.flatMap((parsed) => Array.isArray(parsed)
             ? parsed
-            : (Array.isArray(parsed?.summaries) ? parsed.summaries : (Array.isArray(parsed?.records) ? parsed.records : [parsed]));
+            : (Array.isArray(parsed?.summaries) ? parsed.summaries : (Array.isArray(parsed?.records) ? parsed.records : [parsed])));
         return payloads.map(normalizeSummaryPayload).filter((payload) => payload.summary);
     }
 

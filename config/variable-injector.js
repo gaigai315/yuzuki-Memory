@@ -646,6 +646,15 @@
         return Object.values(node).some((value) => nodeContainsPattern(value, pattern));
     }
 
+    function isMemoryTaskRequest(body, options = {}) {
+        return !!(
+            options?.yzmMemoryTask ||
+            options?.yzmMemoryInternalApi === true ||
+            body?.yzmMemoryTask ||
+            body?.yzmMemoryInternalApi === true
+        );
+    }
+
     function buildVariableReplacements(state, vectorText = '', settings = getPluginSettings()) {
         const names = getRuntimeNames();
         return {
@@ -703,7 +712,7 @@
         if (!settings.injectMemoryTable && !settings.injectVectorMemory) {
             return body;
         }
-        if (window.isSummarizing) {
+        if (window.isSummarizing || isMemoryTaskRequest(body, options)) {
             cleanupVariablesInNode(body, settings);
             return body;
         }

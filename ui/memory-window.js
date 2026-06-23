@@ -4322,6 +4322,8 @@
             syncVisibleTaskButtons();
             await waitForTaskCooldown(1000);
         }
+        taskRunnerProgressLabel = '继续执行...';
+        syncVisibleTaskButtons();
         return !taskRunnerStopRequested;
     }
 
@@ -4442,7 +4444,7 @@
             for (let index = 0; index < batches.length; index += 1) {
                 if (taskRunnerStopRequested) break;
                 const batch = batches[index];
-                taskRunnerProgressLabel = batches.length > 1 ? `停止 (${index + 1}/${batches.length})` : '停止任务';
+                taskRunnerProgressLabel = batches.length > 1 ? `第 ${index + 1}/${batches.length} 批执行中` : '执行中';
                 setTaskButtonRunning(button, true, taskRunnerProgressLabel);
                 const result = await runTaskBatchWithRetry(state, action, {
                     ...options,
@@ -4463,6 +4465,8 @@
                 if (action === 'trace') updateManualPointerSetting('trace', result.range?.end ?? batch.end);
                 if (action === 'summary') updateManualPointerSetting('summary', result.range?.end ?? batch.end);
                 refreshAfterTask(root);
+                taskRunnerProgressLabel = batches.length > 1 ? `第 ${index + 1}/${batches.length} 批已写入` : '已写入';
+                syncVisibleTaskButtons(root);
                 if (!await waitForTaskBuffer('等待数据完全写入', 6)) break;
                 if (index < batches.length - 1 && !await waitForTaskBuffer('批次间冷却，避免触发限流', 5)) break;
             }
