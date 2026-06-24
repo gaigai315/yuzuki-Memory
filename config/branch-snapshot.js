@@ -313,6 +313,16 @@
         const sessionId = options.sessionId || ensureSessionLoaded(getSessionId());
         if (!sessionId || !snapshot?.records) return false;
         const state = options.state || loadState(sessionId);
+        const stateUpdatedAt = Number(state?.updatedAt || state?.ts || 0);
+        const snapshotUpdatedAt = Number(snapshot?.timestamp || 0);
+        if (options.force !== true && state?.saveOrigin === 'manual' && stateUpdatedAt > snapshotUpdatedAt) {
+            console.warn('[yuzuki-Memory] Stale branch snapshot restore skipped to keep manual memory edits.', {
+                stateUpdatedAt,
+                snapshotUpdatedAt,
+                key: String(options.key || ''),
+            });
+            return false;
+        }
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
         (Array.isArray(state.tables) ? state.tables : []).forEach((table) => {
             if (!table?.id || table.id === 'memory_summary') return;
@@ -383,6 +393,17 @@
         pruneSnapshots();
         persistSnapshots(sessionId);
         return true;
+    }
+
+    function captureCurrentStateSnapshot(state = loadState(), options = {}) {
+        if (!isRealtimeEnabled()) return false;
+        const sessionId = ensureSessionLoaded(options.sessionId || getSessionId());
+        if (!sessionId) return false;
+        const chat = getChat();
+        if (!chat.length) {
+            return saveSnapshot(-1, { state, sessionId });
+        }
+        return captureMessageSnapshot(chat.length - 1, { state, sessionId });
     }
 
     function reapplyCurrentMessage(floor) {
@@ -538,6 +559,7 @@
         isRealtimeEnabled,
         saveSnapshot,
         captureMessageSnapshot,
+        captureCurrentStateSnapshot,
         prepareBeforeRequest,
         restoreForCurrentChatPosition,
         restoreSnapshot,

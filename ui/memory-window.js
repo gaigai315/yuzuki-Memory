@@ -339,7 +339,7 @@
             state.activeTableId = state.tables[0]?.id || '';
             activeWorkspaceView = 'table';
         }
-        const saved = saveState();
+        const saved = saveState({ force: true });
         if (!saved) {
             window.alert('当前会话尚未就绪，删除表格未保存。');
             memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
@@ -1570,7 +1570,11 @@
         if (getActiveRecordId(table.id) === recordId) {
             setActiveRecordId(table.id, nextRecords.find((record) => !record.hidden)?.id || '');
         }
-        saveState();
+        if (!persistStateOrReload(root, '当前会话尚未就绪，删除记录未保存。', {
+            tableId: table.id,
+            recordId,
+            exists: false,
+        })) return;
         closeRecordActionMenu(root);
         setMobileDetailOpen(root, false);
         renderWorkspaceList(root);
@@ -1579,7 +1583,84 @@
     }
 
     function saveState(options = {}) {
+        const currentSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
+        if (currentSessionId && (!loadedSessionId || (loadedSessionId !== currentSessionId && !getStorage()?.isSessionSwitching?.()))) {
+            loadedSessionId = currentSessionId;
+        }
         return !!getStorage()?.saveState?.(getState(), createDefaultState(), loadedSessionId, options);
+    }
+
+    function getStoredRecord(tableId, recordId) {
+        const storedState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId);
+        const records = Array.isArray(storedState?.records?.[tableId]) ? storedState.records[tableId] : [];
+        return records.find((record) => String(record?.id || '') === String(recordId || '')) || null;
+    }
+
+    function valuesMatchStoredRecord(record, expectedValues) {
+        if (!expectedValues || typeof expectedValues !== 'object') return true;
+        const storedValues = record?.values && typeof record.values === 'object' ? record.values : {};
+        return Object.entries(expectedValues).every(([key, value]) => String(storedValues[key] ?? '') === String(value ?? ''));
+    }
+
+    function dispatchManualStateUpdated(detail = {}) {
+        YuzukiMemory.BranchSnapshot?.captureCurrentStateSnapshot?.(getState(), { sessionId: loadedSessionId });
+        window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
+            detail: {
+                source: 'manual',
+                ...detail,
+            },
+        }));
+    }
+
+    function persistStateOrReload(root, message, verify = {}) {
+        const saved = saveState({ force: true });
+        if (saved) {
+            if (!verify.tableId || !verify.recordId) {
+                dispatchManualStateUpdated({ tableId: verify.tableId || '', recordId: verify.recordId || '' });
+                return true;
+            }
+            const storedRecord = getStoredRecord(verify.tableId, verify.recordId);
+            const shouldExist = verify.exists !== false;
+            const verified = shouldExist
+                ? !!storedRecord && valuesMatchStoredRecord(storedRecord, verify.values)
+                : !storedRecord;
+            const debugInfo = getStorage()?.getDebugInfo?.(loadedSessionId, createDefaultState());
+            console.log('[yuzuki-Memory] Record save verification.', {
+                saved,
+                verified,
+                loadedSessionId,
+                currentSessionId: getStorage()?.getCurrentSessionId?.() || '',
+                tableId: verify.tableId,
+                recordId: verify.recordId,
+                expectedValues: verify.values || null,
+                storedValues: storedRecord?.values || null,
+                storage: debugInfo || null,
+            });
+            if (verified) {
+                dispatchManualStateUpdated({
+                    tableId: verify.tableId,
+                    recordId: verify.recordId,
+                    exists: shouldExist,
+                });
+                return true;
+            }
+        }
+
+        console.warn('[yuzuki-Memory] Record save verification failed.', {
+            saved,
+            loadedSessionId,
+            currentSessionId: getStorage()?.getCurrentSessionId?.() || '',
+            verify,
+            storage: getStorage()?.getDebugInfo?.(loadedSessionId, createDefaultState()) || null,
+        });
+        if (message) window.alert(message);
+        memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+        if (root) {
+            renderWorkspaceList(root);
+            renderTableWorkspace(root);
+            bindPanelInteractions(root);
+        }
+        return false;
     }
 
     function closeMoreMenu(root) {
@@ -1595,7 +1676,7 @@
         if (!window.confirm('确定重置当前会话的所有表格结构和记录吗？')) return;
 
         memoryState = createDefaultState();
-        saveState();
+        saveState({ force: true });
         refreshActiveWorkspace(root);
         closeMoreMenu(root);
     }
@@ -1639,7 +1720,7 @@
             return false;
         }
 
-        const saved = saveState();
+        const saved = saveState({ force: true });
         if (!saved) {
             window.alert('当前会话尚未就绪，清表操作未保存。');
             memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
@@ -8880,7 +8961,11 @@
             const record = createSummaryRecord(table, kind);
             getRecords(table.id).push(record);
             setActiveRecordId(table.id, record.id);
-            saveState();
+            if (!persistStateOrReload(root, '当前会话尚未就绪，新增总结未保存。', {
+                tableId: table.id,
+                recordId: record.id,
+                values: record.values,
+            })) return;
             renderWorkspaceList(root);
             renderTableWorkspace(root);
             bindPanelInteractions(root);
@@ -9143,7 +9228,11 @@
             }
             setActiveRecordId(table.id, record.id);
             activePlotSummaryKind = normalizedKind;
-            saveState();
+            if (!persistStateOrReload(root, '当前会话尚未就绪，剧情摘要未保存。', {
+                tableId: table.id,
+                recordId: record.id,
+                values: record.values,
+            })) return;
             renderWorkspaceList(root);
             renderTableWorkspace(root);
             bindPanelInteractions(root);
@@ -9209,7 +9298,15 @@
         });
         dialog.addEventListener('click', (event) => event.stopPropagation());
 
-        save.addEventListener('click', () => {
+        const saveRecord = (event) => {
+            event?.preventDefault?.();
+            event?.stopPropagation?.();
+            console.log('[yuzuki-Memory] Record editor save clicked.', {
+                tableId: table.id,
+                recordId: record.id,
+                loadedSessionId,
+                currentSessionId: getStorage()?.getCurrentSessionId?.() || '',
+            });
             const values = {};
             fields.querySelectorAll('[data-yzm-record-field]').forEach((input) => {
                 values[input.dataset.yzmRecordField] = input.value.trim();
@@ -9217,6 +9314,7 @@
 
             const primary = getPrimaryColumn(table);
             if (table.id !== 'plot_summary' && !values[primary]) {
+                window.alert(`${primary}不能为空。`);
                 return;
             }
 
@@ -9227,11 +9325,21 @@
             const records = getRecords(table.id);
             if (isNewRecord) records.push(record);
             setActiveRecordId(table.id, record.id);
-            saveState();
+            if (!persistStateOrReload(root, '当前会话尚未就绪，记录修改未保存。', {
+                tableId: table.id,
+                recordId: record.id,
+                values: record.values,
+            })) return;
             renderWorkspaceList(root);
             renderTableWorkspace(root);
             bindPanelInteractions(root);
             closeModal();
+        };
+        save.onclick = saveRecord;
+        dialog.addEventListener('click', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target?.closest('.yzm-record-save')) return;
+            saveRecord(event);
         });
 
         const firstInput = fields.querySelector('.yzm-record-input');
@@ -9322,7 +9430,11 @@
                 const record = createEmptyRecordForTable(table);
                 getRecords(table.id).push(record);
                 setActiveRecordId(table.id, record.id);
-                saveState();
+                if (!persistStateOrReload(root, '当前会话尚未就绪，新增记录未保存。', {
+                    tableId: table.id,
+                    recordId: record.id,
+                    values: record.values,
+                })) return;
                 renderWorkspaceList(root);
                 renderTableWorkspace(root);
                 bindPanelInteractions(root);
@@ -10427,8 +10539,8 @@
         eventSource.on(eventTypes.CHAT_CHANGED, () => {
             const root = document.getElementById(ROOT_ID);
             if (!root) return;
-            window.setTimeout(() => refreshActiveWorkspace(root), 80);
-            window.setTimeout(() => refreshActiveWorkspace(root), 420);
+            window.setTimeout(() => reloadStateFromStorage(), 80);
+            window.setTimeout(() => reloadStateFromStorage(), 420);
         });
     }
 

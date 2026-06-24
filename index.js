@@ -7,7 +7,7 @@
     'use strict';
 
     const NAMESPACE = 'YuzukiMemory';
-    const VERSION = '0.1.0';
+    const VERSION = '0.1.6';
     const baseUrl = new URL('./', import.meta.url).href;
 
     const MODULES = [
@@ -41,7 +41,9 @@
     });
 
     function resolveModule(path) {
-        return new URL(path, baseUrl).href;
+        const url = new URL(path, baseUrl);
+        url.searchParams.set('v', VERSION);
+        return url.href;
     }
 
     function loadScript(path) {
