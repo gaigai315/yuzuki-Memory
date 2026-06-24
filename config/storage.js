@@ -343,6 +343,7 @@
             updatedAt: Number(rawState.updatedAt || rawState.ts || fallback.updatedAt || 0),
             ts: Number(rawState.ts || rawState.updatedAt || fallback.ts || 0),
             saveOrigin: String(rawState.saveOrigin || fallback.saveOrigin || ''),
+            manualEditedAt: Number(rawState.manualEditedAt || fallback.manualEditedAt || 0),
             tables,
             activeTableId,
             activeRecordIds,
@@ -391,14 +392,18 @@
 
         try {
             const normalized = normalizeState(state, fallbackState || state);
+            const now = Date.now();
             const payload = Object.assign({}, normalized, {
                 version: VERSION,
                 sessionId,
                 sessionAliases: sessionId === getCurrentSessionId() ? getCurrentSessionAliases() : [sessionId].filter(Boolean),
-                updatedAt: Date.now(),
-                ts: Date.now(),
+                updatedAt: now,
+                ts: now,
                 saveOrigin: options.saveOrigin || (options.force ? 'manual' : 'auto'),
             });
+            if (payload.saveOrigin === 'manual') {
+                payload.manualEditedAt = payload.updatedAt;
+            }
 
             const existing = pickNewestState([
                 sessionId === getCurrentSessionId() ? readChatMetadataState() : null,

@@ -1603,7 +1603,8 @@
     }
 
     function dispatchManualStateUpdated(detail = {}) {
-        YuzukiMemory.BranchSnapshot?.captureCurrentStateSnapshot?.(getState(), { sessionId: loadedSessionId });
+        const manualEditedAt = YuzukiMemory.BranchSnapshot?.markManualEdit?.() || Date.now();
+        YuzukiMemory.BranchSnapshot?.captureCurrentStateSnapshot?.(getState(), { sessionId: loadedSessionId, timestamp: manualEditedAt });
         window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
             detail: {
                 source: 'manual',

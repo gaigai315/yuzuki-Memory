@@ -16,6 +16,7 @@
     let bound = false;
     let bindRetryTimer = null;
     let activeSessionId = '';
+    let lastManualEditAt = 0;
     const swipeResolveTimers = {};
 
     function clone(value) {
@@ -80,6 +81,12 @@
 
     function saveState(state, sessionId = getSessionId()) {
         return !!YuzukiMemory.Storage?.saveState?.(state, getFallbackState(), sessionId, { allowDuringSwitch: true });
+    }
+
+    function markManualEdit(timestamp = Date.now()) {
+        const nextTime = Number(timestamp || Date.now());
+        if (Number.isFinite(nextTime)) lastManualEditAt = Math.max(lastManualEditAt, nextTime);
+        return lastManualEditAt;
     }
 
     function getChat() {
@@ -195,12 +202,12 @@
             })));
     }
 
-    function createSnapshot(state = loadState(), floor = -1) {
+    function createSnapshot(state = loadState(), floor = -1, options = {}) {
         return {
             floor: Number(floor),
             records: normalizeTableRecords(state),
             tableShape: getTableShapeSignature(state),
-            timestamp: Date.now(),
+            timestamp: Number(options.timestamp || 0) || Date.now(),
         };
     }
 
@@ -284,7 +291,7 @@
         if (!sessionId) return false;
         const key = String(Math.max(-1, Math.round(Number(floor) || 0)));
         const state = options.state || loadState(sessionId);
-        snapshots[key] = createSnapshot(state, key);
+        snapshots[key] = createSnapshot(state, key, options);
         pruneSnapshots();
         if (options.persist !== false) persistSnapshots(sessionId);
         return true;
@@ -315,6 +322,19 @@
         const state = options.state || loadState(sessionId);
         const stateUpdatedAt = Number(state?.updatedAt || state?.ts || 0);
         const snapshotUpdatedAt = Number(snapshot?.timestamp || 0);
+        const manualGuardAt = Math.max(
+            lastManualEditAt,
+            Number(state?.manualEditedAt || 0),
+            state?.saveOrigin === 'manual' ? stateUpdatedAt : 0
+        );
+        if (options.force !== true && manualGuardAt > snapshotUpdatedAt) {
+            console.warn('[yuzuki-Memory] Stale branch snapshot restore skipped to keep manual memory edits.', {
+                manualGuardAt,
+                snapshotUpdatedAt,
+                key: String(options.key || ''),
+            });
+            return false;
+        }
         if (options.force !== true && state?.saveOrigin === 'manual' && stateUpdatedAt > snapshotUpdatedAt) {
             console.warn('[yuzuki-Memory] Stale branch snapshot restore skipped to keep manual memory edits.', {
                 stateUpdatedAt,
@@ -384,7 +404,7 @@
         const message = chat[floor];
         const state = options.state || loadState(sessionId);
         const snapshot = {
-            ...createSnapshot(state, floor),
+            ...createSnapshot(state, floor, options),
             signature: getMessageSignature(message),
         };
         snapshots[String(floor)] = snapshot;
@@ -560,6 +580,7 @@
         saveSnapshot,
         captureMessageSnapshot,
         captureCurrentStateSnapshot,
+        markManualEdit,
         prepareBeforeRequest,
         restoreForCurrentChatPosition,
         restoreSnapshot,
