@@ -31,7 +31,6 @@
             const wrapper = { chat: safeChat };
             const result = YuzukiMemory.VariableInjector.processBody(wrapper, {
                 disableVectorInjection: true,
-                disableDefaultMemoryInjection: true,
                 yzmPromptReadyHook: true,
             });
             if (result && typeof result.catch === 'function') {

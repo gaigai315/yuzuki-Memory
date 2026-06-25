@@ -271,6 +271,13 @@
         });
     }
 
+    function bodyContainsMemoryVariable(body) {
+        const target = getRequestArray(body);
+        if (!target) return false;
+        const pattern = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/i;
+        return target.items.some((item) => pattern.test(getMessageText(item)));
+    }
+
     function isRequestLike(value) {
         return typeof Request !== 'undefined' && value instanceof Request;
     }
@@ -289,8 +296,12 @@
         const rawBody = JSON.parse(bodyText);
         removeHiddenMessagesFromBody(rawBody, hideResult?.hiddenTexts || YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || []);
         YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
+        const hasMemoryVariable = bodyContainsMemoryVariable(rawBody);
         const body = YuzukiMemory.VariableInjector?.processBody
-            ? await YuzukiMemory.VariableInjector.processBody(rawBody, { getVectorText: getVectorInjectionText })
+            ? await YuzukiMemory.VariableInjector.processBody(rawBody, {
+                getVectorText: getVectorInjectionText,
+                disableDefaultMemoryInjection: !hasMemoryVariable,
+            })
             : rawBody;
         const nextBody = JSON.stringify(body);
         if (bodyContainsYuzukiVector(body)) {
