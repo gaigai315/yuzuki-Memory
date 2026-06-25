@@ -13,7 +13,7 @@
     const STRUCTURED_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT)\s*\}\}/gi;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{\s*VECTOR_MEMORY\s*\}\}/gi;
     const MEMORY_DATA_VARIABLE_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY)\s*\}\}/i;
-    const MEMORY_DATA_ANCHOR_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY)\s*\}\}/gi;
+    const MEMORY_DATA_ANCHOR_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}/gi;
     const MEMORY_PROMPT_VARIABLE_PATTERN = /\{\{\s*MEMORY_PROMPT\s*\}\}/i;
     const VECTOR_VARIABLE_PATTERN = /\{\{\s*VECTOR_MEMORY\s*\}\}/i;
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
@@ -308,7 +308,7 @@
     function buildTableText(state, table) {
         if (!table || table.hidden || table.id === FIXED_SUMMARY_TABLE_ID) return '';
         const rows = tableRecords(state, table.id).map((record) => recordToText(table, record)).filter(Boolean);
-        if (!rows.length) return '';
+        if (!rows.length) return `【${table.name}】\n(历史存档，当前暂无数据)`;
         return compactLines([`【${table.name}】`, ...rows]);
     }
 
@@ -428,7 +428,8 @@
     }
 
     function buildSummaryText(state = getCurrentState()) {
-        return getSummaryEntries(state).map((entry) => entry.text).join('\n\n');
+        const text = getSummaryEntries(state).map((entry) => entry.text).join('\n\n');
+        return text || '(历史存档，当前暂无总结)';
     }
 
     function buildSpecificSummaryText(state, summaryKey) {
@@ -452,7 +453,21 @@
     }
 
     function buildSummaryMessageEntries(state = getCurrentState()) {
-        return getSummaryEntries(state).map((entry) => ({
+        const entries = getSummaryEntries(state);
+        if (!entries.length) {
+            return [{
+                entry: null,
+                message: {
+                    role: 'system',
+                    content: '【前情提要 - 暂无总结】\n(历史存档，当前暂无总结)',
+                    name: 'SYSTEM(总结)',
+                    isGaigaiData: true,
+                    yzmMemoryInjectionType: 'summary',
+                    yzmMemorySummaryId: '',
+                },
+            }];
+        }
+        return entries.map((entry) => ({
             entry,
             message: {
             role: 'system',
@@ -527,12 +542,24 @@
     }
 
     function getRequestArray(body) {
-        if (!body || typeof body !== 'object') return null;
-        if (Array.isArray(body.messages)) return { key: 'messages', items: body.messages };
-        if (Array.isArray(body.chat)) return { key: 'chat', items: body.chat };
-        if (Array.isArray(body.prompt)) return { key: 'prompt', items: body.prompt };
-        if (Array.isArray(body.contents)) return { key: 'contents', items: body.contents };
-        return null;
+        return getRequestArrays(body)[0] || null;
+    }
+
+    function getRequestArrays(body) {
+        if (!body || typeof body !== 'object') return [];
+        const targets = [];
+        const seen = new Set();
+        [
+            ['messages', body.messages],
+            ['chat', body.chat],
+            ['prompt', body.prompt],
+            ['contents', body.contents],
+        ].forEach(([key, items]) => {
+            if (!Array.isArray(items) || seen.has(items)) return;
+            seen.add(items);
+            targets.push({ key, items });
+        });
+        return targets;
     }
 
     function getMessageText(message) {
@@ -554,29 +581,35 @@
     }
 
     function requestBodyContainsInjection(body, flagName, marker = '') {
-        const target = getRequestArray(body);
-        if (!target) return false;
-        return target.items.some((item) => item?.[flagName] || (marker && getMessageText(item).includes(marker)));
+        return getRequestArrays(body).some((target) => (
+            target.items.some((item) => item?.[flagName] || (marker && getMessageText(item).includes(marker)))
+        ));
     }
 
     function requestBodyContainsMemoryData(body) {
-        const target = getRequestArray(body);
-        if (!target) return false;
-        return target.items.some((item) => {
+        return getRequestArrays(body).some((target) => target.items.some((item) => {
             if (item?.isGaigaiData === true || item?.yzmMemoryInjectionType === 'table' || item?.yzmMemoryInjectionType === 'summary') return true;
             const text = getMessageText(item);
             return MEMORY_DATA_MARKERS.some((marker) => text.includes(marker));
-        });
+        }));
+    }
+
+    function requestBodyContainsMemoryInjectionFlags(body) {
+        return getRequestArrays(body).some((target) => target.items.some((item) => (
+            item?.isGaigaiData === true
+            || item?.isGaigaiPrompt === true
+            || item?.isGaigaiVector === true
+            || item?.isYuzukiVector === true
+            || !!item?.yzmMemoryInjectionType
+        )));
     }
 
     function requestBodyContainsMemoryPrompt(body) {
-        const target = getRequestArray(body);
-        if (!target) return false;
-        return target.items.some((item) => {
+        return getRequestArrays(body).some((target) => target.items.some((item) => {
             if (item?.isGaigaiPrompt === true || item?.yzmMemoryInjectionType === 'prompt') return true;
             const name = String(item?.name || item?.identifier || '');
             return name.includes('提示词');
-        });
+        }));
     }
 
     function createInjectedMessage(targetKey, content, flags = {}) {
@@ -740,8 +773,15 @@
         return message;
     }
 
+    function cleanAnchorFragmentText(text) {
+        return String(text || '')
+            .replace(/^\s*\[Example Chat\]\s*/i, '')
+            .replace(/\s*\[Example Chat\]\s*$/i, '')
+            .trim();
+    }
+
     function cloneMessageWithText(targetKey, sourceMessage, text) {
-        const content = String(text || '');
+        const content = cleanAnchorFragmentText(text);
         if (!content.trim()) return null;
         if (!sourceMessage || typeof sourceMessage !== 'object') return content;
 
@@ -866,76 +906,129 @@
         return message || null;
     }
 
-    function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState()) {
-        const target = getRequestArray(body);
-        if (!target) return false;
+    function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState(), vectorText = '', injectedVars = new Set()) {
+        const targets = getRequestArrays(body);
+        if (!targets.length) return false;
 
         const tableEntries = buildTableMessageEntries(state);
         const summaryEntries = buildSummaryMessageEntries(state);
-        const { reservedTables, reservedSummaries } = reserveSpecificAnchorMessages(target.items, tableEntries, summaryEntries);
+        const allItems = targets.flatMap((target) => target.items);
+        const { reservedTables, reservedSummaries } = reserveSpecificAnchorMessages(allItems, tableEntries, summaryEntries);
         let changed = false;
 
         function consumeAnchor(match) {
             const summaryName = getSpecificAnchorName(match, 'MEMORY_SUMMARY');
             if (summaryName) {
                 const message = takeReservedAnchorMessage(reservedSummaries, summaryName);
+                if (message) injectedVars.add(`MEMORY_SUMMARY_${normalizeAnchorName(summaryName)}`);
                 return message ? [message] : [];
             }
 
             const tableName = getSpecificAnchorName(match, 'MEMORY_TABLE');
             if (tableName) {
                 const message = takeReservedAnchorMessage(reservedTables, tableName);
+                if (message) injectedVars.add(`MEMORY_TABLE_${normalizeAnchorName(tableName)}`);
                 return message ? [message] : [];
             }
 
             const key = canonicalizeVariable(match);
-            if (key === '{{MEMORY_SUMMARY}}') return takeAllSummaryMessages(summaryEntries);
-            if (key === '{{MEMORY_TABLE}}') return takeAllTableMessages(tableEntries);
+            if (key === '{{MEMORY_SUMMARY}}') {
+                const messages = takeAllSummaryMessages(summaryEntries);
+                if (messages.length) injectedVars.add('MEMORY_SUMMARY');
+                return messages;
+            }
+            if (key === '{{MEMORY_TABLE}}') {
+                const messages = takeAllTableMessages(tableEntries);
+                if (messages.length) injectedVars.add('MEMORY_TABLE');
+                return messages;
+            }
             if (key === '{{MEMORY}}') {
-                return [
+                const messages = [
                     createPromptMemoryMessage(state),
                     ...takeAllSummaryMessages(summaryEntries),
                     ...takeAllTableMessages(tableEntries),
                 ].filter(Boolean);
+                if (messages.length) {
+                    injectedVars.add('MEMORY');
+                    injectedVars.add('MEMORY_PROMPT');
+                    injectedVars.add('MEMORY_SUMMARY');
+                    injectedVars.add('MEMORY_TABLE');
+                }
+                return messages;
+            }
+            if (key === '{{MEMORY_PROMPT}}') {
+                const message = createPromptMemoryMessage(state);
+                if (message) injectedVars.add('MEMORY_PROMPT');
+                return message ? [message] : [];
+            }
+            if (key === '{{VECTOR_MEMORY}}') {
+                if (!vectorText) return [];
+                injectedVars.add('VECTOR_MEMORY');
+                return [{
+                    role: 'system',
+                    content: `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(vectorText)}`,
+                    name: 'SYSTEM (向量化)',
+                    isGaigaiVector: true,
+                    isYuzukiVector: true,
+                }];
             }
 
             return [];
         }
 
-        const nextItems = [];
-        target.items.forEach((item) => {
-            const text = getMessageText(item);
-            const anchorPattern = new RegExp(MEMORY_DATA_ANCHOR_PATTERN.source, 'gi');
-            if (!anchorPattern.test(text)) {
-                nextItems.push(item);
-                return;
+        targets.forEach((target) => {
+            const nextItems = [];
+            let targetChanged = false;
+            target.items.forEach((item) => {
+                const text = getMessageText(item);
+                const anchorPattern = new RegExp(MEMORY_DATA_ANCHOR_PATTERN.source, 'gi');
+                if (!anchorPattern.test(text)) {
+                    nextItems.push(item);
+                    return;
+                }
+
+                changed = true;
+                targetChanged = true;
+                anchorPattern.lastIndex = 0;
+                let cursor = 0;
+                let match = anchorPattern.exec(text);
+                while (match) {
+                    const before = text.slice(cursor, match.index);
+                    const beforeMessage = createFragmentForAnchor(target.key, item, before);
+                    if (beforeMessage) nextItems.push(beforeMessage);
+
+                    consumeAnchor(match[0])
+                        .map((message) => createMessageForAnchor(target.key, item, message))
+                        .filter(Boolean)
+                        .forEach((message) => nextItems.push(message));
+
+                    cursor = match.index + match[0].length;
+                    match = anchorPattern.exec(text);
+                }
+
+                const afterMessage = createFragmentForAnchor(target.key, item, text.slice(cursor));
+                if (afterMessage) nextItems.push(afterMessage);
+            });
+
+            if (targetChanged) {
+                target.items.splice(0, target.items.length, ...nextItems);
             }
-
-            changed = true;
-            anchorPattern.lastIndex = 0;
-            let cursor = 0;
-            let match = anchorPattern.exec(text);
-            while (match) {
-                const before = text.slice(cursor, match.index);
-                const beforeMessage = createFragmentForAnchor(target.key, item, before);
-                if (beforeMessage) nextItems.push(beforeMessage);
-
-                consumeAnchor(match[0])
-                    .map((message) => createMessageForAnchor(target.key, item, message))
-                    .filter(Boolean)
-                    .forEach((message) => nextItems.push(message));
-
-                cursor = match.index + match[0].length;
-                match = anchorPattern.exec(text);
-            }
-
-            const afterMessage = createFragmentForAnchor(target.key, item, text.slice(cursor));
-            if (afterMessage) nextItems.push(afterMessage);
         });
+        return changed;
+    }
 
-        if (changed) {
+    function removeEmptyAnchorShellMessages(body) {
+        const targets = getRequestArrays(body);
+        let changed = false;
+        targets.forEach((target) => {
+            const nextItems = target.items.filter((item) => {
+                const text = cleanAnchorFragmentText(getMessageText(item));
+                return text.trim() !== '';
+            });
+            if (nextItems.length === target.items.length) return;
             target.items.splice(0, target.items.length, ...nextItems);
-        }
+            changed = true;
+        });
         return changed;
     }
 
@@ -1102,12 +1195,11 @@
         }
         if (window.isSummarizing || isMemoryTaskRequest(body, options)) {
             cleanupVariablesInNode(body, settings);
+            removeEmptyAnchorShellMessages(body);
             return body;
         }
 
         const state = getCurrentState();
-        const hadMemoryDataVariable = settings.injectMemoryTable && nodeContainsPattern(body, MEMORY_DATA_VARIABLE_PATTERN);
-        const hadMemoryPromptVariable = settings.injectMemoryTable && nodeContainsPattern(body, MEMORY_PROMPT_VARIABLE_PATTERN);
         const hadVectorVariable = settings.injectVectorMemory && nodeContainsPattern(body, VECTOR_VARIABLE_PATTERN);
         const hasOwnVectorMarker = hasYuzukiVectorMarker(body);
         if (settings.injectVectorMemory && hasOwnVectorMarker) {
@@ -1118,34 +1210,46 @@
             : '';
         const replacements = buildVariableReplacements(state, vectorText, settings);
         const anchorState = { seen: new Set(), injected: new Set() };
-        if (settings.injectMemoryTable) replaceMemoryDataAnchorsInRequest(body, state);
+        const injectedVars = new Set();
+        if (settings.injectMemoryTable || settings.injectVectorMemory) {
+            replaceMemoryDataAnchorsInRequest(body, state, vectorText, injectedVars);
+        }
         replaceVariablesInNode(body, replacements, anchorState);
 
-        if (settings.injectVectorMemory && vectorText && !hasYuzukiVectorMarker(body) && !hadVectorVariable) {
+        if (settings.injectVectorMemory && vectorText && hadVectorVariable) {
+            logVectorInfo('已替换 {{VECTOR_MEMORY}} 变量', {
+                contentLength: vectorText.length,
+                replaced: injectedVars.has('VECTOR_MEMORY') || anchorState.injected.has('{{VECTOR_MEMORY}}'),
+            });
+        }
+
+        if (settings.injectMemoryTable && !injectedVars.has('MEMORY_PROMPT') && !requestBodyContainsMemoryPrompt(body)) {
+            const promptMessage = createPromptMemoryMessage(state);
+            if (promptMessage) insertInjectedMessages(body, [promptMessage]);
+        }
+
+        if (settings.injectMemoryTable && options.disableDefaultMemoryInjection !== true && !requestBodyContainsMemoryData(body)) {
+            const messages = [];
+            if (!injectedVars.has('MEMORY_SUMMARY') && !injectedVars.has('MEMORY')) {
+                messages.push(...buildSummaryMessages(state));
+            }
+            if (!injectedVars.has('MEMORY_TABLE') && !injectedVars.has('MEMORY')) {
+                messages.push(...buildTableMessages(state));
+            }
+            if (messages.length > 0) insertInjectedMessages(body, messages);
+        }
+
+        if (settings.injectVectorMemory && vectorText && !hasYuzukiVectorMarker(body) && !injectedVars.has('VECTOR_MEMORY')) {
             insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(vectorText)}`, {
                 isYuzukiVector: true,
                 isGaigaiVector: true,
                 name: 'SYSTEM (向量化)',
             });
             logVectorInfo('已自动插入向量记忆消息', { contentLength: vectorText.length });
-        } else if (settings.injectVectorMemory && vectorText && hadVectorVariable) {
-            logVectorInfo('已替换 {{VECTOR_MEMORY}} 变量', {
-                contentLength: vectorText.length,
-                replaced: anchorState.injected.has('{{VECTOR_MEMORY}}'),
-            });
-        }
-
-        const alreadyHasMemoryData = requestBodyContainsMemoryData(body);
-        const alreadyHasMemoryPrompt = requestBodyContainsMemoryPrompt(body);
-
-        if (settings.injectMemoryTable && options.disableDefaultMemoryInjection !== true && !hadMemoryDataVariable && !alreadyHasMemoryData) {
-            const messages = hadMemoryPromptVariable || alreadyHasMemoryPrompt
-                ? buildMemoryDataMessages(state)
-                : buildMemoryMessages(state);
-            insertInjectedMessages(body, messages);
         }
 
         cleanupVariablesInNode(body, settings);
+        removeEmptyAnchorShellMessages(body);
         return body;
     }
 
@@ -1165,6 +1269,7 @@
         buildMemoryText,
         buildMemoryMessages,
         buildMemoryDataMessages,
+        getRequestArrays,
         processBody,
     });
 })();

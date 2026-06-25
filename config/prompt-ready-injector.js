@@ -24,23 +24,7 @@
 
     function processPromptReadyChat(chat) {
         if (!Array.isArray(chat)) return chat;
-        if (!YuzukiMemory.VariableInjector?.processBody) return chat;
-
-        try {
-            const safeChat = safeDeepClone(chat);
-            const wrapper = { chat: safeChat };
-            const result = YuzukiMemory.VariableInjector.processBody(wrapper, {
-                disableVectorInjection: true,
-                yzmPromptReadyHook: true,
-            });
-            if (result && typeof result.catch === 'function') {
-                result.catch((error) => console.warn('[yuzuki-Memory] prompt-ready memory injection failed.', error));
-            }
-            return wrapper.chat;
-        } catch (error) {
-            console.warn('[yuzuki-Memory] prompt-ready memory injection failed.', error);
-            return chat;
-        }
+        return safeDeepClone(chat);
     }
 
     async function injectPromptReadyChat(chat) {
@@ -99,9 +83,7 @@
     }
 
     function installPromptReadyInjectors() {
-        const hookInstalled = installPromptReadyHook();
-        if (hookInstalled) return true;
-        return installPromptReadyEvent();
+        return false;
     }
 
     YuzukiMemory.PromptReadyInjector = Object.assign(YuzukiMemory.PromptReadyInjector || {}, {
@@ -114,17 +96,5 @@
         installPromptReadyInjectors,
     });
 
-    installPromptReadyInjectors();
-    let attempts = 0;
-    const retryTimer = window.setInterval(() => {
-        attempts += 1;
-        installPromptReadyInjectors();
-        if (
-            YuzukiMemory.PromptReadyInjector?.installedHook
-            || YuzukiMemory.PromptReadyInjector?.installedEvent
-            || attempts >= 10
-        ) {
-            window.clearInterval(retryTimer);
-        }
-    }, 1000);
+    console.info('[yuzuki-Memory] prompt-ready memory injector disabled; final request injection is used.');
 })();

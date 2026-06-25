@@ -187,7 +187,19 @@
         const chat = context?.chat;
         if (!Array.isArray(chat)) return [];
         return chat
-            .filter((message) => message?.is_system === true)
+            .filter((message) => (
+                message?.is_yzm_hidden_floor === true
+                || (
+                    message?.is_system === true
+                    && (
+                        String(message?.role || '').toLowerCase() !== 'system'
+                        || message?.isGaigaiData === true
+                        || message?.isGaigaiPrompt === true
+                        || message?.isGaigaiVector === true
+                        || message?.isYuzukiVector === true
+                    )
+                )
+            ))
             .map((message) => String(message?.mes || message?.content || message?.text || '').trim())
             .filter(Boolean);
     }
@@ -240,6 +252,7 @@
         indices.forEach((index) => {
             if (!chat[index]) return;
             chat[index].is_system = true;
+            chat[index].is_yzm_hidden_floor = true;
             updateMessageDom(index);
             count += 1;
         });

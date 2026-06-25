@@ -67,12 +67,24 @@
     }
 
     function getRequestArray(body) {
-        if (!body || typeof body !== 'object') return null;
-        if (Array.isArray(body.messages)) return { key: 'messages', items: body.messages };
-        if (Array.isArray(body.chat)) return { key: 'chat', items: body.chat };
-        if (Array.isArray(body.prompt)) return { key: 'prompt', items: body.prompt };
-        if (Array.isArray(body.contents)) return { key: 'contents', items: body.contents };
-        return null;
+        return getRequestArrays(body)[0] || null;
+    }
+
+    function getRequestArrays(body) {
+        if (!body || typeof body !== 'object') return [];
+        const targets = [];
+        const seen = new Set();
+        [
+            ['messages', body.messages],
+            ['chat', body.chat],
+            ['prompt', body.prompt],
+            ['contents', body.contents],
+        ].forEach(([key, items]) => {
+            if (!Array.isArray(items) || seen.has(items)) return;
+            seen.add(items);
+            targets.push({ key, items });
+        });
+        return targets;
     }
 
     function getMessageText(message) {
@@ -94,16 +106,18 @@
     }
 
     function removeHiddenMessagesFromBody(body, hiddenTexts = []) {
-        const target = getRequestArray(body);
-        if (!target || !hiddenTexts.length) return body;
+        const targets = getRequestArrays(body);
+        if (!targets.length || !hiddenTexts.length) return body;
         const hiddenSet = new Set(hiddenTexts.map((text) => String(text || '').trim()).filter(Boolean));
         if (!hiddenSet.size) return body;
-        const kept = target.items.filter((item) => {
-            if (item?.is_system === true && !item?.isGaigaiData && !item?.isGaigaiPrompt && !item?.isGaigaiVector && !item?.isYuzukiVector) return false;
-            const text = getMessageText(item).trim();
-            return !hiddenSet.has(text);
+        targets.forEach((target) => {
+            const kept = target.items.filter((item) => {
+                if (item?.is_yzm_hidden_floor === true) return false;
+                const text = getMessageText(item).trim();
+                return !hiddenSet.has(text);
+            });
+            target.items.splice(0, target.items.length, ...kept);
         });
-        target.items.splice(0, target.items.length, ...kept);
         return body;
     }
 
@@ -245,13 +259,16 @@
     }
 
     function captureFromBody(body, url = '') {
-        const target = getRequestArray(body);
-        if (!target) return null;
-        const messages = clone(target.items).map(normalizeMessage);
+        const targets = getRequestArrays(body);
+        if (!targets.length) return null;
+        const messages = targets.flatMap((target) => clone(target.items).map((item, index) => ({
+            ...normalizeMessage(item, index),
+            sourceKey: target.key,
+        })));
         const totalTokens = messages.reduce((sum, message) => sum + message.tokens, 0);
         lastRequestData = {
             url,
-            key: target.key,
+            key: targets.map((target) => target.key).join(','),
             model: String(body.model || ''),
             timestamp: Date.now(),
             messages,
@@ -263,19 +280,22 @@
     }
 
     function bodyContainsYuzukiVector(body) {
-        const target = getRequestArray(body);
-        if (!target) return false;
-        return target.items.some((item) => {
+        return getRequestArrays(body).some((target) => target.items.some((item) => {
             if (item?.isYuzukiVector === true) return true;
             return getMessageText(item).includes('【系统检索到的历史记忆片段】');
-        });
+        }));
     }
 
-    function bodyContainsMemoryVariable(body) {
-        const target = getRequestArray(body);
-        if (!target) return false;
-        const pattern = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/i;
-        return target.items.some((item) => pattern.test(getMessageText(item)));
+    function bodyContainsMemoryDataVariable(body) {
+        const pattern = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY)\s*\}\}/i;
+        const scan = (node) => {
+            if (!node) return false;
+            if (typeof node === 'string') return pattern.test(node);
+            if (Array.isArray(node)) return node.some((item) => scan(item));
+            if (typeof node !== 'object') return false;
+            return Object.values(node).some((value) => scan(value));
+        };
+        return scan(body);
     }
 
     function isRequestLike(value) {
@@ -292,15 +312,15 @@
 
     async function processJsonBody(url, options, bodyText, requestSource = null) {
         if (!isTextGenerationRequest(url, options) || typeof bodyText !== 'string' || !bodyText.trim()) return null;
-        const hideResult = await YuzukiMemory.FloorHider?.applyConfiguredHiding?.();
         const rawBody = JSON.parse(bodyText);
-        removeHiddenMessagesFromBody(rawBody, hideResult?.hiddenTexts || YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || []);
+        const hiddenTexts = YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || [];
+        removeHiddenMessagesFromBody(rawBody, hiddenTexts);
         YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
-        const hasMemoryVariable = bodyContainsMemoryVariable(rawBody);
+        const hasMemoryDataVariable = bodyContainsMemoryDataVariable(rawBody);
         const body = YuzukiMemory.VariableInjector?.processBody
             ? await YuzukiMemory.VariableInjector.processBody(rawBody, {
                 getVectorText: getVectorInjectionText,
-                disableDefaultMemoryInjection: !hasMemoryVariable,
+                disableDefaultMemoryInjection: hasMemoryDataVariable,
             })
             : rawBody;
         const nextBody = JSON.stringify(body);
