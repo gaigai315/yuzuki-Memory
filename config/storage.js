@@ -268,6 +268,26 @@
         return value.startsWith('#') ? `#${value.slice(1).trim()}` : value;
     }
 
+    function getSummaryFieldAliases(field) {
+        const aliases = {
+            总结标题: ['总结标题', '标题', 'title', 'name'],
+            核心角色: ['核心角色', '角色名', '主视角', 'character'],
+            楼层数: ['楼层数', '楼层范围', '楼层', 'range', 'floors'],
+            总结内容: ['总结内容', 'summary', 'content', '内容', '正文', '时间线'],
+            未解决问题: ['未解决问题', 'unresolved', '问题'],
+            备注: ['备注', 'remark', 'note', 'notes'],
+        };
+        return aliases[field] || [field];
+    }
+
+    function getFirstDefinedValue(source, field) {
+        for (const name of getSummaryFieldAliases(field)) {
+            const value = String(source?.[name] ?? '').trim();
+            if (value) return value;
+        }
+        return '';
+    }
+
     function normalizeTableColumns(table, fallback) {
         const rawColumns = Array.isArray(table?.columns)
             ? table.columns.map(normalizeColumnDefinition).filter(Boolean)
@@ -326,8 +346,8 @@
                     ...record,
                     values: Object.fromEntries((table.columns || []).map((column) => {
                         const name = cleanColumnName(column);
-                        if (table.id === 'memory_summary' && name === '总结内容') {
-                            return [name, String(record?.values?.总结内容 || record?.values?.时间线 || record?.values?.[column] || '')];
+                        if (table.id === 'memory_summary') {
+                            return [name, getFirstDefinedValue(record?.values, name) || String(record?.values?.[name] ?? record?.values?.[column] ?? '')];
                         }
                         return [name, String(record?.values?.[name] ?? record?.values?.[column] ?? '')];
                     })),

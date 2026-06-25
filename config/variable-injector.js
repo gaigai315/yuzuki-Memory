@@ -13,11 +13,19 @@
     const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/g;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/g;
     const MEMORY_DATA_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/;
-    const MEMORY_DATA_ANCHOR_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/gi;
+    const MEMORY_DATA_ANCHOR_PATTERN = /\{\{(?:MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/gi;
     const MEMORY_PROMPT_VARIABLE_PATTERN = /\{\{MEMORY_PROMPT\}\}/;
     const VECTOR_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/;
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
     const SUMMARY_INJECTION_EXCLUDED_COLUMNS = new Set(['未解决问题']);
+    const SUMMARY_FIELD_ALIASES = {
+        总结标题: ['总结标题', '标题', 'title', 'name'],
+        核心角色: ['核心角色', '角色名', '主视角', 'character'],
+        楼层数: ['楼层数', '楼层范围', '楼层', 'range', 'floors'],
+        总结内容: ['总结内容', 'summary', 'content', '内容', '正文', '时间线'],
+        未解决问题: ['未解决问题', 'unresolved', '问题'],
+        备注: ['备注', 'remark', 'note', 'notes'],
+    };
 
     const DEFAULT_TABLES = [
         {
@@ -337,19 +345,28 @@
         if (!table || !record || !isRecordVisible(record)) return '';
         const primary = getPrimaryColumn(table);
         const values = record.values && typeof record.values === 'object' ? record.values : {};
-        const title = String(values[primary] || '').trim();
+        const title = getSummaryFieldValue(values, primary);
         const body = (Array.isArray(table.columns) ? table.columns : [])
             .map(cleanColumnName)
             .filter((column) => column !== primary && !['核心角色', '楼层数'].includes(column))
             .filter((column) => !SUMMARY_INJECTION_EXCLUDED_COLUMNS.has(column))
             .map((column) => {
-                const value = String(values[column] || '').trim();
+                const value = getSummaryFieldValue(values, column);
                 return value ? `${column}: ${value}` : '';
             })
             .filter(Boolean)
             .join('\n');
         if (!title && !body) return '';
         return compactLines([title ? `【${title}】` : '', body]);
+    }
+
+    function getSummaryFieldValue(values, field) {
+        const names = SUMMARY_FIELD_ALIASES[field] || [field];
+        for (const name of names) {
+            const value = String(values?.[name] ?? '').trim();
+            if (value) return value;
+        }
+        return '';
     }
 
     function getSummaryEntries(state = getCurrentState()) {
@@ -360,7 +377,7 @@
                 const text = summaryRecordToText(table, record);
                 if (!text) return null;
                 const values = record.values && typeof record.values === 'object' ? record.values : {};
-                const title = String(values[getPrimaryColumn(table)] || '').trim();
+                const title = getSummaryFieldValue(values, getPrimaryColumn(table));
                 return {
                     table,
                     record,
@@ -615,8 +632,6 @@
     function getAnchorVariableKey(match) {
         const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/i);
         if (tableMatch) return `{{MEMORY_TABLE_${tableMatch[1]}}}`;
-        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/i);
-        if (summaryMatch) return `{{MEMORY_SUMMARY_${summaryMatch[1]}}}`;
         return match;
     }
 
@@ -624,8 +639,6 @@
         if (Object.prototype.hasOwnProperty.call(replacements, match)) return replacements[match];
         const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/i);
         if (tableMatch) return replacements.__table(tableMatch[1]);
-        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/i);
-        if (summaryMatch) return replacements.__summary(summaryMatch[1]);
         return '';
     }
 
@@ -688,28 +701,6 @@
         return tableEntries.splice(index, 1)[0]?.message || null;
     }
 
-    function summaryMessageMatches(message, summaryKey) {
-        const requested = String(summaryKey || '').trim();
-        if (!requested) return false;
-        const requestedKey = normalizeAnchorName(requested);
-        const title = String(message?.content || '').match(/^【前情提要 - (.+?)】/)?.[1] || '';
-        const number = String(message?.name || '').match(/总结(\d+)/)?.[1] || '';
-        return message?.yzmMemorySummaryId === requested
-            || title === requested
-            || number === requested
-            || normalizeAnchorName(message?.yzmMemorySummaryId) === requestedKey
-            || normalizeAnchorName(title) === requestedKey
-            || normalizeAnchorName(`总结${number}`) === requestedKey
-            || normalizeAnchorName(`剧情总结${number}`) === requestedKey
-            || (title && title.includes(requested));
-    }
-
-    function takeSpecificSummaryMessage(summaryMessages, summaryKey) {
-        const index = summaryMessages.findIndex((message) => summaryMessageMatches(message, summaryKey));
-        if (index < 0) return null;
-        return summaryMessages.splice(index, 1)[0] || null;
-    }
-
     function createPromptMemoryMessage(state) {
         const promptText = buildMemoryPromptText(state);
         if (!promptText) return null;
@@ -726,13 +717,8 @@
         return tableEntries.splice(0).map((entry) => entry.message).filter(Boolean);
     }
 
-    function takeAllSummaryMessages(summaryMessages) {
-        return summaryMessages.splice(0).filter(Boolean);
-    }
-
-    function reserveSpecificAnchorMessages(items, tableEntries, summaryMessages) {
+    function reserveSpecificAnchorMessages(items, tableEntries) {
         const reservedTables = new Map();
-        const reservedSummaries = new Map();
         items.forEach((item) => {
             const text = getMessageText(item);
             String(text || '').replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => {
@@ -742,15 +728,8 @@
                 }
                 return '';
             });
-            String(text || '').replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => {
-                const key = normalizeAnchorName(summaryKey);
-                if (key && !reservedSummaries.has(key)) {
-                    reservedSummaries.set(key, takeSpecificSummaryMessage(summaryMessages, summaryKey));
-                }
-                return '';
-            });
         });
-        return { reservedTables, reservedSummaries };
+        return { reservedTables };
     }
 
     function takeReservedAnchorMessage(reservedMessages, anchorName) {
@@ -766,8 +745,7 @@
         if (!target) return false;
 
         const tableEntries = buildTableMessageEntries(state);
-        const summaryMessages = buildSummaryMessages(state);
-        const { reservedTables, reservedSummaries } = reserveSpecificAnchorMessages(target.items, tableEntries, summaryMessages);
+        const { reservedTables } = reserveSpecificAnchorMessages(target.items, tableEntries);
         let changed = false;
 
         function consumeAnchor(match) {
@@ -777,18 +755,11 @@
                 return message ? [message] : [];
             }
 
-            const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/i);
-            if (summaryMatch) {
-                const message = takeReservedAnchorMessage(reservedSummaries, summaryMatch[1]);
-                return message ? [message] : [];
-            }
-
-            if (/^\{\{MEMORY_SUMMARY\}\}$/i.test(match)) return takeAllSummaryMessages(summaryMessages);
             if (/^\{\{MEMORY_TABLE\}\}$/i.test(match)) return takeAllTableMessages(tableEntries);
             if (/^\{\{MEMORY\}\}$/i.test(match)) {
                 return [
                     createPromptMemoryMessage(state),
-                    ...takeAllSummaryMessages(summaryMessages),
+                    ...buildSummaryMessages(state),
                     ...takeAllTableMessages(tableEntries),
                 ].filter(Boolean);
             }

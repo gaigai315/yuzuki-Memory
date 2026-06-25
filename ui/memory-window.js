@@ -556,6 +556,18 @@
         return '';
     }
 
+    function getSummaryFieldAliases(field) {
+        const aliases = {
+            总结标题: ['总结标题', '标题', 'title', 'name'],
+            核心角色: ['核心角色', '角色名', '主视角', 'character'],
+            楼层数: ['楼层数', '楼层范围', '楼层', 'range', 'floors'],
+            总结内容: ['总结内容', 'summary', 'content', '内容', '正文', '时间线'],
+            未解决问题: ['未解决问题', 'unresolved', '问题'],
+            备注: ['备注', 'remark', 'note', 'notes'],
+        };
+        return aliases[field] || [field];
+    }
+
     function getItemStatusClass(status) {
         if (/未|无|丢失|损坏|失效/.test(status)) return 'yzm-item-status-muted';
         if (/待|需|确认|检查|处理中/.test(status)) return 'yzm-item-status-warn';
@@ -571,7 +583,13 @@
     }
 
     function getSummaryValue(record, fields) {
-        return getRecordValueByCandidates(record, fields);
+        const candidates = [];
+        (Array.isArray(fields) ? fields : [fields]).forEach((field) => {
+            getSummaryFieldAliases(field).forEach((alias) => {
+                if (!candidates.includes(alias)) candidates.push(alias);
+            });
+        });
+        return getRecordValueByCandidates(record, candidates);
     }
 
     function formatVectorDate(timestamp) {
@@ -1795,7 +1813,10 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => {
+            if (overlay.contains(document.activeElement)) document.activeElement.blur?.();
+            overlay.remove();
+        };
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -3269,7 +3290,10 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => {
+            if (document.activeElement === textarea) textarea.blur();
+            overlay.remove();
+        };
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -4810,7 +4834,10 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => {
+            if (overlay.contains(document.activeElement)) document.activeElement.blur?.();
+            overlay.remove();
+        };
         const applyValue = () => {
             const max = Number.isFinite(Number(options.max)) ? Math.max(0, Math.round(Number(options.max) || 0)) : Infinity;
             const value = Math.round(Number(input.value));
@@ -6851,6 +6878,7 @@
         } catch (error) {
             return false;
         } finally {
+            textarea.blur();
             textarea.remove();
         }
     }
@@ -8792,7 +8820,10 @@
         modalHost.appendChild(overlay);
         updateRecordOrganizerSelection(dialog);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => {
+            if (document.activeElement === textarea) textarea.blur();
+            overlay.remove();
+        };
         const rerenderOrganizer = () => {
             renderRecordOrganizerList(list, table);
             updateRecordOrganizerSelection(dialog);
