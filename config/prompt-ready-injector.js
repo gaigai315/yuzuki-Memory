@@ -100,8 +100,8 @@
 
     function installPromptReadyInjectors() {
         const hookInstalled = installPromptReadyHook();
-        const eventInstalled = installPromptReadyEvent();
-        return hookInstalled || eventInstalled;
+        if (hookInstalled) return true;
+        return installPromptReadyEvent();
     }
 
     YuzukiMemory.PromptReadyInjector = Object.assign(YuzukiMemory.PromptReadyInjector || {}, {
@@ -120,7 +120,8 @@
         attempts += 1;
         installPromptReadyInjectors();
         if (
-            (YuzukiMemory.PromptReadyInjector?.installedHook && YuzukiMemory.PromptReadyInjector?.installedEvent)
+            YuzukiMemory.PromptReadyInjector?.installedHook
+            || YuzukiMemory.PromptReadyInjector?.installedEvent
             || attempts >= 10
         ) {
             window.clearInterval(retryTimer);

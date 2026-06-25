@@ -546,6 +546,15 @@
         return index;
     }
 
+    function findMemoryInsertionIndex(items) {
+        if (!Array.isArray(items) || !items.length) return 0;
+        const startIndex = items.findIndex((item) => {
+            const role = String(item?.role || '').toLowerCase();
+            return role === 'system' && getMessageText(item).includes('[Start a new Chat]');
+        });
+        return startIndex >= 0 ? startIndex : 0;
+    }
+
     function insertInjectedMessage(body, content, flags = {}) {
         const target = getRequestArray(body);
         if (!target || !content) return false;
@@ -643,7 +652,7 @@
         const target = getRequestArray(body);
         const normalized = messages.map((message) => createMessageForTarget(target?.key, message)).filter(Boolean);
         if (!target || !normalized.length) return false;
-        target.items.splice(findInsertionIndex(target.items), 0, ...normalized);
+        target.items.splice(findMemoryInsertionIndex(target.items), 0, ...normalized);
         return true;
     }
 
