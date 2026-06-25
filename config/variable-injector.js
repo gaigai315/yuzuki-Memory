@@ -13,7 +13,7 @@
     const STRUCTURED_VARIABLE_PATTERN = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/g;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/g;
     const MEMORY_DATA_VARIABLE_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/;
-    const MEMORY_DATA_ANCHOR_PATTERN = /\{\{(?:MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/gi;
+    const MEMORY_DATA_ANCHOR_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/gi;
     const MEMORY_PROMPT_VARIABLE_PATTERN = /\{\{MEMORY_PROMPT\}\}/;
     const VECTOR_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/;
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
@@ -411,13 +411,20 @@
     }
 
     function buildSummaryMessages(state = getCurrentState()) {
+        return buildSummaryMessageEntries(state).map((entry) => entry.message);
+    }
+
+    function buildSummaryMessageEntries(state = getCurrentState()) {
         return getSummaryEntries(state).map((entry) => ({
+            entry,
+            message: {
             role: 'system',
             content: `【前情提要 - ${entry.title || `总结 ${entry.number}`}】\n${entry.text}`,
             name: `SYSTEM(总结${entry.number})`,
             isGaigaiData: true,
             yzmMemoryInjectionType: 'summary',
             yzmMemorySummaryId: entry.record?.id || '',
+            },
         }));
     }
 
@@ -632,6 +639,8 @@
     function getAnchorVariableKey(match) {
         const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/i);
         if (tableMatch) return `{{MEMORY_TABLE_${tableMatch[1]}}}`;
+        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/i);
+        if (summaryMatch) return `{{MEMORY_SUMMARY_${summaryMatch[1]}}}`;
         return match;
     }
 
@@ -639,6 +648,8 @@
         if (Object.prototype.hasOwnProperty.call(replacements, match)) return replacements[match];
         const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/i);
         if (tableMatch) return replacements.__table(tableMatch[1]);
+        const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/i);
+        if (summaryMatch) return replacements.__summary(summaryMatch[1]);
         return '';
     }
 
@@ -701,6 +712,30 @@
         return tableEntries.splice(index, 1)[0]?.message || null;
     }
 
+    function matchesSummaryAnchor(summaryEntry, requestedName, requestedKey) {
+        if (!summaryEntry) return false;
+        const recordId = String(summaryEntry.record?.id || '');
+        const title = String(summaryEntry.title || '');
+        const number = String(summaryEntry.number || '');
+        return recordId === requestedName
+            || title === requestedName
+            || number === requestedName
+            || normalizeAnchorName(recordId) === requestedKey
+            || normalizeAnchorName(title) === requestedKey
+            || normalizeAnchorName(`总结${number}`) === requestedKey
+            || normalizeAnchorName(`剧情总结${number}`) === requestedKey
+            || (requestedName && title.includes(requestedName));
+    }
+
+    function takeSpecificSummaryMessage(summaryEntries, summaryName) {
+        const requestedName = String(summaryName || '').trim();
+        if (!requestedName) return null;
+        const requestedKey = normalizeAnchorName(requestedName);
+        const index = summaryEntries.findIndex((entry) => matchesSummaryAnchor(entry.entry, requestedName, requestedKey));
+        if (index < 0) return null;
+        return summaryEntries.splice(index, 1)[0]?.message || null;
+    }
+
     function createPromptMemoryMessage(state) {
         const promptText = buildMemoryPromptText(state);
         if (!promptText) return null;
@@ -717,8 +752,13 @@
         return tableEntries.splice(0).map((entry) => entry.message).filter(Boolean);
     }
 
-    function reserveSpecificAnchorMessages(items, tableEntries) {
+    function takeAllSummaryMessages(summaryEntries) {
+        return summaryEntries.splice(0).map((entry) => entry.message).filter(Boolean);
+    }
+
+    function reserveSpecificAnchorMessages(items, tableEntries, summaryEntries) {
         const reservedTables = new Map();
+        const reservedSummaries = new Map();
         items.forEach((item) => {
             const text = getMessageText(item);
             String(text || '').replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => {
@@ -728,8 +768,15 @@
                 }
                 return '';
             });
+            String(text || '').replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryName) => {
+                const key = normalizeAnchorName(summaryName);
+                if (key && !reservedSummaries.has(key)) {
+                    reservedSummaries.set(key, takeSpecificSummaryMessage(summaryEntries, summaryName));
+                }
+                return '';
+            });
         });
-        return { reservedTables };
+        return { reservedTables, reservedSummaries };
     }
 
     function takeReservedAnchorMessage(reservedMessages, anchorName) {
@@ -745,21 +792,29 @@
         if (!target) return false;
 
         const tableEntries = buildTableMessageEntries(state);
-        const { reservedTables } = reserveSpecificAnchorMessages(target.items, tableEntries);
+        const summaryEntries = buildSummaryMessageEntries(state);
+        const { reservedTables, reservedSummaries } = reserveSpecificAnchorMessages(target.items, tableEntries, summaryEntries);
         let changed = false;
 
         function consumeAnchor(match) {
+            const summaryMatch = match.match(/^\{\{MEMORY_SUMMARY_(.+)\}\}$/i);
+            if (summaryMatch) {
+                const message = takeReservedAnchorMessage(reservedSummaries, summaryMatch[1]);
+                return message ? [message] : [];
+            }
+
             const tableMatch = match.match(/^\{\{MEMORY_TABLE_(.+)\}\}$/i);
             if (tableMatch) {
                 const message = takeReservedAnchorMessage(reservedTables, tableMatch[1]);
                 return message ? [message] : [];
             }
 
+            if (/^\{\{MEMORY_SUMMARY\}\}$/i.test(match)) return takeAllSummaryMessages(summaryEntries);
             if (/^\{\{MEMORY_TABLE\}\}$/i.test(match)) return takeAllTableMessages(tableEntries);
             if (/^\{\{MEMORY\}\}$/i.test(match)) {
                 return [
                     createPromptMemoryMessage(state),
-                    ...buildSummaryMessages(state),
+                    ...takeAllSummaryMessages(summaryEntries),
                     ...takeAllTableMessages(tableEntries),
                 ].filter(Boolean);
             }
@@ -998,7 +1053,7 @@
             });
         }
 
-        if (settings.injectMemoryTable && !hadMemoryDataVariable && !requestBodyContainsInjection(body, 'isGaigaiData')) {
+        if (settings.injectMemoryTable && options.disableDefaultMemoryInjection !== true && !hadMemoryDataVariable && !requestBodyContainsInjection(body, 'isGaigaiData')) {
             const messages = hadMemoryPromptVariable || requestBodyContainsInjection(body, 'isGaigaiPrompt')
                 ? buildMemoryDataMessages(state)
                 : buildMemoryMessages(state);
