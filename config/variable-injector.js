@@ -604,6 +604,14 @@
         if (targetKey === 'contents') return createMessageForTarget(targetKey, sourceMessage);
         const content = resolveRuntimeVariables(sourceMessage?.content || '');
         if (!content) return null;
+        if (
+            sourceMessage?.isGaigaiData === true
+            || sourceMessage?.isGaigaiPrompt === true
+            || sourceMessage?.isYuzukiVector === true
+            || sourceMessage?.isGaigaiVector === true
+        ) {
+            return createMessageForTarget(targetKey, sourceMessage);
+        }
         const message = cloneMessageWithText(targetKey, anchorMessage, content);
         if (!message || typeof message !== 'object') return createMessageForTarget(targetKey, sourceMessage);
 
