@@ -88,6 +88,50 @@
         return aliases.map((id) => getStorageKey(id)).filter(Boolean);
     }
 
+    function getPrimaryStorageKey(sessionId = getCurrentSessionId()) {
+        return getStorageKey(sessionId) || getStorageKeys(sessionId)[0] || null;
+    }
+
+    function isQuotaExceeded(error) {
+        return error?.name === 'QuotaExceededError' || error?.code === 22;
+    }
+
+    function cleanupLocalStorageForQuota(sessionId = getCurrentSessionId()) {
+        let cleaned = 0;
+        const primaryKey = getPrimaryStorageKey(sessionId);
+        const keepKeys = new Set([primaryKey].filter(Boolean));
+        try {
+            Object.keys(localStorage).forEach((key) => {
+                const shouldRemove = key.startsWith('yzm_memory_branch_snapshots:')
+                    || (key.startsWith(STORAGE_PREFIX) && !keepKeys.has(key));
+                if (!shouldRemove) return;
+                localStorage.removeItem(key);
+                cleaned += 1;
+            });
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to cleanup localStorage quota pressure.', error);
+        }
+        return cleaned;
+    }
+
+    function writePayloadToLocalStorage(keys, payload, sessionId) {
+        const serialized = JSON.stringify(payload);
+        try {
+            keys.forEach((candidateKey) => {
+                localStorage.setItem(candidateKey, serialized);
+            });
+            return true;
+        } catch (error) {
+            if (!isQuotaExceeded(error)) throw error;
+            const cleaned = cleanupLocalStorageForQuota(sessionId);
+            console.warn('[yuzuki-Memory] localStorage quota exceeded; cleaned stale memory cache and retrying.', { cleaned });
+            keys.forEach((candidateKey) => {
+                localStorage.setItem(candidateKey, serialized);
+            });
+            return true;
+        }
+    }
+
     function readChatMetadataState() {
         const context = getContext();
         const state = context?.chatMetadata?.[CHAT_METADATA_KEY];
@@ -407,8 +451,8 @@
             return false;
         }
 
-        const key = getStorageKey(sessionId);
-        if (!key) return false;
+            const key = getStorageKey(sessionId);
+            if (!key) return false;
 
         try {
             const normalized = normalizeState(state, fallbackState || state);
@@ -447,9 +491,7 @@
                 }
             }
 
-            getStorageKeys(sessionId).forEach((candidateKey) => {
-                localStorage.setItem(candidateKey, JSON.stringify(payload));
-            });
+            writePayloadToLocalStorage([getPrimaryStorageKey(sessionId)].filter(Boolean), payload, sessionId);
             const metadataSaved = sessionId === getCurrentSessionId()
                 ? writeChatMetadataState(payload, { immediate: options.force || options.immediate })
                 : false;
@@ -459,6 +501,8 @@
             return false;
         }
     }
+
+    cleanupLocalStorageForQuota(getCurrentSessionId());
 
     function bindSessionChange(callback) {
         if (typeof callback !== 'function') return;

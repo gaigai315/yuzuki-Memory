@@ -8,7 +8,7 @@
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const PERSIST_PREFIX = 'yzm_memory_branch_snapshots:';
-    const MAX_SNAPSHOTS = 80;
+    const MAX_SNAPSHOTS = 50;
     const HIGH_FLOOR_GENESIS_GUARD = 5;
     const snapshotsBySession = {};
     let snapshots = {};
@@ -216,37 +216,13 @@
     }
 
     function persistSnapshots(sessionId = getSessionId()) {
-        const key = getPersistKey(sessionId);
-        if (!key) return;
-        try {
-            localStorage.setItem(key, JSON.stringify({
-                version: 1,
-                sessionId,
-                snapshots,
-                branchSnapshots,
-                updatedAt: Date.now(),
-            }));
-        } catch (error) {
-            console.warn('[yuzuki-Memory] Failed to persist branch snapshots.', error);
-        }
+        // Align with the legacy plugin: branch snapshots are runtime guards only.
+        // Persisting full table snapshots to localStorage easily exhausts quota.
+        if (sessionId) snapshotsBySession[sessionId] = { snapshots, branchSnapshots };
     }
 
     function loadPersistedSnapshots(sessionId = getSessionId()) {
-        const key = getPersistKey(sessionId);
-        if (!key) return { snapshots: {}, branchSnapshots: {} };
-        try {
-            const parsed = JSON.parse(localStorage.getItem(key) || '{}');
-            return {
-                snapshots: parsed && typeof parsed.snapshots === 'object' && !Array.isArray(parsed.snapshots)
-                    ? parsed.snapshots
-                    : {},
-                branchSnapshots: parsed && typeof parsed.branchSnapshots === 'object' && !Array.isArray(parsed.branchSnapshots)
-                    ? parsed.branchSnapshots
-                    : {},
-            };
-        } catch (_error) {
-            return { snapshots: {}, branchSnapshots: {} };
-        }
+        return snapshotsBySession[sessionId] || { snapshots: {}, branchSnapshots: {} };
     }
 
     function pruneSnapshots() {
@@ -384,8 +360,8 @@
         const baseKey = findBaseSnapshotKey(targetIndex);
         if (!baseKey) return { restored: false, reason: 'missing_base', targetIndex };
         if (isUnsafeGenesisRestore(targetIndex, baseKey)) {
-            console.warn(`[yuzuki-Memory] Branch rollback skipped: only genesis snapshot exists for floor ${targetIndex}.`);
-            return { restored: false, reason: 'unsafe_genesis', targetIndex, baseKey };
+            saveSnapshot(targetIndex, { state: loadState(sessionId), sessionId });
+            return { restored: false, reason: 'unsafe_genesis_seeded', targetIndex, baseKey };
         }
 
         const state = loadState(sessionId);

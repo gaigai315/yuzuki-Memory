@@ -298,6 +298,52 @@
         return scan(body);
     }
 
+    function bodyContainsVectorVariable(body) {
+        const pattern = /\{\{\s*VECTOR_MEMORY\s*\}\}/i;
+        const scan = (node) => {
+            if (!node) return false;
+            if (typeof node === 'string') return pattern.test(node);
+            if (Array.isArray(node)) return node.some((item) => scan(item));
+            if (typeof node !== 'object') return false;
+            return Object.values(node).some((value) => scan(value));
+        };
+        return scan(body);
+    }
+
+    function bodyContainsAnyMemoryVariable(body) {
+        const pattern = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}/i;
+        const scan = (node) => {
+            if (!node) return false;
+            if (typeof node === 'string') return pattern.test(node);
+            if (Array.isArray(node)) return node.some((item) => scan(item));
+            if (typeof node !== 'object') return false;
+            return Object.values(node).some((value) => scan(value));
+        };
+        return scan(body);
+    }
+
+    function logVariableLocations(body) {
+        const pattern = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}/gi;
+        const hits = [];
+        const walk = (node, path) => {
+            if (!node) return;
+            if (typeof node === 'string') {
+                const matches = node.match(pattern);
+                if (matches) hits.push({ path, matches, preview: node.slice(0, 240) });
+                return;
+            }
+            if (Array.isArray(node)) {
+                node.forEach((item, index) => walk(item, `${path}[${index}]`));
+                return;
+            }
+            if (typeof node !== 'object') return;
+            Object.entries(node).forEach(([key, value]) => walk(value, path ? `${path}.${key}` : key));
+        };
+        walk(body, 'body');
+        console.info('[yuzuki-Memory] final request variable locations', hits.length ? hits : 'none');
+        return hits;
+    }
+
     function isRequestLike(value) {
         return typeof Request !== 'undefined' && value instanceof Request;
     }
@@ -317,10 +363,38 @@
         removeHiddenMessagesFromBody(rawBody, hiddenTexts);
         YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
         const hasMemoryDataVariable = bodyContainsMemoryDataVariable(rawBody);
+        const hasVectorVariable = bodyContainsVectorVariable(rawBody);
+        const hasAnyMemoryVariable = bodyContainsAnyMemoryVariable(rawBody);
+        const scanTargets = getRequestArrays(rawBody).map((target) => `${target.key}:${target.items.length}`);
+        console.info(`[yuzuki-Memory] final request variable scan memory=${hasMemoryDataVariable} vector=${hasVectorVariable} arrays=${scanTargets.join(',') || 'none'} promptString=${typeof rawBody.prompt === 'string'}`);
+        console.info('[yuzuki-Memory] final request variable scan detail', {
+            hasMemoryDataVariable,
+            hasVectorVariable,
+            hasAnyMemoryVariable,
+            arrays: scanTargets,
+            promptString: typeof rawBody.prompt === 'string',
+        });
+        logVariableLocations(rawBody);
+        if (typeof YuzukiMemory.PromptReadyInjector?.processPromptReadyChatSync === 'function') {
+            getRequestArrays(rawBody).forEach((target) => {
+                YuzukiMemory.PromptReadyInjector.processPromptReadyChatSync(target.items, {
+                    disableFallback: hasMemoryDataVariable,
+                });
+            });
+            if (typeof rawBody.prompt === 'string' && bodyContainsMemoryDataVariable(rawBody.prompt)) {
+                const promptItems = [{ role: 'system', content: rawBody.prompt, name: 'PROMPT' }];
+                YuzukiMemory.PromptReadyInjector.processPromptReadyChatSync(promptItems, {
+                    disableFallback: hasMemoryDataVariable,
+                });
+                rawBody.prompt = promptItems.map((item) => getMessageText(item)).filter(Boolean).join('\n\n');
+            }
+        }
         const body = YuzukiMemory.VariableInjector?.processBody
             ? await YuzukiMemory.VariableInjector.processBody(rawBody, {
                 getVectorText: getVectorInjectionText,
+                disableVectorFallbackInjection: false,
                 disableDefaultMemoryInjection: hasMemoryDataVariable,
+                preserveUnresolvedVectorAnchors: true,
             })
             : rawBody;
         const nextBody = JSON.stringify(body);

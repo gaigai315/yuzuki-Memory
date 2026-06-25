@@ -394,7 +394,7 @@
             .filter(Boolean)
             .join('\n');
         if (!title && !body) return '';
-        return compactLines([title ? `【${title}】` : '', body]);
+        return body;
     }
 
     function getSummaryFieldValue(values, field) {
@@ -906,7 +906,7 @@
         return message || null;
     }
 
-    function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState(), vectorText = '', injectedVars = new Set()) {
+    function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState(), vectorText = '', injectedVars = new Set(), options = {}) {
         const targets = getRequestArrays(body);
         if (!targets.length) return false;
 
@@ -962,7 +962,7 @@
                 return message ? [message] : [];
             }
             if (key === '{{VECTOR_MEMORY}}') {
-                if (!vectorText) return [];
+                if (!vectorText) return options.preserveUnresolvedVectorAnchors === true ? null : [];
                 injectedVars.add('VECTOR_MEMORY');
                 return [{
                     role: 'system',
@@ -997,10 +997,16 @@
                     const beforeMessage = createFragmentForAnchor(target.key, item, before);
                     if (beforeMessage) nextItems.push(beforeMessage);
 
-                    consumeAnchor(match[0])
-                        .map((message) => createMessageForAnchor(target.key, item, message))
-                        .filter(Boolean)
-                        .forEach((message) => nextItems.push(message));
+                    const consumedMessages = consumeAnchor(match[0]);
+                    if (consumedMessages === null) {
+                        const preservedAnchor = createFragmentForAnchor(target.key, item, match[0]);
+                        if (preservedAnchor) nextItems.push(preservedAnchor);
+                    } else {
+                        consumedMessages
+                            .map((message) => createMessageForAnchor(target.key, item, message))
+                            .filter(Boolean)
+                            .forEach((message) => nextItems.push(message));
+                    }
 
                     cursor = match.index + match[0].length;
                     match = anchorPattern.exec(text);
@@ -1154,6 +1160,7 @@
             ...settings,
             injectMemoryTable: settings.injectMemoryTable && options.disableMemoryInjection !== true,
             injectVectorMemory: settings.injectVectorMemory && options.disableVectorInjection !== true,
+            preserveUnresolvedVectorAnchors: options.preserveUnresolvedVectorAnchors === true,
         };
     }
 
@@ -1167,7 +1174,9 @@
         Object.keys(node).forEach((key) => {
             if (typeof node[key] === 'string') {
                 if (settings.injectMemoryTable) node[key] = node[key].replace(STRUCTURED_VARIABLE_PATTERN, '');
-                if (settings.injectVectorMemory) node[key] = node[key].replace(VECTOR_CLEANUP_VARIABLE_PATTERN, '');
+                if (settings.injectVectorMemory && settings.preserveUnresolvedVectorAnchors !== true) {
+                    node[key] = node[key].replace(VECTOR_CLEANUP_VARIABLE_PATTERN, '');
+                }
             } else if (node[key] && typeof node[key] === 'object') {
                 cleanupVariablesInNode(node[key], settings);
             }
@@ -1212,7 +1221,9 @@
         const anchorState = { seen: new Set(), injected: new Set() };
         const injectedVars = new Set();
         if (settings.injectMemoryTable || settings.injectVectorMemory) {
-            replaceMemoryDataAnchorsInRequest(body, state, vectorText, injectedVars);
+            replaceMemoryDataAnchorsInRequest(body, state, vectorText, injectedVars, {
+                preserveUnresolvedVectorAnchors: options.preserveUnresolvedVectorAnchors === true,
+            });
         }
         replaceVariablesInNode(body, replacements, anchorState);
 
@@ -1223,12 +1234,15 @@
             });
         }
 
-        if (settings.injectMemoryTable && !injectedVars.has('MEMORY_PROMPT') && !requestBodyContainsMemoryPrompt(body)) {
+        const disableMemoryFallback = options.disableFallbackInjection === true || options.disableMemoryFallbackInjection === true;
+        const disableVectorFallback = options.disableFallbackInjection === true || options.disableVectorFallbackInjection === true;
+
+        if (!disableMemoryFallback && settings.injectMemoryTable && !injectedVars.has('MEMORY_PROMPT') && !requestBodyContainsMemoryPrompt(body)) {
             const promptMessage = createPromptMemoryMessage(state);
             if (promptMessage) insertInjectedMessages(body, [promptMessage]);
         }
 
-        if (settings.injectMemoryTable && options.disableDefaultMemoryInjection !== true && !requestBodyContainsMemoryData(body)) {
+        if (!disableMemoryFallback && settings.injectMemoryTable && options.disableDefaultMemoryInjection !== true && !requestBodyContainsMemoryData(body)) {
             const messages = [];
             if (!injectedVars.has('MEMORY_SUMMARY') && !injectedVars.has('MEMORY')) {
                 messages.push(...buildSummaryMessages(state));
@@ -1239,7 +1253,13 @@
             if (messages.length > 0) insertInjectedMessages(body, messages);
         }
 
-        if (settings.injectVectorMemory && vectorText && !hasYuzukiVectorMarker(body) && !injectedVars.has('VECTOR_MEMORY')) {
+        if (
+            settings.injectVectorMemory
+            && vectorText
+            && !disableVectorFallback
+            && !hasYuzukiVectorMarker(body)
+            && !injectedVars.has('VECTOR_MEMORY')
+        ) {
             insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(vectorText)}`, {
                 isYuzukiVector: true,
                 isGaigaiVector: true,
@@ -1269,6 +1289,9 @@
         buildMemoryText,
         buildMemoryMessages,
         buildMemoryDataMessages,
+        buildSummaryMessageEntries,
+        buildTableMessageEntries,
+        createPromptMemoryMessage,
         getRequestArrays,
         processBody,
     });
