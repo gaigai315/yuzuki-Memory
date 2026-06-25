@@ -892,11 +892,6 @@
         return `${currentText}\n${nextText}`;
     }
 
-    function getSummaryRecordTitle(payload, records = [], table = null, meta = {}) {
-        const label = payload.kind === 'branch' ? '支线总结' : '主线总结';
-        return getNextSummaryTitle(table, records, label);
-    }
-
     function isBlankSummaryRecord(record) {
         const values = record?.values || {};
         return !String(values.总结内容 || values.summary || '').trim()
@@ -910,6 +905,46 @@
             const title = String(record?.values?.[primary] || '').trim();
             return title === label && isBlankSummaryRecord(record) && !record?.meta?.yzmMemoryTask;
         }) || null;
+    }
+
+    function getSummaryRecordTaskMeta(record) {
+        const task = record?.meta?.yzmMemoryTask;
+        return task && typeof task === 'object' ? task : null;
+    }
+
+    function getSummaryRecordFloorRange(record) {
+        const values = record?.values || {};
+        const rawRange = String(values.楼层数 || values.range || values['楼层范围'] || values['楼层'] || '').trim();
+        const match = rawRange.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
+        if (!match) return null;
+        const start = Math.max(0, Math.round(Number(match[1]) || 0));
+        const end = Math.max(start, Math.round(Number(match[2]) || 0));
+        return end > start ? { start, end } : null;
+    }
+
+    function isSmallSummaryRecord(record, table, task) {
+        if (task?.summaryType === 'history' || task?.summaryType === 'optimize') return false;
+        return Boolean(getSummaryRecordFloorRange(record));
+    }
+
+    function isSummaryCoveredByRange(record, table, targetRange) {
+        const recordRange = getRangeMeta(getSummaryRecordTaskMeta(record)?.range) || getSummaryRecordFloorRange(record);
+        return isSmallSummaryRecord(record, table, getSummaryRecordTaskMeta(record))
+            && recordRange
+            && recordRange.start >= targetRange.start
+            && recordRange.end <= targetRange.end;
+    }
+
+    function getTitleRecordsForSummary(records = [], table = null, meta = {}) {
+        if (meta.autoTaskType !== 'history') return records;
+        const targetRange = getRangeMeta(meta.range);
+        if (!targetRange) return records;
+        return (Array.isArray(records) ? records : []).filter((record) => !isSummaryCoveredByRange(record, table, targetRange));
+    }
+
+    function getSummaryRecordTitle(payload, records = [], table = null, meta = {}) {
+        const label = payload.kind === 'branch' ? '支线总结' : '主线总结';
+        return getNextSummaryTitle(table, getTitleRecordsForSummary(records, table, meta), label);
     }
 
     function upsertSummaryRecord(state, payload, meta = {}) {
@@ -984,21 +1019,6 @@
         return `${label}（${maxIndex + 1}）`;
     }
 
-    function getSummaryRecordTaskMeta(record) {
-        const task = record?.meta?.yzmMemoryTask;
-        return task && typeof task === 'object' ? task : null;
-    }
-
-    function getSummaryRecordFloorRange(record) {
-        const values = record?.values || {};
-        const rawRange = String(values.楼层数 || values.range || values['楼层范围'] || values['楼层'] || '').trim();
-        const match = rawRange.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
-        if (!match) return null;
-        const start = Math.max(0, Math.round(Number(match[1]) || 0));
-        const end = Math.max(start, Math.round(Number(match[2]) || 0));
-        return end > start ? { start, end } : null;
-    }
-
     function getSummaryRecordKind(record) {
         const values = record?.values || {};
         const title = String(values.总结标题 || values.title || '').trim();
@@ -1046,16 +1066,6 @@
             .filter((record) => !selectedIds.size || selectedIds.has(String(record.id || '')))
             .filter((record) => selectedIds.size || targetKind === 'all' || getSummaryRecordKind(record) === targetKind);
         return { table, records };
-    }
-
-    function isSmallSummaryRecord(record, table, task) {
-        if (task?.kind === 'summary' && task?.summaryType === 'summary') return true;
-        if (task?.summaryType && task.summaryType !== 'summary') return false;
-
-        const primary = getPrimaryColumn(table);
-        const title = String(record?.values?.[primary] || record?.values?.总结标题 || record?.values?.title || '').trim();
-        if (!/^(主线总结|支线总结)(?:（\d+）)?$/.test(title)) return false;
-        return Boolean(getSummaryRecordFloorRange(record));
     }
 
     function cleanupSmallAutoSummaries(state, range, keepRecordIds = []) {
@@ -1657,6 +1667,7 @@
         commitTraceResult,
         commitSummaryResult,
         commitSummaryOptimizeResult,
+        cleanupSmallAutoSummaries,
         bindAutoSummary,
         cancelPendingAutoTask,
     });
