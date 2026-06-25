@@ -274,7 +274,7 @@
     function bodyContainsMemoryVariable(body) {
         const target = getRequestArray(body);
         if (!target) return false;
-        const pattern = /\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT)\}\}/i;
+        const pattern = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/i;
         return target.items.some((item) => pattern.test(getMessageText(item)));
     }
 
