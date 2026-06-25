@@ -16,6 +16,9 @@
     const MEMORY_DATA_ANCHOR_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/gi;
     const MEMORY_PROMPT_VARIABLE_PATTERN = /\{\{MEMORY_PROMPT\}\}/;
     const VECTOR_VARIABLE_PATTERN = /\{\{VECTOR_MEMORY\}\}/;
+    const WORLD_INFO_MEMORY_ANCHOR_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY)\}\}/i;
+    const WORLD_INFO_ANY_ANCHOR_PATTERN = /\{\{(?:MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/i;
+    const EXAMPLE_CHAT_PLACEHOLDER_PATTERN = /^\s*\[Example Chat\]\s*$/i;
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
     const SUMMARY_INJECTION_EXCLUDED_COLUMNS = new Set(['未解决问题']);
     const SUMMARY_FIELD_ALIASES = {
@@ -795,6 +798,38 @@
         return message || null;
     }
 
+    function isWorldInfoEntryEnabled(entry) {
+        return !!entry
+            && entry.enabled !== false
+            && entry.disable !== true
+            && entry.active !== false;
+    }
+
+    function getWorldInfoAnchorEntries() {
+        const collected = [];
+        try {
+            const root = window.world_info;
+            if (!root || typeof root !== 'object') return collected;
+            const books = Array.isArray(root) ? root : Object.values(root);
+            books.forEach((book) => {
+                if (!book || typeof book !== 'object' || !book.entries || typeof book.entries !== 'object') return;
+                Object.values(book.entries).forEach((entry) => {
+                    if (!entry || typeof entry !== 'object' || !isWorldInfoEntryEnabled(entry)) return;
+                    const content = String(entry.content || '');
+                    if (!WORLD_INFO_ANY_ANCHOR_PATTERN.test(content)) return;
+                    collected.push({
+                        content,
+                        order: Number(entry.order ?? entry.sort_order ?? entry.uid ?? entry.id ?? 0) || 0,
+                        hasMemoryAnchor: WORLD_INFO_MEMORY_ANCHOR_PATTERN.test(content),
+                    });
+                });
+            });
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to read world info memory anchors.', error);
+        }
+        return collected.sort((a, b) => a.order - b.order);
+    }
+
     function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState()) {
         const target = getRequestArray(body);
         if (!target) return false;
@@ -802,6 +837,7 @@
         const tableEntries = buildTableMessageEntries(state);
         const summaryEntries = buildSummaryMessageEntries(state);
         const { reservedTables, reservedSummaries } = reserveSpecificAnchorMessages(target.items, tableEntries, summaryEntries);
+        const worldInfoAnchors = getWorldInfoAnchorEntries();
         let changed = false;
 
         function consumeAnchor(match) {
@@ -832,7 +868,16 @@
 
         const nextItems = [];
         target.items.forEach((item) => {
-            const text = getMessageText(item);
+            let text = getMessageText(item);
+            if (EXAMPLE_CHAT_PLACEHOLDER_PATTERN.test(text) && worldInfoAnchors.length) {
+                const worldInfoAnchor = worldInfoAnchors.shift();
+                if (worldInfoAnchor?.hasMemoryAnchor) {
+                    text = worldInfoAnchor.content;
+                } else {
+                    nextItems.push(item);
+                    return;
+                }
+            }
             const anchorPattern = new RegExp(MEMORY_DATA_ANCHOR_PATTERN.source, 'gi');
             if (!anchorPattern.test(text)) {
                 nextItems.push(item);
