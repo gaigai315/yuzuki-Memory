@@ -799,10 +799,36 @@
     }
 
     function isWorldInfoEntryEnabled(entry) {
-        return !!entry
-            && entry.enabled !== false
-            && entry.disable !== true
-            && entry.active !== false;
+        if (typeof entry === 'string') return true;
+        if (!entry || typeof entry !== 'object') return false;
+        const isTruthy = (value) => value === true || value === 1 || ['true', '1', 'yes', 'on', 'enabled', 'checked'].includes(String(value || '').trim().toLowerCase());
+        const isFalsy = (value) => value === false || value === 0 || ['false', '0', 'no', 'off', 'disabled', 'unchecked'].includes(String(value || '').trim().toLowerCase());
+        if (isTruthy(entry.disable) || isTruthy(entry.disabled)) return false;
+        if (Object.prototype.hasOwnProperty.call(entry, 'enabled') && isFalsy(entry.enabled)) return false;
+        if (Object.prototype.hasOwnProperty.call(entry, 'active') && isFalsy(entry.active)) return false;
+        return true;
+    }
+
+    function getRawWorldInfoEntries(value) {
+        if (!value) return [];
+        if (Array.isArray(value)) return value;
+        if (value.entries) return getRawWorldInfoEntries(value.entries);
+        if (value.data?.entries) return getRawWorldInfoEntries(value.data.entries);
+        if (value.worldInfo?.entries) return getRawWorldInfoEntries(value.worldInfo.entries);
+        if (value.worldInfoData?.entries) return getRawWorldInfoEntries(value.worldInfoData.entries);
+        if (value.world_info?.entries) return getRawWorldInfoEntries(value.world_info.entries);
+        if (typeof value === 'object') return Object.values(value);
+        return [];
+    }
+
+    function getWorldInfoEntryContent(entry) {
+        if (typeof entry === 'string') return entry;
+        return String(entry?.content || entry?.text || entry?.value || '');
+    }
+
+    function getWorldInfoEntryOrder(entry, index) {
+        if (!entry || typeof entry !== 'object') return index;
+        return Number(entry.order ?? entry.sort_order ?? entry.position ?? entry.uid ?? entry.id ?? index) || index;
     }
 
     function getWorldInfoAnchorEntries() {
@@ -810,16 +836,15 @@
         try {
             const root = window.world_info;
             if (!root || typeof root !== 'object') return collected;
-            const books = Array.isArray(root) ? root : Object.values(root);
-            books.forEach((book) => {
-                if (!book || typeof book !== 'object' || !book.entries || typeof book.entries !== 'object') return;
-                Object.values(book.entries).forEach((entry) => {
-                    if (!entry || typeof entry !== 'object' || !isWorldInfoEntryEnabled(entry)) return;
-                    const content = String(entry.content || '');
+            const roots = [root, root.worldInfoData, root.world_info, root.data].filter(Boolean);
+            roots.forEach((source) => {
+                getRawWorldInfoEntries(source).forEach((entry, index) => {
+                    if (!isWorldInfoEntryEnabled(entry)) return;
+                    const content = getWorldInfoEntryContent(entry);
                     if (!WORLD_INFO_ANY_ANCHOR_PATTERN.test(content)) return;
                     collected.push({
                         content,
-                        order: Number(entry.order ?? entry.sort_order ?? entry.uid ?? entry.id ?? 0) || 0,
+                        order: getWorldInfoEntryOrder(entry, index),
                         hasMemoryAnchor: WORLD_INFO_MEMORY_ANCHOR_PATTERN.test(content),
                     });
                 });
@@ -827,7 +852,21 @@
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to read world info memory anchors.', error);
         }
-        return collected.sort((a, b) => a.order - b.order);
+        const seen = new Set();
+        return collected
+            .filter((entry) => {
+                if (seen.has(entry.content)) return false;
+                seen.add(entry.content);
+                return true;
+            })
+            .sort((a, b) => a.order - b.order);
+    }
+
+    function requestHasWorldInfoExampleAnchors(body) {
+        const target = getRequestArray(body);
+        if (!target) return false;
+        if (!target.items.some((item) => EXAMPLE_CHAT_PLACEHOLDER_PATTERN.test(getMessageText(item)))) return false;
+        return getWorldInfoAnchorEntries().some((entry) => entry.hasMemoryAnchor);
     }
 
     function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState()) {
@@ -871,16 +910,18 @@
             let text = getMessageText(item);
             if (EXAMPLE_CHAT_PLACEHOLDER_PATTERN.test(text) && worldInfoAnchors.length) {
                 const worldInfoAnchor = worldInfoAnchors.shift();
-                if (worldInfoAnchor?.hasMemoryAnchor) {
-                    text = worldInfoAnchor.content;
-                } else {
+                if (!worldInfoAnchor) {
                     nextItems.push(item);
                     return;
                 }
+                text = worldInfoAnchor.content;
             }
             const anchorPattern = new RegExp(MEMORY_DATA_ANCHOR_PATTERN.source, 'gi');
             if (!anchorPattern.test(text)) {
-                nextItems.push(item);
+                const restoredMessage = text !== getMessageText(item)
+                    ? createFragmentForAnchor(target.key, item, text)
+                    : item;
+                if (restoredMessage) nextItems.push(restoredMessage);
                 return;
             }
 
@@ -1080,6 +1121,7 @@
         const hadMemoryDataVariable = settings.injectMemoryTable && nodeContainsPattern(body, MEMORY_DATA_VARIABLE_PATTERN);
         const hadMemoryPromptVariable = settings.injectMemoryTable && nodeContainsPattern(body, MEMORY_PROMPT_VARIABLE_PATTERN);
         const hadVectorVariable = settings.injectVectorMemory && nodeContainsPattern(body, VECTOR_VARIABLE_PATTERN);
+        const hadWorldInfoExampleAnchor = settings.injectMemoryTable && requestHasWorldInfoExampleAnchors(body);
         const hasOwnVectorMarker = hasYuzukiVectorMarker(body);
         if (settings.injectVectorMemory && hasOwnVectorMarker) {
             logVectorInfo('跳过：请求体已经包含新版向量注入标记');
@@ -1106,7 +1148,7 @@
             });
         }
 
-        if (settings.injectMemoryTable && options.disableDefaultMemoryInjection !== true && !hadMemoryDataVariable && !requestBodyContainsInjection(body, 'isGaigaiData')) {
+        if (settings.injectMemoryTable && options.disableDefaultMemoryInjection !== true && !hadMemoryDataVariable && !hadWorldInfoExampleAnchor && !requestBodyContainsInjection(body, 'isGaigaiData')) {
             const messages = hadMemoryPromptVariable || requestBodyContainsInjection(body, 'isGaigaiPrompt')
                 ? buildMemoryDataMessages(state)
                 : buildMemoryMessages(state);
@@ -1133,6 +1175,7 @@
         buildMemoryText,
         buildMemoryMessages,
         buildMemoryDataMessages,
+        requestHasWorldInfoExampleAnchors,
         processBody,
     });
 })();
