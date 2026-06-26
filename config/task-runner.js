@@ -1630,18 +1630,18 @@
         const pointers = normalizePointers(state);
         pointers[task.pointerKey] = committed.range?.end || task.end;
         if (task.type === 'history' && pointers.summary < pointers.historySummary) pointers.summary = pointers.historySummary;
+        if (settings.hideSummaryFloors) {
+            committed.hideResult = await YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
+                force: true,
+                summaryPointer: pointers.summary,
+            });
+        }
         if (task.type === 'history') {
             committed.cleanupCount = cleanupSmallAutoSummaries(
                 state,
                 { start: task.start, end: task.end },
                 (Array.isArray(committed.records) ? committed.records : [committed.record]).map((record) => record?.id).filter(Boolean)
             );
-            if (settings.hideSummaryFloors) {
-                committed.hideResult = await YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
-                    force: true,
-                    summaryPointer: pointers.summary,
-                });
-            }
             callbacks.saveState?.();
             if (settings.autoVectorizeAfterHistory === true && typeof callbacks.syncSummaryToVectorBook === 'function') {
                 try {

@@ -356,9 +356,20 @@
         }
     }
 
+    async function applyPreRequestHiding() {
+        if (!YuzukiMemory.FloorHider?.applyConfiguredHiding) return null;
+        try {
+            return await YuzukiMemory.FloorHider.applyConfiguredHiding();
+        } catch (error) {
+            console.warn('[yuzuki-Memory] 发送前隐藏楼层失败。', error);
+            return { success: false, error: String(error?.message || error || '发送前隐藏楼层失败') };
+        }
+    }
+
     async function processJsonBody(url, options, bodyText, requestSource = null) {
         if (!isTextGenerationRequest(url, options) || typeof bodyText !== 'string' || !bodyText.trim()) return null;
         const rawBody = JSON.parse(bodyText);
+        await applyPreRequestHiding();
         const hiddenTexts = YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || [];
         removeHiddenMessagesFromBody(rawBody, hiddenTexts);
         YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
