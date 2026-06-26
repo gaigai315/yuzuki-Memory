@@ -457,8 +457,11 @@
 
 #yzm-memory-root .yzm-sidebar,
 #yzm-memory-root .yzm-primary-pane {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     min-width: 0;
-    overflow: auto;
+    overflow: hidden;
     background: var(--yzm-panel-bg);
     border-right: 0;
     box-sizing: border-box;
@@ -980,12 +983,19 @@
 }
 
 #yzm-memory-root .yzm-primary-search {
+    flex: 0 0 auto;
     width: min(168px, calc(100% - 12px));
     margin: 12px auto 8px;
 }
 
 #yzm-memory-root .yzm-primary-list {
+    flex: 1 1 auto;
+    min-height: 0;
     padding: 0 8px 8px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
 }
 
 #yzm-memory-root .yzm-summary-primary-list {
@@ -2554,9 +2564,15 @@
 #yzm-memory-root .yzm-summary-tool-nav-list,
 #yzm-memory-root .yzm-scheme-nav-list {
     display: flex;
+    flex: 1 1 auto;
     flex-direction: column;
     gap: 8px;
+    min-height: 0;
     padding: 10px 8px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
 }
 
 #yzm-memory-root .yzm-config-nav-item,
@@ -6246,6 +6262,42 @@
     overflow: visible;
 }
 
+#yzm-memory-root .yzm-summary-segment-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+    padding: 10px 13px 13px;
+}
+
+#yzm-memory-root .yzm-summary-segment-block {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 8px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-summary-segment-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 32px;
+    padding: 0 10px;
+    color: var(--yzm-muted);
+    border-bottom: 1px solid var(--yzm-border-soft);
+    box-sizing: border-box;
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1.25;
+}
+
+#yzm-memory-root .yzm-summary-segment-header i {
+    color: var(--yzm-icon);
+}
+
 #yzm-memory-root .yzm-summary-timeline-row {
     position: relative;
     display: grid;
@@ -6893,6 +6945,65 @@
 
 #yzm-memory-root .yzm-vector-book-content-field .yzm-record-textarea {
     min-height: 220px;
+}
+
+#yzm-memory-root .yzm-summary-branch-record-fields .yzm-summary-segment-editor-list,
+#yzm-memory-root .yzm-summary-branch-record-fields .yzm-summary-segment-add {
+    grid-column: 1 / -1;
+}
+
+#yzm-memory-root .yzm-summary-segment-editor-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-summary-segment-editor {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    min-width: 0;
+    padding: 10px;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 10px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-summary-segment-editor-header {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-summary-segment-editor-header strong {
+    min-width: 0;
+    color: var(--yzm-title);
+    font-size: 13px;
+    line-height: 1.25;
+}
+
+#yzm-memory-root .yzm-summary-segment-remove,
+#yzm-memory-root .yzm-summary-segment-add {
+    min-height: 32px;
+    color: var(--yzm-text);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 8px;
+    box-sizing: border-box;
+    font: inherit;
+}
+
+#yzm-memory-root .yzm-summary-segment-remove {
+    padding: 0 9px;
+}
+
+#yzm-memory-root .yzm-summary-segment-add {
+    justify-content: center;
 }
 
 #yzm-memory-root .yzm-vector-book-editor-hint {

@@ -3501,16 +3501,19 @@
         title.className = 'yzm-primary-character-name';
         title.textContent = getSummaryPrimaryTitle(table, record);
 
-        const contentCount = getSummaryTimelineItems(getSummaryValue(record, ['总结内容'])).length;
+        const contentCount = getSummarySegments(record).length || getSummaryTimelineItems(getSummaryValue(record, ['总结内容'])).length;
         const floorText = getSummaryFloorText(record);
         const coreCharacter = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
         const meta = document.createElement('div');
         meta.className = 'yzm-primary-character-meta';
-        meta.textContent = [
+        meta.textContent = (kind === 'branch' ? [
+            coreCharacter ? `核心 ${coreCharacter}` : '',
+            `${contentCount} 段内容`,
+        ] : [
             floorText ? `楼层 ${floorText}` : '',
             coreCharacter ? `核心 ${coreCharacter}` : '',
             `${contentCount} 条内容`,
-        ].filter(Boolean).join(' · ');
+        ]).filter(Boolean).join(' · ');
 
         content.append(title, meta);
         item.append(avatar, content);
@@ -3599,7 +3602,49 @@
     }
 
     function getSummaryPrimaryTitle(table, record) {
+        const kind = getSummaryKind(record);
+        const coreCharacter = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
+        if (kind === 'branch' && coreCharacter) return coreCharacter;
         return getRecordTitle(table, record);
+    }
+
+    function splitSummaryLines(value) {
+        return String(value || '')
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+    }
+
+    function parseSummaryFloorRange(value) {
+        const match = String(value || '').match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
+        if (!match) return null;
+        const start = Math.max(0, Math.round(Number(match[1]) || 0));
+        const end = Math.max(start, Math.round(Number(match[2]) || 0));
+        return end > start ? { start, end } : null;
+    }
+
+    function getSummarySegments(record) {
+        if (Array.isArray(record?.summarySegments) && record.summarySegments.length) {
+            return record.summarySegments
+                .map((segment) => ({
+                    floor: String(segment?.floor || '').trim(),
+                    summary: String(segment?.summary || '').trim(),
+                    unresolved: String(segment?.unresolved || '').trim(),
+                    remark: String(segment?.remark || '').trim(),
+                    range: segment?.range && typeof segment.range === 'object' ? segment.range : null,
+                    summaryType: segment?.summaryType || '',
+                    createdAt: segment?.createdAt || 0,
+                }))
+                .filter((segment) => segment.floor || segment.summary);
+        }
+        const floors = splitSummaryLines(getSummaryValue(record, ['楼层数', '楼层范围', '楼层']));
+        const summaries = splitSummaryLines(getSummaryValue(record, ['总结内容']));
+        const count = Math.max(floors.length, summaries.length);
+        if (!count) return [];
+        return Array.from({ length: count }, (_entry, index) => ({
+            floor: floors[index] || '',
+            summary: summaries[index] || '',
+        })).filter((segment) => segment.floor || segment.summary);
     }
 
     function getSummaryRecordTaskRange(record) {
@@ -8238,10 +8283,11 @@
         const summaryKind = /支线/.test(name.textContent) ? '支线' : '主线';
         const coreCharacter = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
         const floorText = getSummaryFloorText(record);
-        if (coreCharacter || floorText) {
+        const summarySegments = getSummarySegments(record);
+        if (coreCharacter || (summaryKind !== '支线' && floorText)) {
             const metaRow = document.createElement('div');
             metaRow.className = 'yzm-summary-meta-row';
-            if (floorText) {
+            if (summaryKind !== '支线' && floorText) {
                 const floor = document.createElement('span');
                 floor.className = 'yzm-summary-meta-chip';
                 floor.append(createIconNode('fa-solid fa-layer-group', ''), document.createTextNode(`楼层数：${floorText}`));
@@ -8263,15 +8309,22 @@
         contentTitle.className = 'yzm-summary-card-title';
         contentTitle.append(createIconNode(getSummaryFieldIcon('总结内容'), ''), document.createTextNode(`${summaryKind}内容`));
 
-        const contentList = document.createElement('div');
-        contentList.className = 'yzm-summary-timeline-list';
-        const timelineItems = getSummaryTimelineItems(getSummaryValue(record, ['总结内容']));
-        if (timelineItems.length) {
-            timelineItems.forEach((item) => contentList.appendChild(createSummaryTimelineRow(item)));
+        if (summaryKind === '支线' && summarySegments.length > 1) {
+            const segmentList = document.createElement('div');
+            segmentList.className = 'yzm-summary-segment-list';
+            summarySegments.forEach((segment) => segmentList.appendChild(createSummarySegmentBlock(segment)));
+            contentCard.append(contentTitle, segmentList);
         } else {
-            contentList.appendChild(createSummaryTimelineRow({ time: '', event: '' }));
+            const contentList = document.createElement('div');
+            contentList.className = 'yzm-summary-timeline-list';
+            const timelineItems = getSummaryTimelineItems(getSummaryValue(record, ['总结内容']));
+            if (timelineItems.length) {
+                timelineItems.forEach((item) => contentList.appendChild(createSummaryTimelineRow(item)));
+            } else {
+                contentList.appendChild(createSummaryTimelineRow({ time: '', event: '' }));
+            }
+            contentCard.append(contentTitle, contentList);
         }
-        contentCard.append(contentTitle, contentList);
 
         const cardGrid = document.createElement('div');
         cardGrid.className = 'yzm-summary-card-grid';
@@ -8282,6 +8335,30 @@
 
         view.append(header, contentCard, cardGrid);
         return view;
+    }
+
+    function createSummarySegmentBlock(segment) {
+        const block = document.createElement('section');
+        block.className = 'yzm-summary-segment-block';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-summary-segment-header';
+        header.append(
+            createIconNode('fa-solid fa-layer-group', ''),
+            document.createTextNode(segment.floor ? `楼层数：${segment.floor}` : '楼层数：未填写')
+        );
+
+        const list = document.createElement('div');
+        list.className = 'yzm-summary-timeline-list';
+        const items = getSummaryTimelineItems(segment.summary);
+        if (items.length) {
+            items.forEach((item) => list.appendChild(createSummaryTimelineRow(item)));
+        } else {
+            list.appendChild(createSummaryTimelineRow({ time: '', event: segment.summary || '' }));
+        }
+
+        block.append(header, list);
+        return block;
     }
 
     function createSummaryTextCard(title, field, text = '') {
@@ -9108,6 +9185,59 @@
         return field;
     }
 
+    function createSummarySegmentEditorBlock(segment = {}, index = 0) {
+        const block = document.createElement('section');
+        block.className = 'yzm-summary-segment-editor';
+        block.dataset.yzmSummarySegment = 'true';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-summary-segment-editor-header';
+        const title = document.createElement('strong');
+        title.textContent = `总结片段 ${index + 1}`;
+        const remove = createIconButton('删除', 'fa-solid fa-trash', 'yzm-summary-segment-remove');
+        remove.type = 'button';
+        header.append(title, remove);
+
+        const floorField = createRecordInput('楼层数', segment.floor || '', false, { placeholder: '例如 0-100' });
+        floorField.querySelector('.yzm-record-input')?.setAttribute('data-yzm-summary-segment-floor', 'true');
+        const summaryField = createRecordInput('总结内容', segment.summary || '', true, { placeholder: '填写该楼层段对应的支线总结' });
+        summaryField.querySelector('.yzm-record-input')?.setAttribute('data-yzm-summary-segment-summary', 'true');
+
+        block.append(header, floorField, summaryField);
+        return block;
+    }
+
+    function createBranchSummaryRecordFields(table, record) {
+        const fields = document.createElement('div');
+        fields.className = 'yzm-record-fields yzm-summary-branch-record-fields';
+        fields.append(
+            createRecordInput('总结标题', getRecordValue(record, '总结标题'), false),
+            createRecordInput('核心角色', getRecordValue(record, '核心角色'), true)
+        );
+
+        const segmentList = document.createElement('div');
+        segmentList.className = 'yzm-summary-segment-editor-list';
+        const segments = getSummarySegments(record);
+        (segments.length ? segments : [{ floor: getSummaryFloorText(record), summary: getSummaryValue(record, ['总结内容']) }])
+            .forEach((segment, index) => segmentList.appendChild(createSummarySegmentEditorBlock(segment, index)));
+
+        const addSegment = createIconButton('新增片段', 'fa-solid fa-plus', 'yzm-summary-segment-add');
+        addSegment.type = 'button';
+
+        fields.append(segmentList, addSegment,
+            createRecordInput('未解决问题', getRecordValue(record, '未解决问题'), true),
+            createRecordInput('备注', getRecordValue(record, '备注'), true)
+        );
+        return fields;
+    }
+
+    function refreshSummarySegmentEditorTitles(fields) {
+        fields.querySelectorAll('.yzm-summary-segment-editor').forEach((block, index) => {
+            const title = block.querySelector('.yzm-summary-segment-editor-header strong');
+            if (title) title.textContent = `总结片段 ${index + 1}`;
+        });
+    }
+
     function getRecordEditorLabel(table) {
         if (table?.id === 'plot_summary') return '剧情摘要';
         if (table?.id === 'character_profile') return '角色';
@@ -9306,12 +9436,15 @@
         close.setAttribute('aria-label', `关闭编辑${editorLabel}`);
         close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
 
-        const fields = document.createElement('div');
-        fields.className = 'yzm-record-fields';
-        table.columns.forEach((column) => {
-            const name = cleanColumnName(column);
-            fields.appendChild(createRecordInput(name, getRecordValue(record, name), isRecordEditorMultilineField(table, name)));
-        });
+        const isBranchSummaryRecord = table.id === 'memory_summary' && getSummaryKind(record) === 'branch';
+        const fields = isBranchSummaryRecord ? createBranchSummaryRecordFields(table, record) : document.createElement('div');
+        if (!isBranchSummaryRecord) {
+            fields.className = 'yzm-record-fields';
+            table.columns.forEach((column) => {
+                const name = cleanColumnName(column);
+                fields.appendChild(createRecordInput(name, getRecordValue(record, name), isRecordEditorMultilineField(table, name)));
+            });
+        }
 
         const actions = document.createElement('div');
         actions.className = 'yzm-record-actions';
@@ -9329,6 +9462,31 @@
             if (event.target === overlay) closeModal();
         });
         dialog.addEventListener('click', (event) => event.stopPropagation());
+        if (isBranchSummaryRecord) {
+            fields.addEventListener('click', (event) => {
+                const target = event.target instanceof Element ? event.target : null;
+                if (target?.closest('.yzm-summary-segment-add')) {
+                    event.preventDefault();
+                    const list = fields.querySelector('.yzm-summary-segment-editor-list');
+                    list?.appendChild(createSummarySegmentEditorBlock({}, list.children.length));
+                    refreshSummarySegmentEditorTitles(fields);
+                    return;
+                }
+                if (target?.closest('.yzm-summary-segment-remove')) {
+                    event.preventDefault();
+                    const block = target.closest('.yzm-summary-segment-editor');
+                    const list = fields.querySelector('.yzm-summary-segment-editor-list');
+                    if (block && list && list.children.length > 1) block.remove();
+                    else if (block) {
+                        const floorInput = block.querySelector('[data-yzm-summary-segment-floor]');
+                        const summaryInput = block.querySelector('[data-yzm-summary-segment-summary]');
+                        if (floorInput) floorInput.value = '';
+                        if (summaryInput) summaryInput.value = '';
+                    }
+                    refreshSummarySegmentEditorTitles(fields);
+                }
+            });
+        }
 
         const saveRecord = (event) => {
             event?.preventDefault?.();
@@ -9341,8 +9499,31 @@
             });
             const values = {};
             fields.querySelectorAll('[data-yzm-record-field]').forEach((input) => {
+                if (input.hasAttribute('data-yzm-summary-segment-floor') || input.hasAttribute('data-yzm-summary-segment-summary')) return;
                 values[input.dataset.yzmRecordField] = input.value.trim();
             });
+            if (isBranchSummaryRecord) {
+                const floors = [];
+                const summaries = [];
+                const segments = [];
+                fields.querySelectorAll('.yzm-summary-segment-editor').forEach((block) => {
+                    const floor = block.querySelector('[data-yzm-summary-segment-floor]')?.value?.trim() || '';
+                    const summary = block.querySelector('[data-yzm-summary-segment-summary]')?.value?.trim() || '';
+                    if (!floor && !summary) return;
+                    floors.push(floor);
+                    summaries.push(summary);
+                    segments.push({
+                        floor,
+                        summary,
+                        range: parseSummaryFloorRange(floor),
+                        summaryType: 'manual',
+                        createdAt: Date.now(),
+                    });
+                });
+                values.楼层数 = floors.join('\n');
+                values.总结内容 = summaries.join('\n');
+                record.summarySegments = segments;
+            }
 
             const primary = getPrimaryColumn(table);
             if (table.id !== 'plot_summary' && !values[primary]) {

@@ -892,6 +892,66 @@
         return `${currentText}\n${nextText}`;
     }
 
+    function splitMultilineValue(value) {
+        return String(value || '')
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean);
+    }
+
+    function normalizeBranchCharacterName(value) {
+        return String(value || '').trim().toLowerCase();
+    }
+
+    function findBranchSummaryByCharacter(records = [], character = '') {
+        const key = normalizeBranchCharacterName(character);
+        if (!key) return null;
+        return (Array.isArray(records) ? records : []).find((record) => {
+            const values = record?.values || {};
+            const title = String(values.总结标题 || values.title || '').trim();
+            const recordCharacter = normalizeBranchCharacterName(values.核心角色 || values.character || values.角色名 || values.主视角);
+            return /支线/.test(title) && recordCharacter === key;
+        }) || null;
+    }
+
+    function syncSummarySegmentsToValues(record) {
+        const segments = Array.isArray(record?.summarySegments) ? record.summarySegments : [];
+        if (!segments.length) return;
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        record.values.楼层数 = segments.map((segment) => String(segment.floor || '').trim()).filter(Boolean).join('\n');
+        record.values.总结内容 = segments.map((segment) => String(segment.summary || '').trim()).filter(Boolean).join('\n');
+        record.values.未解决问题 = segments.map((segment) => String(segment.unresolved || '').trim()).filter(Boolean).join('\n');
+        record.values.备注 = segments.map((segment) => String(segment.remark || '').trim()).filter(Boolean).join('\n');
+    }
+
+    function appendSummarySegment(record, values, meta = {}) {
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        const nextFloor = String(values.楼层数 || '').trim();
+        const nextSummary = String(values.总结内容 || '').trim();
+        record.summarySegments = Array.isArray(record.summarySegments) ? record.summarySegments : [];
+        const range = getRangeMeta(meta.range);
+        const segment = {
+            floor: nextFloor,
+            summary: nextSummary,
+            unresolved: String(values.未解决问题 || '').trim(),
+            remark: String(values.备注 || '').trim(),
+            range,
+            summaryType: meta.autoTaskType || 'manual',
+            createdAt: Date.now(),
+        };
+        if (nextFloor) {
+            const duplicateIndex = record.summarySegments.findIndex((entry) => String(entry?.floor || '').trim() === nextFloor);
+            if (duplicateIndex > -1) {
+                record.summarySegments[duplicateIndex] = { ...record.summarySegments[duplicateIndex], ...segment };
+            } else {
+                record.summarySegments.push(segment);
+            }
+        } else {
+            record.summarySegments.push(segment);
+        }
+        syncSummarySegmentsToValues(record);
+    }
+
     function isBlankSummaryRecord(record) {
         const values = record?.values || {};
         return !String(values.总结内容 || values.summary || '').trim()
@@ -915,6 +975,17 @@
     function getSummaryRecordFloorRange(record) {
         const values = record?.values || {};
         const rawRange = String(values.楼层数 || values.range || values['楼层范围'] || values['楼层'] || '').trim();
+        const match = rawRange.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
+        if (!match) return null;
+        const start = Math.max(0, Math.round(Number(match[1]) || 0));
+        const end = Math.max(start, Math.round(Number(match[2]) || 0));
+        return end > start ? { start, end } : null;
+    }
+
+    function getSummarySegmentRange(segment) {
+        const range = getRangeMeta(segment?.range);
+        if (range) return range;
+        const rawRange = String(segment?.floor || segment?.楼层数 || segment?.rangeLabel || '').trim();
         const match = rawRange.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
         if (!match) return null;
         const start = Math.max(0, Math.round(Number(match[1]) || 0));
@@ -966,15 +1037,17 @@
             备注: payload.remark,
         };
         const primary = getPrimaryColumn(table);
-        let record = records.find((entry) => String(entry?.values?.[primary] || '').trim() === title);
+        const shouldGroupBranch = payload.kind === 'branch' && values.核心角色;
+        let record = shouldGroupBranch ? findBranchSummaryByCharacter(records, values.核心角色) : null;
+        if (!record) record = records.find((entry) => String(entry?.values?.[primary] || '').trim() === title);
         if (!record) {
             const label = payload.kind === 'branch' ? '支线总结' : '主线总结';
             record = findReusableSummaryPlaceholder(records, primary, label);
         }
         if (record) {
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
-            record.values[primary] = title;
-            if (isAutoSummaryRecord) {
+            record.values[primary] = shouldGroupBranch ? (record.values[primary] || title) : title;
+            if (isAutoSummaryRecord && !shouldGroupBranch) {
                 record.values.核心角色 = values.核心角色;
                 record.values.楼层数 = values.楼层数;
                 record.values.总结内容 = values.总结内容;
@@ -982,13 +1055,18 @@
                 record.values.备注 = values.备注;
             } else {
                 record.values.核心角色 = values.核心角色 || record.values.核心角色 || '';
-                record.values.楼层数 = appendMultilineValue(record.values.楼层数, values.楼层数);
-                record.values.总结内容 = appendMultilineValue(record.values.总结内容, values.总结内容);
-                record.values.未解决问题 = appendMultilineValue(record.values.未解决问题, values.未解决问题);
-                record.values.备注 = appendMultilineValue(record.values.备注, values.备注);
+                appendSummarySegment(record, values, meta);
             }
         } else {
             record = createRecord(table, values);
+            if (shouldGroupBranch) {
+                record.values.楼层数 = '';
+                record.values.总结内容 = '';
+                record.values.未解决问题 = '';
+                record.values.备注 = '';
+                record.summarySegments = [];
+                appendSummarySegment(record, values, meta);
+            }
             records.push(record);
         }
         if (rangeLabel || meta.autoTaskType) {
@@ -1075,15 +1153,36 @@
         const target = getRangeMeta(range);
         if (!target) return 0;
         const keepIds = new Set((Array.isArray(keepRecordIds) ? keepRecordIds : [keepRecordIds]).filter(Boolean).map(String));
+        let cleanupCount = 0;
         const nextRecords = records.filter((record) => {
             if (keepIds.has(String(record?.id || ''))) return true;
+            if (Array.isArray(record?.summarySegments) && record.summarySegments.length) {
+                const before = record.summarySegments.length;
+                record.summarySegments = record.summarySegments.filter((segment) => {
+                    const segmentRange = getSummarySegmentRange(segment);
+                    const isCovered = segmentRange
+                        && segmentRange.start >= target.start
+                        && segmentRange.end <= target.end
+                        && segment.summaryType !== 'history'
+                        && segment.summaryType !== 'optimize';
+                    return !isCovered;
+                });
+                cleanupCount += before - record.summarySegments.length;
+                if (record.summarySegments.length) {
+                    syncSummarySegmentsToValues(record);
+                    return true;
+                }
+                if (before !== record.summarySegments.length) return false;
+            }
             const task = getSummaryRecordTaskMeta(record);
             const recordRange = getRangeMeta(task?.range) || getSummaryRecordFloorRange(record);
             if (!isSmallSummaryRecord(record, table, task) || !recordRange) return true;
-            return !(recordRange.start >= target.start && recordRange.end <= target.end);
+            const covered = recordRange.start >= target.start && recordRange.end <= target.end;
+            if (covered) cleanupCount += 1;
+            return !covered;
         });
         state.records[table.id] = nextRecords;
-        return records.length - nextRecords.length;
+        return cleanupCount;
     }
 
     function applyTraceResult(state, resultRows) {
