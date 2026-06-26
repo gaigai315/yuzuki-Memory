@@ -8,9 +8,9 @@
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const DEFAULT_STATE_REVISION = 13;
-    const MEMORY_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/gi;
-    const ANCHOR_VARIABLE_PATTERN = /^\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}$/i;
-    const STRUCTURED_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT)\s*\}\}/gi;
+    const MEMORY_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/gi;
+    const ANCHOR_VARIABLE_PATTERN = /^\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}$/i;
+    const STRUCTURED_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT)\s*\}\}/gi;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{\s*VECTOR_MEMORY\s*\}\}/gi;
     const MEMORY_DATA_VARIABLE_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY)\s*\}\}/i;
     const MEMORY_DATA_ANCHOR_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}/gi;
@@ -257,6 +257,7 @@
         if (upper.startsWith('MEMORY_SUMMARY_')) return `{{MEMORY_SUMMARY_${normalized.slice('MEMORY_SUMMARY_'.length)}}}`;
         if (upper === 'DATABASE_SCHEMA') return '{{DATABASE_SCHEMA}}';
         if (upper === 'TABLE_DEFINITIONS') return '{{TABLE_DEFINITIONS}}';
+        if (upper === 'BRANCH_SUMMARY_NAMES') return '{{BRANCH_SUMMARY_NAMES}}';
         if (upper === 'MEMORY_SUMMARY') return '{{MEMORY_SUMMARY}}';
         if (upper === 'MEMORY_TABLE') return '{{MEMORY_TABLE}}';
         if (upper === 'MEMORY_PROMPT') return '{{MEMORY_PROMPT}}';
@@ -378,6 +379,19 @@
         return compactLines(lines);
     }
 
+    function buildBranchSummaryNamesText(state = getCurrentState()) {
+        const names = [];
+        tableRecords(state, FIXED_SUMMARY_TABLE_ID).forEach((record) => {
+            if (!record || record.hidden) return;
+            const values = record.values && typeof record.values === 'object' ? record.values : {};
+            const title = getSummaryFieldValue(values, '总结标题');
+            if (!/支线/.test(title)) return;
+            const name = getSummaryFieldValue(values, '核心角色');
+            if (name && !names.includes(name)) names.push(name);
+        });
+        return names.length ? names.join('、') : '（当前暂无已有支线核心角色）';
+    }
+
     function summaryRecordToText(table, record) {
         if (!table || !record || !isRecordVisible(record)) return '';
         const primary = getPrimaryColumn(table);
@@ -488,6 +502,7 @@
             const summaryKey = getSpecificAnchorName(match, 'MEMORY_SUMMARY');
             if (summaryKey) return buildSpecificSummaryText(state, summaryKey);
             if (key === '{{DATABASE_SCHEMA}}' || key === '{{TABLE_DEFINITIONS}}') return buildDatabaseSchemaText(state);
+            if (key === '{{BRANCH_SUMMARY_NAMES}}') return buildBranchSummaryNamesText(state);
             if (key === '{{MEMORY_TABLE}}') return buildAllTablesText(state);
             if (key === '{{MEMORY_SUMMARY}}') return buildSummaryText(state);
             if (key === '{{MEMORY}}') return compactLines([buildSummaryText(state), buildAllTablesText(state)]);
@@ -1282,6 +1297,7 @@
         buildSpecificSummaryText,
         buildSummaryMessages,
         buildDatabaseSchemaText,
+        buildBranchSummaryNamesText,
         buildAllTablesText,
         buildSpecificTableText,
         buildTableMessages,

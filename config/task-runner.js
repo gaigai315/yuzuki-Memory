@@ -198,7 +198,7 @@
         return String(text || '')
             .replace(/<Memory>[\s\S]*?<\/Memory>/gi, '')
             .replace(/<GaigaiMemory>[\s\S]*?<\/GaigaiMemory>/gi, '')
-            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/gi, '')
+            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/gi, '')
             .trim();
     }
 
@@ -446,12 +446,29 @@
         return compactLines(lines);
     }
 
+    function buildBranchSummaryNamesText(state) {
+        if (YuzukiMemory.VariableInjector?.buildBranchSummaryNamesText) {
+            return YuzukiMemory.VariableInjector.buildBranchSummaryNamesText(state);
+        }
+        const records = stateRecords(state, FIXED_SUMMARY_TABLE_ID);
+        const names = [];
+        records.forEach((record) => {
+            const values = record?.values || {};
+            const title = String(values.总结标题 || values.title || '').trim();
+            if (!/支线/.test(title)) return;
+            const name = String(values.核心角色 || values.character || values.角色名 || values.主视角 || '').trim();
+            if (name && !names.includes(name)) names.push(name);
+        });
+        return names.length ? names.join('、') : '（当前暂无已有支线核心角色）';
+    }
+
     function resolveTaskPromptVariables(text, state, options = {}) {
         const names = getRuntimeNames();
         const suppressMemoryTables = options.suppressMemoryTables === true;
         return String(text || '')
             .replace(/\{\{user\}\}/g, names.user)
             .replace(/\{\{char\}\}/g, names.char)
+            .replace(/\{\{BRANCH_SUMMARY_NAMES\}\}/gi, () => suppressMemoryTables ? '' : buildBranchSummaryNamesText(state))
             .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS)\}\}/gi, () => suppressMemoryTables ? '' : buildDatabaseSchemaText(state, options))
             .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => suppressMemoryTables ? '' : (YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName) || ''))
             .replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => suppressMemoryTables ? '' : (YuzukiMemory.VariableInjector?.buildSpecificSummaryText?.(state, summaryKey) || ''))
@@ -1275,7 +1292,8 @@
 3. 同一天内多段内容只在第一段写 YYYY年MM月DD日，后续同日段落只写 HH:mm-HH:mm；跨天时再写新的日期。
 4. kind 只能是 main 或 branch；主线对象不要输出 character 字段。
 5. 支线对象必须输出 character，且只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
-6. 主线和支线不要记录同一事件。`;
+6. 已有支线核心角色：{{BRANCH_SUMMARY_NAMES}}。如果新增支线剧情的核心角色已经在此列表中，character 必须复用列表里的原名字，不要改写成别名、称号或其他近似名字；只有确实是其他具体角色时，才新增新的支线核心角色名。
+7. 主线和支线不要记录同一事件。`;
     }
 
     function getTracePromptFromScheme(scheme) {
