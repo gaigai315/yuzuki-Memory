@@ -154,6 +154,7 @@
             fillMode: settings?.fillMode === 'batch' ? 'batch' : 'realtime',
             traceBatchEnabled: settings?.traceBatchEnabled !== false,
             traceBatchSize: Math.max(1, Math.round(Number(settings?.traceBatchSize) || 40)),
+            traceBatchDelay: Math.max(0, Math.round(Number(settings?.traceBatchDelay ?? 2) || 0)),
         };
     }
 
@@ -1580,7 +1581,9 @@
         if (settings.fillMode !== 'batch' || !settings.traceBatchEnabled) return null;
         const lastIndex = Math.max(0, Number(pointers.trace) || 0);
         const interval = Math.max(1, Number(settings.traceBatchSize) || 40);
-        if (chatLength - lastIndex < interval) return null;
+        const delay = Math.max(0, Number(settings.traceBatchDelay) || 0);
+        const threshold = interval + delay;
+        if (chatLength - lastIndex < threshold) return null;
         return {
             type: 'trace',
             pointerKey: 'trace',
@@ -1588,8 +1591,8 @@
             lastIndex,
             currentCount: chatLength,
             interval,
-            delay: 0,
-            threshold: interval,
+            delay,
+            threshold,
             start: lastIndex,
             end: Math.min(lastIndex + interval, chatLength),
         };

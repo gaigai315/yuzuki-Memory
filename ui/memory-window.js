@@ -150,6 +150,7 @@
         fillMode: 'realtime',
         traceBatchEnabled: true,
         traceBatchSize: 40,
+        traceBatchDelay: 2,
         summaryBatchEnabled: true,
         summaryBatchSize: 40,
         traceRunMode: 'confirm',
@@ -1163,6 +1164,7 @@
             fillMode: source.fillMode === 'batch' ? 'batch' : DEFAULT_PLUGIN_SETTINGS.fillMode,
             traceBatchEnabled: typeof source.traceBatchEnabled === 'boolean' ? source.traceBatchEnabled : DEFAULT_PLUGIN_SETTINGS.traceBatchEnabled,
             traceBatchSize: Math.round(normalizeNumberSetting(source.traceBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchSize, 0)),
+            traceBatchDelay: Math.round(normalizeNumberSetting(source.traceBatchDelay, 0, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchDelay, 0)),
             summaryBatchEnabled: typeof source.summaryBatchEnabled === 'boolean' ? source.summaryBatchEnabled : DEFAULT_PLUGIN_SETTINGS.summaryBatchEnabled,
             summaryBatchSize: Math.round(normalizeNumberSetting(source.summaryBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.summaryBatchSize, 0)),
             traceRunMode: source.traceRunMode === 'silent' ? 'silent' : DEFAULT_PLUGIN_SETTINGS.traceRunMode,
@@ -7116,6 +7118,12 @@
         return input;
     }
 
+    function normalizePluginNumberSettingValue(settingKey, value) {
+        const min = settingKey === 'traceBatchSize' || settingKey === 'summaryBatchSize' ? 1 : 0;
+        const fallback = DEFAULT_PLUGIN_SETTINGS[settingKey] ?? 0;
+        return Math.round(normalizeNumberSetting(value, min, 9999, fallback, 0));
+    }
+
     function createAutoSummaryConfigPanel() {
         const settings = getAutoSummarySettings();
         const panel = document.createElement('section');
@@ -7794,8 +7802,29 @@
             createModeChoice('批量填表', 'fa-solid fa-layer-group', '按楼层批量处理，API单独请求。', settings.fillMode === 'batch', 'batch')
         );
 
-        card.append(titleNode, modeRow);
+        card.append(titleNode, modeRow, createTraceBatchConfigPanel(settings));
         return card;
+    }
+
+    function createTraceBatchConfigPanel(settings = getPluginSettings()) {
+        const panel = document.createElement('div');
+        panel.className = 'yzm-fill-batch-settings';
+        panel.hidden = settings.fillMode !== 'batch';
+        panel.append(
+            createPluginConfigRow(
+                '每批处理楼层数',
+                '达到该楼层数后触发一次自动批量填表，并在完成后推进填表指针。',
+                'fa-solid fa-list-ol',
+                createTraceUnitInput(createConfigNumberInput(settings.traceBatchSize, 'traceBatchSize'), '层')
+            ),
+            createPluginConfigRow(
+                '滞后执行楼层',
+                '多等几层再执行，让本批末尾剧情有后续上下文；这几层不会写入本批。',
+                'fa-regular fa-clock',
+                createTraceUnitInput(createConfigNumberInput(settings.traceBatchDelay, 'traceBatchDelay'), '层')
+            )
+        );
+        return panel;
     }
 
     function createTagFilterPanel() {
@@ -10495,8 +10524,12 @@
                 if (fillModeButton) {
                     const mode = fillModeButton.dataset.yzmFillMode === 'batch' ? 'batch' : 'realtime';
                     updatePluginSetting('fillMode', mode);
+                    if (mode === 'batch') updatePluginSetting('traceBatchEnabled', true);
                     root.querySelectorAll('[data-yzm-fill-mode]').forEach((button) => {
                         button.classList.toggle('yzm-fill-mode-choice-active', button === fillModeButton);
+                    });
+                    root.querySelectorAll('.yzm-fill-batch-settings').forEach((panel) => {
+                        panel.hidden = mode !== 'batch';
                     });
                     return;
                 }
@@ -10579,7 +10612,7 @@
                     return;
                 }
                 if (!target?.matches?.('.yzm-config-number-input[data-yzm-plugin-setting]')) return;
-                const value = Math.round(normalizeNumberSetting(target.value, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0));
+                const value = normalizePluginNumberSettingValue(target.dataset.yzmPluginSetting, target.value);
                 target.value = String(value);
                 updatePluginSetting(target.dataset.yzmPluginSetting, value);
                 if (target.dataset.yzmPluginSetting === 'hiddenFloorCount') {
@@ -10594,7 +10627,7 @@
                     return;
                 }
                 if (!target?.matches?.('.yzm-config-number-input[data-yzm-plugin-setting]')) return;
-                const value = Math.round(normalizeNumberSetting(target.value, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0));
+                const value = normalizePluginNumberSettingValue(target.dataset.yzmPluginSetting, target.value);
                 target.value = String(value);
                 updatePluginSetting(target.dataset.yzmPluginSetting, value);
                 if (target.dataset.yzmPluginSetting === 'hiddenFloorCount') {
