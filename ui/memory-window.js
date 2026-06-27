@@ -625,6 +625,21 @@
         }).filter(Boolean);
     }
 
+    function hideSummaryRecordsAfterVectorSync() {
+        const table = getTables().find((entry) => entry.id === 'memory_summary');
+        if (!table) return 0;
+        let changed = 0;
+        getRecords(table.id).forEach((record) => {
+            if (!record || record.hidden) return;
+            const content = getSummaryValue(record, ['总结内容']);
+            if (!String(content || '').trim()) return;
+            record.hidden = true;
+            changed += 1;
+        });
+        if (changed > 0) saveState({ force: true });
+        return changed;
+    }
+
     function splitSummaryTimelineLine(line) {
         const timeMatch = line.match(/\d{1,2}[:：]\d{2}(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?/);
         if (!timeMatch) return null;
@@ -3190,13 +3205,29 @@
     async function syncSummaryToVectorBook(options = {}) {
         const store = await ensureVectorStoreReady();
         if (!store) return { success: false, error: '向量书模块尚未加载' };
-        const result = await store.syncSummaryToBook(getSummaryVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default');
+        const result = await store.syncSummaryToBook(getSummaryVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', getCurrentChatVectorBookName());
         if (!result.success) return result;
+        const hiddenSummaryCount = hideSummaryRecordsAfterVectorSync();
         if (options.vectorize === true) {
             const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
-            return { ...result, vectorized: true, vectorizeResult };
+            return { ...result, vectorized: true, vectorizeResult, hiddenSummaryCount };
         }
-        return { ...result, vectorized: false };
+        return { ...result, vectorized: false, hiddenSummaryCount };
+    }
+
+    function getCurrentChatVectorBookName() {
+        const context = getContext() || {};
+        const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
+        return String(
+            context.chatMetadata?.file_name
+            || context.chatId
+            || context.chat?.file_name
+            || context.group?.name
+            || character?.name
+            || context.name2
+            || context.characterName
+            || '当前会话总结'
+        ).replace(/\.[^.]+$/, '').trim() || '当前会话总结';
     }
 
     async function saveVectorBookFromEditor(root, overlay, bookId = '') {

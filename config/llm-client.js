@@ -437,6 +437,31 @@
         return { success: true, text: content };
     }
 
+    function formatResponseParseError(error, response, rawText = '') {
+        const message = String(error?.message || error || '解析响应失败').trim();
+        const status = response ? `HTTP ${response.status || '?'} ${response.statusText || ''}`.trim() : '';
+        const body = String(rawText || '').trim();
+        const preview = body ? `\n\n响应体预览：\n${body.slice(0, 1200)}` : '\n\n响应体为空。';
+        return [message, status, preview].filter(Boolean).join('\n');
+    }
+
+    async function parseGenerateResponse(response, stream = false) {
+        if (response.body && stream) {
+            try {
+                return await readStream(response.body);
+            } catch (error) {
+                throw new Error(formatResponseParseError(error, response));
+            }
+        }
+
+        const text = await response.text().catch(() => '');
+        try {
+            return parseResponsePayload(text);
+        } catch (error) {
+            throw new Error(formatResponseParseError(error, response, text));
+        }
+    }
+
     async function readStream(body) {
         const reader = body.getReader();
         const decoder = new TextDecoder('utf-8');
@@ -530,9 +555,7 @@
                 }
             }
 
-            const result = response.body && payload.stream
-                ? await readStream(response.body)
-                : parseResponsePayload(await response.text());
+            const result = await parseGenerateResponse(response, payload.stream);
             return { ...result, config };
         } catch (error) {
             if (options.signal?.aborted || error?.name === 'AbortError') return { success: false, error: '已中断发送', aborted: true };
@@ -568,9 +591,7 @@
             }
         }
 
-        const result = response.body && payload.stream
-            ? await readStream(response.body)
-            : parseResponsePayload(await response.text());
+        const result = await parseGenerateResponse(response, payload.stream);
         return { ...result };
     }
 
@@ -643,9 +664,7 @@
             };
         }
 
-        const result = response.body && contentType.includes('text/event-stream')
-            ? await readStream(response.body)
-            : parseResponsePayload(await response.text());
+        const result = await parseGenerateResponse(response, contentType.includes('text/event-stream'));
         return { ...result };
     }
 

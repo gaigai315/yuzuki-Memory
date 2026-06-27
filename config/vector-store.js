@@ -339,12 +339,15 @@
             return { success: true, bookId: id, count: chunks.length };
         }
 
-        async syncSummaryToBook(chunks, sessionId = 'default') {
+        async syncSummaryToBook(chunks, sessionId = 'default', bookName = '') {
             const normalizedChunks = Array.isArray(chunks) ? chunks.map((chunk) => String(chunk || '').trim()).filter(Boolean) : [];
             if (!normalizedChunks.length) return { success: false, count: 0, error: '总结内容为空' };
 
             const id = `yzm_summary_book_${String(sessionId || 'default').replace(/[^\w-]/g, '_')}`;
             const oldBook = this.library[id];
+            const normalizedName = String(bookName || '').trim() || '当前会话总结';
+            const oldName = String(oldBook?.name || '').trim();
+            const shouldUseSessionName = !oldName || oldName === '剧情总结归档' || oldName === '当前会话总结';
             const oldVectors = new Map();
             if (oldBook) {
                 oldBook.chunks.forEach((chunk, index) => {
@@ -365,13 +368,13 @@
             });
 
             this.library[id] = this.normalizeBook({
-                name: oldBook?.name || '剧情总结归档',
+                name: shouldUseSessionName ? normalizedName : oldName,
                 chunks: normalizedChunks,
                 vectors,
                 vectorized,
                 createTime: oldBook?.createTime || Date.now(),
                 updateTime: Date.now(),
-            }, '剧情总结归档');
+            }, normalizedName);
             this.selectedBookId = id;
             await this.saveLibrary();
             this.toggleActiveBook(id, true);
