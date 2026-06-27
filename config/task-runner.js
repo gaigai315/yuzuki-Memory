@@ -111,8 +111,10 @@
         try {
             if (typeof toastr !== 'undefined' && typeof toastr.error === 'function') {
                 toastr.error(detail, '柚月记忆', { timeOut: 8000 });
-                return;
             }
+        } catch (_error) {}
+        try {
+            if (typeof window.alert === 'function') window.alert(detail);
         } catch (_error) {}
         console.warn(`[yuzuki-Memory] ${detail}`);
     }
@@ -792,9 +794,18 @@
         return String(value || '').trim();
     }
 
+    function previewRawModelText(text = '') {
+        const source = String(text || '').trim();
+        return source ? source.slice(0, 2000) : '（空）';
+    }
+
+    function formatSummaryParseError(message, text = '') {
+        return `${message}\n\n模型原始回复预览：\n${previewRawModelText(text)}`;
+    }
+
     function parseSummaryResponse(text = '') {
         const parsedBlocks = parseJsonBlocks(text);
-        if (!parsedBlocks.length) throw new Error('未找到可解析的 JSON 结果。');
+        if (!parsedBlocks.length) throw new Error(formatSummaryParseError('未找到可解析的 JSON 结果。', text));
         const payloads = parsedBlocks.flatMap((parsed) => Array.isArray(parsed)
             ? parsed
             : (Array.isArray(parsed?.summaries) ? parsed.summaries : (Array.isArray(parsed?.records) ? parsed.records : [parsed])));
@@ -1446,7 +1457,7 @@
         const response = await generate(built.messages, { ...options, kind: 'summary' });
         if (!response.success) return response;
         const payloads = parseSummaryResponse(response.text);
-        if (!payloads.length) return { success: false, error: '总结结果缺少 summary/总结内容。', text: response.text };
+        if (!payloads.length) return { success: false, error: formatSummaryParseError('总结结果缺少 summary/总结内容。', response.text), text: response.text };
         const result = {
             success: true,
             kind: 'summary',
@@ -1503,7 +1514,7 @@
         const response = await generate(messages, { ...options, kind: 'summaryOptimize' });
         if (!response.success) return response;
         const payloads = parseSummaryResponse(response.text);
-        if (!payloads.length) return { success: false, error: '优化结果缺少 summary/总结内容。', text: response.text };
+        if (!payloads.length) return { success: false, error: formatSummaryParseError('优化结果缺少 summary/总结内容。', response.text), text: response.text };
         const result = {
             success: true,
             kind: 'summary',
