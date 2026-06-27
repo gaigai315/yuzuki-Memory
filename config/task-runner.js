@@ -101,7 +101,13 @@
     function notifyAutoTaskFailure(task = {}, error = '') {
         const taskTitle = String(task?.title || '自动记忆任务').trim();
         const message = String(error?.message || error || '未知错误').trim();
-        const detail = message ? `${taskTitle}失败：${message}` : `${taskTitle}失败`;
+        const range = Number.isFinite(Number(task?.start)) && Number.isFinite(Number(task?.end))
+            ? `（范围 ${task.start}-${task.end}，不含 ${task.end}）`
+            : '';
+        const retryHint = task?.type === 'trace' ? '填表指针未推进，后续正文结束后会继续尝试补跑。' : '总结指针未推进，后续正文结束后会继续尝试补跑。';
+        const detail = message
+            ? `${taskTitle}失败${range}：${message}\n${retryHint}`
+            : `${taskTitle}失败${range}。\n${retryHint}`;
         try {
             if (typeof toastr !== 'undefined' && typeof toastr.error === 'function') {
                 toastr.error(detail, '柚月记忆', { timeOut: 8000 });
@@ -1587,7 +1593,7 @@
         return {
             type: 'trace',
             pointerKey: 'trace',
-            title: '自动批量追溯',
+            title: '自动批量填表',
             lastIndex,
             currentCount: chatLength,
             interval,
@@ -1691,7 +1697,7 @@
             previewOnly: false,
             autoTaskType: 'trace',
         });
-        if (!result.success) return result;
+        if (!result.success) return { ...result, range: result.range || { start: task.start, end: task.end } };
 
         const pointers = normalizePointers(state);
         pointers.trace = result.range?.end || task.end;
