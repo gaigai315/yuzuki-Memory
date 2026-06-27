@@ -504,7 +504,7 @@
         return String(text || '')
             .replace(/\{\{user\}\}/g, names.user)
             .replace(/\{\{char\}\}/g, names.char)
-            .replace(/\{\{BRANCH_SUMMARY_NAMES\}\}/gi, () => suppressMemoryTables ? '' : buildBranchSummaryNamesText(state))
+            .replace(/\{\{BRANCH_SUMMARY_NAMES\}\}/gi, () => buildBranchSummaryNamesText(state))
             .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS)\}\}/gi, () => suppressMemoryTables ? '' : buildDatabaseSchemaText(state, options))
             .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => suppressMemoryTables ? '' : (YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName) || ''))
             .replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => suppressMemoryTables ? '' : (YuzukiMemory.VariableInjector?.buildSpecificSummaryText?.(state, summaryKey) || ''))
