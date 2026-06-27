@@ -4435,6 +4435,10 @@
         const action = button.dataset.yzmTaskAction || '';
         if (taskRunnerBusy && action === taskRunnerActiveAction) {
             setTaskButtonRunning(button, true, taskRunnerProgressLabel || '停止任务');
+            return;
+        }
+        if (button.dataset.yzmTaskStop === 'true') {
+            setTaskButtonRunning(button, false);
         }
     }
 
@@ -4679,11 +4683,11 @@
         console.log(`[yuzuki-Memory Task] ${label} (${seconds}s)...`);
         for (let remaining = Math.max(1, Math.round(Number(seconds) || 1)); remaining > 0; remaining -= 1) {
             if (taskRunnerStopRequested) return false;
-            taskRunnerProgressLabel = `${label} ${remaining}s`;
+            taskRunnerProgressLabel = `停止任务 (${remaining}s)`;
             syncVisibleTaskButtons();
             await waitForTaskCooldown(1000);
         }
-        taskRunnerProgressLabel = '继续执行...';
+        taskRunnerProgressLabel = '停止任务';
         syncVisibleTaskButtons();
         return !taskRunnerStopRequested;
     }
@@ -4867,6 +4871,7 @@
             taskRunnerActiveAction = '';
             taskRunnerProgressLabel = '';
             refreshAfterTask(root);
+            syncVisibleTaskButtons(root);
         }
     }
 
