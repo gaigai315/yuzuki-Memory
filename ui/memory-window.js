@@ -3662,6 +3662,84 @@
         return range ? `${range.start}-${range.end}` : '';
     }
 
+    function normalizeSummarySegmentForMerge(segment = {}, index = 0) {
+        const floor = String(segment?.floor || '').trim();
+        const range = segment?.range && typeof segment.range === 'object'
+            ? segment.range
+            : parseSummaryFloorRange(floor);
+        return {
+            floor,
+            summary: String(segment?.summary || '').trim(),
+            unresolved: String(segment?.unresolved || '').trim(),
+            remark: String(segment?.remark || '').trim(),
+            range,
+            summaryType: segment?.summaryType || 'manual',
+            createdAt: Number(segment?.createdAt || 0) || Date.now(),
+            _mergeIndex: index,
+        };
+    }
+
+    function syncMergedBranchSummaryValues(record) {
+        const segments = Array.isArray(record?.summarySegments) ? record.summarySegments : [];
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        record.values.楼层数 = segments.map((segment) => String(segment?.floor || '').trim()).filter(Boolean).join('\n');
+        record.values.总结内容 = segments.map((segment) => String(segment?.summary || '').trim()).filter(Boolean).join('\n');
+    }
+
+    function appendUniqueMultilineValue(targetValues, field, value) {
+        const next = String(value || '').trim();
+        if (!next) return;
+        const current = String(targetValues?.[field] || '').trim();
+        if (!current) {
+            targetValues[field] = next;
+            return;
+        }
+        const existingLines = new Set(current.split(/\n+/).map((line) => line.trim()).filter(Boolean));
+        const additions = next.split(/\n+/).map((line) => line.trim()).filter((line) => line && !existingLines.has(line));
+        if (additions.length) targetValues[field] = `${current}\n${additions.join('\n')}`;
+    }
+
+    function mergeBranchSummaryIntoExisting(table, record) {
+        if (!table || table.id !== 'memory_summary' || !record || getSummaryKind(record) !== 'branch') return null;
+        const character = String(record.values?.核心角色 || getSummaryValue(record, ['核心角色', '角色名', '主视角']) || '').trim();
+        if (!character) return null;
+        const records = getRecords(table.id);
+        const target = records.find((entry) => (
+            entry
+            && entry !== record
+            && getSummaryKind(entry) === 'branch'
+            && String(getSummaryValue(entry, ['核心角色', '角色名', '主视角']) || '').trim() === character
+        ));
+        if (!target) return null;
+
+        target.values = target.values && typeof target.values === 'object' ? target.values : {};
+        target.values.核心角色 = character;
+        const mergedSegments = [
+            ...getSummarySegments(target),
+            ...getSummarySegments(record),
+        ]
+            .map((segment, index) => normalizeSummarySegmentForMerge(segment, index))
+            .filter((segment) => segment.floor || segment.summary)
+            .sort((a, b) => {
+                const aStart = Number.isFinite(Number(a.range?.start)) ? Number(a.range.start) : Number.MAX_SAFE_INTEGER;
+                const bStart = Number.isFinite(Number(b.range?.start)) ? Number(b.range.start) : Number.MAX_SAFE_INTEGER;
+                if (aStart !== bStart) return aStart - bStart;
+                const aEnd = Number.isFinite(Number(a.range?.end)) ? Number(a.range.end) : Number.MAX_SAFE_INTEGER;
+                const bEnd = Number.isFinite(Number(b.range?.end)) ? Number(b.range.end) : Number.MAX_SAFE_INTEGER;
+                if (aEnd !== bEnd) return aEnd - bEnd;
+                return a._mergeIndex - b._mergeIndex;
+            })
+            .map(({ _mergeIndex, ...segment }) => segment);
+        target.summarySegments = mergedSegments;
+        syncMergedBranchSummaryValues(target);
+        appendUniqueMultilineValue(target.values, '未解决问题', record.values?.未解决问题);
+        appendUniqueMultilineValue(target.values, '备注', record.values?.备注);
+
+        const recordIndex = records.findIndex((entry) => entry === record || String(entry?.id || '') === String(record.id || ''));
+        if (recordIndex > -1) records.splice(recordIndex, 1);
+        return target;
+    }
+
     function createTableWorkspaceView(table) {
         if (table?.id === 'character_profile') {
             return createCharacterProfileView(table);
@@ -9537,6 +9615,8 @@
             }));
             const records = getRecords(table.id);
             if (isNewRecord) records.push(record);
+            const mergedRecord = isBranchSummaryRecord ? mergeBranchSummaryIntoExisting(table, record) : null;
+            if (mergedRecord) record = mergedRecord;
             setActiveRecordId(table.id, record.id);
             if (!persistStateOrReload(root, '当前会话尚未就绪，记录修改未保存。', {
                 tableId: table.id,

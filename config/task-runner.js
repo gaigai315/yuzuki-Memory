@@ -63,6 +63,8 @@
     let autoTaskLastGenerationAt = 0;
     let autoTaskSessionPollTimer = null;
     const CHAT_REQUEST_COOLDOWN_MS = 1500;
+    const AUTO_TASK_BACKFILL_RETRY_MS = 15000;
+    const AUTO_TASK_BACKFILL_NEXT_MS = 2500;
 
     function isGenerationBusy() {
         const ctx = getContext();
@@ -94,6 +96,19 @@
 
     function isManualTaskBusy() {
         return window.yzmMemoryManualTaskRunning === true;
+    }
+
+    function notifyAutoTaskFailure(task = {}, error = '') {
+        const taskTitle = String(task?.title || '自动记忆任务').trim();
+        const message = String(error?.message || error || '未知错误').trim();
+        const detail = message ? `${taskTitle}失败：${message}` : `${taskTitle}失败`;
+        try {
+            if (typeof toastr !== 'undefined' && typeof toastr.error === 'function') {
+                toastr.error(detail, '柚月记忆', { timeOut: 8000 });
+                return;
+            }
+        } catch (_error) {}
+        console.warn(`[yuzuki-Memory] ${detail}`);
     }
 
     function parseJsonStorage(key, fallback) {
@@ -1580,6 +1595,14 @@
         };
     }
 
+    function buildPendingAutoTask(pointers, chatLength, settings, pluginSettings) {
+        const traceTask = buildAutoTraceTask(pointers, chatLength, pluginSettings);
+        if (traceTask) return traceTask;
+        const historyTask = buildAutoTask('history', pointers, chatLength, settings);
+        if (historyTask) return historyTask;
+        return buildAutoTask('summary', pointers, chatLength, settings);
+    }
+
     async function confirmAutoTask(task, callbacks = {}) {
         if (settingsSupportsDirect(callbacks) && callbacks.confirmAutoTask) {
             return callbacks.confirmAutoTask(task);
@@ -1707,10 +1730,7 @@
             const settings = getAutoSummarySettings();
             const pluginSettings = getPluginSettings();
             const pointers = normalizePointers(state);
-            const traceTask = buildAutoTraceTask(pointers, chatLength, pluginSettings);
-            const historyTask = traceTask ? null : buildAutoTask('history', pointers, chatLength, settings);
-            const summaryTask = traceTask || historyTask ? null : buildAutoTask('summary', pointers, chatLength, settings);
-            const task = traceTask || historyTask || summaryTask;
+            const task = buildPendingAutoTask(pointers, chatLength, settings, pluginSettings);
             if (!task) {
                 autoTaskArmed = false;
                 autoTaskBaselineChatLength = chatLength;
@@ -1718,19 +1738,41 @@
             }
 
             autoSummaryRunning = true;
+            let shouldContinueBackfill = false;
+            let continueDelay = AUTO_TASK_BACKFILL_NEXT_MS;
             try {
                 autoSummaryPromptOpen = task.type === 'trace' ? false : (!settings.directTrigger || !settings.autoSave);
                 const result = task.type === 'trace'
                     ? await runAutoTraceTask(state, task, callbacks)
                     : await runAutoSummaryTask(state, task, settings, callbacks);
-                if (result?.success === false) console.warn('[yuzuki-Memory] Auto task skipped:', result.error);
+                if (result?.success === false) {
+                    console.warn('[yuzuki-Memory] Auto task skipped:', result.error);
+                    notifyAutoTaskFailure(task, result.error);
+                    shouldContinueBackfill = true;
+                    continueDelay = AUTO_TASK_BACKFILL_RETRY_MS;
+                } else if (result?.skipped || result?.postponed) {
+                    shouldContinueBackfill = false;
+                } else {
+                    const latestState = callbacks.getState?.() || state;
+                    const latestPointers = normalizePointers(latestState);
+                    shouldContinueBackfill = !!buildPendingAutoTask(latestPointers, getChatLength(), settings, pluginSettings);
+                }
             } catch (error) {
                 console.warn('[yuzuki-Memory] Auto task failed:', error);
+                notifyAutoTaskFailure(task, error);
+                shouldContinueBackfill = true;
+                continueDelay = AUTO_TASK_BACKFILL_RETRY_MS;
             } finally {
                 autoSummaryRunning = false;
                 autoSummaryPromptOpen = false;
-                autoTaskArmed = false;
                 autoTaskBaselineChatLength = getChatLength();
+                if (shouldContinueBackfill) {
+                    autoTaskArmed = true;
+                    autoTaskBaselineChatLength = Math.max(0, getChatLength() - 1);
+                    scheduleAutoSummary(callbacks, continueDelay);
+                } else {
+                    autoTaskArmed = false;
+                }
             }
         }, delayMs);
     }
