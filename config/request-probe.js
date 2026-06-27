@@ -392,13 +392,6 @@
                     disableFallback: hasMemoryDataVariable,
                 });
             });
-            if (typeof rawBody.prompt === 'string' && bodyContainsMemoryDataVariable(rawBody.prompt)) {
-                const promptItems = [{ role: 'system', content: rawBody.prompt, name: 'PROMPT' }];
-                YuzukiMemory.PromptReadyInjector.processPromptReadyChatSync(promptItems, {
-                    disableFallback: hasMemoryDataVariable,
-                });
-                rawBody.prompt = promptItems.map((item) => getMessageText(item)).filter(Boolean).join('\n\n');
-            }
         }
         const body = YuzukiMemory.VariableInjector?.processBody
             ? await YuzukiMemory.VariableInjector.processBody(rawBody, {

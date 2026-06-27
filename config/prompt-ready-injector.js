@@ -11,6 +11,16 @@
     const STRIP_MEMORY_VAR_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT)\s*\}\}/gi;
     const SPECIFIC_TABLE_PATTERN = /\{\{\s*MEMORY_TABLE\s*_\s*([^{}]+?)\s*\}\}/i;
     const SPECIFIC_SUMMARY_PATTERN = /\{\{\s*MEMORY_SUMMARY\s*_\s*([^{}]+?)\s*\}\}/i;
+    const FIXED_PROMPT_IDENTIFIERS = new Set([
+        'worldInfoBefore',
+        'worldInfoAfter',
+        'authorsNote',
+        'dialogueExamples',
+        'charDescription',
+        'charPersonality',
+        'scenario',
+        'personaDescription',
+    ]);
     let retryTimer = null;
 
     function safeDeepClone(value) {
@@ -144,58 +154,27 @@
         };
     }
 
-    function replaceAnchorsInSourceText(text, state) {
-        const injector = YuzukiMemory.VariableInjector;
-        if (!injector || typeof text !== 'string' || !MEMORY_VAR_PATTERN.test(text)) {
-            MEMORY_VAR_PATTERN.lastIndex = 0;
-            return { text, changed: false, anchors: 0 };
-        }
-        MEMORY_VAR_PATTERN.lastIndex = 0;
-        let anchors = 0;
-        const nextText = text.replace(STRIP_MEMORY_VAR_PATTERN, (match) => {
-            anchors += 1;
-            const summaryName = match.match(/\{\{\s*MEMORY_SUMMARY\s*_\s*([^{}]+?)\s*\}\}/i)?.[1];
-            if (summaryName) return injector.buildSpecificSummaryText?.(state, summaryName) || '';
-            const tableName = match.match(/\{\{\s*MEMORY_TABLE\s*_\s*([^{}]+?)\s*\}\}/i)?.[1];
-            if (tableName) return injector.buildSpecificTableText?.(state, tableName) || '';
-            if (/\{\{\s*MEMORY_PROMPT\s*\}\}/i.test(match)) return injector.buildMemoryPromptText?.(state) || '';
-            if (/\{\{\s*MEMORY_SUMMARY\s*\}\}/i.test(match)) return injector.buildSummaryText?.(state) || '';
-            if (/\{\{\s*MEMORY_TABLE\s*\}\}/i.test(match)) return injector.buildAllTablesText?.(state) || '';
-            if (/\{\{\s*MEMORY\s*\}\}/i.test(match)) {
-                return [
-                    injector.buildSummaryText?.(state) || '',
-                    injector.buildAllTablesText?.(state) || '',
-                ].filter(Boolean).join('\n\n');
-            }
-            return '';
-        });
-        return {
-            text: injector.resolveRuntimeVariables?.(nextText) || nextText,
-            changed: nextText !== text,
-            anchors,
-        };
-    }
-
-    function processExtensionPromptAnchors(state) {
+    function processExtensionPromptAnchors() {
         const context = getContext();
         const prompts = context?.extensionPrompts;
-        if (!prompts || typeof prompts !== 'object') return { anchors: 0, changed: 0 };
+        if (!prompts || typeof prompts !== 'object') return { anchors: 0 };
         let anchors = 0;
-        let changed = 0;
         Object.entries(prompts).forEach(([key, prompt]) => {
             if (!prompt || typeof prompt !== 'object' || typeof prompt.value !== 'string') return;
-            const result = replaceAnchorsInSourceText(prompt.value, state);
-            if (!result.changed) return;
-            prompt.value = result.text;
-            anchors += result.anchors;
-            changed += 1;
-            console.info('[yuzuki-Memory] extensionPrompt anchor replaced.', {
+            if (!MEMORY_VAR_PATTERN.test(prompt.value)) {
+                MEMORY_VAR_PATTERN.lastIndex = 0;
+                return;
+            }
+            MEMORY_VAR_PATTERN.lastIndex = 0;
+            const matches = prompt.value.match(STRIP_MEMORY_VAR_PATTERN) || [];
+            anchors += matches.length;
+            console.info('[yuzuki-Memory] extensionPrompt anchor detected.', {
                 key,
-                anchors: result.anchors,
-                preview: result.text.slice(0, 160),
+                anchors: matches.length,
+                preview: prompt.value.slice(0, 160),
             });
         });
-        return { anchors, changed };
+        return { anchors };
     }
 
     function getDefaultPosition(chat) {
@@ -309,12 +288,29 @@
         return null;
     }
 
+    function getMessageIdentifier(message) {
+        return String(message?.identifier || message?.name || message?.id || '').trim();
+    }
+
+    function isFixedPromptAnchor(message) {
+        const identifier = getMessageIdentifier(message);
+        if (FIXED_PROMPT_IDENTIFIERS.has(identifier)) return true;
+        const normalized = identifier.replace(/\s+/g, '').toLowerCase();
+        return normalized === 'worldinfo(before)'
+            || normalized === 'worldinfo(after)'
+            || normalized === 'worldinfo'
+            || normalized.includes('worldinfobefore')
+            || normalized.includes('worldinfoafter')
+            || normalized.includes('authorsnote');
+    }
+
     function isAnchorAllowed(message, text, worldInfoEntries) {
         if (!MEMORY_VAR_PATTERN.test(text)) {
             MEMORY_VAR_PATTERN.lastIndex = 0;
             return true;
         }
         MEMORY_VAR_PATTERN.lastIndex = 0;
+        if (isFixedPromptAnchor(message)) return true;
         if (message?.identifier && getPromptToggleStateByIdentifier(message.identifier) === false) return false;
         const normalized = normalizeAnchorText(text);
         let hitEnabled = false;
@@ -347,8 +343,9 @@
 
         const state = storage.loadState(injector.createDefaultState?.());
         const extensionPromptResult = options.processExtensionPrompts === true
-            ? processExtensionPromptAnchors(state)
-            : { anchors: 0, changed: 0 };
+            ? processExtensionPromptAnchors()
+            : { anchors: 0 };
+        const macroDebug = YuzukiMemory.VariableInjector?.getMacroRegistrationDebug?.() || null;
         const summaryMessages = (injector.buildSummaryMessages?.(state) || []).map((message) => ({
             ...message,
             isGaigaiData: true,
@@ -368,6 +365,7 @@
         let idxSummaryVar = -1;
         let idxTableVar = -1;
         let idxSmartVar = -1;
+        let idxPromptVar = -1;
         let anchors = 0;
         let injected = 0;
         const initialAnchorIndexes = [];
@@ -412,6 +410,9 @@
             }
 
             if (/\{\{\s*MEMORY_PROMPT\s*\}\}/i.test(text)) {
+                const promptMatch = text.match(/\{\{\s*MEMORY_PROMPT\s*\}\}/i);
+                anchors += 1;
+                if (idxPromptVar < 0 && promptMatch) idxPromptVar = i;
                 text = text.replace(/\{\{\s*MEMORY_PROMPT\s*\}\}/gi, promptMessage ? promptMessage.content : '');
                 setPrimaryTextToMessage(message, text);
                 if (promptMessage) {
@@ -506,7 +507,7 @@
             insertionOps.push({ index, type: 'Table', messages: tableMessages.splice(0) });
         }
         if (allowFallback && !replacedPrompt && promptMessage && options.disablePromptFallback !== true) {
-            insertionOps.push({ index: getPromptDefaultPosition(chat), type: 'Prompt', messages: [promptMessage] });
+            insertionOps.push({ index: idxPromptVar >= 0 ? idxPromptVar : getPromptDefaultPosition(chat), type: 'Prompt', messages: [promptMessage] });
         }
 
         insertionOps
@@ -529,7 +530,7 @@
             fallback: insertionOps.length,
             initialAnchorIndexes,
             extensionPromptAnchors: extensionPromptResult.anchors,
-            extensionPromptChanged: extensionPromptResult.changed,
+            macroRegistration: macroDebug,
         });
         return chat;
     }

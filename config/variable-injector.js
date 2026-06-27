@@ -34,6 +34,14 @@
         未解决问题: ['未解决问题', 'unresolved', '问题'],
         备注: ['备注', 'remark', 'note', 'notes'],
     };
+    const REGISTERED_ST_MACROS = new Set();
+    const ST_MACRO_REGISTRATION = {
+        scheduled: 0,
+        registered: 0,
+        failed: [],
+        done: false,
+        updatedAt: 0,
+    };
 
     const DEFAULT_TABLES = [
         {
@@ -397,9 +405,10 @@
         const primary = getPrimaryColumn(table);
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const title = getSummaryFieldValue(values, primary);
-        const body = (Array.isArray(table.columns) ? table.columns : [])
+        const summaryContent = getSummaryFieldValue(values, '总结内容');
+        const extraBody = (Array.isArray(table.columns) ? table.columns : [])
             .map(cleanColumnName)
-            .filter((column) => column !== primary && !['核心角色', '楼层数'].includes(column))
+            .filter((column) => column !== primary && !['核心角色', '楼层数', '总结内容'].includes(column))
             .filter((column) => !SUMMARY_INJECTION_EXCLUDED_COLUMNS.has(column))
             .map((column) => {
                 const value = getSummaryFieldValue(values, column);
@@ -407,6 +416,7 @@
             })
             .filter(Boolean)
             .join('\n');
+        const body = compactLines([summaryContent, extraBody]);
         if (!title && !body) return '';
         return body;
     }
@@ -923,7 +933,6 @@
 
     function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState(), vectorText = '', injectedVars = new Set(), options = {}) {
         const targets = getRequestArrays(body);
-        if (!targets.length) return false;
 
         const tableEntries = buildTableMessageEntries(state);
         const summaryEntries = buildSummaryMessageEntries(state);
@@ -1035,6 +1044,19 @@
                 target.items.splice(0, target.items.length, ...nextItems);
             }
         });
+
+        if (typeof body.prompt === 'string') {
+            const anchorPattern = new RegExp(MEMORY_DATA_ANCHOR_PATTERN.source, 'gi');
+            if (anchorPattern.test(body.prompt)) {
+                anchorPattern.lastIndex = 0;
+                body.prompt = body.prompt.replace(anchorPattern, (match) => {
+                    const consumedMessages = consumeAnchor(match);
+                    if (consumedMessages === null) return match;
+                    return consumedMessages.map((message) => resolveRuntimeVariables(message?.content || '')).filter(Boolean).join('\n\n');
+                });
+                changed = true;
+            }
+        }
         return changed;
     }
 
@@ -1166,6 +1188,99 @@
             __summary: (summaryKey) => settings.injectMemoryTable
                 ? resolveRuntimeVariables(buildSpecificSummaryText(state, summaryKey))
                 : `{{MEMORY_SUMMARY_${summaryKey}}}`,
+        };
+    }
+
+    function createMacroHandler(name) {
+        return () => {
+            const state = getCurrentState();
+            const settings = getPluginSettings();
+            if (!settings.injectMemoryTable) return `{{${name}}}`;
+            if (name === 'MEMORY') return buildMemoryText(state);
+            if (name === 'MEMORY_PROMPT') return buildMemoryPromptText(state);
+            if (name === 'MEMORY_SUMMARY') return buildSummaryText(state);
+            if (name === 'MEMORY_TABLE') return buildAllTablesText(state);
+            if (name === 'DATABASE_SCHEMA' || name === 'TABLE_DEFINITIONS') return buildDatabaseSchemaText(state);
+            if (name === 'BRANCH_SUMMARY_NAMES') return buildBranchSummaryNamesText(state);
+            return '';
+        };
+    }
+
+    function getSillyTavernMacroNames(state = getCurrentState()) {
+        const names = new Set([
+            'MEMORY',
+            'MEMORY_PROMPT',
+            'MEMORY_SUMMARY',
+            'MEMORY_TABLE',
+            'DATABASE_SCHEMA',
+            'TABLE_DEFINITIONS',
+            'BRANCH_SUMMARY_NAMES',
+        ]);
+        return Array.from(names);
+    }
+
+    async function registerMacroSystem(name) {
+        try {
+            const module = await import('/scripts/macros/macro-system.js');
+            module?.macros?.register?.(name, {
+                category: 'memory',
+                description: `yuzuki-Memory ${name}`,
+                strictArgs: false,
+                handler: createMacroHandler(name),
+            });
+            return true;
+        } catch (error) {
+            console.warn('[yuzuki-Memory] 注册新版酒馆宏失败。', name, error);
+            return false;
+        }
+    }
+
+    async function registerLegacyMacro(name) {
+        try {
+            const module = await import('/scripts/macros.js');
+            module?.MacrosParser?.registerMacro?.(name, createMacroHandler(name), `yuzuki-Memory ${name}`);
+            return true;
+        } catch (error) {
+            console.warn('[yuzuki-Memory] 注册旧版酒馆宏失败。', name, error);
+            return false;
+        }
+    }
+
+    function registerSillyTavernMacros(attempt = 0) {
+        const names = getSillyTavernMacroNames();
+        const pending = names.filter((name) => !REGISTERED_ST_MACROS.has(name));
+        if (!pending.length) return ST_MACRO_REGISTRATION.done;
+        ST_MACRO_REGISTRATION.scheduled += pending.length;
+        ST_MACRO_REGISTRATION.done = false;
+        ST_MACRO_REGISTRATION.updatedAt = Date.now();
+        pending.forEach((name) => REGISTERED_ST_MACROS.add(name));
+        Promise.all(pending.map(async (name) => {
+            let ok = await registerMacroSystem(name);
+            if (!ok) ok = await registerLegacyMacro(name);
+            if (ok) {
+                ST_MACRO_REGISTRATION.registered += 1;
+            } else {
+                ST_MACRO_REGISTRATION.failed.push(name);
+            }
+            return ok;
+        })).then((results) => {
+            ST_MACRO_REGISTRATION.done = true;
+            ST_MACRO_REGISTRATION.updatedAt = Date.now();
+            console.info('[yuzuki-Memory] SillyTavern memory macro registration completed.', {
+                registered: results.filter(Boolean).length,
+                failed: ST_MACRO_REGISTRATION.failed.slice(),
+                totalRegistered: ST_MACRO_REGISTRATION.registered,
+            });
+        });
+        console.info('[yuzuki-Memory] SillyTavern memory macro registration scheduled.', { count: pending.length });
+        if (!names.length && attempt < 10) window.setTimeout(() => registerSillyTavernMacros(attempt + 1), 500);
+        return true;
+    }
+
+    function getMacroRegistrationDebug() {
+        return {
+            ...ST_MACRO_REGISTRATION,
+            registeredNames: Array.from(REGISTERED_ST_MACROS),
         };
     }
 
@@ -1309,6 +1424,10 @@
         buildTableMessageEntries,
         createPromptMemoryMessage,
         getRequestArrays,
+        registerSillyTavernMacros,
+        getMacroRegistrationDebug,
         processBody,
     });
+
+    registerSillyTavernMacros();
 })();
