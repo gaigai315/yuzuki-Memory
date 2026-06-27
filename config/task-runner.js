@@ -117,6 +117,24 @@
         console.warn(`[yuzuki-Memory] ${detail}`);
     }
 
+    function notifyAutoTaskSuccess(task = {}, result = {}) {
+        const taskTitle = String(task?.title || '自动记忆任务').trim();
+        const range = Number.isFinite(Number(result?.range?.start ?? task?.start)) && Number.isFinite(Number(result?.range?.end ?? task?.end))
+            ? `（范围 ${result?.range?.start ?? task.start}-${result?.range?.end ?? task.end}，不含 ${result?.range?.end ?? task.end}）`
+            : '';
+        const count = Number(result?.count) || 0;
+        const detail = task?.type === 'trace'
+            ? `${taskTitle}完成${range}：写入 ${count} 条，填表指针已推进。`
+            : `${taskTitle}完成${range}。`;
+        try {
+            if (typeof toastr !== 'undefined' && typeof toastr.success === 'function') {
+                toastr.success(detail, '柚月记忆', { timeOut: 5000 });
+                return;
+            }
+        } catch (_error) {}
+        console.log(`[yuzuki-Memory] ${detail}`);
+    }
+
     function parseJsonStorage(key, fallback) {
         const globalValue = YuzukiMemory.GlobalSettings?.get?.(key, undefined);
         if (globalValue !== undefined) return globalValue === null ? fallback : globalValue;
@@ -1776,6 +1794,7 @@
                 } else if (result?.skipped || result?.postponed) {
                     shouldContinueBackfill = false;
                 } else {
+                    if (task.type === 'trace') notifyAutoTaskSuccess(task, result);
                     const latestState = callbacks.getState?.() || state;
                     const latestPointers = normalizePointers(latestState);
                     shouldContinueBackfill = !!buildPendingAutoTask(latestPointers, getChatLength(), settings, pluginSettings);
