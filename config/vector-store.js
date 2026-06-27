@@ -256,9 +256,12 @@
         getBookStats(book) {
             const total = Array.isArray(book?.chunks) ? book.chunks.length : 0;
             const done = Array.isArray(book?.vectorized) ? book.vectorized.filter(Boolean).length : 0;
+            const dimension = Array.isArray(book?.vectors)
+                ? (book.vectors.find((vector) => Array.isArray(vector) && vector.length)?.length || 0)
+                : 0;
             const progress = total ? Math.round((done / total) * 100) : 0;
             const status = total === 0 ? 'pending' : (done >= total ? 'done' : (done > 0 ? 'running' : 'pending'));
-            return { total, done, progress, status };
+            return { total, done, dimension, progress, status };
         }
 
         listBooks() {
@@ -270,6 +273,7 @@
                     name: book.name,
                     entries: stats.total,
                     vectorizedCount: stats.done,
+                    dimension: stats.dimension,
                     progress: stats.progress,
                     status: stats.status,
                     selected: id === this.selectedBookId,
@@ -473,13 +477,26 @@
             return 0;
         }
 
+        getBookVectorDimension(book) {
+            if (!Array.isArray(book?.vectors)) return 0;
+            const vector = book.vectors.find((item) => Array.isArray(item) && item.length);
+            return Array.isArray(vector) ? vector.length : 0;
+        }
+
         async search(query, allowedBookIds = null) {
             await this.whenReady();
-            const settings = YuzukiMemory.EmbeddingClient.loadSettings();
-            if (!settings.enabled) {
-                console.info('[yuzuki-Memory Vector] 搜索跳过：向量召回未启用');
+            let pluginSettings = {};
+            try {
+                pluginSettings = YuzukiMemory.GlobalSettings?.get?.('yzm_memory_global_plugin_settings', {})
+                    ?? JSON.parse(localStorage.getItem('yzm_memory_global_plugin_settings') || '{}');
+            } catch (_error) {
+                pluginSettings = {};
+            }
+            if (pluginSettings?.injectVectorMemory !== true) {
+                console.info('[yuzuki-Memory Vector] 搜索跳过：注入向量记忆未启用');
                 return [];
             }
+            const settings = YuzukiMemory.EmbeddingClient.loadSettings();
             const rerankSettings = YuzukiMemory.RerankClient?.loadSettings?.() || { enabled: false };
             const sourceQuery = String(query || '').trim();
             if (!sourceQuery) {
@@ -496,9 +513,47 @@
             const initialThreshold = rerankSettings.enabled ? 0.1 : settings.threshold;
 
             const queryVector = await this.getEmbedding(sourceQuery.slice(-6000));
+            const queryDimension = Array.isArray(queryVector) ? queryVector.length : 0;
+            if (!queryDimension) {
+                console.warn('[yuzuki-Memory Vector] 搜索跳过：查询向量维度为空');
+                return [];
+            }
+            const matchedBookIds = [];
+            const mismatchedBooks = [];
+            const emptyBooks = [];
+            bookIds.forEach((bookId) => {
+                const book = this.library[bookId];
+                if (!book) return;
+                const dimension = this.getBookVectorDimension(book);
+                if (!dimension) {
+                    emptyBooks.push(book.name || bookId);
+                    return;
+                }
+                if (dimension !== queryDimension) {
+                    mismatchedBooks.push(`${book.name || bookId}: ${dimension} != ${queryDimension}`);
+                    return;
+                }
+                matchedBookIds.push(bookId);
+            });
+            if (!matchedBookIds.length) {
+                console.warn('[yuzuki-Memory Vector] 搜索跳过：绑定向量书维度均与当前 Embedding API 不匹配', {
+                    queryDimension,
+                    mismatchedBooks,
+                    emptyBooks,
+                });
+                return [];
+            }
+            if (mismatchedBooks.length || emptyBooks.length) {
+                console.warn('[yuzuki-Memory Vector] 已跳过维度不匹配或未向量化的书', {
+                    queryDimension,
+                    matchedBooks: matchedBookIds.length,
+                    mismatchedBooks,
+                    emptyBooks,
+                });
+            }
             const seen = new Set();
             const results = [];
-            bookIds.forEach((bookId) => {
+            matchedBookIds.forEach((bookId) => {
                 const book = this.library[bookId];
                 if (!book) return;
                 book.chunks.forEach((chunk, index) => {
@@ -519,7 +574,9 @@
                 .sort((a, b) => b.score - a.score)
                 .slice(0, recallCount);
             console.info('[yuzuki-Memory Vector] 向量初筛完成', {
-                books: bookIds.length,
+                books: matchedBookIds.length,
+                skippedBooks: bookIds.length - matchedBookIds.length,
+                queryDimension,
                 candidates: candidates.length,
                 rawMatches: results.length,
                 initialThreshold,

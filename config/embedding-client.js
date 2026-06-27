@@ -73,7 +73,7 @@
         const provider = PROVIDERS[raw.provider] ? raw.provider : DEFAULT_SETTINGS.provider;
         const meta = getProviderMeta(provider);
         return {
-            enabled: raw.enabled === true,
+            enabled: true,
             provider,
             baseUrl: String(raw.baseUrl || raw.apiUrl || meta.defaultUrl || '').trim(),
             apiKey: String(raw.apiKey || '').trim(),

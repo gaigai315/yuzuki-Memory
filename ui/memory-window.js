@@ -3008,6 +3008,7 @@
         metrics.className = 'yzm-vector-detail-metrics';
         metrics.append(
             createVectorMetric('分段数', stats.total.toLocaleString()),
+            createVectorMetric('向量维度', stats.dimension ? `${stats.dimension} 维` : '未生成'),
             createVectorMetric('向量化进度', `${stats.progress}%`, true, stats.progress),
             createVectorMetric('最后更新', formatVectorDate(book.updateTime), false, 0, 'yzm-vector-metric-updated')
         );
@@ -5595,8 +5596,6 @@
         const meta = YuzukiMemory.EmbeddingClient?.getProviderMeta?.(searchSettings.provider) || {};
         const fetchModelButton = createApiMiniButton('拉取模型', 'fa-solid fa-cloud-arrow-down');
         fetchModelButton.dataset.yzmApiAction = 'fetchEmbeddingModels';
-        const enabledSwitch = createConfigSwitch(searchSettings.enabled === true);
-        enabledSwitch.classList.add('yzm-embedding-enabled-switch');
         return createApiPagePanel('向量化 API 配置', '配置书籍分段向量化与相似度检索所使用的 Embedding 模型。', 'fa-solid fa-diagram-project', [
             createApiCard('连接配置', 'fa-solid fa-link', [
                 createApiGrid([
@@ -5605,7 +5604,7 @@
                     createApiField('API Key', createApiBoundInput('sk-...', searchSettings.apiKey, 'password', true, 'embeddingApiKey')),
                     createApiField('模型名称', createApiInlineControl(createApiBoundInput(meta.placeholderModel || '输入模型名称', searchSettings.model, 'text', false, 'embeddingModel'), fetchModelButton)),
                 ]),
-                createApiConnectionFooter(createApiField('启用召回', enabledSwitch, 'yzm-api-field-inline'), createApiActions([
+                createApiConnectionFooter(createApiInlineWarning('是否注入向量召回由「插件配置 - 注入向量记忆」统一控制。'), createApiActions([
                     ['测试连接', 'fa-solid fa-plug-circle-check', '', 'testEmbeddingConnection'],
                 ])),
             ], '', createApiInlineWarning('此为向量化（Embedding）模型，不支持 LLM 模型')),
@@ -5909,7 +5908,7 @@
         const recallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="recallLimit"]');
         const depthInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="contextDepth"]');
         return {
-            enabled: root.querySelector('.yzm-api-view .yzm-embedding-enabled-switch')?.classList.contains('yzm-config-switch-on') === true,
+            enabled: true,
             provider: getApiFieldValue(root, 'embeddingProvider'),
             baseUrl: getApiFieldValue(root, 'embeddingBaseUrl'),
             apiKey: getApiFieldValue(root, 'embeddingApiKey'),
@@ -5926,11 +5925,6 @@
         setApiFieldValue(root, 'embeddingBaseUrl', normalized.baseUrl);
         setApiFieldValue(root, 'embeddingApiKey', normalized.apiKey);
         setApiFieldValue(root, 'embeddingModel', normalized.model);
-        const enabledSwitch = root.querySelector('.yzm-api-view .yzm-embedding-enabled-switch');
-        if (enabledSwitch) {
-            enabledSwitch.classList.toggle('yzm-config-switch-on', normalized.enabled === true);
-            enabledSwitch.setAttribute('aria-pressed', String(normalized.enabled === true));
-        }
         const thresholdInput = root.querySelector('.yzm-api-view .yzm-api-range-number');
         const threshold = Number(clampNumber(normalized.threshold, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold).toFixed(2));
         if (thresholdInput) thresholdInput.value = threshold.toFixed(2);
@@ -6452,7 +6446,8 @@
                 return;
             }
             saveEmbeddingSettingsFromForm(root, false);
-            showLlmApiResultDialog(root, '测试成功', '', 'success');
+            const dimension = Math.max(0, Math.round(Number(result.dimension) || 0));
+            showLlmApiResultDialog(root, '测试成功', dimension ? `向量维度：${dimension} 维` : '连接成功，但未解析到向量维度。', 'success');
         } catch (error) {
             showLlmApiResultDialog(root, '测试失败', String(error?.message || error || '测试失败'), 'error');
         } finally {
