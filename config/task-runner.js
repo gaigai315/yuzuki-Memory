@@ -803,13 +803,41 @@
         return `${message}\n\n模型原始回复预览：\n${previewRawModelText(text)}`;
     }
 
+    function extractMemorySummaryText(text = '') {
+        const source = String(text || '');
+        const match = source.match(/<Memory(?:\s+[^>]*)?>([\s\S]*?)<\/Memory>/i);
+        return match ? match[1].trim() : '';
+    }
+
+    function parseMemorySummarySections(text = '') {
+        const body = extractMemorySummaryText(text);
+        if (!body) throw new Error(formatSummaryParseError('未找到 <Memory>...</Memory> 总结标签。', text));
+
+        const headingPattern = /【\s*(主线总结|支线总结)\s*(?:[:：\-－—]\s*([^】]+?))?\s*】/g;
+        const matches = [...body.matchAll(headingPattern)];
+        if (!matches.length) throw new Error(formatSummaryParseError('Memory 标签内未找到【主线总结】或【支线总结：角色名】分块。', text));
+
+        return matches.map((match, index) => {
+            const start = match.index + match[0].length;
+            const end = index + 1 < matches.length ? matches[index + 1].index : body.length;
+            const kindLabel = match[1];
+            const character = String(match[2] || '').trim();
+            const summary = body.slice(start, end).trim();
+            return {
+                kind: kindLabel.includes('支线') ? 'branch' : 'main',
+                title: '',
+                character: kindLabel.includes('支线') ? character : '',
+                summary,
+                unresolved: '',
+                remark: '',
+            };
+        }).filter((payload) => payload.summary && (payload.kind === 'main' || payload.character));
+    }
+
     function parseSummaryResponse(text = '') {
-        const parsedBlocks = parseJsonBlocks(text);
-        if (!parsedBlocks.length) throw new Error(formatSummaryParseError('未找到可解析的 JSON 结果。', text));
-        const payloads = parsedBlocks.flatMap((parsed) => Array.isArray(parsed)
-            ? parsed
-            : (Array.isArray(parsed?.summaries) ? parsed.summaries : (Array.isArray(parsed?.records) ? parsed.records : [parsed])));
-        return payloads.map(normalizeSummaryPayload).filter((payload) => payload.summary);
+        const payloads = parseMemorySummarySections(text);
+        if (!payloads.length) throw new Error(formatSummaryParseError('Memory 总结内容为空，或支线缺少角色名。', text));
+        return payloads;
     }
 
     function getSummaryPreview(payload) {
@@ -1349,15 +1377,22 @@
 
     function getDefaultSummaryPrompt() {
         return `你是剧情总结助手。请总结给定聊天范围。
-只输出 JSON，不要解释，不要 Markdown。格式：
-{"summaries":[{"kind":"main","title":"","summary":"YYYY年MM月DD日,HH:mm-HH:mm [地点] 事件闭环描述","unresolved":"未解决问题","remark":"备注"},{"kind":"branch","title":"","character":"角色名","summary":"YYYY年MM月DD日,HH:mm-HH:mm [地点] 事件闭环描述","unresolved":"未解决问题","remark":"备注"}]}
+输出必须使用 <Memory>...</Memory> 包裹；标签外不要输出任何内容。
+格式：
+<Memory>
+【主线总结】
+YYYY年MM月DD日,HH:mm-HH:mm [地点] 事件闭环描述
+
+【支线总结：角色名】
+YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
+</Memory>
 规则：
-1. summaries 可以包含多个对象，用于同时输出主线和多个支线。
-2. summary 是记忆总结详情页唯一展示内容；多段剧情用换行分隔，或用字符串数组。
+1. 可以同时输出一个主线总结和多个支线总结分块；没有内容的分块不要输出。
+2. 分块正文是记忆总结详情页唯一展示内容；多段剧情用换行分隔。
 3. 同一天内多段内容只在第一段写 YYYY年MM月DD日，后续同日段落只写 HH:mm-HH:mm；跨天时再写新的日期。
-4. kind 只能是 main 或 branch；主线对象不要输出 character 字段。
-5. 支线对象必须输出 character，且只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
-6. 已有支线核心角色：{{BRANCH_SUMMARY_NAMES}}。如果新增支线剧情的核心角色已经在此列表中，character 必须复用列表里的原名字，不要改写成别名、称号或其他近似名字；只有确实是其他具体角色时，才新增新的支线核心角色名。
+4. 主线必须使用标题【主线总结】。
+5. 支线必须使用标题【支线总结：角色名】，角色名只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
+6. 已有支线核心角色：{{BRANCH_SUMMARY_NAMES}}。如果新增支线剧情的核心角色已经在此列表中，标题中的角色名必须复用列表里的原名字，不要改写成别名、称号或其他近似名字；只有确实是其他具体角色时，才新增新的支线核心角色名。
 7. 主线和支线不要记录同一事件。`;
     }
 
@@ -1369,25 +1404,35 @@
     function getDefaultOptimizePrompt(kind = 'trace') {
         if (kind === 'summary') {
             return `你是总结优化助手。请整理现有总结，合并重复、修正冲突、补全内容脉络。
-只输出 JSON，不要解释，不要 Markdown。
+只输出 <Memory>...</Memory>，不要解释，不要 Markdown。
 格式：
-{"summaries":[{"kind":"main","title":"","summary":"优化后的主线总结正文","unresolved":"未解决问题","remark":"备注"},{"kind":"branch","title":"","character":"角色名","summary":"优化后的支线总结正文","unresolved":"未解决问题","remark":"备注"}]}
+<Memory>
+【主线总结】
+优化后的主线总结正文
+
+【支线总结：角色名】
+优化后的支线总结正文
+</Memory>
 规则：
-1. 单条优化只输出一个 summaries 对象，kind 必须与原总结一致。
-2. 多条合并优化可输出一个或多个 summaries 对象，但必须覆盖被选中旧总结里的关键事实，不要只输出增量差异。
-3. 主线对象不要输出 character。
-4. 支线对象必须输出 character，且只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
-5. summary 必须是最终可直接落盘的正文。`;
+1. 单条优化只输出对应分块，分块类型必须与原总结一致。
+2. 多条合并优化可输出一个或多个分块，但必须覆盖被选中旧总结里的关键事实，不要只输出增量差异。
+3. 主线分块标题必须是【主线总结】。
+4. 支线分块标题必须是【支线总结：角色名】，且只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
+5. 分块正文必须是最终可直接落盘的内容。`;
         }
         return `你是记忆表格优化助手。请整理现有表格内容，合并重复、修正冲突。只输出 JSON，格式同追溯任务。`;
     }
 
     function getSummaryOptimizeResponseFormatPrompt() {
-        return `请按以下格式回复，且只输出 JSON，不要解释，不要 Markdown：
-{"summaries":[{"kind":"main","title":"","summary":"优化后的总结正文","unresolved":"未解决问题","remark":"备注"}]}
-或：
-{"summaries":[{"kind":"branch","title":"","character":"角色名","summary":"优化后的支线总结正文","unresolved":"未解决问题","remark":"备注"}]}
-单条优化只输出一个对象；多条合并优化可输出一个或多个对象。summary 必须是最终可直接落盘的正文。支线对象的 character 只能填写一个具体角色名，不要写组织名、势力名、事件名、分类名或多个角色名。`;
+        return `请按以下格式回复，且只输出 <Memory>...</Memory>，不要解释，不要 Markdown：
+<Memory>
+【主线总结】
+优化后的主线总结正文
+
+【支线总结：角色名】
+优化后的支线总结正文
+</Memory>
+单条优化只输出对应分块；多条合并优化可输出一个或多个分块。分块正文必须是最终可直接落盘的内容。支线标题中的角色名只能填写一个具体角色名，不要写组织名、势力名、事件名、分类名或多个角色名。`;
     }
 
     function buildTaskRangeText(range, kind = 'trace') {
@@ -1457,7 +1502,7 @@
         const response = await generate(built.messages, { ...options, kind: 'summary' });
         if (!response.success) return response;
         const payloads = parseSummaryResponse(response.text);
-        if (!payloads.length) return { success: false, error: formatSummaryParseError('总结结果缺少 summary/总结内容。', response.text), text: response.text };
+        if (!payloads.length) return { success: false, error: formatSummaryParseError('总结结果缺少可落盘的分块正文。', response.text), text: response.text };
         const result = {
             success: true,
             kind: 'summary',
@@ -1509,12 +1554,12 @@
             { role: 'system', content: historianPrompt },
             { role: 'user', content: `【待优化总结】\n${summaries || '（暂无）'}` },
             { role: 'system', content: prompt },
-            { role: 'user', content: '请立即根据以上待优化总结和优化要求输出优化后的 JSON。' },
+            { role: 'user', content: '请立即根据以上待优化总结和优化要求输出优化后的 <Memory> 总结。' },
         ].filter((message) => message.content && message.content.trim());
         const response = await generate(messages, { ...options, kind: 'summaryOptimize' });
         if (!response.success) return response;
         const payloads = parseSummaryResponse(response.text);
-        if (!payloads.length) return { success: false, error: formatSummaryParseError('优化结果缺少 summary/总结内容。', response.text), text: response.text };
+        if (!payloads.length) return { success: false, error: formatSummaryParseError('优化结果缺少可落盘的分块正文。', response.text), text: response.text };
         const result = {
             success: true,
             kind: 'summary',
