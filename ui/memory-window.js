@@ -7697,15 +7697,19 @@
 
             const actions = document.createElement('div');
             actions.className = 'yzm-structure-actions yzm-tag-diagnostic-actions';
+            const cancel = createIconButton('不应用', 'fa-regular fa-circle-xmark', 'yzm-add-table-cancel');
             const apply = createIconButton('应用并保存', 'fa-regular fa-circle-check', 'yzm-add-table-confirm');
             apply.disabled = result?.noTags || (!normalizeTagList(result?.blacklist).length && !normalizeTagList(result?.whitelist).length);
-            actions.append(apply);
+            actions.append(cancel, apply);
 
             dialog.append(header, body, actions);
             overlay.appendChild(dialog);
             modalHost.appendChild(overlay);
 
+            let settled = false;
             const closeWith = (value) => {
+                if (settled) return;
+                settled = true;
                 overlay.remove();
                 document.removeEventListener('keydown', handleKeydown);
                 resolve(value);
@@ -7714,6 +7718,7 @@
                 if (event.key === 'Escape') closeWith(false);
             };
             close.onclick = () => closeWith(false);
+            cancel.onclick = () => closeWith(false);
             apply.onclick = () => closeWith(true);
             overlay.addEventListener('click', (event) => {
                 if (event.target === overlay) closeWith(false);
