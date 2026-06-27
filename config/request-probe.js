@@ -70,6 +70,51 @@
         return getRequestArrays(body)[0] || null;
     }
 
+    function extractPhoneSignalFromMessages(messages) {
+        if (!Array.isArray(messages)) return null;
+        for (let index = messages.length - 1; index >= 0; index -= 1) {
+            const message = messages[index];
+            if (message?.gaigaiPhoneSignal && typeof message.gaigaiPhoneSignal === 'object') {
+                return message.gaigaiPhoneSignal;
+            }
+        }
+        return null;
+    }
+
+    function extractPhoneSignalFromNode(node, seen = new Set()) {
+        if (!node || typeof node !== 'object' || seen.has(node)) return null;
+        seen.add(node);
+        if (node.gaigaiPhoneSignal && typeof node.gaigaiPhoneSignal === 'object') return node.gaigaiPhoneSignal;
+        if (Array.isArray(node)) {
+            for (const item of node) {
+                const signal = extractPhoneSignalFromNode(item, seen);
+                if (signal) return signal;
+            }
+            return null;
+        }
+        for (const value of Object.values(node)) {
+            const signal = extractPhoneSignalFromNode(value, seen);
+            if (signal) return signal;
+        }
+        return null;
+    }
+
+    function getPhoneMemoryPermissions(body) {
+        const requestSignal = getRequestArrays(body)
+            .map((target) => extractPhoneSignalFromMessages(target.items))
+            .find(Boolean);
+        const signal = requestSignal
+            || extractPhoneSignalFromNode(body)
+            || (lastRequestData ? extractPhoneSignalFromNode(lastRequestData.rawBody || lastRequestData) : null);
+        if (!signal) return null;
+        return {
+            allowSummary: signal.allowSummary === true,
+            allowTable: signal.allowTable === true,
+            allowVector: signal.allowVector === true,
+            allowPrompt: signal.allowPrompt === true,
+        };
+    }
+
     function getRequestArrays(body) {
         if (!body || typeof body !== 'object') return [];
         const targets = [];
@@ -369,6 +414,10 @@
     async function processJsonBody(url, options, bodyText, requestSource = null) {
         if (!isTextGenerationRequest(url, options) || typeof bodyText !== 'string' || !bodyText.trim()) return null;
         const rawBody = JSON.parse(bodyText);
+        const phonePermissions = getPhoneMemoryPermissions(rawBody);
+        if (phonePermissions) {
+            console.info('[yuzuki-Memory] phone request memory permissions detected', phonePermissions);
+        }
         await applyPreRequestHiding();
         const hiddenTexts = YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || [];
         removeHiddenMessagesFromBody(rawBody, hiddenTexts);
@@ -396,7 +445,11 @@
         const body = YuzukiMemory.VariableInjector?.processBody
             ? await YuzukiMemory.VariableInjector.processBody(rawBody, {
                 getVectorText: getVectorInjectionText,
-                disableVectorFallbackInjection: false,
+                disableVectorInjection: phonePermissions ? !phonePermissions.allowVector : false,
+                disableVectorFallbackInjection: phonePermissions ? !phonePermissions.allowVector : false,
+                disableMemoryPromptInjection: phonePermissions ? !phonePermissions.allowPrompt : false,
+                disableSummaryInjection: phonePermissions ? !phonePermissions.allowSummary : false,
+                disableTableInjection: phonePermissions ? !phonePermissions.allowTable : false,
                 disableDefaultMemoryInjection: hasMemoryDataVariable,
                 preserveUnresolvedVectorAnchors: true,
             })

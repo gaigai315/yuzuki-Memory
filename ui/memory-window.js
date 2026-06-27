@@ -4869,6 +4869,11 @@
                 refreshAfterTask(root);
                 taskRunnerProgressLabel = batches.length > 1 ? `第 ${index + 1}/${batches.length} 批已写入` : '已写入';
                 syncVisibleTaskButtons(root);
+                if (action === 'summary' && batches.length > 1) {
+                    const rangeStart = result.range?.start ?? batch.start;
+                    const rangeEnd = result.range?.end ?? batch.end;
+                    showTaskToast(`手动总结第 ${index + 1}/${batches.length} 批完成（范围 ${rangeStart}-${rangeEnd}，不含 ${rangeEnd}）：写入 ${result.count || 0} 条。`, 'success');
+                }
                 if (!await waitForTaskBuffer('等待数据完全写入', 6)) break;
                 if (index < batches.length - 1 && !await waitForTaskBuffer('批次间冷却，避免触发限流', 5)) break;
             }

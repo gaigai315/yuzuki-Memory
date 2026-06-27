@@ -933,9 +933,10 @@
 
     function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState(), vectorText = '', injectedVars = new Set(), options = {}) {
         const targets = getRequestArrays(body);
+        const settings = options.settings || getPluginSettings();
 
-        const tableEntries = buildTableMessageEntries(state);
-        const summaryEntries = buildSummaryMessageEntries(state);
+        const tableEntries = settings.injectTable === false ? [] : buildTableMessageEntries(state);
+        const summaryEntries = settings.injectSummary === false ? [] : buildSummaryMessageEntries(state);
         const allItems = targets.flatMap((target) => target.items);
         const { reservedTables, reservedSummaries } = reserveSpecificAnchorMessages(allItems, tableEntries, summaryEntries);
         let changed = false;
@@ -943,6 +944,7 @@
         function consumeAnchor(match) {
             const summaryName = getSpecificAnchorName(match, 'MEMORY_SUMMARY');
             if (summaryName) {
+                if (settings.injectSummary === false) return [];
                 const message = takeReservedAnchorMessage(reservedSummaries, summaryName);
                 if (message) injectedVars.add(`MEMORY_SUMMARY_${normalizeAnchorName(summaryName)}`);
                 return message ? [message] : [];
@@ -950,6 +952,7 @@
 
             const tableName = getSpecificAnchorName(match, 'MEMORY_TABLE');
             if (tableName) {
+                if (settings.injectTable === false) return [];
                 const message = takeReservedAnchorMessage(reservedTables, tableName);
                 if (message) injectedVars.add(`MEMORY_TABLE_${normalizeAnchorName(tableName)}`);
                 return message ? [message] : [];
@@ -957,35 +960,39 @@
 
             const key = canonicalizeVariable(match);
             if (key === '{{MEMORY_SUMMARY}}') {
+                if (settings.injectSummary === false) return [];
                 const messages = takeAllSummaryMessages(summaryEntries);
                 if (messages.length) injectedVars.add('MEMORY_SUMMARY');
                 return messages;
             }
             if (key === '{{MEMORY_TABLE}}') {
+                if (settings.injectTable === false) return [];
                 const messages = takeAllTableMessages(tableEntries);
                 if (messages.length) injectedVars.add('MEMORY_TABLE');
                 return messages;
             }
             if (key === '{{MEMORY}}') {
                 const messages = [
-                    createPromptMemoryMessage(state),
-                    ...takeAllSummaryMessages(summaryEntries),
-                    ...takeAllTableMessages(tableEntries),
+                    settings.injectMemoryPrompt === false ? null : createPromptMemoryMessage(state),
+                    ...(settings.injectSummary === false ? [] : takeAllSummaryMessages(summaryEntries)),
+                    ...(settings.injectTable === false ? [] : takeAllTableMessages(tableEntries)),
                 ].filter(Boolean);
                 if (messages.length) {
                     injectedVars.add('MEMORY');
-                    injectedVars.add('MEMORY_PROMPT');
-                    injectedVars.add('MEMORY_SUMMARY');
-                    injectedVars.add('MEMORY_TABLE');
+                    if (settings.injectMemoryPrompt !== false) injectedVars.add('MEMORY_PROMPT');
+                    if (settings.injectSummary !== false) injectedVars.add('MEMORY_SUMMARY');
+                    if (settings.injectTable !== false) injectedVars.add('MEMORY_TABLE');
                 }
                 return messages;
             }
             if (key === '{{MEMORY_PROMPT}}') {
+                if (settings.injectMemoryPrompt === false) return [];
                 const message = createPromptMemoryMessage(state);
                 if (message) injectedVars.add('MEMORY_PROMPT');
                 return message ? [message] : [];
             }
             if (key === '{{VECTOR_MEMORY}}') {
+                if (settings.injectVectorMemory === false) return [];
                 if (!vectorText) return options.preserveUnresolvedVectorAnchors === true ? null : [];
                 injectedVars.add('VECTOR_MEMORY');
                 return [{
@@ -1172,20 +1179,28 @@
 
     function buildVariableReplacements(state, vectorText = '', settings = getPluginSettings()) {
         const names = getRuntimeNames();
+        const allowMemoryPrompt = settings.injectMemoryTable && settings.injectMemoryPrompt !== false;
+        const allowSummary = settings.injectMemoryTable && settings.injectSummary !== false;
+        const allowTable = settings.injectMemoryTable && settings.injectTable !== false;
+        const memoryText = compactLines([
+            allowMemoryPrompt ? buildMemoryPromptText(state) : '',
+            allowSummary ? buildSummaryText(state) : '',
+            allowTable ? buildAllTablesText(state) : '',
+        ]);
         return {
-            '{{MEMORY}}': settings.injectMemoryTable ? buildMemoryText(state) : '{{MEMORY}}',
-            '{{MEMORY_SUMMARY}}': settings.injectMemoryTable ? resolveRuntimeVariables(buildSummaryText(state)) : '{{MEMORY_SUMMARY}}',
-            '{{MEMORY_TABLE}}': settings.injectMemoryTable ? resolveRuntimeVariables(buildAllTablesText(state)) : '{{MEMORY_TABLE}}',
-            '{{MEMORY_PROMPT}}': settings.injectMemoryTable ? buildMemoryPromptText(state) : '{{MEMORY_PROMPT}}',
-            '{{DATABASE_SCHEMA}}': settings.injectMemoryTable ? buildDatabaseSchemaText(state) : '{{DATABASE_SCHEMA}}',
-            '{{TABLE_DEFINITIONS}}': settings.injectMemoryTable ? buildDatabaseSchemaText(state) : '{{TABLE_DEFINITIONS}}',
+            '{{MEMORY}}': settings.injectMemoryTable ? resolveRuntimeVariables(memoryText) : '{{MEMORY}}',
+            '{{MEMORY_SUMMARY}}': allowSummary ? resolveRuntimeVariables(buildSummaryText(state)) : '{{MEMORY_SUMMARY}}',
+            '{{MEMORY_TABLE}}': allowTable ? resolveRuntimeVariables(buildAllTablesText(state)) : '{{MEMORY_TABLE}}',
+            '{{MEMORY_PROMPT}}': allowMemoryPrompt ? buildMemoryPromptText(state) : '{{MEMORY_PROMPT}}',
+            '{{DATABASE_SCHEMA}}': allowTable ? buildDatabaseSchemaText(state) : '{{DATABASE_SCHEMA}}',
+            '{{TABLE_DEFINITIONS}}': allowTable ? buildDatabaseSchemaText(state) : '{{TABLE_DEFINITIONS}}',
             '{{VECTOR_MEMORY}}': settings.injectVectorMemory ? resolveRuntimeVariables(vectorText) : '{{VECTOR_MEMORY}}',
             '{{user}}': names.user,
             '{{char}}': names.char,
-            __table: (tableName) => settings.injectMemoryTable
+            __table: (tableName) => allowTable
                 ? resolveRuntimeVariables(buildSpecificTableText(state, tableName))
                 : `{{MEMORY_TABLE_${tableName}}}`,
-            __summary: (summaryKey) => settings.injectMemoryTable
+            __summary: (summaryKey) => allowSummary
                 ? resolveRuntimeVariables(buildSpecificSummaryText(state, summaryKey))
                 : `{{MEMORY_SUMMARY_${summaryKey}}}`,
         };
@@ -1286,9 +1301,13 @@
 
     function getEffectiveSettings(options = {}) {
         const settings = getPluginSettings();
+        const injectMemoryTable = settings.injectMemoryTable && options.disableMemoryInjection !== true;
         return {
             ...settings,
-            injectMemoryTable: settings.injectMemoryTable && options.disableMemoryInjection !== true,
+            injectMemoryTable,
+            injectMemoryPrompt: injectMemoryTable && options.disableMemoryPromptInjection !== true,
+            injectSummary: injectMemoryTable && options.disableSummaryInjection !== true,
+            injectTable: injectMemoryTable && options.disableTableInjection !== true,
             injectVectorMemory: settings.injectVectorMemory && options.disableVectorInjection !== true,
             preserveUnresolvedVectorAnchors: options.preserveUnresolvedVectorAnchors === true,
         };
@@ -1352,6 +1371,7 @@
         const injectedVars = new Set();
         if (settings.injectMemoryTable || settings.injectVectorMemory) {
             replaceMemoryDataAnchorsInRequest(body, state, vectorText, injectedVars, {
+                settings,
                 preserveUnresolvedVectorAnchors: options.preserveUnresolvedVectorAnchors === true,
             });
         }
@@ -1367,17 +1387,17 @@
         const disableMemoryFallback = options.disableFallbackInjection === true || options.disableMemoryFallbackInjection === true;
         const disableVectorFallback = options.disableFallbackInjection === true || options.disableVectorFallbackInjection === true;
 
-        if (!disableMemoryFallback && settings.injectMemoryTable && !injectedVars.has('MEMORY_PROMPT') && !requestBodyContainsMemoryPrompt(body)) {
+        if (!disableMemoryFallback && settings.injectMemoryPrompt && !injectedVars.has('MEMORY_PROMPT') && !requestBodyContainsMemoryPrompt(body)) {
             const promptMessage = createPromptMemoryMessage(state);
             if (promptMessage) insertInjectedMessages(body, [promptMessage]);
         }
 
         if (!disableMemoryFallback && settings.injectMemoryTable && options.disableDefaultMemoryInjection !== true && !requestBodyContainsMemoryData(body)) {
             const messages = [];
-            if (!injectedVars.has('MEMORY_SUMMARY') && !injectedVars.has('MEMORY')) {
+            if (settings.injectSummary && !injectedVars.has('MEMORY_SUMMARY') && !injectedVars.has('MEMORY')) {
                 messages.push(...buildSummaryMessages(state));
             }
-            if (!injectedVars.has('MEMORY_TABLE') && !injectedVars.has('MEMORY')) {
+            if (settings.injectTable && !injectedVars.has('MEMORY_TABLE') && !injectedVars.has('MEMORY')) {
                 messages.push(...buildTableMessages(state));
             }
             if (messages.length > 0) insertInjectedMessages(body, messages);
