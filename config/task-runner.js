@@ -320,6 +320,20 @@
         return !!(message?.isGaigaiData || message?.isGaigaiPrompt || message?.isPhoneMessage || message?.yzmMemoryInternal);
     }
 
+    function isDialogueFloorMessage(message) {
+        if (!message || typeof message !== 'object') return false;
+        if (message.is_user === true || message.is_user === false) return true;
+        const role = String(message.role || '').toLowerCase();
+        return role === 'user' || role === 'assistant';
+    }
+
+    function shouldSkipTaskRangeMessage(message) {
+        if (!message || isPluginMessage(message)) return true;
+        const role = String(message.role || '').toLowerCase();
+        if (role !== 'system') return false;
+        return !isDialogueFloorMessage(message);
+    }
+
     function chatMessagesFromRange(start, end, options = {}) {
         const ctx = getContext();
         const chat = Array.isArray(ctx?.chat) ? ctx.chat : [];
@@ -332,7 +346,7 @@
         const messages = [];
 
         chat.slice(from, to).forEach((message, offset) => {
-            if (!message || message.role === 'system' || isPluginMessage(message)) return;
+            if (shouldSkipTaskRangeMessage(message)) return;
             let content = stripImages(stripMemoryTags(getChatText(message)));
             content = filterContentByTags(content, tagPreset);
             if (!content.trim()) return;
