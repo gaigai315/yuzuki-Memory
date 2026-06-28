@@ -136,6 +136,7 @@
     };
     const VECTOR_BOOK_PAGE_SIZE = 10;
     const VECTOR_SEGMENT_PAGE_SIZE = 10;
+    const CHARACTER_VECTOR_SYNC_DELAY = 1200;
     const DEFAULT_VECTOR_SEARCH_SETTINGS = {
         threshold: 0.3,
         recallLimit: 6,
@@ -210,6 +211,7 @@
     let floatingResizeController = null;
     let floatingVisibilityTimer = null;
     let chatContextRefreshBound = false;
+    let characterVectorSyncTimer = null;
     let taskRunnerBusy = false;
     let taskRunnerStopRequested = false;
     let taskRunnerActiveAction = '';
@@ -626,6 +628,27 @@
             const remark = getSummaryValue(record, ['备注']);
             return [title, content, remark].filter(Boolean).join('\n');
         }).filter(Boolean);
+    }
+
+    function recordToVectorChunk(table, record) {
+        if (!table || !record) return '';
+        const parts = (Array.isArray(table.columns) ? table.columns : [])
+            .map((column) => {
+                const name = cleanColumnName(column);
+                const value = getRecordValue(record, column).trim();
+                return value ? `${name}: ${value}` : '';
+            })
+            .filter(Boolean);
+        return parts.length ? `- ${parts.join('；')}` : '';
+    }
+
+    function getCharacterVectorChunks() {
+        const table = getTables().find((entry) => entry.id === 'character_profile');
+        if (!table) return [];
+        return getRecords(table.id)
+            .filter((record) => record?.characterVectorSynced === true)
+            .map((record) => recordToVectorChunk(table, record))
+            .filter(Boolean);
     }
 
     function hideSummaryRecordsAfterVectorSync() {
@@ -1114,10 +1137,16 @@
         if (!scheme) return false;
         const visibility = normalizePromptSchemeTableVisibility(scheme.tableVisibility);
         const entries = Object.entries(visibility);
-        if (!entries.length) return false;
         const state = getState();
         let changed = false;
+        const plotSummaryTable = getTables().find((entry) => entry.id === 'plot_summary');
+        if (plotSummaryTable?.hidden === true) {
+            plotSummaryTable.hidden = false;
+            changed = true;
+        }
+        if (!entries.length) return changed;
         entries.forEach(([tableId, visible]) => {
+            if (tableId === 'plot_summary' && visible === false) return;
             const table = getTables().find((entry) => entry.id === tableId);
             if (!table || isFixedTable(tableId)) return;
             const nextHidden = visible === false;
@@ -3226,12 +3255,42 @@
         if (!store) return { success: false, error: '向量书模块尚未加载' };
         const result = await store.syncSummaryToBook(getSummaryVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', getCurrentChatVectorBookName());
         if (!result.success) return result;
-        const hiddenSummaryCount = hideSummaryRecordsAfterVectorSync();
+        const hiddenSummaryCount = options.hideAfterSync === true ? hideSummaryRecordsAfterVectorSync() : 0;
         if (options.vectorize === true) {
             const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
             return { ...result, vectorized: true, vectorizeResult, hiddenSummaryCount };
         }
         return { ...result, vectorized: false, hiddenSummaryCount };
+    }
+
+    async function syncCharacterProfilesToVectorBook(options = {}) {
+        const store = await ensureVectorStoreReady();
+        if (!store) return { success: false, error: '向量书模块尚未加载' };
+        const result = await store.syncCharacterProfilesToBook(getCharacterVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', `${getCurrentChatVectorBookName()} · 角色档案`);
+        if (!result.success) return result;
+        if (options.vectorize === true && result.count > 0) {
+            const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
+            return { ...result, vectorized: true, vectorizeResult };
+        }
+        return { ...result, vectorized: false };
+    }
+
+    function hasCharacterVectorRecords() {
+        return getRecords('character_profile').some((record) => record?.characterVectorSynced === true);
+    }
+
+    function scheduleCharacterVectorSync(options = {}) {
+        window.clearTimeout(characterVectorSyncTimer);
+        if (!hasCharacterVectorRecords() && options.force !== true) return;
+        characterVectorSyncTimer = window.setTimeout(async () => {
+            try {
+                await syncCharacterProfilesToVectorBook({ vectorize: options.vectorize !== false });
+                const root = document.getElementById(ROOT_ID);
+                if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root);
+            } catch (error) {
+                console.warn('[yuzuki-Memory] 角色档案向量书同步失败。', error);
+            }
+        }, Number(options.delay) >= 0 ? Number(options.delay) : CHARACTER_VECTOR_SYNC_DELAY);
     }
 
     function getCurrentChatVectorBookName() {
@@ -3395,7 +3454,7 @@
 
         if (action === 'sync-summary') {
             const shouldVectorize = getAutoSummarySettings().autoVectorizeAfterHistory === true;
-            const result = await syncSummaryToVectorBook({ vectorize: shouldVectorize });
+            const result = await syncSummaryToVectorBook({ vectorize: shouldVectorize, hideAfterSync: shouldVectorize });
             if (!result.success) {
                 window.alert(result.error || '同步失败');
                 return;
@@ -4569,6 +4628,9 @@
             const preview = document.createElement('textarea');
             preview.className = 'yzm-task-result-preview';
             preview.value = formatTaskPreview(options.result);
+            preview.autocomplete = 'off';
+            preview.spellcheck = false;
+            preview.dataset.yzmNoAutocomplete = 'true';
 
             let compare = null;
             let editableTextarea = preview;
@@ -4579,9 +4641,15 @@
                 oldBlock.className = 'yzm-task-result-preview yzm-task-result-compare-text';
                 oldBlock.value = formatSummaryOptimizeOldText(options.result) || '（没有旧内容）';
                 oldBlock.readOnly = true;
+                oldBlock.autocomplete = 'off';
+                oldBlock.spellcheck = false;
+                oldBlock.dataset.yzmNoAutocomplete = 'true';
                 const newBlock = document.createElement('textarea');
                 newBlock.className = 'yzm-task-result-preview yzm-task-result-compare-text';
                 newBlock.value = formatTaskPreview(options.result);
+                newBlock.autocomplete = 'off';
+                newBlock.spellcheck = false;
+                newBlock.dataset.yzmNoAutocomplete = 'true';
                 editableTextarea = newBlock;
                 const oldWrap = document.createElement('div');
                 oldWrap.className = 'yzm-task-result-compare-pane';
@@ -4605,8 +4673,13 @@
             overlay.appendChild(dialog);
             modalHost.appendChild(overlay);
 
+            let settled = false;
             const closeWith = (value) => {
+                if (settled) return;
+                settled = true;
                 if (activeTaskResultDialogCloser === closeWith) activeTaskResultDialogCloser = null;
+                editableTextarea.blur();
+                close.focus();
                 overlay.remove();
                 document.removeEventListener('keydown', handleKeydown);
                 resolve(value);
@@ -4744,7 +4817,10 @@
             overlay.appendChild(dialog);
             modalHost.appendChild(overlay);
 
+            let settled = false;
             const closeWith = (value) => {
+                if (settled) return;
+                settled = true;
                 overlay.remove();
                 document.removeEventListener('keydown', handleKeydown);
                 resolve(value);
@@ -4996,7 +5072,7 @@
                     refreshAfterTask(root);
                     if (result?.cancelled) {
                         taskRunnerStopRequested = true;
-                        window.alert(`第 ${index + 1} 批已取消，后续批次已停止。`);
+                        showTaskToast(`第 ${index + 1} 批已取消，后续批次已停止。`, 'warning');
                         return;
                     }
                     if (result?.skipped) continue;
@@ -7528,6 +7604,7 @@
             const settings = getAutoSummarySettings();
             const result = await syncSummaryToVectorBook({
                 vectorize: settings.autoVectorizeAfterHistory === true,
+                hideAfterSync: settings.autoVectorizeAfterHistory === true,
             });
             if (!result.success) {
                 window.alert(result.error || '同步失败');
@@ -8763,10 +8840,18 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复手动追溯后，新楼层可能把物品追踪、世界设定等表格回滚清空的问题。',
-            '手动追溯、追溯优化和总结任务写入后会立即刷新分支快照，避免后续实时填表覆盖已保存记忆。',
-            '对齐旧插件的 OpenAI 兼容反代逻辑，优化 build/Gemini 反代的 makersuite 兼容、流式兜底和 OpenAI 协议降级。',
-            '自定义反代模式下保留 proxy_only 的 Base URL 原样处理，减少本地/远程反代地址被改写导致的鉴权问题。',
+            '新增角色档案向量化：可在角色档案条目整理中选中角色并生成当前会话专属角色档案向量书。',
+            '角色档案向量化改为按当前勾选项覆盖名单；未再次勾选的旧向量化角色会退出向量书并恢复显示。',
+            '角色档案向量召回会回填到角色档案表区域，不再混入通用 {{VECTOR_MEMORY}}；普通向量书仍保持原注入逻辑。',
+            '已向量化的隐藏角色仍可被实时填表/批量填表更新，更新后会自动同步专属角色档案向量书。',
+            '优化角色档案向量召回显示，旧/新向量内容都会压缩成和普通角色档案一致的单行格式，减少上下文占用。',
+            '对齐旧记忆插件的 {{MEMORY_TABLE_xx}} 变量逻辑：单独放置某个表后，会从 {{MEMORY_TABLE}} / {{MEMORY}} 默认注入中剥离该表。',
+            '修复向量检索上下文只读已落地聊天的问题，现在发送时会把当前请求里的 user/assistant 正文一起用于检索。',
+            '修复删除旧聊天后从新第 0 楼开始时，旧隐藏记录或旧总结指针可能在发送前重新隐藏新消息的问题。',
+            '修复记忆总结为空时仍注入“暂无总结”占位系统消息的问题，空总结现在不会发送。',
+            '修复内置提示词方案会把“剧情摘要”表本身自动隐藏的问题，并会恢复已被旧方案隐藏的剧情摘要表。',
+            '修复批量填表空字段/空壳表也被当作成功写入的问题，避免空结果污染表格或推进任务指针。',
+            '修复追溯填表结果确认弹窗点击右上角关闭后 UI 卡住的问题；关闭、遮罩点击和 Esc 现在都视为取消。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -9210,6 +9295,7 @@
         const selectAll = dialog.querySelector('.yzm-organizer-select-all');
         const batchButtons = dialog.querySelectorAll('[data-yzm-organizer-batch]');
         const toggleButton = dialog.querySelector('[data-yzm-organizer-batch="toggle"]');
+        const vectorizeButton = dialog.querySelector('[data-yzm-organizer-batch="vectorize"]');
 
         if (count) count.textContent = `已选 ${selectedCount} 项`;
         if (selectAll) {
@@ -9230,6 +9316,9 @@
             if (label) label.textContent = '显/隐';
             toggleButton.title = mode === 'show' ? '显示选中条目' : '隐藏选中条目';
             toggleButton.setAttribute('aria-label', toggleButton.title);
+        }
+        if (vectorizeButton) {
+            vectorizeButton.hidden = table?.id !== 'character_profile';
         }
     }
 
@@ -9276,9 +9365,12 @@
         actions.className = 'yzm-organizer-actions';
         const toggleButton = createIconButton('显/隐', 'fa-solid fa-eye-slash', 'yzm-organizer-action yzm-organizer-toggle');
         toggleButton.dataset.yzmOrganizerBatch = 'toggle';
+        const vectorizeButton = createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-organizer-action yzm-organizer-vectorize');
+        vectorizeButton.dataset.yzmOrganizerBatch = 'vectorize';
+        vectorizeButton.hidden = table.id !== 'character_profile';
         const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-organizer-action yzm-organizer-danger');
         deleteButton.dataset.yzmOrganizerBatch = 'delete';
-        actions.append(toggleButton, deleteButton);
+        actions.append(toggleButton, vectorizeButton, deleteButton);
         toolbar.append(selectLabel, actions);
 
         const list = document.createElement('div');
@@ -9303,7 +9395,7 @@
             updateRecordOrganizerSelection(dialog);
         };
         bindRecordOrganizerDrag(root, table, list, rerenderOrganizer);
-        const applyBatch = (action, ids) => {
+        const applyBatch = async (action, ids) => {
             if (!ids.length) return;
             if (table.id === 'plot_summary') {
                 applyPlotOrganizerBatch(root, table, action, ids);
@@ -9317,14 +9409,48 @@
             if (action === 'delete') {
                 if (!window.confirm(`确定删除选中的 ${ids.length} 个条目吗？`)) return;
                 getState().records[table.id] = records.filter((record) => !idSet.has(record.id));
+            } else if (action === 'vectorize' && table.id === 'character_profile') {
+                let removedVectorCount = 0;
+                records.forEach((record) => {
+                    if (idSet.has(record.id)) {
+                        record.hidden = true;
+                        record.characterVectorSynced = true;
+                        return;
+                    }
+                    if (record?.characterVectorSynced === true) {
+                        record.hidden = false;
+                        record.characterVectorSynced = false;
+                        removedVectorCount += 1;
+                    }
+                });
+                if (!refreshAfterRecordOrganizerChange(root, table)) return;
+                rerenderOrganizer();
+                vectorizeButton.disabled = true;
+                try {
+                    const result = await syncCharacterProfilesToVectorBook({ vectorize: true });
+                    const added = result.vectorizeResult?.count || 0;
+                    const removedText = removedVectorCount ? `，已恢复 ${removedVectorCount} 个未选中的旧向量化角色` : '';
+                    window.alert(`已用当前选中的 ${ids.length} 个角色档案覆盖当前会话角色向量书，新增向量化 ${added} 条${removedText}。`);
+                } catch (error) {
+                    window.alert(String(error?.message || error || '角色档案向量化失败'));
+                } finally {
+                    vectorizeButton.disabled = false;
+                    if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
+                }
+                return;
             } else {
                 const nextAction = action === 'toggle' ? getOrganizerToggleMode(table, ids) : action;
                 records.forEach((record) => {
-                    if (idSet.has(record.id)) record.hidden = nextAction === 'hide';
+                    if (!idSet.has(record.id)) return;
+                    record.hidden = nextAction === 'hide';
+                    if (table.id === 'character_profile' && nextAction === 'show') {
+                        record.characterVectorSynced = false;
+                    }
                 });
             }
 
-            refreshAfterRecordOrganizerChange(root, table);
+            const saved = refreshAfterRecordOrganizerChange(root, table);
+            if (saved && table.id === 'character_profile') scheduleCharacterVectorSync({ force: true });
             rerenderOrganizer();
         };
 
@@ -11137,6 +11263,7 @@
         memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
         applyResolvedPromptSchemeToState({ save: false });
         refreshActiveWorkspace(root);
+        scheduleCharacterVectorSync();
     }
 
     function scheduleSessionWorkspaceRefresh(root, sessionId) {
@@ -11274,7 +11401,7 @@
                 });
             },
             syncSummaryToVectorBook(options = {}) {
-                return syncSummaryToVectorBook(options);
+                return syncSummaryToVectorBook({ ...options, hideAfterSync: options.vectorize === true });
             },
             onUpdate() {
                 const root = document.getElementById(ROOT_ID);

@@ -8,6 +8,7 @@
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
+    const CHARACTER_PROFILE_TABLE_ID = 'character_profile';
     const DEFAULT_STATE_REVISION = 13;
     const MEMORY_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/gi;
     const ANCHOR_VARIABLE_PATTERN = /^\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}$/i;
@@ -20,7 +21,7 @@
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
     const MEMORY_DATA_MARKERS = [
         '【前情提要 -',
-        '【记忆只读数据库 -',
+        '【当前世界状态参考 -',
         '【剧情摘要】',
         '【角色档案】',
         '【物品追踪】',
@@ -342,19 +343,21 @@
         return lines.length ? `- ${lines.join('；')}` : '';
     }
 
-    function buildTableText(state, table) {
+    function buildTableText(state, table, options = {}) {
         if (!table || table.hidden || table.id === FIXED_SUMMARY_TABLE_ID) return '';
         const rows = tableRecords(state, table.id).map((record) => recordToText(table, record)).filter(Boolean);
-        if (!rows.length) return `【${table.name}】\n(历史存档，当前暂无数据)`;
-        return compactLines([`【${table.name}】`, ...rows]);
+        const characterVectorText = table.id === CHARACTER_PROFILE_TABLE_ID ? String(options.characterProfileText || '').trim() : '';
+        if (!rows.length && !characterVectorText) return `【${table.name}】\n(历史存档，当前暂无数据)`;
+        const vectorBlock = characterVectorText ? `【角色档案向量召回】\n${characterVectorText}` : '';
+        return compactLines([`【${table.name}】`, ...rows, vectorBlock]);
     }
 
-    function buildTableMemoryMessage(state, table) {
-        const tableText = buildTableText(state, table);
+    function buildTableMemoryMessage(state, table, options = {}) {
+        const tableText = buildTableText(state, table, options);
         if (!tableText) return null;
         return {
             role: 'system',
-            content: `【记忆只读数据库 - ${table.name}】\n(历史存档，仅作背景参考，请勿复述或重演)\n${tableText}`,
+            content: `【当前世界状态参考 - ${table.name}】\n(历史存档，仅作背景参考，请勿复述或重演)\n${tableText}`,
             name: `SYSTEM (${table.name})`,
             isGaigaiData: true,
             yzmMemoryInjectionType: 'table',
@@ -362,27 +365,31 @@
         };
     }
 
-    function buildTableMessageEntries(state = getCurrentState()) {
+    function buildTableMessageEntries(state = getCurrentState(), options = {}) {
+        const excludedTableIds = new Set(Array.isArray(options.excludeTableIds) ? options.excludeTableIds.map(String) : []);
         return (Array.isArray(state?.tables) ? state.tables : [])
             .filter((table) => table.id !== FIXED_SUMMARY_TABLE_ID)
-            .map((table) => ({ table, message: buildTableMemoryMessage(state, table) }))
+            .filter((table) => !excludedTableIds.has(String(table.id || '')))
+            .map((table) => ({ table, message: buildTableMemoryMessage(state, table, options) }))
             .filter((entry) => entry.message);
     }
 
-    function buildTableMessages(state = getCurrentState()) {
-        return buildTableMessageEntries(state).map((entry) => entry.message);
+    function buildTableMessages(state = getCurrentState(), options = {}) {
+        return buildTableMessageEntries(state, options).map((entry) => entry.message);
     }
 
-    function buildAllTablesText(state = getCurrentState()) {
+    function buildAllTablesText(state = getCurrentState(), options = {}) {
         const tables = Array.isArray(state?.tables) ? state.tables : [];
+        const excludedTableIds = new Set(Array.isArray(options.excludeTableIds) ? options.excludeTableIds.map(String) : []);
         return tables
             .filter((table) => table.id !== FIXED_SUMMARY_TABLE_ID)
-            .map((table) => buildTableText(state, table))
+            .filter((table) => !excludedTableIds.has(String(table.id || '')))
+            .map((table) => buildTableText(state, table, options))
             .filter(Boolean)
             .join('\n\n');
     }
 
-    function buildSpecificTableText(state, tableName) {
+    function buildSpecificTableText(state, tableName, options = {}) {
         const requestedName = String(tableName || '').trim();
         if (!requestedName) return '';
         const requestedKey = normalizeAnchorName(requestedName);
@@ -392,7 +399,7 @@
             || tables.find((entry) => normalizeAnchorName(entry.name) === requestedKey)
             || tables.find((entry) => normalizeAnchorName(entry.id) === requestedKey)
             || tables.find((entry) => entry.name.includes(requestedName));
-        return buildTableText(state, table);
+        return buildTableText(state, table, options);
     }
 
     function buildDatabaseSchemaText(state = getCurrentState(), options = {}) {
@@ -481,7 +488,7 @@
 
     function buildSummaryText(state = getCurrentState()) {
         const text = getSummaryEntries(state).map((entry) => entry.text).join('\n\n');
-        return text || '(历史存档，当前暂无总结)';
+        return text || '';
     }
 
     function buildSpecificSummaryText(state, summaryKey) {
@@ -506,19 +513,7 @@
 
     function buildSummaryMessageEntries(state = getCurrentState()) {
         const entries = getSummaryEntries(state);
-        if (!entries.length) {
-            return [{
-                entry: null,
-                message: {
-                    role: 'system',
-                    content: '【前情提要 - 暂无总结】\n(历史存档，当前暂无总结)',
-                    name: 'SYSTEM(总结)',
-                    isGaigaiData: true,
-                    yzmMemoryInjectionType: 'summary',
-                    yzmMemorySummaryId: '',
-                },
-            }];
-        }
+        if (!entries.length) return [];
         return entries.map((entry) => ({
             entry,
             message: {
@@ -632,6 +627,32 @@
             }).filter(Boolean).join('\n');
         }
         return '';
+    }
+
+    function findTableByAnchorName(state, tableName) {
+        const requestedName = String(tableName || '').trim();
+        if (!requestedName) return null;
+        const requestedKey = normalizeAnchorName(requestedName);
+        const tables = Array.isArray(state?.tables) ? state.tables : [];
+        return tables.find((table) => matchesTableAnchor(table, requestedName, requestedKey)) || null;
+    }
+
+    function collectSpecificTableAnchorIds(body, state = getCurrentState()) {
+        const tableIds = new Set();
+        const scanText = (text) => {
+            String(text || '').replace(MEMORY_DATA_ANCHOR_PATTERN, (match) => {
+                const tableName = getSpecificAnchorName(match, 'MEMORY_TABLE');
+                if (!tableName) return '';
+                const table = findTableByAnchorName(state, tableName);
+                if (table?.id) tableIds.add(String(table.id));
+                return '';
+            });
+        };
+        getRequestArrays(body).forEach((target) => {
+            target.items.forEach((item) => scanText(getMessageText(item)));
+        });
+        if (typeof body?.prompt === 'string') scanText(body.prompt);
+        return tableIds;
     }
 
     function requestBodyContainsInjection(body, flagName, marker = '') {
@@ -928,6 +949,7 @@
     function reserveSpecificAnchorMessages(items, tableEntries, summaryEntries) {
         const reservedTables = new Map();
         const reservedSummaries = new Map();
+        const reservedTableIds = new Set();
         items.forEach((item) => {
             const text = getMessageText(item);
             String(text || '').replace(MEMORY_DATA_ANCHOR_PATTERN, (match) => {
@@ -935,7 +957,9 @@
                 if (!tableName) return '';
                 const key = normalizeAnchorName(tableName);
                 if (key && !reservedTables.has(key)) {
-                    reservedTables.set(key, takeSpecificTableMessage(tableEntries, tableName));
+                    const message = takeSpecificTableMessage(tableEntries, tableName);
+                    reservedTables.set(key, message);
+                    if (message?.yzmMemoryTableId) reservedTableIds.add(String(message.yzmMemoryTableId));
                 }
                 return '';
             });
@@ -949,7 +973,7 @@
                 return '';
             });
         });
-        return { reservedTables, reservedSummaries };
+        return { reservedTables, reservedSummaries, reservedTableIds };
     }
 
     function takeReservedAnchorMessage(reservedMessages, anchorName) {
@@ -963,11 +987,15 @@
     function replaceMemoryDataAnchorsInRequest(body, state = getCurrentState(), vectorText = '', injectedVars = new Set(), options = {}) {
         const targets = getRequestArrays(body);
         const settings = options.settings || getPluginSettings();
+        const tableOptions = { characterProfileText: options.characterProfileText || '' };
+        const extractedTableIds = new Set(Array.isArray(options.excludeTableIds) ? options.excludeTableIds.map(String) : []);
 
-        const tableEntries = settings.injectTable === false ? [] : buildTableMessageEntries(state);
+        const tableEntries = settings.injectTable === false ? [] : buildTableMessageEntries(state, tableOptions);
         const summaryEntries = settings.injectSummary === false ? [] : buildSummaryMessageEntries(state);
         const allItems = targets.flatMap((target) => target.items);
-        const { reservedTables, reservedSummaries } = reserveSpecificAnchorMessages(allItems, tableEntries, summaryEntries);
+        if (typeof body.prompt === 'string') allItems.push(body.prompt);
+        const { reservedTables, reservedSummaries, reservedTableIds } = reserveSpecificAnchorMessages(allItems, tableEntries, summaryEntries);
+        extractedTableIds.forEach((tableId) => reservedTableIds.add(tableId));
         let changed = false;
 
         function consumeAnchor(match) {
@@ -996,7 +1024,8 @@
             }
             if (key === '{{MEMORY_TABLE}}') {
                 if (settings.injectTable === false) return [];
-                const messages = takeAllTableMessages(tableEntries);
+                const messages = takeAllTableMessages(tableEntries)
+                    .filter((message) => !reservedTableIds.has(String(message?.yzmMemoryTableId || '')));
                 if (messages.length) injectedVars.add('MEMORY_TABLE');
                 return messages;
             }
@@ -1004,7 +1033,8 @@
                 const messages = [
                     settings.injectMemoryPrompt === false ? null : createPromptMemoryMessage(state),
                     ...(settings.injectSummary === false ? [] : takeAllSummaryMessages(summaryEntries)),
-                    ...(settings.injectTable === false ? [] : takeAllTableMessages(tableEntries)),
+                    ...(settings.injectTable === false ? [] : takeAllTableMessages(tableEntries)
+                        .filter((message) => !reservedTableIds.has(String(message?.yzmMemoryTableId || '')))),
                 ].filter(Boolean);
                 if (messages.length) {
                     injectedVars.add('MEMORY');
@@ -1111,6 +1141,33 @@
         return changed;
     }
 
+    function dedupeTableInjectionMessages(body) {
+        const targets = getRequestArrays(body);
+        let changed = false;
+        targets.forEach((target) => {
+            const bestByTable = new Map();
+            target.items.forEach((item, index) => {
+                if (item?.yzmMemoryInjectionType !== 'table' || !item?.yzmMemoryTableId) return;
+                const tableId = String(item.yzmMemoryTableId || '');
+                const textLength = getMessageText(item).length;
+                const previous = bestByTable.get(tableId);
+                if (!previous || textLength > previous.textLength) {
+                    bestByTable.set(tableId, { index, textLength });
+                }
+            });
+            if (!bestByTable.size) return;
+            const keepIndexes = new Set([...bestByTable.values()].map((entry) => entry.index));
+            const nextItems = target.items.filter((item, index) => {
+                if (item?.yzmMemoryInjectionType !== 'table' || !item?.yzmMemoryTableId) return true;
+                return keepIndexes.has(index);
+            });
+            if (nextItems.length === target.items.length) return;
+            target.items.splice(0, target.items.length, ...nextItems);
+            changed = true;
+        });
+        return changed;
+    }
+
     function markInjectionContainer(node, match) {
         if (!node || typeof node !== 'object') return;
         const key = canonicalizeVariable(match);
@@ -1206,20 +1263,24 @@
         );
     }
 
-    function buildVariableReplacements(state, vectorText = '', settings = getPluginSettings()) {
+    function buildVariableReplacements(state, vectorText = '', settings = getPluginSettings(), options = {}) {
         const names = getRuntimeNames();
         const allowMemoryPrompt = settings.injectMemoryTable && settings.injectMemoryPrompt !== false;
         const allowSummary = settings.injectMemoryTable && settings.injectSummary !== false;
         const allowTable = settings.injectMemoryTable && settings.injectTable !== false;
+        const tableOptions = {
+            characterProfileText: options.characterProfileText || '',
+            excludeTableIds: Array.isArray(options.excludeTableIds) ? options.excludeTableIds : [],
+        };
         const memoryText = compactLines([
             allowMemoryPrompt ? buildMemoryPromptText(state) : '',
             allowSummary ? buildSummaryText(state) : '',
-            allowTable ? buildAllTablesText(state) : '',
+            allowTable ? buildAllTablesText(state, tableOptions) : '',
         ]);
         return {
             '{{MEMORY}}': settings.injectMemoryTable ? resolveRuntimeVariables(memoryText) : '{{MEMORY}}',
             '{{MEMORY_SUMMARY}}': allowSummary ? resolveRuntimeVariables(buildSummaryText(state)) : '{{MEMORY_SUMMARY}}',
-            '{{MEMORY_TABLE}}': allowTable ? resolveRuntimeVariables(buildAllTablesText(state)) : '{{MEMORY_TABLE}}',
+            '{{MEMORY_TABLE}}': allowTable ? resolveRuntimeVariables(buildAllTablesText(state, tableOptions)) : '{{MEMORY_TABLE}}',
             '{{MEMORY_PROMPT}}': allowMemoryPrompt ? buildMemoryPromptText(state) : '{{MEMORY_PROMPT}}',
             '{{DATABASE_SCHEMA}}': allowTable ? buildDatabaseSchemaText(state) : '{{DATABASE_SCHEMA}}',
             '{{TABLE_DEFINITIONS}}': allowTable ? buildDatabaseSchemaText(state) : '{{TABLE_DEFINITIONS}}',
@@ -1227,7 +1288,7 @@
             '{{user}}': names.user,
             '{{char}}': names.char,
             __table: (tableName) => allowTable
-                ? resolveRuntimeVariables(buildSpecificTableText(state, tableName))
+                ? resolveRuntimeVariables(buildSpecificTableText(state, tableName, tableOptions))
                 : `{{MEMORY_TABLE_${tableName}}}`,
             __summary: (summaryKey) => allowSummary
                 ? resolveRuntimeVariables(buildSpecificSummaryText(state, summaryKey))
@@ -1395,20 +1456,33 @@
         const vectorText = settings.injectVectorMemory && typeof options.getVectorText === 'function' && !hasOwnVectorMarker
             ? await options.getVectorText(body)
             : '';
-        const replacements = buildVariableReplacements(state, vectorText, settings);
+        let genericVectorText = vectorText;
+        let characterProfileVectorText = '';
+        if (vectorText && typeof vectorText === 'object') {
+            genericVectorText = String(vectorText.generic || vectorText.text || '');
+            characterProfileVectorText = String(vectorText.characterProfile || '');
+        }
+        const extractedTableIds = [...collectSpecificTableAnchorIds(body, state)];
+        const runtimeOptions = {
+            characterProfileText: characterProfileVectorText,
+            excludeTableIds: extractedTableIds,
+        };
+        const replacements = buildVariableReplacements(state, genericVectorText, settings, runtimeOptions);
         const anchorState = { seen: new Set(), injected: new Set() };
         const injectedVars = new Set();
         if (settings.injectMemoryTable || settings.injectVectorMemory) {
-            replaceMemoryDataAnchorsInRequest(body, state, vectorText, injectedVars, {
+            replaceMemoryDataAnchorsInRequest(body, state, genericVectorText, injectedVars, {
                 settings,
+                characterProfileText: characterProfileVectorText,
+                excludeTableIds: extractedTableIds,
                 preserveUnresolvedVectorAnchors: options.preserveUnresolvedVectorAnchors === true,
             });
         }
         replaceVariablesInNode(body, replacements, anchorState);
 
-        if (settings.injectVectorMemory && vectorText && hadVectorVariable) {
+        if (settings.injectVectorMemory && genericVectorText && hadVectorVariable) {
             logVectorInfo('已替换 {{VECTOR_MEMORY}} 变量', {
-                contentLength: vectorText.length,
+                contentLength: genericVectorText.length,
                 replaced: injectedVars.has('VECTOR_MEMORY') || anchorState.injected.has('{{VECTOR_MEMORY}}'),
             });
         }
@@ -1427,26 +1501,27 @@
                 messages.push(...buildSummaryMessages(state));
             }
             if (settings.injectTable && !injectedVars.has('MEMORY_TABLE') && !injectedVars.has('MEMORY')) {
-                messages.push(...buildTableMessages(state));
+                messages.push(...buildTableMessages(state, runtimeOptions));
             }
             if (messages.length > 0) insertInjectedMessages(body, messages);
         }
 
         if (
             settings.injectVectorMemory
-            && vectorText
+            && genericVectorText
             && !disableVectorFallback
             && !hasYuzukiVectorMarker(body)
             && !injectedVars.has('VECTOR_MEMORY')
         ) {
-            insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(vectorText)}`, {
+            insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(genericVectorText)}`, {
                 isYuzukiVector: true,
                 isGaigaiVector: true,
                 name: 'SYSTEM (向量化)',
             });
-            logVectorInfo('已自动插入向量记忆消息', { contentLength: vectorText.length });
+            logVectorInfo('已自动插入向量记忆消息', { contentLength: genericVectorText.length });
         }
 
+        dedupeTableInjectionMessages(body);
         cleanupVariablesInNode(body, settings);
         removeEmptyAnchorShellMessages(body);
         return body;
