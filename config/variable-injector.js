@@ -7,6 +7,7 @@
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
+    const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
     const DEFAULT_STATE_REVISION = 13;
     const MEMORY_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/gi;
     const ANCHOR_VARIABLE_PATTERN = /^\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}$/i;
@@ -306,13 +307,35 @@
         return !record?.hidden;
     }
 
+    function getPlotSummaryKindByColumn(column) {
+        return cleanColumnName(column) === '支线' ? 'branch' : 'main';
+    }
+
+    function filterPlotSummaryValue(record, column, value) {
+        const text = String(value || '').trim();
+        if (!text) return '';
+        const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+        if (!lines.length) return '';
+        const kind = getPlotSummaryKindByColumn(column);
+        const states = Array.isArray(record?.hiddenPlotItems?.[kind])
+            ? record.hiddenPlotItems[kind].map(Boolean)
+            : null;
+        if (!states) {
+            return record?.hiddenKinds?.[kind] ? '' : lines.join('\n');
+        }
+        return lines.filter((_line, index) => !states[index]).join('\n');
+    }
+
     function recordToText(table, record) {
         if (!table || !record || !isRecordVisible(record)) return '';
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const lines = (Array.isArray(table.columns) ? table.columns : [])
             .map((column) => {
                 const name = cleanColumnName(column);
-                const value = String(values[name] ?? values[column] ?? '').trim();
+                const rawValue = String(values[name] ?? values[column] ?? '').trim();
+                const value = table.id === PLOT_SUMMARY_TABLE_ID
+                    ? filterPlotSummaryValue(record, column, rawValue)
+                    : rawValue;
                 return value ? `${name}: ${value}` : '';
             })
             .filter(Boolean);
