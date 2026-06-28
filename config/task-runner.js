@@ -1827,13 +1827,13 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 (Array.isArray(committed.records) ? committed.records : [committed.record]).map((record) => record?.id).filter(Boolean)
             );
             callbacks.saveState?.();
-            if (settings.autoVectorizeAfterHistory === true && typeof callbacks.syncSummaryToVectorBook === 'function') {
-                try {
-                    committed.vectorSyncResult = await callbacks.syncSummaryToVectorBook({ vectorize: true });
-                } catch (error) {
-                    committed.vectorSyncResult = { success: false, error: String(error?.message || error || '总结同步向量化失败') };
-                    console.warn('[yuzuki-Memory] Auto history summary vector sync failed:', error);
-                }
+        }
+        if (settings.autoVectorizeAfterHistory === true && typeof callbacks.syncSummaryToVectorBook === 'function') {
+            try {
+                committed.vectorSyncResult = await callbacks.syncSummaryToVectorBook({ vectorize: true });
+            } catch (error) {
+                committed.vectorSyncResult = { success: false, error: String(error?.message || error || '总结同步向量化失败') };
+                console.warn('[yuzuki-Memory] Auto summary vector sync failed:', error);
             }
         }
         callbacks.saveState?.();

@@ -7311,9 +7311,9 @@
         const text = document.createElement('div');
         text.className = 'yzm-auto-summary-vector-text';
         const label = document.createElement('strong');
-        label.textContent = '大总结后自动同步到向量化';
+        label.textContent = '总结后自动同步到向量化';
         const desc = document.createElement('span');
-        desc.textContent = '大总结完成后，将总结内容同步到向量化书籍，供后续检索召回。';
+        desc.textContent = '小总结和大总结完成后，都会覆盖同步当前会话的向量化书籍并重新向量化。';
         text.append(label, desc);
         row.append(createAutoSummarySwitch(settings.autoVectorizeAfterHistory, 'autoVectorizeAfterHistory'), text, createIconButton('同步', 'fa-solid fa-rotate', 'yzm-api-button yzm-auto-summary-vector-button'));
         card.append(title, row);
