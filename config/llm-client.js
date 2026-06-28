@@ -90,6 +90,12 @@
         return String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^[\s\S]*?<\/think>/i, '').trim();
     }
 
+    function appendTokenTruncationMarker(text = '', source = 'API') {
+        const base = String(text || '');
+        if (!base || base.includes('finish_reason=length') || base.includes('达到最大 Token 限制')) return base;
+        return `${base}\n\n[上游返回 finish_reason=length，已输出已接收内容；来源=${source}]`;
+    }
+
     async function getCsrfToken(forceRefresh = false) {
         if (!forceRefresh && typeof window.getRequestHeaders === 'function') {
             const headers = window.getRequestHeaders() || {};
@@ -209,6 +215,14 @@
             ? configOrProvider
             : configOrProvider?.provider;
         return provider === 'gemini';
+    }
+
+    function shouldUseGeminiNative(configOrProvider) {
+        const provider = typeof configOrProvider === 'string'
+            ? configOrProvider
+            : configOrProvider?.provider;
+        const apiUrl = typeof configOrProvider === 'string' ? '' : String(configOrProvider?.apiUrl || '');
+        return provider === 'gemini' && !apiUrl.toLowerCase().includes('/v1');
     }
 
     function resolveGeminiGenerateUrl(apiUrl, model, apiKey = '') {
@@ -415,6 +429,10 @@
         if (!data || typeof data !== 'object') throw new Error('API 返回格式异常');
         if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
 
+        const finishReason = data?.choices?.[0]?.finish_reason
+            || data?.data?.choices?.[0]?.finish_reason
+            || data?.candidates?.[0]?.finishReason
+            || '';
         const maybeArrayContent = data?.choices?.[0]?.message?.content;
         const normalizedArrayContent = Array.isArray(maybeArrayContent)
             ? maybeArrayContent.map((part) => String(part?.text || part?.content || '')).join('')
@@ -434,7 +452,11 @@
             || ''
         );
         if (!content) throw new Error('API 返回内容为空');
-        return { success: true, text: content };
+        return {
+            success: true,
+            text: finishReason === 'length' ? appendTokenTruncationMarker(content, '非流式响应') : content,
+            truncated: finishReason === 'length',
+        };
     }
 
     function formatResponseParseError(error, response, rawText = '') {
@@ -489,6 +511,7 @@
                         if (reasoning) fullReasoning += reasoning;
                     } catch (error) {
                         if (/安全策略|内容被|unauthori|csrf|forbidden/i.test(String(error?.message || ''))) throw error;
+                        if (jsonText.trim() && !jsonText.includes('[DONE]') && !jsonText.trim().startsWith('{')) fullText += jsonText;
                     }
                 }
                 if (done) break;
@@ -498,9 +521,9 @@
         }
         let text = stripThinking(fullText);
         if (!text && fullReasoning.trim()) throw new Error('API 只返回了 reasoning_content，未返回正文内容');
-        if (truncated && text) text += '\n\n[内容已因达到最大 Token 限制而截断]';
+        if (truncated && text) text = appendTokenTruncationMarker(text, '流式响应');
         if (!text) throw new Error('流式传输返回为空');
-        return { success: true, text };
+        return { success: true, text, truncated };
     }
 
     async function generateWithTavern(messages, options = {}) {
@@ -606,7 +629,7 @@
 
     function resolveDirectUrl(config) {
         let directUrl = config.apiUrl.replace(/\/+$/, '');
-        if (isGeminiProvider(config)) {
+        if (shouldUseGeminiNative(config)) {
             return resolveGeminiGenerateUrl(directUrl, config.model, config.apiKey);
         }
 
@@ -618,7 +641,7 @@
 
     function resolveDirectPayload(config, messages, stream) {
         const modelLower = config.model.toLowerCase();
-        if (isGeminiProvider(config)) {
+        if (shouldUseGeminiNative(config)) {
             return {
                 contents: messages.map((message) => ({
                     role: message.role === 'user' ? 'user' : 'model',
@@ -648,11 +671,12 @@
     }
 
     async function postDirectGenerate(config, messages, options = {}) {
-        const stream = options.stream ?? config.stream;
+        const requestedStream = options.stream ?? config.stream;
+        const stream = options.forceNonStream === true ? false : requestedStream;
         const directUrl = resolveDirectUrl(config);
         const headers = { 'Content-Type': 'application/json' };
         const authHeader = createAuthHeader(config.apiKey);
-        if (authHeader && !isGeminiProvider(config)) headers.Authorization = authHeader;
+        if (authHeader && !shouldUseGeminiNative(config)) headers.Authorization = authHeader;
 
         const response = await fetch(directUrl, {
             method: 'POST',
@@ -677,6 +701,16 @@
             const result = await parseGenerateResponse(response, contentType.includes('text/event-stream'));
             return { ...result };
         } catch (error) {
+            if (stream && options.forceNonStream !== true && !options.signal?.aborted) {
+                const retryResult = await postDirectGenerate(config, messages, { ...options, stream: false, forceNonStream: true });
+                if (retryResult?.success) return { ...retryResult, fallback: 'direct-non-stream' };
+                return {
+                    success: false,
+                    error: `${formatError(error, '解析响应失败')}\n\n[非流式重试]\n${retryResult?.error || '请求失败'}`,
+                    status: response.status,
+                    statusText: response.statusText,
+                };
+            }
             return {
                 success: false,
                 error: formatError(error, '解析响应失败'),
