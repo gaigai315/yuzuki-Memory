@@ -465,12 +465,34 @@
         const body = (table.columns || [])
             .map((column) => {
                 const name = cleanColumnName(column);
-                const value = String(values[name] ?? values[column] ?? '').trim();
+                const rawValue = String(values[name] ?? values[column] ?? '').trim();
+                const value = table.id === PLOT_SUMMARY_TABLE_ID
+                    ? filterPlotSummaryValue(record, column, rawValue)
+                    : rawValue;
                 return value ? `${name}: ${value}` : '';
             })
             .filter(Boolean)
             .join('；');
         return body ? `- ${body}` : '';
+    }
+
+    function getPlotSummaryKindByColumn(column) {
+        return cleanColumnName(column) === '支线' ? 'branch' : 'main';
+    }
+
+    function filterPlotSummaryValue(record, column, value) {
+        const text = String(value || '').trim();
+        if (!text) return '';
+        const lines = text.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+        if (!lines.length) return '';
+        const kind = getPlotSummaryKindByColumn(column);
+        const states = Array.isArray(record?.hiddenPlotItems?.[kind])
+            ? record.hiddenPlotItems[kind].map(Boolean)
+            : null;
+        if (!states) {
+            return record?.hiddenKinds?.[kind] ? '' : lines.join('\n');
+        }
+        return lines.filter((_line, index) => !states[index]).join('\n');
     }
 
     function tablesToReferenceText(state, options = {}) {
