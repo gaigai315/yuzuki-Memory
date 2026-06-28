@@ -181,6 +181,7 @@
             traceBatchEnabled: settings?.traceBatchEnabled !== false,
             traceBatchSize: Math.max(1, Math.round(Number(settings?.traceBatchSize) || 40)),
             traceBatchDelay: Math.max(0, Math.round(Number(settings?.traceBatchDelay ?? 2) || 0)),
+            traceRunMode: settings?.traceRunMode === 'silent' ? 'silent' : 'confirm',
         };
     }
 
@@ -1398,6 +1399,33 @@
         return { ...result, success: true, count: created.length, record: created[0] || null, records: created, removedCount: removeIds.size };
     }
 
+    function rebuildTaskResultFromText(action, originalResult = {}, editedText = '') {
+        const text = String(editedText || '').trim();
+        if (!text) return { ...originalResult, success: false, error: '编辑后的结果为空。' };
+        if (action === 'trace' || action === 'traceOptimize') {
+            const parsed = parseTraceResponse(text);
+            return {
+                ...originalResult,
+                success: true,
+                parsed,
+                preview: getTracePreview(parsed),
+                text,
+            };
+        }
+        if (action === 'summary' || action === 'summaryOptimize') {
+            const payloads = parseSummaryResponse(text);
+            return {
+                ...originalResult,
+                success: true,
+                payload: payloads[0],
+                payloads,
+                preview: payloads.map((payload) => getSummaryPreview(payload)).filter(Boolean).join('\n\n'),
+                text,
+            };
+        }
+        return { ...originalResult, success: true, text };
+    }
+
     function getDefaultTracePrompt(state, options = {}) {
         return `你是记忆表格追溯助手。请阅读聊天记录，提取应该写入记忆表格的信息。
 只输出 JSON，不要解释。格式：
@@ -1773,9 +1801,13 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 
         let committed = result;
         if (!settings.autoSave) {
-            const approved = await confirmTaskResult(result, task, callbacks);
-            if (!approved) return { success: true, skipped: true, result };
-            committed = commitSummaryResult(state, result);
+            const confirmation = await confirmTaskResult(result, task, callbacks);
+            if (!confirmation) return { success: true, skipped: true, result };
+            committed = confirmation && typeof confirmation === 'object' && 'text' in confirmation
+                ? rebuildTaskResultFromText('summary', result, confirmation.text)
+                : result;
+            if (!committed.success) return committed;
+            committed = commitSummaryResult(state, committed);
         }
 
         const pointers = normalizePointers(state);
@@ -1809,20 +1841,33 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     async function runAutoTraceTask(state, task, callbacks = {}) {
+        const pluginSettings = getPluginSettings();
+        const autoSave = pluginSettings.traceRunMode === 'silent';
         const result = await runTrace(state, {
             start: task.start,
             end: task.end,
-            silent: true,
-            previewOnly: false,
+            silent: autoSave,
+            previewOnly: !autoSave,
             autoTaskType: 'trace',
         });
         if (!result.success) return { ...result, range: result.range || { start: task.start, end: task.end } };
 
+        let committed = result;
+        if (!autoSave) {
+            const confirmation = await confirmTaskResult(result, task, callbacks);
+            if (!confirmation) return { success: true, skipped: true, result };
+            committed = confirmation && typeof confirmation === 'object' && 'text' in confirmation
+                ? rebuildTaskResultFromText('trace', result, confirmation.text)
+                : result;
+            if (!committed.success) return committed;
+            committed = commitTraceResult(state, committed);
+        }
+
         const pointers = normalizePointers(state);
-        pointers.trace = result.range?.end || task.end;
+        pointers.trace = committed.range?.end || task.end;
         callbacks.saveState?.();
-        callbacks.onUpdate?.(result);
-        return result;
+        callbacks.onUpdate?.(committed);
+        return committed;
     }
 
     function scheduleAutoSummary(callbacks = {}, delayMs = 800) {
@@ -1955,6 +2000,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         commitTraceResult,
         commitSummaryResult,
         commitSummaryOptimizeResult,
+        rebuildTaskResultFromText,
         cleanupSmallAutoSummaries,
         bindAutoSummary,
         cancelPendingAutoTask,

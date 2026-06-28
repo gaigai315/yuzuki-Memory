@@ -213,6 +213,7 @@
     let taskRunnerActiveAction = '';
     let taskRunnerProgressLabel = '';
     let taskRunnerAbortController = null;
+    let activeTaskResultDialogCloser = null;
     let activeWorkspaceView = 'table';
     let activeConfigSectionId = 'plugin';
     let activeApiSectionId = 'llm';
@@ -631,8 +632,10 @@
         let changed = 0;
         getRecords(table.id).forEach((record) => {
             if (!record || record.hidden) return;
+            if (record.vectorSynced === true) return;
             const content = getSummaryValue(record, ['总结内容']);
             if (!String(content || '').trim()) return;
+            record.vectorSynced = true;
             record.hidden = true;
             changed += 1;
         });
@@ -4484,6 +4487,7 @@
         if (!taskRunnerBusy) return;
         taskRunnerStopRequested = true;
         taskRunnerAbortController?.abort?.();
+        activeTaskResultDialogCloser?.(false);
         taskRunnerProgressLabel = '正在停止...';
         syncVisibleTaskButtons(root);
     }
@@ -4549,9 +4553,9 @@
             const preview = document.createElement('textarea');
             preview.className = 'yzm-task-result-preview';
             preview.value = formatTaskPreview(options.result);
-            preview.readOnly = true;
 
             let compare = null;
+            let editableTextarea = preview;
             if (options.compare === true) {
                 compare = document.createElement('div');
                 compare.className = 'yzm-task-result-compare';
@@ -4561,8 +4565,8 @@
                 oldBlock.readOnly = true;
                 const newBlock = document.createElement('textarea');
                 newBlock.className = 'yzm-task-result-preview yzm-task-result-compare-text';
-                newBlock.value = options.result?.preview || formatTaskPreview(options.result);
-                newBlock.readOnly = true;
+                newBlock.value = formatTaskPreview(options.result);
+                editableTextarea = newBlock;
                 const oldWrap = document.createElement('div');
                 oldWrap.className = 'yzm-task-result-compare-pane';
                 const oldTitle = document.createElement('strong');
@@ -4586,21 +4590,23 @@
             modalHost.appendChild(overlay);
 
             const closeWith = (value) => {
+                if (activeTaskResultDialogCloser === closeWith) activeTaskResultDialogCloser = null;
                 overlay.remove();
                 document.removeEventListener('keydown', handleKeydown);
                 resolve(value);
             };
+            activeTaskResultDialogCloser = closeWith;
             const handleKeydown = (event) => {
                 if (event.key === 'Escape') closeWith(false);
             };
             close.onclick = () => closeWith(false);
-            confirm.onclick = () => closeWith(true);
+            confirm.onclick = () => closeWith({ action: 'confirm', text: editableTextarea.value });
             overlay.addEventListener('click', (event) => {
                 if (event.target === overlay) closeWith(false);
             });
             dialog.addEventListener('click', (event) => event.stopPropagation());
             document.addEventListener('keydown', handleKeydown);
-            (compare?.querySelector('textarea') || preview).focus();
+            editableTextarea.focus();
         });
     }
 
@@ -4760,7 +4766,7 @@
 
         if (!result?.success) return result;
         if (!options.silent) {
-            const approved = await openTaskResultConfirmDialog(ensureRoot(), {
+            const confirmation = await openTaskResultConfirmDialog(ensureRoot(), {
                 title: `${getTaskActionLabel(action)}结果确认`,
                 description: options.batchIndex
                     ? `第 ${options.batchIndex}/${options.batchTotal} 批，范围 ${options.start}-${options.end}（不含 ${options.end}）。确认后才会写入插件记忆。`
@@ -4768,7 +4774,11 @@
                 result,
                 compare: action === 'summaryOptimize',
             });
-            if (!approved) return { success: false, cancelled: true, error: '用户取消写入。' };
+            if (!confirmation) return { success: false, cancelled: true, error: '用户取消写入。' };
+            if (confirmation && typeof confirmation === 'object' && 'text' in confirmation) {
+                result = YuzukiMemory.TaskRunner.rebuildTaskResultFromText(action, result, confirmation.text);
+                if (!result?.success) return result;
+            }
             result = commitTaskResult(action, state, result);
         }
         return result;
@@ -11013,8 +11023,8 @@
                 const root = document.getElementById(ROOT_ID);
                 if (!root) return Promise.resolve(false);
                 return openTaskResultConfirmDialog(root, {
-                    title: `${task?.title || '自动总结'}结果确认`,
-                    description: '完成模式未勾选静默保存，确认后才会写入插件记忆。',
+                    title: `${task?.title || '自动任务'}结果确认`,
+                    description: '完成后未启用静默保存，确认后才会写入插件记忆。可先编辑结果再写入。',
                     result,
                 });
             },
