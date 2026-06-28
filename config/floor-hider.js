@@ -65,7 +65,7 @@
         const hidden = new Set();
         if (!Array.isArray(chat)) return hidden;
         chat.forEach((message, index) => {
-            if (message?.is_system === true) hidden.add(index);
+            if (message?.is_system === true && message?.is_yzm_hidden_floor === true) hidden.add(index);
         });
         return hidden;
     }
@@ -188,7 +188,7 @@
         if (!Array.isArray(chat)) return [];
         return chat
             .filter((message) => (
-                message?.is_yzm_hidden_floor === true
+                (message?.is_yzm_hidden_floor === true && message?.is_system === true)
                 || (
                     message?.is_system === true
                     && (
@@ -297,6 +297,13 @@
 
         const summaryPointer = getSummaryPointer(options);
         if (summaryPointer <= 0) return { success: true, count: 0, indices: [], hiddenTexts: getCurrentHiddenMessageTexts() };
+        if (summaryPointer > chat.length) {
+            console.info('[yuzuki-Memory] 总结后隐藏跳过：总结指针超过当前聊天长度，可能是清空/删减聊天后的旧指针。', {
+                summaryPointer,
+                chatLength: chat.length,
+            });
+            return { success: false, skipped: true, reason: 'stale_summary_pointer', summaryPointer, chatLength: chat.length };
+        }
         const indices = collectSummaryIndicesToHide(chat, summaryPointer);
         if (!indices.length) return { success: true, count: 0, indices: [], hiddenTexts: getCurrentHiddenMessageTexts() };
 

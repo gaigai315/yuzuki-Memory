@@ -150,6 +150,13 @@
         return JSON.stringify(message, null, 2);
     }
 
+    function getMessageRoleKind(message) {
+        const role = String(message?.role || '').toLowerCase();
+        if (message?.is_user === true || role === 'user' || role === 'human') return 'user';
+        if (message?.is_user === false || role === 'assistant' || role === 'model' || role === 'ai') return 'assistant';
+        return '';
+    }
+
     function removeHiddenMessagesFromBody(body, hiddenTexts = []) {
         const targets = getRequestArrays(body);
         if (!targets.length || !hiddenTexts.length) return body;
@@ -191,19 +198,27 @@
     }
 
     function extractSearchText(body) {
-        const target = getRequestArray(body);
-        const sourceItems = getContextChatItems();
-        const items = sourceItems.length ? sourceItems : (target?.items || []);
-        if (!items.length) return '';
         const settings = YuzukiMemory.EmbeddingClient?.loadSettings?.() || {};
         const depth = Math.max(1, Math.round(Number(settings.contextDepth) || 2));
+        const contextItems = getContextChatItems();
+        const requestItems = getRequestArrays(body).flatMap((target) => target.items || []);
+        const items = [...contextItems, ...requestItems];
+        if (!items.length) return '';
         const collected = [];
         for (let index = items.length - 1; index >= 0 && collected.length < depth; index -= 1) {
             const item = items[index];
             if (isSystemLikeMessage(item)) continue;
+            const roleKind = getMessageRoleKind(item);
+            if (!roleKind) continue;
             const text = getMessageText(item).trim();
             if (text) collected.unshift(text);
         }
+        console.info('[yuzuki-Memory Vector] 检索上下文收集', {
+            contextMessages: contextItems.length,
+            requestMessages: requestItems.length,
+            collected: collected.length,
+            depth,
+        });
         return collected.join('\n').slice(-6000);
     }
 
@@ -214,6 +229,24 @@
         } else {
             console[method](`[yuzuki-Memory Vector] ${message}`, detail);
         }
+    }
+
+    function compactCharacterProfileChunk(text = '') {
+        const source = String(text || '').trim();
+        if (!source) return '';
+        if (!source.includes('\n')) return source.startsWith('- ') ? source : `- ${source}`;
+        const titleMatch = source.match(/^【角色档案[:：]([^】]+)】/m);
+        const titleName = String(titleMatch?.[1] || '').trim();
+        const rawParts = source
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => line.replace(/^[-•]\s*/, '').trim())
+            .filter((line) => !/^【角色档案[:：][^】]+】$/.test(line))
+            .filter(Boolean);
+        const hasName = rawParts.some((part) => /^角色名\s*[:：]/.test(part));
+        const parts = titleName && !hasName ? [`角色名: ${titleName}`, ...rawParts] : rawParts;
+        return parts.length ? `- ${parts.join('；')}` : '';
     }
 
     async function getVectorInjectionText(body) {
@@ -251,12 +284,20 @@
                 recallLimit: settings.recallLimit,
                 rerank: rerankSettings.enabled === true,
             });
-            const searchPromise = store.search(query);
+            const characterBookIds = typeof store.getActiveBooksByKind === 'function'
+                ? store.getActiveBooksByKind('character_profile')
+                : activeBooks.filter((bookId) => typeof store.isCharacterProfileBook === 'function' && store.isCharacterProfileBook(bookId));
+            const characterBookSet = new Set(characterBookIds);
+            const genericBookIds = activeBooks.filter((bookId) => !characterBookSet.has(bookId));
+            const searchPromise = Promise.all([
+                genericBookIds.length ? store.search(query, genericBookIds) : Promise.resolve([]),
+                characterBookIds.length ? store.search(query, characterBookIds) : Promise.resolve([]),
+            ]);
             const timeoutPromise = new Promise((_, reject) => {
                 window.setTimeout(() => reject(new Error('向量检索超时')), 20000);
             });
-            const results = await Promise.race([searchPromise, timeoutPromise]);
-            if (!Array.isArray(results) || !results.length) {
+            const [genericResults, characterResults] = await Promise.race([searchPromise, timeoutPromise]);
+            if ((!Array.isArray(genericResults) || !genericResults.length) && (!Array.isArray(characterResults) || !characterResults.length)) {
                 logVectorInfo('检索完成：没有命中内容', {
                     activeBooks: activeBooks.length,
                     threshold: settings.threshold,
@@ -264,15 +305,21 @@
                 });
                 return '';
             }
-            const vectorText = results.map((item) => item.text).join('\n\n');
+            const vectorText = (genericResults || []).map((item) => item.text).join('\n\n');
+            const characterProfileText = (characterResults || [])
+                .map((item) => compactCharacterProfileChunk(item.text))
+                .filter(Boolean)
+                .join('\n');
             logVectorInfo('检索完成', {
-                count: results.length,
-                contentLength: vectorText.length,
-                topScore: Number(results[0]?.score || 0).toFixed(4),
-                topSource: results[0]?.source || '',
+                count: (genericResults || []).length + (characterResults || []).length,
+                genericCount: (genericResults || []).length,
+                characterProfileCount: (characterResults || []).length,
+                contentLength: vectorText.length + characterProfileText.length,
+                topScore: Number((genericResults?.[0] || characterResults?.[0])?.score || 0).toFixed(4),
+                topSource: (genericResults?.[0] || characterResults?.[0])?.source || '',
                 rerank: rerankSettings.enabled === true,
             });
-            return vectorText;
+            return { generic: vectorText, characterProfile: characterProfileText };
         } catch (error) {
             logVectorInfo('检索失败，已跳过', String(error?.message || error || ''), 'warn');
             return '';

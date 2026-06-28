@@ -8,6 +8,8 @@
     const LEGACY_BACKUP_HEADER = '=== Gaigai 向量缓存文件 (图书馆版) ===';
     const LEGACY_LIBRARY_MARKER = '>>> 图书馆 <<<';
     const DEFAULT_SEPARATOR = '===';
+    const BOOK_KIND_SUMMARY = 'summary';
+    const BOOK_KIND_CHARACTER_PROFILE = 'character_profile';
 
     class VectorStore {
         constructor() {
@@ -62,6 +64,8 @@
             const vectorized = Array.isArray(book?.vectorized) ? book.vectorized : [];
             return {
                 name: String(book?.name || fallbackName).trim() || fallbackName,
+                kind: String(book?.kind || '').trim(),
+                sessionId: String(book?.sessionId || '').trim(),
                 chunks,
                 vectors: chunks.map((_chunk, index) => vectors[index] || null),
                 vectorized: chunks.map((_chunk, index) => Boolean(vectorized[index])),
@@ -278,6 +282,8 @@
                     status: stats.status,
                     selected: id === this.selectedBookId,
                     active: activeBooks.includes(id),
+                    kind: book.kind || '',
+                    sessionId: book.sessionId || '',
                     createTime: book.createTime,
                     updateTime: book.updateTime,
                 };
@@ -369,6 +375,68 @@
 
             this.library[id] = this.normalizeBook({
                 name: shouldUseSessionName ? normalizedName : oldName,
+                kind: BOOK_KIND_SUMMARY,
+                sessionId: String(sessionId || 'default'),
+                chunks: normalizedChunks,
+                vectors,
+                vectorized,
+                createTime: oldBook?.createTime || Date.now(),
+                updateTime: Date.now(),
+            }, normalizedName);
+            this.selectedBookId = id;
+            await this.saveLibrary();
+            this.toggleActiveBook(id, true);
+            return { success: true, bookId: id, count: normalizedChunks.length };
+        }
+
+        getCharacterProfileBookId(sessionId = 'default') {
+            return `yzm_character_book_${String(sessionId || 'default').replace(/[^\w-]/g, '_')}`;
+        }
+
+        isCharacterProfileBook(bookId) {
+            return this.library[bookId]?.kind === BOOK_KIND_CHARACTER_PROFILE
+                || String(bookId || '').startsWith('yzm_character_book_');
+        }
+
+        getActiveBooksByKind(kind = '') {
+            const expected = String(kind || '').trim();
+            return this.getActiveBooks().filter((bookId) => {
+                const book = this.library[bookId];
+                if (!book) return false;
+                if (expected === BOOK_KIND_CHARACTER_PROFILE) return this.isCharacterProfileBook(bookId);
+                if (!expected) return !this.isCharacterProfileBook(bookId);
+                return book.kind === expected;
+            });
+        }
+
+        async syncCharacterProfilesToBook(chunks, sessionId = 'default', bookName = '') {
+            const normalizedChunks = Array.isArray(chunks) ? chunks.map((chunk) => String(chunk || '').trim()).filter(Boolean) : [];
+            const id = this.getCharacterProfileBookId(sessionId);
+            const oldBook = this.library[id];
+            const normalizedName = String(bookName || '').trim() || '当前会话角色档案';
+            const oldVectors = new Map();
+            if (oldBook) {
+                oldBook.chunks.forEach((chunk, index) => {
+                    if (oldBook.vectorized[index] && oldBook.vectors[index]) oldVectors.set(chunk, oldBook.vectors[index]);
+                });
+            }
+
+            const vectors = [];
+            const vectorized = [];
+            normalizedChunks.forEach((chunk) => {
+                if (oldVectors.has(chunk)) {
+                    vectors.push(oldVectors.get(chunk));
+                    vectorized.push(true);
+                } else {
+                    vectors.push(null);
+                    vectorized.push(false);
+                }
+            });
+
+            this.library[id] = this.normalizeBook({
+                name: normalizedName,
+                kind: BOOK_KIND_CHARACTER_PROFILE,
+                sessionId: String(sessionId || 'default'),
                 chunks: normalizedChunks,
                 vectors,
                 vectorized,

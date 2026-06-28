@@ -982,6 +982,10 @@
         const primaryValue = String(normalizedValues[primary] || values[primary] || values.name || values.title || '').trim();
         if (primaryValue) normalizedValues[primary] = primaryValue;
         if (!normalizedValues[primary]) normalizedValues[primary] = `${primary}${records.length + 1}`;
+        const hasValidUpdate = (table.columns || [])
+            .map(cleanColumnName)
+            .some((name) => name !== primary && String(normalizedValues[name] || '').trim());
+        if (!hasValidUpdate) return null;
 
         let record = records.find((entry) => recordTitle(table, entry) === normalizedValues[primary]);
         if (!record) {
@@ -1382,14 +1386,21 @@
                 count += 1;
                 return;
             }
-            upsertRecord(state, table, row.values);
-            count += 1;
+            if (upsertRecord(state, table, row.values)) count += 1;
         });
         return count;
     }
 
     function commitTraceResult(state, result) {
         const count = applyTraceResult(state, result?.parsed);
+        if (!count) {
+            return {
+                ...result,
+                success: false,
+                count: 0,
+                error: '批量填表没有解析到有效更新，已跳过写入，避免清空或覆盖现有表格。',
+            };
+        }
         return { ...result, success: true, count };
     }
 

@@ -380,7 +380,7 @@
             if (message?.isGaigaiData === true || message?.yzmMemoryInjectionType === 'summary' || message?.yzmMemoryInjectionType === 'table') {
                 const type = String(message?.yzmMemoryInjectionType || '').toLowerCase();
                 const content = getPrimaryTextFromMessage(message);
-                if (type === 'table' || content.includes('【记忆只读数据库 -')) replacedTable = true;
+                if (type === 'table' || content.includes('【当前世界状态参考 -') || content.includes('【记忆只读数据库 -')) replacedTable = true;
                 else replacedSummary = true;
             }
         });

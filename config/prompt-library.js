@@ -349,9 +349,7 @@ Your primary function is to analyze provided texts, extract key information, ass
             modes: {
                 trace: 'realtime',
             },
-            tableVisibility: {
-                plot_summary: false,
-            },
+            tableVisibility: {},
             builtin: true,
         };
     }
@@ -554,9 +552,7 @@ Your primary function is to analyze provided texts, extract key information, ass
                 modes: {
                     trace: 'realtime',
                 },
-                tableVisibility: {
-                    plot_summary: false,
-                },
+                tableVisibility: {},
                 builtin: true,
             },
         ];

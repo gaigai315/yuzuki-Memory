@@ -293,6 +293,16 @@
         const primaryName = getPrimaryColumnName(table);
         const primaryValue = String(row.primaryValue || '').trim();
         if (!primaryValue) return false;
+        const validUpdates = Object.entries(row.values || {})
+            .map(([field, value]) => {
+                const column = findColumn(table, field);
+                if (!column) return null;
+                const nextValue = String(value || '').trim();
+                if (!nextValue) return null;
+                return { column, value: nextValue };
+            })
+            .filter(Boolean);
+        if (!validUpdates.length) return false;
 
         let record = records.find((entry) => String(entry?.values?.[primaryName] || '').trim() === primaryValue);
         if (!record) {
@@ -302,14 +312,12 @@
         record.values = record.values && typeof record.values === 'object' ? record.values : {};
         record.values[primaryName] = primaryValue;
 
-        Object.entries(row.values || {}).forEach(([field, value]) => {
-            const column = findColumn(table, field);
-            if (!column) return;
+        validUpdates.forEach(({ column, value }) => {
             const columnName = cleanColumnName(column);
             const shouldAppend = isAppendColumn(column);
             record.values[columnName] = shouldAppend
                 ? appendCellValue(record.values[columnName], value)
-                : String(value || '').trim();
+                : value;
         });
         return true;
     }
