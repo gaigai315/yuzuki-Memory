@@ -5132,6 +5132,11 @@
     margin-top: 10px;
 }
 
+#yzm-memory-root .yzm-fill-settings-body {
+    display: grid;
+    gap: 12px;
+}
+
 #yzm-memory-root .yzm-fill-mode-choice {
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr);
