@@ -177,6 +177,7 @@
     function getPluginSettings() {
         const settings = parseJsonStorage(PLUGIN_SETTINGS_STORAGE_KEY, {});
         return {
+            enableFilling: settings?.enableFilling !== false,
             fillMode: settings?.fillMode === 'batch' ? 'batch' : 'realtime',
             traceBatchEnabled: settings?.traceBatchEnabled !== false,
             traceBatchSize: Math.max(1, Math.round(Number(settings?.traceBatchSize) || 40)),
@@ -1731,7 +1732,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     function buildAutoTraceTask(pointers, chatLength, settings) {
-        if (settings.fillMode !== 'batch' || !settings.traceBatchEnabled) return null;
+        if (settings.enableFilling === false || settings.fillMode !== 'batch' || !settings.traceBatchEnabled) return null;
         const lastIndex = Math.max(0, Number(pointers.trace) || 0);
         const interval = Math.max(1, Number(settings.traceBatchSize) || 40);
         const delay = Math.max(0, Number(settings.traceBatchDelay) || 0);
