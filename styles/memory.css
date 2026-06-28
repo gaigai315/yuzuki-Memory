@@ -6470,6 +6470,37 @@
     width: min(520px, 100%);
 }
 
+#yzm-memory-root .yzm-update-notice-dialog {
+    width: min(520px, 100%);
+}
+
+#yzm-memory-root .yzm-update-notice-content {
+    display: grid;
+    gap: 8px;
+    padding: 4px 2px;
+    color: var(--yzm-text);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+#yzm-memory-root .yzm-update-notice-content p,
+#yzm-memory-root .yzm-update-notice-content ul {
+    margin: 0;
+}
+
+#yzm-memory-root .yzm-update-notice-content ul {
+    padding-left: 18px;
+}
+
+#yzm-memory-root .yzm-update-notice-content li + li {
+    margin-top: 6px;
+}
+
+#yzm-memory-root .yzm-update-notice-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
 #yzm-memory-root .yzm-task-result-meta,
 #yzm-memory-root .yzm-auto-task-info {
     color: var(--yzm-muted);

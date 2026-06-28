@@ -17,6 +17,7 @@
     const LLM_API_PRESETS_STORAGE_KEY = 'yzm_memory_global_llm_api_presets';
     const LLM_API_MODE_STORAGE_KEY = 'yzm_memory_global_llm_api_mode';
     const LLM_API_ACTIVE_PRESET_STORAGE_KEY = 'yzm_memory_global_llm_api_active_preset';
+    const UPDATE_NOTICE_VERSION_STORAGE_KEY = 'yzm_memory_seen_update_version';
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
@@ -8574,6 +8575,91 @@
         getModalHost(root).querySelector(selector)?.remove();
     }
 
+    function getCurrentPluginVersion() {
+        return String(YuzukiMemory.version || '').replace(/^v+/i, '').trim() || '0.0.0';
+    }
+
+    function openUpdateNoticeDialog(root) {
+        const version = getCurrentPluginVersion();
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-update-notice-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-update-notice-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-update-notice-dialog';
+        dialog.setAttribute('aria-label', '更新通知');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = `更新通知 v${version}`;
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭更新通知');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const content = document.createElement('div');
+        content.className = 'yzm-update-notice-content';
+
+        const intro = document.createElement('p');
+        intro.textContent = '本次更新内容：';
+        const list = document.createElement('ul');
+        [
+            '独立 API 的 OpenAI 降级请求已对齐旧版，避免 custom/openai 字段混用导致鉴权不稳定。',
+            '填表与总结的结果确认弹窗支持编辑后保存，保存前会重新解析编辑内容。',
+            '停止任务会关闭等待中的确认弹窗，避免按钮停在“正在停止”。',
+            '剧情摘要同步向量后自动隐藏增加版本标记，避免刷新后重复隐藏。',
+        ].forEach((text) => {
+            const item = document.createElement('li');
+            item.textContent = text;
+            list.appendChild(item);
+        });
+        content.append(intro, list);
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-structure-actions yzm-update-notice-actions';
+        const confirm = createButton('知道了', 'yzm-add-table-confirm');
+        actions.appendChild(confirm);
+
+        dialog.append(header, content, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const markSeenAndClose = () => {
+            localStorage.setItem(UPDATE_NOTICE_VERSION_STORAGE_KEY, version);
+            overlay.remove();
+            document.removeEventListener('keydown', handleKeydown);
+        };
+        const handleKeydown = (event) => {
+            if (event.key === 'Escape') markSeenAndClose();
+        };
+        close.onclick = markSeenAndClose;
+        confirm.onclick = markSeenAndClose;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) markSeenAndClose();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        document.addEventListener('keydown', handleKeydown);
+        confirm.focus();
+    }
+
+    function maybeShowUpdateNotice(root) {
+        const version = getCurrentPluginVersion();
+        if (!version) return;
+        if (localStorage.getItem(UPDATE_NOTICE_VERSION_STORAGE_KEY) === version) return;
+        window.setTimeout(() => {
+            const shell = root?.querySelector?.('.yzm-shell');
+            if (!shell || shell.hidden) return;
+            if (localStorage.getItem(UPDATE_NOTICE_VERSION_STORAGE_KEY) === version) return;
+            openUpdateNoticeDialog(root);
+        }, 120);
+    }
+
     function openTableEditor(root, item = getActiveTableItem(root)) {
         const tableId = item?.dataset?.yzmTableId;
         const table = getTables().find((entry) => entry.id === tableId);
@@ -10927,6 +11013,7 @@
         if (!shell) return;
         shell.hidden = forceOpen ? false : !shell.hidden;
         updateFloatingIconVisibility();
+        if (!shell.hidden) maybeShowUpdateNotice(root);
     }
 
     function getExtensionMenuHost() {
