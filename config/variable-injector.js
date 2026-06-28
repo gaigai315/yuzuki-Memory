@@ -162,12 +162,14 @@
             return {
                 injectMemoryTable: settings.injectMemoryTable !== false,
                 injectVectorMemory: settings.injectVectorMemory === true,
+                enableFilling: settings.enableFilling !== false,
                 fillMode: settings.fillMode === 'batch' ? 'batch' : 'realtime',
             };
         } catch (_error) {
             return {
                 injectMemoryTable: true,
                 injectVectorMemory: false,
+                enableFilling: true,
                 fillMode: 'realtime',
             };
         }
@@ -522,7 +524,8 @@
     }
 
     function buildMemoryPromptText(state = getCurrentState()) {
-        if (getPluginSettings().fillMode !== 'realtime') return '';
+        const settings = getPluginSettings();
+        if (settings.enableFilling === false || settings.fillMode !== 'realtime') return '';
         const scheme = getActivePromptScheme(state);
         const prompts = YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.(scheme || { prompts: {} }) || scheme?.prompts || {};
         const tracePrompt = prompts.traceRealtime || prompts.trace;

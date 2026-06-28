@@ -148,6 +148,7 @@
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
         enableFloatingIcon: false,
+        enableFilling: true,
         fillMode: 'realtime',
         traceBatchEnabled: true,
         traceBatchSize: 40,
@@ -1180,6 +1181,7 @@
             hideFloorsEnabled: typeof source.hideFloorsEnabled === 'boolean' ? source.hideFloorsEnabled : DEFAULT_PLUGIN_SETTINGS.hideFloorsEnabled,
             hiddenFloorCount: Math.round(normalizeNumberSetting(source.hiddenFloorCount, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0)),
             enableFloatingIcon: typeof source.enableFloatingIcon === 'boolean' ? source.enableFloatingIcon : DEFAULT_PLUGIN_SETTINGS.enableFloatingIcon,
+            enableFilling: typeof source.enableFilling === 'boolean' ? source.enableFilling : DEFAULT_PLUGIN_SETTINGS.enableFilling,
             fillMode: source.fillMode === 'batch' ? 'batch' : DEFAULT_PLUGIN_SETTINGS.fillMode,
             traceBatchEnabled: typeof source.traceBatchEnabled === 'boolean' ? source.traceBatchEnabled : DEFAULT_PLUGIN_SETTINGS.traceBatchEnabled,
             traceBatchSize: Math.round(normalizeNumberSetting(source.traceBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchSize, 0)),
@@ -4834,6 +4836,10 @@
         }
         const panel = button.closest('.yzm-trace-panel');
         const options = getTaskPanelOptions(panel);
+        if ((action === 'trace' || action === 'traceOptimize') && getPluginSettings().enableFilling === false) {
+            window.alert('填表功能已关闭。请先在「设置 - 填表模式」开启填表。');
+            return;
+        }
         if (options.end <= options.start && (action === 'trace' || action === 'summary')) {
             window.alert('请选择有效的楼层范围。');
             return;
@@ -7842,6 +7848,13 @@
         titleNode.className = 'yzm-config-card-title';
         titleNode.append(createIconNode('fa-solid fa-sliders', ''), document.createTextNode('填表模式'));
 
+        const enableRow = createPluginConfigRow(
+            '启用填表',
+            '关闭后实时填表和自动批量填表都不会触发；总结功能不受影响。',
+            'fa-solid fa-toggle-on',
+            createConfigSwitch(settings.enableFilling, 'enableFilling')
+        );
+
         const modeRow = document.createElement('div');
         modeRow.className = 'yzm-fill-mode-row';
         modeRow.append(
@@ -7849,7 +7862,7 @@
             createModeChoice('批量填表', 'fa-solid fa-layer-group', '按楼层批量处理，API单独请求。', settings.fillMode === 'batch', 'batch')
         );
 
-        card.append(titleNode, modeRow, createTraceBatchConfigPanel(settings));
+        card.append(titleNode, enableRow, modeRow, createTraceBatchConfigPanel(settings));
         return card;
     }
 
