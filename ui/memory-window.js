@@ -4527,8 +4527,8 @@
 
     function openTaskResultConfirmDialog(root, options = {}) {
         return new Promise((resolve) => {
-            const modalHost = getModalHost(root);
-            removeModal(root, '.yzm-task-result-modal');
+            const modalHost = getGlobalModalHost(root);
+            removeGlobalModal(root, '.yzm-task-result-modal');
 
             const overlay = document.createElement('div');
             overlay.className = 'yzm-structure-modal yzm-task-result-modal';
@@ -4615,8 +4615,8 @@
 
     function openAutoTaskConfirmDialog(root, task) {
         return new Promise((resolve) => {
-            const modalHost = getModalHost(root);
-            removeModal(root, '.yzm-auto-task-modal');
+            const modalHost = getGlobalModalHost(root);
+            removeGlobalModal(root, '.yzm-auto-task-modal');
 
             const overlay = document.createElement('div');
             overlay.className = 'yzm-structure-modal yzm-auto-task-modal';
@@ -8589,8 +8589,16 @@
         return root.querySelector('.yzm-shell') || root;
     }
 
+    function getGlobalModalHost(root) {
+        return root || document.getElementById(ROOT_ID) || document.body;
+    }
+
     function removeModal(root, selector = '.yzm-structure-modal') {
         getModalHost(root).querySelector(selector)?.remove();
+    }
+
+    function removeGlobalModal(root, selector = '.yzm-structure-modal') {
+        getGlobalModalHost(root).querySelector(selector)?.remove();
     }
 
     function getCurrentPluginVersion() {
