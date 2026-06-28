@@ -4773,8 +4773,24 @@
         return result;
     }
 
-    function refreshAfterTask(root) {
-        saveState();
+    function markTaskStateUpdated(action = '', result = {}) {
+        const manualEditedAt = YuzukiMemory.BranchSnapshot?.markManualEdit?.() || Date.now();
+        saveState({ force: true, saveOrigin: 'manual' });
+        YuzukiMemory.BranchSnapshot?.captureCurrentStateSnapshot?.(getState(), {
+            sessionId: loadedSessionId,
+            timestamp: manualEditedAt,
+        });
+        window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
+            detail: {
+                source: 'task-runner',
+                action,
+                count: Number(result?.count) || 0,
+            },
+        }));
+    }
+
+    function refreshAfterTask(root, options = {}) {
+        if (options.persist !== false) saveState();
         renderWorkspaceList(root);
         renderTableWorkspace(root);
         if (activeWorkspaceView === 'trace') renderTraceWorkspace(root);
@@ -4991,7 +5007,8 @@
                 results.push(result);
                 if (action === 'trace') updateManualPointerSetting('trace', result.range?.end ?? batch.end);
                 if (action === 'summary') updateManualPointerSetting('summary', result.range?.end ?? batch.end);
-                refreshAfterTask(root);
+                markTaskStateUpdated(action, result);
+                refreshAfterTask(root, { persist: false });
                 taskRunnerProgressLabel = batches.length > 1 ? `第 ${index + 1}/${batches.length} 批已写入` : '已写入';
                 syncVisibleTaskButtons(root);
                 if (action === 'summary' && batches.length > 1) {
@@ -5015,7 +5032,8 @@
             }
 
             const result = mergeTaskResults(results, action);
-            refreshAfterTask(root);
+            markTaskStateUpdated(action, result);
+            refreshAfterTask(root, { persist: false });
             if (action === 'summary' && getAutoSummarySettings().autoVectorizeAfterHistory === true) {
                 await syncSummaryToVectorBook({ vectorize: true });
             }
@@ -8745,9 +8763,10 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '填表模式新增总开关，关闭后实时填表与自动批量填表都会停止，下面的填表设置会自动折叠。',
-            '填表与总结的确认弹窗改为全局显示，插件页面未打开时也能直接在酒馆页面确认。',
-            '记忆方案保存时会记录当前表格显隐状态，刷新后按用户保存时的选择恢复，包括剧情摘要。',
+            '修复手动追溯后，新楼层可能把物品追踪、世界设定等表格回滚清空的问题。',
+            '手动追溯、追溯优化和总结任务写入后会立即刷新分支快照，避免后续实时填表覆盖已保存记忆。',
+            '对齐旧插件的 OpenAI 兼容反代逻辑，优化 build/Gemini 反代的 makersuite 兼容、流式兜底和 OpenAI 协议降级。',
+            '自定义反代模式下保留 proxy_only 的 Base URL 原样处理，减少本地/远程反代地址被改写导致的鉴权问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
