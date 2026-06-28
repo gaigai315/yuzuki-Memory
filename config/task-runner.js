@@ -741,6 +741,7 @@
     }
 
     function parseTraceResponse(text = '') {
+        const memoryText = normalizeMemoryEnvelope(text);
         try {
             const parsedBlocks = parseJsonBlocks(text);
             if (!parsedBlocks.length) throw new Error('未找到可解析的 JSON 结果。');
@@ -752,9 +753,9 @@
             return parsedBlocks[0];
         } catch (error) {
             const parser = YuzukiMemory.MemoryTagParser;
-            const rows = parser?.extractMemoryRows?.(text) || [];
+            const rows = parser?.extractMemoryRows?.(memoryText) || parser?.extractMemoryRows?.(text) || [];
             if (rows.length) return { memoryRows: rows };
-            const fallbackRows = parser?.parseMemoryText?.(text) || [];
+            const fallbackRows = parser?.parseMemoryText?.(memoryText) || parser?.parseMemoryText?.(text) || [];
             if (fallbackRows.length) return { memoryRows: fallbackRows };
             throw error;
         }
@@ -794,6 +795,36 @@
         return String(value || '').trim();
     }
 
+    function withMemoryPrefill(messages = []) {
+        const normalized = (Array.isArray(messages) ? messages : [])
+            .filter((message) => message?.content && String(message.content).trim());
+        const last = normalized[normalized.length - 1];
+        if (last && ['assistant', 'model'].includes(String(last.role || '').toLowerCase())
+            && /^<Memory(?:\s+[^>]*)?>\s*$/i.test(String(last.content || '').trim())) {
+            return normalized;
+        }
+        return [...normalized, { role: 'assistant', content: '<Memory>\n' }];
+    }
+
+    function normalizeMemoryEnvelope(text = '') {
+        let source = String(text || '').trim();
+        if (!source) return '';
+        source = source.replace(/^```(?:xml|html|memory)?\s*/i, '').replace(/```\s*$/i, '').trim();
+
+        const openMatch = source.match(/<Memory(?:\s+[^>]*)?>/i);
+        if (openMatch) {
+            source = source.slice(openMatch.index);
+            const afterOpen = source.slice(openMatch[0].length);
+            if (/^\s*<Memory(?:\s+[^>]*)?>/i.test(afterOpen)) {
+                source = afterOpen.replace(/^\s*<Memory(?:\s+[^>]*)?>/i, '<Memory>').trimStart();
+            }
+            return /<\/Memory>/i.test(source) ? source : `${source}\n</Memory>`;
+        }
+
+        source = source.replace(/^<\/Memory>/i, '').trim();
+        return `<Memory>\n${source}\n</Memory>`;
+    }
+
     function previewRawModelText(text = '') {
         const source = String(text || '').trim();
         return source ? source.slice(0, 2000) : '（空）';
@@ -804,7 +835,7 @@
     }
 
     function extractMemorySummaryText(text = '') {
-        const source = String(text || '');
+        const source = normalizeMemoryEnvelope(text);
         const match = source.match(/<Memory(?:\s+[^>]*)?>([\s\S]*?)<\/Memory>/i);
         return match ? match[1].trim() : '';
     }
@@ -1452,7 +1483,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const range = chatMessagesFromRange(options.start, options.end);
         const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, options);
         const tracePrompt = resolveTaskPromptVariables(getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options), state, options);
-        const messages = [
+        const messages = withMemoryPrefill([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText() },
             { role: 'system', content: `【已归档记忆，仅供参考】\n${tablesToReferenceText(state, options) || '（暂无）'}` },
@@ -1460,7 +1491,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             ...range.messages,
             { role: 'system', content: tracePrompt },
             { role: 'user', content: '请立即根据以上待追溯聊天内容和批量追溯填表提示词执行任务。' },
-        ].filter((message) => message.content && message.content.trim());
+        ]);
         return { messages, range };
     }
 
@@ -1475,14 +1506,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             ...options,
             suppressMemoryTables: true,
         });
-        const messages = [
+        const messages = withMemoryPrefill([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildTaskRangeText(range, 'summary') },
             { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
             ...range.messages,
             { role: 'system', content: summaryPrompt },
             { role: 'user', content: '请立即根据以上待总结聊天内容和总结提示词执行任务。' },
-        ].filter((message) => message.content && message.content.trim());
+        ]);
         return { messages, range };
     }
 
@@ -1521,10 +1552,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 
     async function runTraceOptimize(state, options = {}) {
         const prompt = resolveTaskPromptVariables(compactLines([getActivePromptScheme(state)?.prompts?.traceOptimize, getDefaultOptimizePrompt('trace'), options.note]), state, options);
-        const messages = [
+        const messages = withMemoryPrefill([
             { role: 'system', content: prompt },
             { role: 'user', content: `【待优化表格】\n${tablesToReferenceText(state, options) || '（暂无）'}\n\n请按系统提示词要求输出优化后的结果。` },
-        ];
+        ]);
         const response = await generate(messages, { ...options, kind: 'traceOptimize' });
         if (!response.success) return response;
         const parsed = parseTraceResponse(response.text);
@@ -1550,12 +1581,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             ? compactLines([`【本次重点优化建议】\n${note}`, getSummaryOptimizeResponseFormatPrompt()])
             : (schemePrompt || getDefaultOptimizePrompt('summary'));
         const prompt = resolveTaskPromptVariables(promptSource, state, options);
-        const messages = [
+        const messages = withMemoryPrefill([
             { role: 'system', content: historianPrompt },
             { role: 'user', content: `【待优化总结】\n${summaries || '（暂无）'}` },
             { role: 'system', content: prompt },
             { role: 'user', content: '请立即根据以上待优化总结和优化要求输出优化后的 <Memory> 总结。' },
-        ].filter((message) => message.content && message.content.trim());
+        ]);
         const response = await generate(messages, { ...options, kind: 'summaryOptimize' });
         if (!response.success) return response;
         const payloads = parseSummaryResponse(response.text);
