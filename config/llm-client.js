@@ -183,12 +183,14 @@
 
     function processApiUrl(url, provider, forModelFetch = false) {
         if (!url) return '';
-        let cleaned = String(url || '').trim().replace(/0\.0\.0\.0/g, '127.0.0.1').replace(/\/+$/, '');
+        let cleaned = String(url || '').trim().replace(/\/+$/, '');
         if (!cleaned) return '';
 
         if (provider === 'proxy_only') {
             return cleaned;
         }
+
+        cleaned = cleaned.replace(/0\.0\.0\.0/g, '127.0.0.1');
 
         if (provider !== 'gemini' && provider !== 'claude' && provider !== 'local') {
             const parts = cleaned.split('/');
@@ -720,6 +722,73 @@
         }
     }
 
+    function shouldUseProxyGeminiCompat(config) {
+        const apiUrl = String(config?.apiUrl || '').toLowerCase();
+        return config?.provider === 'proxy_only'
+            && String(config?.model || '').toLowerCase().includes('gemini')
+            && !apiUrl.includes('127.0.0.1')
+            && !apiUrl.includes('localhost')
+            && !apiUrl.includes('/v1');
+    }
+
+    function resolveProxyGeminiPayload(config, messages, targetUrl, stream) {
+        const payload = {
+            chat_completion_source: 'makersuite',
+            reverse_proxy: targetUrl,
+            proxy_password: config.apiKey,
+            model: config.model,
+            messages,
+            temperature: config.temperature,
+            max_tokens: config.maxTokens,
+            maxOutputTokens: config.maxTokens,
+            stream,
+            custom_prompt_post_processing: 'strict',
+            use_makersuite_sysprompt: true,
+            safetySettings: GEMINI_SAFETY_SETTINGS,
+            safety_settings: GEMINI_SAFETY_SETTINGS,
+            gemini_safety_settings: GEMINI_SAFETY_SETTINGS,
+        };
+        if (String(config.model || '').toLowerCase().includes('thinking')) {
+            payload.thinkingConfig = {
+                includeThoughts: true,
+                thinkingBudget: 4096,
+            };
+        }
+        return payload;
+    }
+
+    async function tryProxyGeminiGenerate(config, messages, targetUrl, stream, options = {}) {
+        const payload = resolveProxyGeminiPayload(config, messages, targetUrl, stream);
+        const result = await postTavernGenerate(payload, options);
+        if (result?.success) return { ...result, config, fallback: 'proxy-gemini-makersuite' };
+        if (stream && !options.signal?.aborted) {
+            const retryResult = await postTavernGenerate(resolveProxyGeminiPayload(config, messages, targetUrl, false), options);
+            if (retryResult?.success) return { ...retryResult, config, fallback: 'proxy-gemini-makersuite-non-stream' };
+            return {
+                success: false,
+                error: `${result?.error || 'Gemini 反代流式请求失败'}\n\n[非流式重试]\n${retryResult?.error || '请求失败'}`,
+            };
+        }
+        return result;
+    }
+
+    async function generateWithProxyGeminiCompat(config, messages, options = {}) {
+        const baseUrl = config.apiUrl.replace(/\/v1\/?$/i, '').replace(/\/chat\/completions\/?$/i, '').replace(/\/+$/, '');
+        const wantsStream = options.stream ?? config.stream;
+        const cleanUrlResult = await tryProxyGeminiGenerate(config, messages, baseUrl, wantsStream, options);
+        if (cleanUrlResult?.success) return cleanUrlResult;
+
+        const v1Url = `${baseUrl}/v1`;
+        const v1Result = await tryProxyGeminiGenerate(config, messages, v1Url, wantsStream, options);
+        if (v1Result?.success) return v1Result;
+
+        return {
+            success: false,
+            error: `[Gemini 反代兼容]\n${cleanUrlResult?.error || '纯净 URL 请求失败'}\n\n[追加 /v1]\n${v1Result?.error || '请求失败'}`,
+            config,
+        };
+    }
+
     async function generateWithCustom(rawConfig, messages, options = {}) {
         const config = normalizeCustomConfig(rawConfig);
         if (!PROVIDERS[config.provider]) return { success: false, error: '请选择 API 服务商。' };
@@ -729,11 +798,21 @@
         const cleanMessages = normalizeMessages(messages);
         if (!cleanMessages.length) return { success: false, error: '消息数组为空' };
 
-        const payload = resolveCustomProxyPayload(config, cleanMessages, options);
-        const result = await postTavernGenerate(payload, options);
-        if (result?.success) return { ...result, config };
+        let proxyError = '';
+        let skipCustomProxy = false;
+        if (shouldUseProxyGeminiCompat(config)) {
+            const proxyGeminiResult = await generateWithProxyGeminiCompat(config, cleanMessages, options);
+            if (proxyGeminiResult?.success) return proxyGeminiResult;
+            proxyError = proxyGeminiResult?.error || 'Gemini 反代兼容请求失败';
+            skipCustomProxy = true;
+        }
 
-        let proxyError = result?.error || '后端代理请求失败';
+        if (!skipCustomProxy) {
+            const payload = resolveCustomProxyPayload(config, cleanMessages, options);
+            const result = await postTavernGenerate(payload, options);
+            if (result?.success) return { ...result, config };
+            proxyError = result?.error || '后端代理请求失败';
+        }
         if (config.provider === 'proxy_only' || config.provider === 'compatible') {
             const retryUrl = config.apiUrl.includes('/v1') || config.apiUrl.includes('/chat')
                 ? config.apiUrl

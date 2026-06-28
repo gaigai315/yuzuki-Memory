@@ -193,6 +193,44 @@
         return result;
     }
 
+    function countSnapshotRecords(records = {}) {
+        return Object.values(records || {}).reduce((sum, tableRecords) => (
+            sum + (Array.isArray(tableRecords) ? tableRecords.length : 0)
+        ), 0);
+    }
+
+    function getSnapshotRecordsHash(records = {}) {
+        return hashText(JSON.stringify(records || {}));
+    }
+
+    function protectNewerCurrentState(state, snapshot, options = {}) {
+        if (options.force === true) return false;
+        const currentRecords = normalizeTableRecords(state);
+        const snapshotRecords = snapshot?.records || {};
+        const currentCount = countSnapshotRecords(currentRecords);
+        const snapshotCount = countSnapshotRecords(snapshotRecords);
+        const currentHash = getSnapshotRecordsHash(currentRecords);
+        const snapshotHash = getSnapshotRecordsHash(snapshotRecords);
+        const currentUpdatedAt = Number(state?.updatedAt || state?.ts || 0);
+        const snapshotUpdatedAt = Number(snapshot?.timestamp || 0);
+        const looksUserOrTaskEdited = currentUpdatedAt > snapshotUpdatedAt
+            || Number(state?.manualEditedAt || 0) > snapshotUpdatedAt
+            || state?.saveOrigin === 'manual';
+
+        if (!looksUserOrTaskEdited || currentHash === snapshotHash) return false;
+        if (currentCount >= snapshotCount) {
+            console.warn('[yuzuki-Memory] Branch snapshot restore skipped; current memory is newer/richer than snapshot.', {
+                currentCount,
+                snapshotCount,
+                currentUpdatedAt,
+                snapshotUpdatedAt,
+                key: String(options.key || ''),
+            });
+            return true;
+        }
+        return false;
+    }
+
     function getTableShapeSignature(state) {
         return JSON.stringify((Array.isArray(state?.tables) ? state.tables : [])
             .filter((table) => table?.id && table.id !== 'memory_summary')
@@ -317,6 +355,12 @@
                 snapshotUpdatedAt,
                 key: String(options.key || ''),
             });
+            return false;
+        }
+        if (protectNewerCurrentState(state, snapshot, options)) {
+            const key = String(options.key || '');
+            if (key && snapshots[key]) snapshots[key] = createSnapshot(state, key);
+            persistSnapshots(sessionId);
             return false;
         }
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
