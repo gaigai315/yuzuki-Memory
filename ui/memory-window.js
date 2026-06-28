@@ -923,6 +923,12 @@
             .filter(([tableId]) => !!tableId));
     }
 
+    function captureCurrentTableVisibility() {
+        return Object.fromEntries(getTables()
+            .filter((table) => table && isBuiltInTable(table.id) && !isFixedTable(table.id))
+            .map((table) => [table.id, table.hidden !== true]));
+    }
+
     function getPromptSchemes() {
         const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
         try {
@@ -1142,6 +1148,7 @@
             id: createPromptSchemeId(),
             name: String(name || '').trim() || `${draft.name}（自定义）`,
             builtin: false,
+            tableVisibility: captureCurrentTableVisibility(),
             prompts: { ...(draft.prompts || {}) },
             modes: { ...(draft.modes || {}) },
         });
@@ -5347,6 +5354,7 @@
             draft.name = name;
             draft.id = draft.id || createPromptSchemeId();
         }
+        draft.tableVisibility = captureCurrentTableVisibility();
         const schemes = getPromptSchemes();
         const index = schemes.findIndex((scheme) => scheme.id === draft.id);
         if (index >= 0) {
