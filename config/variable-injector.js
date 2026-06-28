@@ -209,13 +209,16 @@
             const raw = YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEMES_STORAGE_KEY, [])
                 ?? JSON.parse(localStorage.getItem(PROMPT_SCHEMES_STORAGE_KEY) || '[]');
             const schemes = Array.isArray(raw) ? raw.map(normalizePromptScheme).filter(Boolean) : [];
-            const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
-            return [defaultScheme, ...schemes].filter((scheme, index, list) => (
+            const defaultSchemes = (YuzukiMemory.PromptLibrary?.getDefaultSchemes?.() || [YuzukiMemory.PromptLibrary?.getDefaultScheme?.()])
+                .map(normalizePromptScheme)
+                .filter(Boolean);
+            return [...defaultSchemes, ...schemes].filter((scheme, index, list) => (
                 scheme && list.findIndex((entry) => entry?.id === scheme.id) === index
             ));
         } catch (_error) {
-            const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
-            return defaultScheme ? [defaultScheme] : [];
+            return (YuzukiMemory.PromptLibrary?.getDefaultSchemes?.() || [YuzukiMemory.PromptLibrary?.getDefaultScheme?.()])
+                .map(normalizePromptScheme)
+                .filter(Boolean);
         }
     }
 
