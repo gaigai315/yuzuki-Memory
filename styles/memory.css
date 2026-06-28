@@ -5911,31 +5911,119 @@
 }
 
 #yzm-memory-root .yzm-plot-list {
-    position: relative;
     display: flex;
     flex: 0 0 auto;
     flex-direction: column;
-    gap: 7px;
+    gap: 8px;
     min-height: 0;
-    padding: 8px 10px 10px;
+    padding: 10px;
     overflow: visible;
 }
 
-#yzm-memory-root .yzm-plot-list::before {
+#yzm-memory-root .yzm-plot-day {
+    min-width: 0;
+    background: var(--yzm-row-bg);
+    border: 1px solid rgba(124, 145, 210, 0.22);
+    border-radius: 8px;
+    box-shadow: 0 6px 16px rgba(80, 96, 150, 0.06);
+    overflow: hidden;
+}
+
+#yzm-memory-root[data-yzm-theme="dark"] .yzm-plot-day {
+    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+}
+
+#yzm-memory-root .yzm-plot-day-header {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 42px;
+    padding: 8px 10px;
+    color: inherit;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.66), rgba(124, 145, 210, 0.06));
+    border: 0;
+    box-sizing: border-box;
+    cursor: pointer;
+    text-align: left;
+}
+
+#yzm-memory-root[data-yzm-theme="dark"] .yzm-plot-day-header {
+    background: linear-gradient(180deg, rgba(44, 52, 88, 0.66), rgba(124, 145, 210, 0.08));
+}
+
+#yzm-memory-root .yzm-plot-day-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-plot-day-dot {
+    flex: 0 0 auto;
+    width: 8px;
+    height: 8px;
+    background: #7c8fed;
+    border: 3px solid rgba(124, 145, 210, 0.16);
+    border-radius: 999px;
+    box-sizing: content-box;
+}
+
+#yzm-memory-root .yzm-plot-day-title strong {
+    min-width: 0;
+    overflow: hidden;
+    color: #5268d7;
+    font-size: 15px;
+    font-weight: 800;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root[data-yzm-theme="dark"] .yzm-plot-day-title strong {
+    color: #aeb8ff;
+}
+
+#yzm-memory-root .yzm-plot-day-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--yzm-icon);
+    font-size: 11px;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-plot-day-meta i {
+    font-size: 11px;
+}
+
+#yzm-memory-root .yzm-plot-day-body {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px 10px 14px;
+    border-top: 1px solid rgba(124, 145, 210, 0.16);
+}
+
+#yzm-memory-root .yzm-plot-day-body::before {
     content: "";
     position: absolute;
-    left: 20px;
-    top: 16px;
-    bottom: 14px;
+    left: 23px;
+    top: 12px;
+    bottom: 12px;
     width: 1px;
-    background: linear-gradient(180deg, rgba(124, 145, 210, 0.2), rgba(124, 145, 210, 0.5), rgba(124, 145, 210, 0.2));
+    background: linear-gradient(180deg, rgba(124, 145, 210, 0.18), rgba(124, 145, 210, 0.5), rgba(124, 145, 210, 0.18));
 }
 
 #yzm-memory-root .yzm-plot-card {
     position: relative;
     display: grid;
-    grid-template-columns: 20px minmax(0, 1fr);
-    gap: 6px;
+    grid-template-columns: 18px minmax(72px, 92px) minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 8px;
     min-width: 0;
 }
 
@@ -5943,8 +6031,7 @@
     opacity: 0.62;
 }
 
-#yzm-memory-root .yzm-plot-card-hidden .yzm-plot-card-top strong,
-#yzm-memory-root .yzm-plot-card-hidden .yzm-plot-time-chip strong,
+#yzm-memory-root .yzm-plot-card-hidden .yzm-plot-card-time,
 #yzm-memory-root .yzm-plot-card-hidden .yzm-plot-card-text {
     text-decoration: line-through;
     text-decoration-thickness: 1px;
@@ -5961,12 +6048,12 @@
     position: relative;
     z-index: 1;
     display: flex;
-    width: 100%;
+    width: 18px;
     min-width: 0;
     padding-right: 0;
     padding-left: 0;
     justify-content: center;
-    padding-top: 10px;
+    padding-top: 0;
     color: inherit;
     background: transparent;
     border: 0;
@@ -5975,8 +6062,8 @@
 }
 
 #yzm-memory-root .yzm-plot-marker span {
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     background: #7c8fed;
     border: 2px solid var(--yzm-surface);
     border-radius: 999px;
@@ -5984,66 +6071,10 @@
     box-shadow: 0 0 0 1px rgba(124, 145, 210, 0.42), 0 4px 10px rgba(90, 110, 200, 0.18);
 }
 
-#yzm-memory-root .yzm-plot-card-content {
-    position: relative;
-    min-width: 0;
-    padding: 7px 9px 8px;
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.7), var(--yzm-row-bg));
-    border: 1px solid rgba(124, 145, 210, 0.22);
-    border-left: 2px solid rgba(124, 143, 237, 0.7);
-    border-radius: 8px;
-    box-sizing: border-box;
-    box-shadow: 0 8px 18px rgba(80, 96, 150, 0.08);
-}
-
-#yzm-memory-root[data-yzm-theme="dark"] .yzm-plot-card-content {
-    background: linear-gradient(180deg, rgba(44, 52, 88, 0.72), var(--yzm-row-bg));
-    box-shadow: 0 8px 18px rgba(0, 0, 0, 0.18);
-}
-
-#yzm-memory-root .yzm-plot-card-top {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 6px;
-    min-width: 0;
-}
-
-#yzm-memory-root .yzm-plot-card-top strong {
-    min-width: 0;
-    overflow: hidden;
-    color: #5268d7;
-    font-size: 13px;
-    font-weight: 800;
-    line-height: 1.3;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-#yzm-memory-root[data-yzm-theme="dark"] .yzm-plot-card-top strong {
-    color: #aeb8ff;
-}
-
-#yzm-memory-root .yzm-plot-card-title-wrap {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    min-width: 0;
-}
-
-#yzm-memory-root .yzm-plot-card-title-label,
-#yzm-memory-root .yzm-plot-summary-label,
-#yzm-memory-root .yzm-plot-time-label {
-    color: var(--yzm-icon);
-    font-size: 9px;
-    font-weight: 700;
-    line-height: 1.2;
-}
-
 #yzm-memory-root .yzm-plot-status {
     flex: 0 0 auto;
     margin-top: 0;
-    padding: 2px 7px;
+    padding: 2px 6px;
     font-size: 9px;
     font-weight: 700;
     line-height: 1.2;
@@ -6061,59 +6092,33 @@
     border: 1px solid rgba(124, 145, 210, 0.18);
 }
 
-#yzm-memory-root .yzm-plot-time-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 112px));
-    gap: 5px;
-    margin-top: 5px;
-}
-
-#yzm-memory-root .yzm-plot-time-chip {
+#yzm-memory-root .yzm-plot-card-time {
     display: flex;
     align-items: center;
-    gap: 5px;
+    justify-content: center;
     min-width: 0;
     min-height: 24px;
-    padding: 3px 6px;
+    padding: 3px 7px;
+    color: #6a7fda;
     background: rgba(124, 145, 210, 0.08);
     border: 1px solid rgba(124, 145, 210, 0.16);
-    border-radius: 6px;
+    border-radius: 999px;
     box-sizing: border-box;
-}
-
-#yzm-memory-root .yzm-plot-time-label {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    flex: 0 0 auto;
-    white-space: nowrap;
-}
-
-#yzm-memory-root .yzm-plot-time-label i {
-    color: var(--yzm-icon);
-    font-size: 10px;
-}
-
-#yzm-memory-root .yzm-plot-time-chip strong {
-    display: block;
-    margin-top: 0;
-    overflow: hidden;
-    color: var(--yzm-title);
     font-size: 11px;
-    font-weight: 700;
-    line-height: 1.25;
-    text-overflow: ellipsis;
+    font-weight: 800;
+    line-height: 1.2;
     white-space: nowrap;
 }
 
-#yzm-memory-root .yzm-plot-summary-label {
-    margin-top: 5px;
+#yzm-memory-root[data-yzm-theme="dark"] .yzm-plot-card-time {
+    color: #aeb8ff;
 }
 
 #yzm-memory-root .yzm-plot-card-text {
-    margin-top: 2px;
+    min-width: 0;
+    margin-top: 0;
     color: var(--yzm-text);
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.35;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
@@ -6472,7 +6477,11 @@
 
 #yzm-memory-root .yzm-task-result-dialog,
 #yzm-memory-root .yzm-auto-task-dialog {
-    width: min(520px, 100%);
+    width: min(720px, 100%);
+}
+
+#yzm-memory-root .yzm-task-result-dialog {
+    max-height: min(82vh, 720px);
 }
 
 #yzm-memory-root .yzm-update-notice-dialog {
@@ -6515,7 +6524,8 @@
 
 #yzm-memory-root .yzm-task-result-preview {
     width: 100%;
-    min-height: 220px;
+    min-height: 260px;
+    max-height: 52vh;
     padding: 10px;
     overflow: auto;
     color: inherit;
@@ -7955,21 +7965,46 @@
         overflow-x: hidden;
     }
 
-    #yzm-memory-root .yzm-plot-list::before {
-        left: 15px;
-        top: 14px;
-        bottom: 12px;
+    #yzm-memory-root .yzm-plot-day-header {
+        min-height: 38px;
+        padding: 7px 8px;
+        gap: 6px;
+    }
+
+    #yzm-memory-root .yzm-plot-day-title {
+        gap: 6px;
+    }
+
+    #yzm-memory-root .yzm-plot-day-title strong {
+        font-size: 13px;
+    }
+
+    #yzm-memory-root .yzm-plot-day-meta {
+        gap: 5px;
+        font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-plot-day-body {
+        gap: 6px;
+        padding: 7px 8px 8px 10px;
+    }
+
+    #yzm-memory-root .yzm-plot-day-body::before {
+        left: 18px;
+        top: 11px;
+        bottom: 11px;
     }
 
     #yzm-memory-root .yzm-plot-card {
-        grid-template-columns: 15px minmax(0, 1fr);
+        grid-template-columns: 16px minmax(66px, 78px) minmax(0, 1fr);
         gap: 4px;
         width: 100%;
         max-width: 100%;
     }
 
     #yzm-memory-root .yzm-plot-marker {
-        padding-top: 9px;
+        width: 16px;
+        padding-top: 0;
     }
 
     #yzm-memory-root .yzm-plot-marker span {
@@ -7978,55 +8013,17 @@
         border-width: 2px;
     }
 
-    #yzm-memory-root .yzm-plot-card-content {
-        min-width: 0;
-        max-width: 100%;
-        padding: 6px 7px 7px;
-        overflow: hidden;
-    }
-
-    #yzm-memory-root .yzm-plot-card-top {
-        align-items: flex-start;
-        gap: 4px;
-    }
-
-    #yzm-memory-root .yzm-plot-card-top strong {
-        font-size: 12px;
-    }
-
     #yzm-memory-root .yzm-plot-status {
+        grid-column: 2 / -1;
+        justify-self: start;
         padding: 2px 5px;
         font-size: 8px;
     }
 
-    #yzm-memory-root .yzm-plot-time-grid {
-        grid-template-columns: minmax(0, 1fr);
-        gap: 4px;
-        margin-top: 4px;
-    }
-
-    #yzm-memory-root .yzm-plot-time-chip {
+    #yzm-memory-root .yzm-plot-card-time {
         min-height: 21px;
         padding: 2px 5px;
-        gap: 4px;
-    }
-
-    #yzm-memory-root .yzm-plot-time-label {
-        gap: 3px;
-        font-size: 8px;
-    }
-
-    #yzm-memory-root .yzm-plot-time-label i {
-        font-size: 8px;
-    }
-
-    #yzm-memory-root .yzm-plot-time-chip strong {
         font-size: 10px;
-    }
-
-    #yzm-memory-root .yzm-plot-summary-label {
-        margin-top: 4px;
-        font-size: 8px;
     }
 
     #yzm-memory-root .yzm-plot-card-text {

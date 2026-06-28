@@ -545,17 +545,18 @@
     function resolveTaskPromptVariables(text, state, options = {}) {
         const names = getRuntimeNames();
         const suppressMemoryTables = options.suppressMemoryTables === true;
+        const suppressMemoryData = suppressMemoryTables || options.suppressMemoryData === true;
         return String(text || '')
             .replace(/\{\{user\}\}/g, names.user)
             .replace(/\{\{char\}\}/g, names.char)
             .replace(/\{\{BRANCH_SUMMARY_NAMES\}\}/gi, () => buildBranchSummaryNamesText(state))
             .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS)\}\}/gi, () => suppressMemoryTables ? '' : buildDatabaseSchemaText(state, options))
-            .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => suppressMemoryTables ? '' : (YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName) || ''))
-            .replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => suppressMemoryTables ? '' : (YuzukiMemory.VariableInjector?.buildSpecificSummaryText?.(state, summaryKey) || ''))
-            .replace(/\{\{MEMORY_TABLE\}\}/gi, () => suppressMemoryTables ? '' : (YuzukiMemory.VariableInjector?.buildAllTablesText?.(state) || tablesToReferenceText(state, options)))
-            .replace(/\{\{MEMORY_SUMMARY\}\}/gi, () => suppressMemoryTables ? '' : (YuzukiMemory.VariableInjector?.buildSummaryText?.(state) || ''))
+            .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName) || ''))
+            .replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSpecificSummaryText?.(state, summaryKey) || ''))
+            .replace(/\{\{MEMORY_TABLE\}\}/gi, () => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildAllTablesText?.(state) || tablesToReferenceText(state, options)))
+            .replace(/\{\{MEMORY_SUMMARY\}\}/gi, () => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSummaryText?.(state) || ''))
             .replace(/\{\{MEMORY_PROMPT\}\}/gi, '')
-            .replace(/\{\{MEMORY\}\}/gi, () => suppressMemoryTables ? '' : (YuzukiMemory.VariableInjector?.buildMemoryText?.(state) || compactLines([YuzukiMemory.VariableInjector?.buildSummaryText?.(state), tablesToReferenceText(state, options)])));
+            .replace(/\{\{MEMORY\}\}/gi, () => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildMemoryText?.(state) || compactLines([YuzukiMemory.VariableInjector?.buildSummaryText?.(state), tablesToReferenceText(state, options)])));
     }
 
     function getActivePromptScheme(state) {
@@ -661,7 +662,10 @@
                 if (!preset) return { success: false, error: '未选择可用的 LLM API 预设。' };
                 return YuzukiMemory.LlmClient.generateWithCustom(preset, messages, { stream: preset.stream !== false, ...taskOptions });
             }
-            return YuzukiMemory.LlmClient.generateWithTavern(messages, { stream: true, ...taskOptions });
+            const shouldStream = options.stream !== undefined
+                ? options.stream !== false
+                : !['trace', 'traceOptimize'].includes(String(options.kind || ''));
+            return YuzukiMemory.LlmClient.generateWithTavern(messages, { ...taskOptions, stream: shouldStream });
         } finally {
             window.isSummarizing = previousSummarizing;
         }
@@ -831,15 +835,15 @@
         return String(value || '').trim();
     }
 
-    function withMemoryPrefill(messages = []) {
+    function withMemoryPrefill(messages = [], prefill = '<Memory>\n') {
         const normalized = (Array.isArray(messages) ? messages : [])
             .filter((message) => message?.content && String(message.content).trim());
         const last = normalized[normalized.length - 1];
         if (last && ['assistant', 'model'].includes(String(last.role || '').toLowerCase())
-            && /^<Memory(?:\s+[^>]*)?>\s*$/i.test(String(last.content || '').trim())) {
+            && /^<Memory(?:\s+[^>]*)?>/i.test(String(last.content || '').trim())) {
             return normalized;
         }
-        return [...normalized, { role: 'assistant', content: '<Memory>\n' }];
+        return [...normalized, { role: 'assistant', content: prefill }];
     }
 
     function normalizeMemoryEnvelope(text = '') {
@@ -1019,7 +1023,10 @@
         }
         const field = kind === 'branch' ? '支线' : '主线';
         record.values = record.values && typeof record.values === 'object' ? record.values : {};
-        record.values[field] = [String(record.values[field] || '').trim(), String(text || '').trim()].filter(Boolean).join('\n');
+        record.values[field] = normalizePlotStoredLines([
+            ...String(record.values[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean),
+            String(text || '').trim(),
+        ]);
         return record;
     }
 
@@ -1039,6 +1046,78 @@
         };
     }
 
+    function getPlotDateFromTimeText(timeText = '') {
+        const normalized = String(timeText || '').trim();
+        if (!normalized) return '';
+        const match = normalized.match(/(?:\d{1,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
+        return match ? match[0].replace(/\s+/g, '') : '';
+    }
+
+    function getPlotClockSortValue(timeText = '') {
+        const match = String(timeText || '').match(/(\d{1,2})[:：](\d{2})/);
+        if (!match) return 999999;
+        return Number(match[1]) * 60 + Number(match[2]);
+    }
+
+    function movePlotDatePrefixFromContent(time = '', content = '') {
+        const normalizedTime = String(time || '').trim();
+        let normalizedContent = String(content || '').trim();
+        if (getPlotDateFromTimeText(normalizedTime) || !normalizedContent) {
+            return { time: normalizedTime, content: normalizedContent };
+        }
+        const date = getPlotDateFromTimeText(normalizedContent);
+        if (!date) return { time: normalizedTime, content: normalizedContent };
+        const contentClocks = [...normalizedContent.matchAll(/\d{1,2}[:：]\d{2}/g)].map((match) => match[0].replace('：', ':'));
+        const contentTimeRange = contentClocks.length
+            ? `${contentClocks[0]}${contentClocks[1] ? `-${contentClocks[1]}` : ''}`
+            : '';
+        normalizedContent = normalizedContent
+            .replace(new RegExp(`^\\s*${escapeRegExp(date)}\\s*[，,、:：\\s-]*`), '')
+            .replace(/^\d{1,2}[:：]\d{2}(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?\s*[，,、:：\s-]*/, '')
+            .trim();
+        return {
+            time: normalizedTime ? `${date},${normalizedTime}` : (contentTimeRange ? `${date},${contentTimeRange}` : date),
+            content: normalizedContent,
+        };
+    }
+
+    function normalizePlotStoredLines(lines = []) {
+        let lastDate = '';
+        const items = lines
+            .map((line, index) => {
+                const parsed = splitPlotTimeAndContent(line);
+                const text = parsed.time ? `${parsed.time}\t${parsed.content}` : String(line || '').trim();
+                const tabIndex = text.indexOf('\t');
+                const fixed = movePlotDatePrefixFromContent(
+                    (tabIndex > -1 ? text.slice(0, tabIndex) : '').replace(/：/g, ':').trim(),
+                    (tabIndex > -1 ? text.slice(tabIndex + 1) : text).trim()
+                );
+                if (!fixed.time || !fixed.content) return null;
+                const date = getPlotDateFromTimeText(fixed.time) || lastDate;
+                if (date) lastDate = date;
+                const fullTime = getPlotDateFromTimeText(fixed.time) ? fixed.time : (date ? `${date},${fixed.time}` : fixed.time);
+                return {
+                    raw: `${fullTime}\t${fixed.content}`,
+                    date: getPlotDateFromTimeText(fullTime) || '',
+                    sort: getPlotClockSortValue(fullTime),
+                    content: fixed.content,
+                    index,
+                };
+            })
+            .filter(Boolean);
+        const seen = new Set();
+        return items
+            .filter((item) => {
+                const key = `${item.date}|${item.sort}|${item.content}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            })
+            .sort((a, b) => String(a.date).localeCompare(String(b.date), 'zh-Hans-CN', { numeric: true }) || a.sort - b.sort || a.index - b.index)
+            .map((item) => item.raw)
+            .join('\n');
+    }
+
     function plotValuesToText(values = {}, fallbackTitle = '') {
         let title = String(values['摘要名称'] || values['标题'] || values.name || values.title || '').trim();
         if (/^(主线|支线)摘要$/.test(title)) title = '';
@@ -1049,6 +1128,9 @@
             date = parsed.time;
             content = parsed.content;
         }
+        const fixed = movePlotDatePrefixFromContent(date, content);
+        date = fixed.time;
+        content = fixed.content;
         const body = [title, content].filter(Boolean).join('：');
         return [date, body].filter(Boolean).join('\t').trim();
     }
@@ -1559,17 +1641,20 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     function buildTraceMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
-        const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, options);
-        const tracePrompt = resolveTaskPromptVariables(getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options), state, options);
+        const taskPromptOptions = {
+            ...options,
+            suppressMemoryData: true,
+        };
+        const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, taskPromptOptions);
+        const tracePrompt = resolveTaskPromptVariables(getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options), state, taskPromptOptions);
         const messages = withMemoryPrefill([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText() },
-            { role: 'system', content: `【已归档记忆，仅供参考】\n${tablesToReferenceText(state, options) || '（暂无）'}` },
             { role: 'system', content: buildTaskRangeText(range, 'trace') },
             ...range.messages,
             { role: 'system', content: tracePrompt },
             { role: 'user', content: '请立即根据以上待追溯聊天内容和批量追溯填表提示词执行任务。' },
-        ]);
+        ], '<Memory>');
         return { messages, range };
     }
 

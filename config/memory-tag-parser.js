@@ -118,6 +118,11 @@
         return /支线/.test(String(value || '')) ? 'branch' : (/主线/.test(String(value || '')) ? 'main' : '');
     }
 
+    function isPlotTimeBracket(value = '') {
+        const text = String(value || '').trim();
+        return /(?:\d{1,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}|\d{1,2}[:：]\d{2}/.test(text);
+    }
+
     function normalizePlotField(field = '') {
         const key = normalizeName(field);
         if (key === '标题' || key === '名称' || key === '摘要名称') return '摘要名称';
@@ -135,14 +140,50 @@
             values[normalizePlotField(parsed.field)] = parsed.value;
         });
 
-        const loosePattern = /(摘要名称|标题|名称|日期|时间|摘要内容|总结内容|内容)\s*[:：]\s*([\s\S]*?)(?=(?:[，,；;]\s*)?(?:摘要名称|标题|名称|日期|时间|摘要内容|总结内容|内容)\s*[:：]|$)/g;
+        const loosePattern = /(摘要名称|标题|名称|日期|时间|摘要内容|总结内容|内容)\s*[:：]\s*([\s\S]*?)(?=(?:[|，,；;]\s*)?(?:摘要名称|标题|名称|日期|时间|摘要内容|总结内容|内容)\s*[:：]|$)/g;
         let match;
         while ((match = loosePattern.exec(String(source || ''))) !== null) {
             const field = normalizePlotField(match[1]);
-            const value = String(match[2] || '').replace(/^[，,；;\s]+|[，,；;\s]+$/g, '').trim();
+            const value = String(match[2] || '').replace(/^[|，,；;\s]+|[|，,；;\s]+$/g, '').trim();
             if (value) values[field] = value;
         }
         return values;
+    }
+
+    function splitPlotSummaryEntries(source = '') {
+        const text = String(source || '').trim();
+        if (!text) return [];
+        const entries = [];
+        const pattern = /\[[^\]]+\]\s*\|\s*内容\s*[:：][\s\S]*?(?=(?:[;；]\s*)?\[[^\]]+\]\s*\|\s*内容\s*[:：]|$)/g;
+        let match;
+        while ((match = pattern.exec(text)) !== null) {
+            const value = String(match[0] || '').replace(/^[;；]\s*/, '').trim();
+            if (value) entries.push(value);
+        }
+        if (entries.length) return entries;
+        return text.split(/[;；](?=\s*\[[^\]]+\]\s*\|)/).map((entry) => entry.trim()).filter(Boolean);
+    }
+
+    function expandPlotRows(kind, source = '', fallbackTitle = '') {
+        const normalizedKind = kind === 'branch' ? 'branch' : 'main';
+        const entries = splitPlotSummaryEntries(source);
+        if (!entries.length) return [createPlotRow(normalizedKind, source, fallbackTitle)];
+        const rows = [];
+        let lastDate = '';
+        entries.forEach((entry) => {
+            const bracketMatch = entry.match(/^\[([^\]]+)\]\s*\|\s*(?:内容|摘要内容|总结内容)\s*[:：]\s*([\s\S]*)$/);
+            if (!bracketMatch) {
+                rows.push(createPlotRow(normalizedKind, entry, fallbackTitle));
+                return;
+            }
+            const rawTime = bracketMatch[1].trim();
+            const content = bracketMatch[2].trim();
+            const dateMatch = rawTime.match(/(?:\d{1,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
+            if (dateMatch) lastDate = dateMatch[0].replace(/\s+/g, '');
+            const time = !dateMatch && lastDate ? `${lastDate},${rawTime}` : rawTime;
+            rows.push(createPlotRow(normalizedKind, `日期:${time}|内容:${content}`, fallbackTitle));
+        });
+        return rows;
     }
 
     function createPlotRow(kind, source = '', fallbackTitle = '') {
@@ -183,7 +224,7 @@
                     currentTable = '剧情摘要';
                     currentPlotKind = getPlotKind(plotHeaderMatch[1]);
                     const rest = String(plotHeaderMatch[2] || '').trim();
-                    if (rest) rows.push(createPlotRow(currentPlotKind, rest));
+                    if (rest) rows.push(...expandPlotRows(currentPlotKind, rest));
                     return;
                 }
                 currentTable = line.replace(/^#+/, '').trim();
@@ -192,10 +233,14 @@
             }
             if (normalizeName(currentTable) === normalizeName('剧情摘要')) {
                 const keyMatch = line.match(/^\[([^\]]+)\]\s*(?:\||$)([\s\S]*)$/);
-                const linePlotKind = getPlotKind(keyMatch ? keyMatch[1] : '');
+                const bracketValue = keyMatch ? keyMatch[1].trim() : '';
+                const bracketIsPlotTime = isPlotTimeBracket(bracketValue);
+                const linePlotKind = !bracketIsPlotTime ? getPlotKind(bracketValue) : '';
                 const targetKind = linePlotKind || currentPlotKind;
                 if (targetKind) {
-                    rows.push(createPlotRow(targetKind, keyMatch ? keyMatch[2] : line, keyMatch && !linePlotKind ? keyMatch[1].trim() : ''));
+                    const source = keyMatch && !bracketIsPlotTime ? keyMatch[2] : line;
+                    const fallbackTitle = keyMatch && !linePlotKind && !bracketIsPlotTime ? bracketValue : '';
+                    rows.push(...expandPlotRows(targetKind, source, fallbackTitle));
                     return;
                 }
             }
@@ -252,6 +297,78 @@
         return `${currentText}\n${nextText}`;
     }
 
+    function getPlotDateFromTimeText(timeText = '') {
+        const normalized = String(timeText || '').trim();
+        if (!normalized) return '';
+        const match = normalized.match(/(?:\d{1,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
+        return match ? match[0].replace(/\s+/g, '') : '';
+    }
+
+    function getPlotClockSortValue(timeText = '') {
+        const match = String(timeText || '').match(/(\d{1,2})[:：](\d{2})/);
+        if (!match) return 999999;
+        return Number(match[1]) * 60 + Number(match[2]);
+    }
+
+    function movePlotDatePrefixFromContent(time = '', content = '') {
+        const normalizedTime = String(time || '').trim();
+        let normalizedContent = String(content || '').trim();
+        if (getPlotDateFromTimeText(normalizedTime) || !normalizedContent) {
+            return { time: normalizedTime, content: normalizedContent };
+        }
+        const date = getPlotDateFromTimeText(normalizedContent);
+        if (!date) return { time: normalizedTime, content: normalizedContent };
+        const contentClocks = [...normalizedContent.matchAll(/\d{1,2}[:：]\d{2}/g)].map((match) => match[0].replace('：', ':'));
+        const contentTimeRange = contentClocks.length
+            ? `${contentClocks[0]}${contentClocks[1] ? `-${contentClocks[1]}` : ''}`
+            : '';
+        normalizedContent = normalizedContent
+            .replace(new RegExp(`^\\s*${date.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[，,、:：\\s-]*`), '')
+            .replace(/^\d{1,2}[:：]\d{2}(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?\s*[，,、:：\s-]*/, '')
+            .trim();
+        return {
+            time: normalizedTime ? `${date},${normalizedTime}` : (contentTimeRange ? `${date},${contentTimeRange}` : date),
+            content: normalizedContent,
+        };
+    }
+
+    function normalizePlotStoredLines(lines = []) {
+        let lastDate = '';
+        const items = lines
+            .map((line, index) => {
+                const parsed = splitPlotTimeAndContent(line);
+                const text = parsed.time ? `${parsed.time}\t${parsed.content}` : String(line || '').trim();
+                const tabIndex = text.indexOf('\t');
+                const fixed = movePlotDatePrefixFromContent(
+                    (tabIndex > -1 ? text.slice(0, tabIndex) : '').replace(/：/g, ':').trim(),
+                    (tabIndex > -1 ? text.slice(tabIndex + 1) : text).trim()
+                );
+                if (!fixed.time || !fixed.content) return null;
+                const date = getPlotDateFromTimeText(fixed.time) || lastDate;
+                if (date) lastDate = date;
+                const fullTime = getPlotDateFromTimeText(fixed.time) ? fixed.time : (date ? `${date},${fixed.time}` : fixed.time);
+                return {
+                    raw: `${fullTime}\t${fixed.content}`,
+                    date: getPlotDateFromTimeText(fullTime) || '',
+                    sort: getPlotClockSortValue(fullTime),
+                    content: fixed.content,
+                    index,
+                };
+            })
+            .filter(Boolean);
+        const seen = new Set();
+        return items
+            .filter((item) => {
+                const key = `${item.date}|${item.sort}|${item.content}`;
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            })
+            .sort((a, b) => String(a.date).localeCompare(String(b.date), 'zh-Hans-CN', { numeric: true }) || a.sort - b.sort || a.index - b.index)
+            .map((item) => item.raw)
+            .join('\n');
+    }
+
     function plotRowToText(row) {
         const values = row?.values || {};
         let title = String(values['摘要名称'] || values['标题'] || '').trim();
@@ -263,6 +380,9 @@
             date = parsed.time;
             content = parsed.content;
         }
+        const fixed = movePlotDatePrefixFromContent(date, content);
+        date = fixed.time;
+        content = fixed.content;
         const body = [title, content].filter(Boolean).join('：');
         return [date, body].filter(Boolean).join('\t').trim();
     }
@@ -283,7 +403,10 @@
                 state.records[table.id].push(record);
             }
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
-            record.values[field] = appendMultilineValue(record.values[field], text);
+            record.values[field] = normalizePlotStoredLines([
+                ...String(record.values[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean),
+                text,
+            ]);
             return true;
         }
 

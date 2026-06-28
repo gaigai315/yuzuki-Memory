@@ -6,9 +6,11 @@
     const CHAT_METADATA_KEY = 'yuzukiMemory';
     const VERSION = 1;
     const SESSION_POLL_MS = 800;
+    const CHAT_SAVE_DEBOUNCE_MS = 500;
     let activeSessionId = null;
     let pollTimer = null;
     let sessionSwitching = false;
+    let chatSaveTimer = null;
 
     function getContext() {
         if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') {
@@ -132,6 +134,19 @@
         }
     }
 
+    function tryWritePayloadToLocalStorage(keys, payload, sessionId) {
+        try {
+            return writePayloadToLocalStorage(keys, payload, sessionId);
+        } catch (error) {
+            if (!isQuotaExceeded(error)) throw error;
+            console.warn('[yuzuki-Memory] localStorage quota still exceeded; chat metadata save will be used as primary storage.', {
+                sessionId,
+                payloadLength: JSON.stringify(payload).length,
+            });
+            return false;
+        }
+    }
+
     function readChatMetadataState() {
         const context = getContext();
         const state = context?.chatMetadata?.[CHAT_METADATA_KEY];
@@ -165,11 +180,12 @@
 
     function scheduleChatSave(context = getContext(), immediate = false) {
         if (!context) return;
+        window.clearTimeout(chatSaveTimer);
         if (immediate) {
             saveChatMetadataNow(context);
             return;
         }
-        window.setTimeout(() => saveChatMetadataNow(context), 10);
+        chatSaveTimer = window.setTimeout(() => saveChatMetadataNow(context), CHAT_SAVE_DEBOUNCE_MS);
     }
 
     function writeChatMetadataState(state, options = {}) {
@@ -433,9 +449,11 @@
 
             const metadataState = sessionId === getCurrentSessionId() ? readChatMetadataState() : null;
             const compatibleMetadata = isCompatibleStateSession(metadataState, sessionId) ? metadataState : null;
-            const sourceState = pickBestState([...localStates, compatibleMetadata]);
+            const sourceState = compatibleMetadata || pickBestState(localStates);
             const normalized = normalizeState(sourceState ? stampSession(sourceState, sessionId) : null, fallbackState);
-            if (sourceState && sourceState.sessionId && sourceState.sessionId !== sessionId) {
+            if (!compatibleMetadata && sourceState && sessionId === getCurrentSessionId()) {
+                saveState(normalized, fallbackState, sessionId, { force: true, saveOrigin: 'migration', immediate: true });
+            } else if (sourceState && sourceState.sessionId && sourceState.sessionId !== sessionId) {
                 saveState(normalized, fallbackState, sessionId, { force: true, saveOrigin: 'migration' });
             }
             return normalized;
@@ -469,10 +487,9 @@
                 payload.manualEditedAt = payload.updatedAt;
             }
 
-            const existing = pickNewestState([
-                sessionId === getCurrentSessionId() ? readChatMetadataState() : null,
-                localStorage.getItem(key) ? JSON.parse(localStorage.getItem(key)) : null,
-            ]);
+            const metadataState = sessionId === getCurrentSessionId() ? readChatMetadataState() : null;
+            const localState = localStorage.getItem(key) ? JSON.parse(localStorage.getItem(key)) : null;
+            const existing = metadataState || pickNewestState([localState]);
             const existingCount = countRecords(existing);
             const payloadCount = countRecords(payload);
             if (!options.force && existingCount > payloadCount && payloadCount <= 2) {
@@ -491,11 +508,11 @@
                 }
             }
 
-            writePayloadToLocalStorage([getPrimaryStorageKey(sessionId)].filter(Boolean), payload, sessionId);
             const metadataSaved = sessionId === getCurrentSessionId()
                 ? writeChatMetadataState(payload, { immediate: options.force || options.immediate })
                 : false;
-            return metadataSaved || true;
+            const localSaved = tryWritePayloadToLocalStorage([getPrimaryStorageKey(sessionId)].filter(Boolean), payload, sessionId);
+            return sessionId === getCurrentSessionId() ? metadataSaved : localSaved;
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to save chat state.', error);
             return false;

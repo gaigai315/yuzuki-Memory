@@ -226,6 +226,8 @@
     let activePromptSchemeSectionId = 'info';
     let activePromptSchemeDraft = null;
     let activePlotSummaryKind = 'main';
+    const plotSummaryExpandedDays = new Set();
+    const plotSummaryCollapsedDays = new Set();
     const vectorUiState = {
         bookPage: 1,
         segmentPage: 1,
@@ -4686,12 +4688,12 @@
             };
             activeTaskResultDialogCloser = closeWith;
             const handleKeydown = (event) => {
-                if (event.key === 'Escape') closeWith(false);
+                if (event.key === 'Escape') closeWith({ action: 'cancel', cancelled: true });
             };
-            close.onclick = () => closeWith(false);
+            close.onclick = () => closeWith({ action: 'cancel', cancelled: true });
             confirm.onclick = () => closeWith({ action: 'confirm', text: editableTextarea.value });
             overlay.addEventListener('click', (event) => {
-                if (event.target === overlay) closeWith(false);
+                if (event.target === overlay) closeWith({ action: 'cancel', cancelled: true });
             });
             dialog.addEventListener('click', (event) => event.stopPropagation());
             document.addEventListener('keydown', handleKeydown);
@@ -4929,8 +4931,9 @@
         console.log(`[yuzuki-Memory] ${message}`);
     }
 
-    async function runSingleTaskBatch(state, action, options) {
+    async function runSingleTaskBatch(action, options) {
         const taskOptions = { ...options, previewOnly: !options.silent };
+        let state = getState();
         let result;
         if (action === 'trace') result = await YuzukiMemory.TaskRunner.runTrace(state, taskOptions);
         else if (action === 'summary') result = await YuzukiMemory.TaskRunner.runSummary(state, taskOptions);
@@ -4948,24 +4951,29 @@
                 result,
                 compare: action === 'summaryOptimize',
             });
-            if (!confirmation) return { success: false, cancelled: true, error: '用户取消写入。' };
+            if (!confirmation || confirmation.cancelled || confirmation.action === 'cancel') {
+                taskRunnerStopRequested = true;
+                taskRunnerAbortController?.abort?.();
+                return { success: false, cancelled: true, error: '用户取消写入。' };
+            }
             if (confirmation && typeof confirmation === 'object' && 'text' in confirmation) {
                 result = YuzukiMemory.TaskRunner.rebuildTaskResultFromText(action, result, confirmation.text);
                 if (!result?.success) return result;
             }
+            state = getState();
             result = commitTaskResult(action, state, result);
         }
         return result;
     }
 
-    async function runTaskBatchWithRetry(state, action, options, retries = 1) {
+    async function runTaskBatchWithRetry(action, options, retries = 1) {
         let lastResult = null;
         let lastError = null;
         for (let attempt = 0; attempt <= retries; attempt += 1) {
             if (taskRunnerStopRequested) return { success: false, cancelled: true, aborted: true, error: '任务已停止。' };
             taskRunnerAbortController = new AbortController();
             try {
-                const result = await runSingleTaskBatch(state, action, {
+                const result = await runSingleTaskBatch(action, {
                     ...options,
                     signal: taskRunnerAbortController.signal,
                 });
@@ -5027,7 +5035,6 @@
         taskRunnerActiveAction = action;
         taskRunnerProgressLabel = '停止任务';
         try {
-            const state = getState();
             const canBatch = action === 'trace' || action === 'summary';
             const batches = canBatch ? buildTaskBatches(options) : [{ start: options.start, end: options.end }];
             const llmSnapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.() || null;
@@ -5039,7 +5046,7 @@
                 while (!taskRunnerStopRequested) {
                     taskRunnerProgressLabel = batches.length > 1 ? `第 ${index + 1}/${batches.length} 批执行中` : '执行中';
                     setTaskButtonRunning(button, true, taskRunnerProgressLabel);
-                    result = await runTaskBatchWithRetry(state, action, {
+                    result = await runTaskBatchWithRetry(action, {
                         ...options,
                         ...batch,
                         batchIndex: batches.length > 1 ? index + 1 : 0,
@@ -8408,32 +8415,61 @@
     }
 
     function getPlotSummaryItems(text = '') {
-        return String(text || '')
+        let lastDate = '';
+        const entries = String(text || '')
             .split(/\n+/)
             .map((line) => line.trim())
             .filter(Boolean)
+            .flatMap((line) => splitPlotSummaryEntries(line))
             .map((line, index) => {
                 const parsed = parsePlotSummaryLine(line);
+                const fixed = movePlotDatePrefixFromContent(parsed.time, parsed.content);
+                const explicitDate = getPlotDateFromTimeText(fixed.time);
+                if (explicitDate) lastDate = explicitDate;
+                const inheritedTime = fixed.time && !explicitDate && lastDate ? `${lastDate},${fixed.time}` : fixed.time;
                 return {
                     index,
                     title: `节点 ${String(index + 1).padStart(2, '0')}`,
                     raw: line,
-                    date: getPlotDateText(parsed.time),
-                    startTime: getPlotClockText(parsed.time, 'start'),
-                    endTime: getPlotClockText(parsed.time, 'end'),
-                    sortTime: getPlotSortTime(parsed.time),
-                    text: parsed.content,
+                    date: getPlotDateText(inheritedTime),
+                    startTime: getPlotClockText(inheritedTime, 'start'),
+                    endTime: getPlotClockText(inheritedTime, 'end'),
+                    sortTime: getPlotSortTime(inheritedTime),
+                    text: fixed.content,
                 };
-            })
-            .map((item, index, items) => ({
-                ...item,
-                status: items.some((entry, entryIndex) => entryIndex !== index && entry.sortTime > item.sortTime) ? 'completed' : 'running',
-            }));
+            });
+        const sorted = entries.sort((a, b) => String(a.date).localeCompare(String(b.date), 'zh-Hans-CN', { numeric: true }) || a.sortTime - b.sortTime || a.index - b.index);
+        return sorted.map((item, index, items) => ({
+            ...item,
+            status: index === items.length - 1 ? 'running' : 'completed',
+        }));
+    }
+
+    function splitPlotSummaryEntries(line = '') {
+        const source = String(line || '').trim();
+        if (!source) return [];
+        const entries = [];
+        const pattern = /\[[^\]]+\]\s*\|\s*内容\s*[:：][\s\S]*?(?=(?:[;；]\s*)?\[[^\]]+\]\s*\|\s*内容\s*[:：]|$)/g;
+        let match;
+        while ((match = pattern.exec(source)) !== null) {
+            const value = String(match[0] || '').replace(/^[;；]\s*/, '').trim();
+            if (value) entries.push(value);
+        }
+        if (entries.length) return entries;
+        return source.split(/[;；](?=\s*\[[^\]]+\]\s*\|)/).map((entry) => entry.trim()).filter(Boolean);
     }
 
     function parsePlotSummaryLine(line = '') {
         const normalized = String(line || '').trim();
         if (!normalized) return { time: '', content: '' };
+
+        const bracketPipeMatch = normalized.match(/^\[([^\]]+)\]\s*\|\s*(?:内容|摘要内容|总结内容)\s*[:：]\s*([\s\S]*)$/);
+        if (bracketPipeMatch) {
+            return {
+                time: bracketPipeMatch[1].trim(),
+                content: bracketPipeMatch[2].trim(),
+            };
+        }
 
         const tabIndex = normalized.indexOf('\t');
         if (tabIndex > -1) {
@@ -8474,7 +8510,38 @@
     function getPlotDateText(timeText = '') {
         const normalized = String(timeText || '').trim();
         if (!normalized) return '未记录日期';
-        return normalized.split(/[，,\s]+/)[0] || normalized;
+        return getPlotDateFromTimeText(normalized) || '未记录日期';
+    }
+
+    function getPlotDateFromTimeText(timeText = '') {
+        const normalized = String(timeText || '').trim();
+        if (!normalized) return '';
+        const dateMatch = normalized.match(/(?:\d{1,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
+        if (dateMatch) return dateMatch[0].replace(/\s+/g, '');
+        const beforeComma = normalized.split(/[，,]/)[0]?.trim() || '';
+        return /(?:年|月|日)/.test(beforeComma) ? beforeComma : '';
+    }
+
+    function movePlotDatePrefixFromContent(time = '', content = '') {
+        const normalizedTime = String(time || '').trim();
+        let normalizedContent = String(content || '').trim();
+        if (getPlotDateFromTimeText(normalizedTime) || !normalizedContent) {
+            return { time: normalizedTime, content: normalizedContent };
+        }
+        const date = getPlotDateFromTimeText(normalizedContent);
+        if (!date) return { time: normalizedTime, content: normalizedContent };
+        const contentClocks = [...normalizedContent.matchAll(/\d{1,2}[:：]\d{2}/g)].map((match) => match[0].replace('：', ':'));
+        const contentTimeRange = contentClocks.length
+            ? `${contentClocks[0]}${contentClocks[1] ? `-${contentClocks[1]}` : ''}`
+            : '';
+        normalizedContent = normalizedContent
+            .replace(new RegExp(`^\\s*${date.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[，,、:：\\s-]*`), '')
+            .replace(/^\d{1,2}[:：]\d{2}(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?\s*[，,、:：\s-]*/, '')
+            .trim();
+        return {
+            time: normalizedTime ? `${date},${normalizedTime}` : (contentTimeRange ? `${date},${contentTimeRange}` : date),
+            content: normalizedContent,
+        };
     }
 
     function getPlotClockText(timeText = '', position = 'start') {
@@ -8491,6 +8558,44 @@
         return Number(clockMatch[1]) * 60 + Number(clockMatch[2]);
     }
 
+    function getPlotDayKey(kind, date = '') {
+        return `${getPlotSummaryKindKey(kind)}:${String(date || '未记录日期').trim() || '未记录日期'}`;
+    }
+
+    function isPlotDayExpanded(kind, date, index = 0, group = null, groups = []) {
+        const key = getPlotDayKey(kind, date);
+        if (plotSummaryCollapsedDays.has(key)) return false;
+        if (plotSummaryExpandedDays.has(key)) return true;
+        const runningIndex = groups.findIndex((entry) => entry?.items?.some((item) => item.status === 'running' && !item.hidden));
+        return runningIndex >= 0 ? index === runningIndex : index === 0;
+    }
+
+    function setPlotDayExpanded(kind, date, expanded) {
+        const key = getPlotDayKey(kind, date);
+        if (expanded) {
+            plotSummaryCollapsedDays.delete(key);
+            plotSummaryExpandedDays.add(key);
+            return;
+        }
+        plotSummaryExpandedDays.delete(key);
+        plotSummaryCollapsedDays.add(key);
+    }
+
+    function groupPlotSummaryItemsByDay(items = []) {
+        const groups = [];
+        const byDate = new Map();
+        items.forEach((item) => {
+            const date = String(item.date || '未记录日期').trim() || '未记录日期';
+            if (!byDate.has(date)) {
+                const group = { date, items: [] };
+                byDate.set(date, group);
+                groups.push(group);
+            }
+            byDate.get(date).items.push(item);
+        });
+        return groups;
+    }
+
     function parsePlotSummaryEditorValue(text = '') {
         const lines = String(text || '')
             .split(/\n+/)
@@ -8501,19 +8606,30 @@
         const firstLine = lines[0];
         const parsed = parsePlotSummaryLine(firstLine);
         if (!parsed.time) return { time: '', content: lines.join('\n') };
+        const fixed = movePlotDatePrefixFromContent(parsed.time, [parsed.content, ...lines.slice(1)].filter(Boolean).join('\n'));
 
-        return {
-            time: parsed.time,
-            content: [parsed.content, ...lines.slice(1)].filter(Boolean).join('\n'),
-        };
+        return fixed;
     }
 
     function formatPlotSummaryEditorValue(time = '', content = '') {
-        const normalizedTime = String(time || '').trim();
-        const normalizedContent = String(content || '').trim();
+        const fixed = movePlotDatePrefixFromContent(time, content);
+        const normalizedTime = String(fixed.time || '').trim();
+        const normalizedContent = String(fixed.content || '').trim();
         if (!normalizedTime) return normalizedContent;
         if (!normalizedContent) return normalizedTime;
         return `${normalizedTime}\t${normalizedContent}`;
+    }
+
+    function normalizePlotSummaryStoredText(text = '') {
+        return getPlotSummaryItems(text)
+            .map((item) => {
+                const time = item.date && item.startTime !== '—'
+                    ? `${item.date},${item.startTime}${item.endTime !== '—' ? `-${item.endTime}` : ''}`
+                    : item.raw.split('\t')[0] || '';
+                return formatPlotSummaryEditorValue(time, item.text);
+            })
+            .filter(Boolean)
+            .join('\n');
     }
 
     function createPlotSummaryView(table) {
@@ -8521,6 +8637,7 @@
         const kind = activePlotSummaryKind === 'branch' ? 'branch' : 'main';
         const label = getPlotSummaryLabel(kind);
         const icon = kind === 'branch' ? 'fa-solid fa-code-branch' : 'fa-solid fa-timeline';
+        normalizePlotSummaryRecordValues(record);
         const items = getPlotSummaryItemEntries(record, kind);
 
         const view = document.createElement('div');
@@ -8549,11 +8666,9 @@
                 ...items.filter((item) => !item.hidden),
                 ...items.filter((item) => item.hidden),
             ];
-            displayItems.forEach((item, index) => {
-                if (item.hidden && displayItems[index - 1] && !displayItems[index - 1].hidden) {
-                    list.appendChild(createPrimaryHiddenDivider());
-                }
-                list.appendChild(createPlotSummaryCard(item, kind, item.hidden));
+            const groups = groupPlotSummaryItemsByDay(displayItems);
+            groups.forEach((group, index) => {
+                list.appendChild(createPlotSummaryDayGroup(group, kind, isPlotDayExpanded(kind, group.date, index, group, groups)));
             });
         } else {
             const empty = document.createElement('div');
@@ -8565,6 +8680,70 @@
         panel.append(header, list);
         view.appendChild(panel);
         return view;
+    }
+
+    function normalizePlotSummaryRecordValues(record) {
+        if (!record) return false;
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        let changed = false;
+        ['主线', '支线'].forEach((field) => {
+            const current = String(record.values[field] || '').trim();
+            if (!current) return;
+            const normalized = normalizePlotSummaryStoredText(current);
+            if (normalized && normalized !== current) {
+                record.values[field] = normalized;
+                changed = true;
+            }
+        });
+        if (changed) saveState();
+        return changed;
+    }
+
+    function createPlotSummaryDayGroup(group, kind, expanded = false) {
+        const section = document.createElement('section');
+        section.className = expanded ? 'yzm-plot-day yzm-plot-day-expanded' : 'yzm-plot-day';
+        section.dataset.yzmPlotDay = group.date;
+        section.dataset.yzmPlotKind = kind;
+
+        const header = document.createElement('button');
+        header.type = 'button';
+        header.className = 'yzm-plot-day-header';
+        header.dataset.yzmPlotDayToggle = 'true';
+        header.dataset.yzmPlotDay = group.date;
+        header.dataset.yzmPlotKind = kind;
+        header.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+
+        const title = document.createElement('div');
+        title.className = 'yzm-plot-day-title';
+        const dot = document.createElement('span');
+        dot.className = 'yzm-plot-day-dot';
+        const date = document.createElement('strong');
+        date.textContent = group.date;
+        const running = group.items.some((item) => item.status === 'running' && !item.hidden);
+        const status = document.createElement('span');
+        status.className = running ? 'yzm-plot-status yzm-plot-status-running' : 'yzm-plot-status yzm-plot-status-completed';
+        status.textContent = running ? '进行中' : '已完成';
+        title.append(dot, date, status);
+
+        const meta = document.createElement('div');
+        meta.className = 'yzm-plot-day-meta';
+        const completedCount = group.items.filter((item) => item.status === 'completed').length;
+        meta.append(
+            document.createTextNode(`完成 ${completedCount}/${group.items.length} 个时段`),
+            createIconNode(expanded ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down', '')
+        );
+
+        header.append(title, meta);
+
+        const body = document.createElement('div');
+        body.className = 'yzm-plot-day-body';
+        body.hidden = !expanded;
+        group.items.forEach((item) => {
+            body.appendChild(createPlotSummaryCard(item, kind, item.hidden));
+        });
+
+        section.append(header, body);
+        return section;
     }
 
     function createPlotSummaryCard(item, kind, hidden = false) {
@@ -8579,23 +8758,11 @@
         marker.setAttribute('aria-label', `编辑第 ${item.index + 1} 条剧情摘要`);
         marker.appendChild(document.createElement('span'));
 
-        const content = document.createElement('div');
-        content.className = 'yzm-plot-card-content';
-
-        const top = document.createElement('div');
-        top.className = 'yzm-plot-card-top';
-
-        const titleWrap = document.createElement('div');
-        titleWrap.className = 'yzm-plot-card-title-wrap';
-
-        const titleLabel = document.createElement('span');
-        titleLabel.className = 'yzm-plot-card-title-label';
-        titleLabel.textContent = '日期';
-
-        const title = document.createElement('strong');
-        title.textContent = item.date;
-
-        titleWrap.append(titleLabel, title);
+        const time = document.createElement('div');
+        time.className = 'yzm-plot-card-time';
+        const start = item.startTime && item.startTime !== '—' ? item.startTime : '';
+        const end = item.endTime && item.endTime !== '—' ? item.endTime : '';
+        time.textContent = start && end ? `${start}-${end}` : (start || end || '未记录');
 
         const status = document.createElement('span');
         status.className = item.status === 'completed' ? 'yzm-plot-status yzm-plot-status-completed' : 'yzm-plot-status yzm-plot-status-running';
@@ -8603,22 +8770,9 @@
 
         const text = document.createElement('div');
         text.className = 'yzm-plot-card-text';
-        text.textContent = item.text;
+        text.textContent = item.text || item.raw || '（暂无事件概要）';
 
-        const timeGrid = document.createElement('div');
-        timeGrid.className = 'yzm-plot-time-grid';
-        timeGrid.append(
-            createPlotTimeChip('开始时间', item.startTime, 'fa-regular fa-clock'),
-            createPlotTimeChip('完成时间', item.endTime || '—', 'fa-regular fa-hourglass-half')
-        );
-
-        const summaryLabel = document.createElement('div');
-        summaryLabel.className = 'yzm-plot-summary-label';
-        summaryLabel.textContent = '事件概要';
-
-        top.append(titleWrap, status);
-        content.append(top, timeGrid, summaryLabel, text);
-        card.append(marker, content);
+        card.append(marker, time, text, status);
         return card;
     }
 
@@ -8840,18 +8994,12 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '新增角色档案向量化：可在角色档案条目整理中选中角色并生成当前会话专属角色档案向量书。',
-            '角色档案向量化改为按当前勾选项覆盖名单；未再次勾选的旧向量化角色会退出向量书并恢复显示。',
-            '角色档案向量召回会回填到角色档案表区域，不再混入通用 {{VECTOR_MEMORY}}；普通向量书仍保持原注入逻辑。',
-            '已向量化的隐藏角色仍可被实时填表/批量填表更新，更新后会自动同步专属角色档案向量书。',
-            '优化角色档案向量召回显示，旧/新向量内容都会压缩成和普通角色档案一致的单行格式，减少上下文占用。',
-            '对齐旧记忆插件的 {{MEMORY_TABLE_xx}} 变量逻辑：单独放置某个表后，会从 {{MEMORY_TABLE}} / {{MEMORY}} 默认注入中剥离该表。',
-            '修复向量检索上下文只读已落地聊天的问题，现在发送时会把当前请求里的 user/assistant 正文一起用于检索。',
-            '修复删除旧聊天后从新第 0 楼开始时，旧隐藏记录或旧总结指针可能在发送前重新隐藏新消息的问题。',
-            '修复记忆总结为空时仍注入“暂无总结”占位系统消息的问题，空总结现在不会发送。',
-            '修复内置提示词方案会把“剧情摘要”表本身自动隐藏的问题，并会恢复已被旧方案隐藏的剧情摘要表。',
-            '修复批量填表空字段/空壳表也被当作成功写入的问题，避免空结果污染表格或推进任务指针。',
-            '修复追溯填表结果确认弹窗点击右上角关闭后 UI 卡住的问题；关闭、遮罩点击和 Esc 现在都视为取消。',
+            '剧情摘要页面改为按日期分组的折叠视图，长时间线会按天收纳，减少分散占用。',
+            '展开某一天后，内部摘要以紧凑时间段行展示，方便快速扫读同一天的剧情进度。',
+            '剧情摘要支持同一天紧凑写法：[x年x月x日,08:00-09:15]|内容:...;[09:25-12:15]|内容:...，后续时间段会自动继承当天日期。',
+            '分批追溯写入同一天剧情摘要时，会按日期和时间合并排序，并跳过完全重复的时间段内容。',
+            '每条剧情摘要左侧圆点仍可点击编辑对应条目，原有主线/支线摘要数据格式保持兼容。',
+            '修复 localStorage 容量超限时会导致填表结果保存失败的问题；当前会话记忆现在以酒馆聊天文件元数据为主存储，localStorage 仅作为缓存/迁移来源。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -9911,6 +10059,7 @@
                 record.values[field] = nextValue;
                 setPlotItemHiddenStates(record, normalizedKind, nextValue ? [false] : []);
             }
+            record.values[field] = normalizePlotSummaryStoredText(record.values[field]);
             setActiveRecordId(table.id, record.id);
             activePlotSummaryKind = normalizedKind;
             if (!persistStateOrReload(root, '当前会话尚未就绪，剧情摘要未保存。', {
@@ -11079,6 +11228,19 @@
             });
         });
 
+        root.querySelectorAll('.yzm-plot-day-header[data-yzm-plot-day-toggle]').forEach((button) => {
+            if (button.dataset.yzmBound === 'true') return;
+            button.dataset.yzmBound = 'true';
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const expanded = button.getAttribute('aria-expanded') === 'true';
+                setPlotDayExpanded(button.dataset.yzmPlotKind || activePlotSummaryKind, button.dataset.yzmPlotDay || '', !expanded);
+                renderTableWorkspace(root);
+                bindPanelInteractions(root);
+            });
+        });
+
         root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar, .yzm-world-avatar, .yzm-summary-avatar').forEach((avatar) => {
             if (avatar.dataset.yzmBound === 'true') return;
             avatar.dataset.yzmBound = 'true';
@@ -11257,8 +11419,13 @@
         }, 1200);
     }
 
-    function reloadStateFromStorage() {
+    function reloadStateFromStorage(event = null) {
         const root = ensureRoot();
+        if (taskRunnerBusy && event?.detail?.source === 'task-runner') {
+            refreshActiveWorkspace(root);
+            scheduleCharacterVectorSync();
+            return;
+        }
         loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
         memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
         applyResolvedPromptSchemeToState({ save: false });

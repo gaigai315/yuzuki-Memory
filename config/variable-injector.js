@@ -312,6 +312,41 @@
         return cleanColumnName(column) === '支线' ? 'branch' : 'main';
     }
 
+    function getPlotDateFromTimeText(timeText = '') {
+        const normalized = String(timeText || '').trim();
+        if (!normalized) return '';
+        const match = normalized.match(/(?:\d{1,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
+        return match ? match[0].replace(/\s+/g, '') : '';
+    }
+
+    function stripPlotDateFromTimeText(timeText = '') {
+        const text = String(timeText || '').trim();
+        const date = getPlotDateFromTimeText(text);
+        if (!date) return text;
+        return text
+            .replace(new RegExp(`^\\s*${date.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*[，,、\\s]*`), '')
+            .trim();
+    }
+
+    function compactPlotSummaryInjectionLines(lines = []) {
+        let lastDate = '';
+        return (Array.isArray(lines) ? lines : [])
+            .map((line) => {
+                const text = String(line || '').trim();
+                if (!text) return '';
+                const tabIndex = text.indexOf('\t');
+                if (tabIndex < 0) return text;
+                const time = text.slice(0, tabIndex).trim();
+                const content = text.slice(tabIndex + 1).trim();
+                if (!time || !content) return text;
+                const date = getPlotDateFromTimeText(time);
+                const timeForInjection = date && date === lastDate ? stripPlotDateFromTimeText(time) : time;
+                if (date) lastDate = date;
+                return `${timeForInjection}\t${content}`;
+            })
+            .filter(Boolean);
+    }
+
     function filterPlotSummaryValue(record, column, value) {
         const text = String(value || '').trim();
         if (!text) return '';
@@ -321,10 +356,10 @@
         const states = Array.isArray(record?.hiddenPlotItems?.[kind])
             ? record.hiddenPlotItems[kind].map(Boolean)
             : null;
-        if (!states) {
-            return record?.hiddenKinds?.[kind] ? '' : lines.join('\n');
-        }
-        return lines.filter((_line, index) => !states[index]).join('\n');
+        const visibleLines = !states
+            ? (record?.hiddenKinds?.[kind] ? [] : lines)
+            : lines.filter((_line, index) => !states[index]);
+        return compactPlotSummaryInjectionLines(visibleLines).join('\n');
     }
 
     function recordToText(table, record) {
@@ -409,7 +444,7 @@
             .filter((table) => !options.tableId || table.id === options.tableId);
         const lines = tables.map((table) => {
             if (table.id === 'plot_summary') {
-                return '#剧情摘要：包含 #主线摘要：摘要名称，日期，摘要内容；#支线摘要：日期，摘要内容';
+                return '#剧情摘要：包含 #主线摘要/#支线摘要；格式为 [x年x月x日,08:00-09:15]|内容:事件;[09:25-12:15]|内容:同一天后续事件；同一天只在第一段写日期，跨天再写完整日期';
             }
             const columns = (Array.isArray(table.columns) ? table.columns : [])
                 .map(cleanColumnName)

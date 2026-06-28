@@ -404,13 +404,19 @@
         if (!chunk || typeof chunk !== 'object') return { content: '', reasoning: '', finishReason: '', error: '' };
         const error = chunk.error?.message || chunk.error || '';
         const finishReason = chunk.choices?.[0]?.finish_reason || chunk.candidates?.[0]?.finishReason || '';
+        if (['SAFETY', 'RECITATION', 'safety'].includes(finishReason)) {
+            return { content: '', reasoning: '', finishReason, error: `内容被安全策略拦截 (${finishReason})` };
+        }
         const reasoning = chunk.choices?.[0]?.delta?.reasoning_content || '';
+        const geminiPartsText = Array.isArray(chunk.candidates?.[0]?.content?.parts)
+            ? chunk.candidates[0].content.parts.map((part) => String(part?.text || '')).join('')
+            : '';
         const content = chunk.choices?.[0]?.delta?.content
             || chunk.choices?.[0]?.message?.content
             || chunk.data?.choices?.[0]?.message?.content
             || chunk.choices?.[0]?.text
             || chunk.data?.choices?.[0]?.text
-            || chunk.candidates?.[0]?.content?.parts?.[0]?.text
+            || geminiPartsText
             || chunk.delta?.text
             || chunk.content_block?.text
             || '';
@@ -421,6 +427,16 @@
         let data = rawData;
         if (typeof data === 'string') {
             const plain = stripThinking(data);
+            if (/^\s*data:\s*/m.test(plain)) {
+                const parsedStream = parseSseTextPayload(plain);
+                if (parsedStream.text) {
+                    return {
+                        success: true,
+                        text: parsedStream.truncated ? appendTokenTruncationMarker(parsedStream.text, 'SSE 文本响应') : parsedStream.text,
+                        truncated: parsedStream.truncated,
+                    };
+                }
+            }
             try {
                 data = JSON.parse(data);
             } catch {
@@ -435,9 +451,15 @@
             || data?.data?.choices?.[0]?.finish_reason
             || data?.candidates?.[0]?.finishReason
             || '';
+        if (['SAFETY', 'RECITATION', 'safety'].includes(finishReason) && !data?.candidates?.[0]?.content) {
+            throw new Error(`内容被安全策略拦截 (${finishReason})`);
+        }
         const maybeArrayContent = data?.choices?.[0]?.message?.content;
         const normalizedArrayContent = Array.isArray(maybeArrayContent)
             ? maybeArrayContent.map((part) => String(part?.text || part?.content || '')).join('')
+            : '';
+        const geminiPartsText = Array.isArray(data?.candidates?.[0]?.content?.parts)
+            ? data.candidates[0].content.parts.map((part) => String(part?.text || '')).join('')
             : '';
         const content = stripThinking(
             normalizedArrayContent
@@ -445,7 +467,7 @@
             || data?.choices?.[0]?.text
             || data?.data?.choices?.[0]?.message?.content
             || data?.data?.choices?.[0]?.text
-            || data?.candidates?.[0]?.content?.parts?.[0]?.text
+            || geminiPartsText
             || data?.content?.[0]?.text
             || data?.results?.[0]?.text
             || data?.text
@@ -458,6 +480,32 @@
             success: true,
             text: finishReason === 'length' ? appendTokenTruncationMarker(content, '非流式响应') : content,
             truncated: finishReason === 'length',
+        };
+    }
+
+    function parseSseTextPayload(text = '') {
+        let fullText = '';
+        let fullReasoning = '';
+        let truncated = false;
+        String(text || '').split(/\r?\n/).forEach((line) => {
+            const trimmed = line.trim();
+            if (!trimmed || trimmed.startsWith(':') || trimmed === 'data: [DONE]' || trimmed === 'data:[DONE]') return;
+            const jsonText = trimmed.startsWith('data:') ? trimmed.replace(/^data:\s*/, '') : '';
+            if (!jsonText || jsonText === '[DONE]') return;
+            try {
+                const chunk = JSON.parse(jsonText);
+                const { content, reasoning, finishReason, error } = extractStreamContent(chunk);
+                if (error) throw new Error(error);
+                if (finishReason === 'length') truncated = true;
+                if (reasoning) fullReasoning += reasoning;
+                if (content) fullText += content;
+            } catch (_error) {
+                // Ignore malformed keepalive/debug lines in SSE text fallback.
+            }
+        });
+        return {
+            text: stripThinking(fullText || fullReasoning),
+            truncated,
         };
     }
 
@@ -580,7 +628,8 @@
                 }
             }
 
-            const result = await parseGenerateResponse(response, payload.stream);
+            const contentType = response.headers.get('content-type') || '';
+            const result = await parseGenerateResponse(response, contentType.includes('text/event-stream'));
             return { ...result, config };
         } catch (error) {
             if (options.signal?.aborted || error?.name === 'AbortError') return { success: false, error: '已中断发送', aborted: true };
@@ -617,7 +666,8 @@
         }
 
         try {
-            const result = await parseGenerateResponse(response, payload.stream);
+            const contentType = response.headers.get('content-type') || '';
+            const result = await parseGenerateResponse(response, contentType.includes('text/event-stream'));
             return { ...result };
         } catch (error) {
             return {
