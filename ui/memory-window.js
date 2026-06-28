@@ -930,25 +930,31 @@
     }
 
     function getPromptSchemes() {
-        const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
+        const builtinSchemes = (YuzukiMemory.PromptLibrary?.getDefaultSchemes?.() || [YuzukiMemory.PromptLibrary?.getDefaultScheme?.()])
+            .map(normalizePromptScheme)
+            .filter(Boolean);
+        const builtinIds = new Set(builtinSchemes.map((scheme) => scheme.id));
         try {
             const raw = YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEMES_STORAGE_KEY, [])
                 ?? JSON.parse(localStorage.getItem(PROMPT_SCHEMES_STORAGE_KEY) || '[]');
             const schemes = Array.isArray(raw)
-                ? raw.map(normalizePromptScheme).filter((scheme) => scheme && !scheme.builtin && scheme.id !== defaultScheme?.id)
+                ? raw.map(normalizePromptScheme).filter((scheme) => scheme && !scheme.builtin && !builtinIds.has(scheme.id))
                 : [];
-            return defaultScheme ? [defaultScheme, ...schemes] : schemes;
+            return [...builtinSchemes, ...schemes];
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to load prompt schemes.', error);
-            return defaultScheme ? [defaultScheme] : [];
+            return builtinSchemes;
         }
     }
 
     function savePromptSchemes(schemes) {
-        const defaultScheme = normalizePromptScheme(YuzukiMemory.PromptLibrary?.getDefaultScheme?.());
+        const builtinIds = new Set((YuzukiMemory.PromptLibrary?.getDefaultSchemes?.() || [YuzukiMemory.PromptLibrary?.getDefaultScheme?.()])
+            .map(normalizePromptScheme)
+            .filter(Boolean)
+            .map((scheme) => scheme.id));
         const normalized = (Array.isArray(schemes) ? schemes : [])
             .map(normalizePromptScheme)
-            .filter((scheme) => scheme && !scheme.builtin && scheme.id !== defaultScheme?.id);
+            .filter((scheme) => scheme && !scheme.builtin && !builtinIds.has(scheme.id));
         if (YuzukiMemory.GlobalSettings?.set) {
             YuzukiMemory.GlobalSettings.set(PROMPT_SCHEMES_STORAGE_KEY, normalized);
         } else {

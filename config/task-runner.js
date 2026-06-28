@@ -538,9 +538,9 @@
 
     function getActivePromptScheme(state) {
         const schemes = parseJsonStorage(PROMPT_SCHEMES_STORAGE_KEY, []);
-        const defaultScheme = YuzukiMemory.PromptLibrary?.getDefaultScheme?.();
+        const defaultSchemes = YuzukiMemory.PromptLibrary?.getDefaultSchemes?.() || [YuzukiMemory.PromptLibrary?.getDefaultScheme?.()];
         const sourceSchemes = [
-            defaultScheme,
+            ...defaultSchemes,
             ...(Array.isArray(schemes) ? schemes : []),
         ].filter((scheme, index, list) => scheme && list.findIndex((entry) => entry?.id === scheme.id) === index);
         const normalized = sourceSchemes.map((scheme) => {
@@ -758,7 +758,7 @@
         const memoryText = normalizeMemoryEnvelope(text);
         try {
             const parsedBlocks = parseJsonBlocks(text);
-            if (!parsedBlocks.length) throw new Error('未找到可解析的 JSON 结果。');
+            if (!parsedBlocks.length) throw new Error(formatTraceParseError('未找到可解析的 JSON 结果。', text));
             if (parsedBlocks.length === 1) return parsedBlocks[0];
             const records = parsedBlocks.flatMap((block) => Array.isArray(block?.records) ? block.records : (Array.isArray(block) ? block : []));
             const memoryRows = parsedBlocks.flatMap((block) => Array.isArray(block?.memoryRows) ? block.memoryRows : []);
@@ -842,6 +842,10 @@
     function previewRawModelText(text = '') {
         const source = String(text || '').trim();
         return source ? source.slice(0, 2000) : '（空）';
+    }
+
+    function formatTraceParseError(message, text = '') {
+        return `${message}\n\n模型原始回复预览：\n${previewRawModelText(text)}`;
     }
 
     function formatSummaryParseError(message, text = '') {
