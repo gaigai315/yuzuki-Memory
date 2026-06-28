@@ -4694,6 +4694,72 @@
         });
     }
 
+    function openBatchFailureDialog(root, options = {}) {
+        return new Promise((resolve) => {
+            const modalHost = getGlobalModalHost(root);
+            removeGlobalModal(root, '.yzm-batch-failure-modal');
+
+            const overlay = document.createElement('div');
+            overlay.className = 'yzm-structure-modal yzm-batch-failure-modal';
+
+            const dialog = document.createElement('section');
+            dialog.className = 'yzm-structure-dialog yzm-batch-failure-dialog';
+            dialog.setAttribute('aria-label', '批次异常处理');
+
+            const header = document.createElement('div');
+            header.className = 'yzm-structure-header';
+            const title = document.createElement('strong');
+            title.className = 'yzm-structure-title';
+            title.textContent = `第 ${options.batchIndex || 1} 批执行失败`;
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'yzm-structure-close';
+            close.setAttribute('aria-label', '停止后续批次');
+            close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+            header.append(title, close);
+
+            const meta = document.createElement('div');
+            meta.className = 'yzm-task-result-meta';
+            meta.textContent = `当前批次 ${options.batchIndex || 1}/${options.batchTotal || 1}，范围 ${options.start ?? 0}-${options.end ?? 0}（不含 ${options.end ?? 0}）。`;
+
+            const preview = document.createElement('textarea');
+            preview.className = 'yzm-task-result-preview';
+            preview.readOnly = true;
+            preview.value = String(options.error || '未知错误');
+
+            const actions = document.createElement('div');
+            actions.className = 'yzm-structure-actions yzm-task-result-actions';
+            const stop = createButton('停止任务', 'yzm-api-button');
+            const next = createButton('继续后续批次', 'yzm-api-button');
+            const retry = createButton('重试本批', 'yzm-add-table-confirm');
+            actions.append(stop, next, retry);
+
+            dialog.append(header, meta, preview, actions);
+            overlay.appendChild(dialog);
+            modalHost.appendChild(overlay);
+
+            const closeWith = (value) => {
+                overlay.remove();
+                document.removeEventListener('keydown', handleKeydown);
+                resolve(value);
+            };
+            const handleKeydown = (event) => {
+                if (event.key === 'Escape') closeWith('stop');
+                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) closeWith('retry');
+            };
+            close.onclick = () => closeWith('stop');
+            stop.onclick = () => closeWith('stop');
+            next.onclick = () => closeWith('continue');
+            retry.onclick = () => closeWith('retry');
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) closeWith('stop');
+            });
+            dialog.addEventListener('click', (event) => event.stopPropagation());
+            document.addEventListener('keydown', handleKeydown);
+            retry.focus();
+        });
+    }
+
     function commitTaskResult(action, state, result) {
         if (action === 'trace' || action === 'traceOptimize') return YuzukiMemory.TaskRunner.commitTraceResult(state, result);
         if (action === 'summaryOptimize') return YuzukiMemory.TaskRunner.commitSummaryOptimizeResult(state, result);
@@ -4866,25 +4932,54 @@
             const state = getState();
             const canBatch = action === 'trace' || action === 'summary';
             const batches = canBatch ? buildTaskBatches(options) : [{ start: options.start, end: options.end }];
+            const llmSnapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.() || null;
             const results = [];
             for (let index = 0; index < batches.length; index += 1) {
                 if (taskRunnerStopRequested) break;
                 const batch = batches[index];
-                taskRunnerProgressLabel = batches.length > 1 ? `第 ${index + 1}/${batches.length} 批执行中` : '执行中';
-                setTaskButtonRunning(button, true, taskRunnerProgressLabel);
-                const result = await runTaskBatchWithRetry(state, action, {
-                    ...options,
-                    ...batch,
-                    batchIndex: batches.length > 1 ? index + 1 : 0,
-                    batchTotal: batches.length,
-                }, action === 'trace' ? 1 : 0);
+                let result = null;
+                while (!taskRunnerStopRequested) {
+                    taskRunnerProgressLabel = batches.length > 1 ? `第 ${index + 1}/${batches.length} 批执行中` : '执行中';
+                    setTaskButtonRunning(button, true, taskRunnerProgressLabel);
+                    result = await runTaskBatchWithRetry(state, action, {
+                        ...options,
+                        ...batch,
+                        batchIndex: batches.length > 1 ? index + 1 : 0,
+                        batchTotal: batches.length,
+                        llmSnapshot,
+                    }, action === 'trace' ? 1 : 0);
+                    if (result?.success || result?.cancelled || batches.length <= 1) break;
+                    refreshAfterTask(root);
+                    const choice = await openBatchFailureDialog(root, {
+                        batchIndex: index + 1,
+                        batchTotal: batches.length,
+                        start: batch.start,
+                        end: batch.end,
+                        error: result?.error,
+                    });
+                    if (choice === 'retry') {
+                        if (!await waitForTaskBuffer('等待后重试当前批次', 5)) break;
+                        continue;
+                    }
+                    if (choice === 'continue') {
+                        showTaskToast(`第 ${index + 1}/${batches.length} 批失败，已按选择继续后续批次。`, 'warning');
+                        result = { ...result, skipped: true };
+                        break;
+                    }
+                    taskRunnerStopRequested = true;
+                    break;
+                }
                 if (taskRunnerStopRequested) break;
                 if (!result?.success) {
-                    taskRunnerStopRequested = true;
                     refreshAfterTask(root);
-                    window.alert(result?.cancelled
-                        ? `第 ${index + 1} 批已取消，后续批次已停止。`
-                        : `第 ${index + 1} 批执行失败，后续批次已停止：\n${result?.error || '未知错误'}`);
+                    if (result?.cancelled) {
+                        taskRunnerStopRequested = true;
+                        window.alert(`第 ${index + 1} 批已取消，后续批次已停止。`);
+                        return;
+                    }
+                    if (result?.skipped) continue;
+                    taskRunnerStopRequested = true;
+                    window.alert(`第 ${index + 1} 批执行失败，后续批次已停止：\n${result?.error || '未知错误'}`);
                     return;
                 }
                 results.push(result);

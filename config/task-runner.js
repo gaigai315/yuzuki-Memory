@@ -588,6 +588,15 @@
         return presets.find((preset) => preset.id === activeId) || presets[0] || null;
     }
 
+    function createLlmRequestSnapshot() {
+        const mode = getLlmMode();
+        const preset = mode === 'custom' ? getActiveLlmPreset() : null;
+        return {
+            mode,
+            preset: preset ? JSON.parse(JSON.stringify(preset)) : null,
+        };
+    }
+
     function buildTaskRequestMeta(options = {}) {
         return {
             kind: String(options.kind || options.autoTaskType || 'manual'),
@@ -600,8 +609,9 @@
 
     function captureTaskRequest(messages, options = {}) {
         if (!YuzukiMemory.RequestProbe?.captureFromBody) return;
-        const mode = getLlmMode();
-        const preset = mode === 'custom' ? getActiveLlmPreset() : null;
+        const snapshot = options.llmSnapshot && typeof options.llmSnapshot === 'object' ? options.llmSnapshot : null;
+        const mode = snapshot?.mode || getLlmMode();
+        const preset = mode === 'custom' ? (snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset()) : null;
         const body = {
             model: mode === 'custom' ? String(preset?.model || '') : 'SillyTavern',
             messages,
@@ -622,8 +632,10 @@
                 yzmMemoryTask: buildTaskRequestMeta(options),
                 yzmMemoryInternalApi: true,
             };
-            if (getLlmMode() === 'custom') {
-                const preset = getActiveLlmPreset();
+            const snapshot = options.llmSnapshot && typeof options.llmSnapshot === 'object' ? options.llmSnapshot : null;
+            const mode = snapshot?.mode || getLlmMode();
+            if (mode === 'custom') {
+                const preset = snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset();
                 if (!preset) return { success: false, error: '未选择可用的 LLM API 预设。' };
                 return YuzukiMemory.LlmClient.generateWithCustom(preset, messages, { stream: preset.stream !== false, ...taskOptions });
             }
@@ -2002,6 +2014,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         commitSummaryResult,
         commitSummaryOptimizeResult,
         rebuildTaskResultFromText,
+        createLlmRequestSnapshot,
         cleanupSmallAutoSummaries,
         bindAutoSummary,
         cancelPendingAutoTask,
