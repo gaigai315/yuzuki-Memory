@@ -739,7 +739,16 @@
                 ? config.apiUrl
                 : `${config.apiUrl.replace(/\/+$/, '')}/v1`;
             const retryConfig = { ...config, provider: 'compatible', apiUrl: retryUrl };
-            const retryPayload = resolveCustomProxyPayload(retryConfig, cleanMessages, options);
+            const retryPayload = {
+                chat_completion_source: 'openai',
+                reverse_proxy: retryUrl,
+                proxy_password: config.apiKey,
+                model: config.model,
+                messages: cleanMessages,
+                temperature: config.temperature,
+                max_tokens: config.maxTokens,
+                stream: options.stream ?? config.stream,
+            };
             const retryResult = await postTavernGenerate(retryPayload, options);
             if (retryResult?.success) return { ...retryResult, config: retryConfig, fallback: 'openai' };
             proxyError = `${proxyError}\n\n[降级 OpenAI 协议]\n${retryResult.error || '请求失败'}`;
