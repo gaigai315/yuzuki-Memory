@@ -7862,7 +7862,12 @@
             createModeChoice('批量填表', 'fa-solid fa-layer-group', '按楼层批量处理，API单独请求。', settings.fillMode === 'batch', 'batch')
         );
 
-        card.append(titleNode, enableRow, modeRow, createTraceBatchConfigPanel(settings));
+        const fillBody = document.createElement('div');
+        fillBody.className = 'yzm-fill-settings-body';
+        fillBody.hidden = settings.enableFilling === false;
+        fillBody.append(modeRow, createTraceBatchConfigPanel(settings));
+
+        card.append(titleNode, enableRow, fillBody);
         return card;
     }
 
@@ -10745,6 +10750,11 @@
                         updatePluginSetting(pluginSettingKey, isOn);
                         if (pluginSettingKey === 'hideFloorsEnabled' && isOn) {
                             applyHiddenFloorsFromSettings();
+                        }
+                        if (pluginSettingKey === 'enableFilling') {
+                            configSwitch.closest('.yzm-fill-mode-card')?.querySelectorAll('.yzm-fill-settings-body').forEach((panel) => {
+                                panel.hidden = !isOn;
+                            });
                         }
                     }
                 }
