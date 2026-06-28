@@ -591,8 +591,17 @@
             }
         }
 
-        const result = await parseGenerateResponse(response, payload.stream);
-        return { ...result };
+        try {
+            const result = await parseGenerateResponse(response, payload.stream);
+            return { ...result };
+        } catch (error) {
+            return {
+                success: false,
+                error: formatError(error, '解析响应失败'),
+                status: response.status,
+                statusText: response.statusText,
+            };
+        }
     }
 
     function resolveDirectUrl(config) {
@@ -664,8 +673,17 @@
             };
         }
 
-        const result = await parseGenerateResponse(response, contentType.includes('text/event-stream'));
-        return { ...result };
+        try {
+            const result = await parseGenerateResponse(response, contentType.includes('text/event-stream'));
+            return { ...result };
+        } catch (error) {
+            return {
+                success: false,
+                error: formatError(error, '解析响应失败'),
+                status: response.status,
+                statusText: response.statusText,
+            };
+        }
     }
 
     async function generateWithCustom(rawConfig, messages, options = {}) {
