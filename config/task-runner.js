@@ -98,11 +98,17 @@
         return window.yzmMemoryManualTaskRunning === true;
     }
 
+    function formatDisplayFloorRange(start, end) {
+        const from = Math.max(0, Math.round(Number(start) || 0));
+        const exclusiveEnd = Math.max(from, Math.round(Number(end) || 0));
+        return `${from}-${Math.max(from, exclusiveEnd - 1)}`;
+    }
+
     function notifyAutoTaskFailure(task = {}, error = '') {
         const taskTitle = String(task?.title || '自动记忆任务').trim();
         const message = String(error?.message || error || '未知错误').trim();
         const range = Number.isFinite(Number(task?.start)) && Number.isFinite(Number(task?.end))
-            ? `（范围 ${task.start}-${task.end}，不含 ${task.end}）`
+            ? `（楼层 ${formatDisplayFloorRange(task.start, task.end)}）`
             : '';
         const retryHint = task?.type === 'trace' ? '填表指针未推进，后续正文结束后会继续尝试补跑。' : '总结指针未推进，后续正文结束后会继续尝试补跑。';
         const detail = message
@@ -122,7 +128,7 @@
     function notifyAutoTaskSuccess(task = {}, result = {}) {
         const taskTitle = String(task?.title || '自动记忆任务').trim();
         const range = Number.isFinite(Number(result?.range?.start ?? task?.start)) && Number.isFinite(Number(result?.range?.end ?? task?.end))
-            ? `（范围 ${result?.range?.start ?? task.start}-${result?.range?.end ?? task.end}，不含 ${result?.range?.end ?? task.end}）`
+            ? `（楼层 ${formatDisplayFloorRange(result?.range?.start ?? task.start, result?.range?.end ?? task.end)}）`
             : '';
         const count = Number(result?.count) || 0;
         const detail = task?.type === 'trace'
@@ -1143,12 +1149,12 @@
 
     function getRangeLabel(range) {
         const normalized = getRangeMeta(range);
-        return normalized ? `${normalized.start}-${normalized.end}（不含${normalized.end}）` : '';
+        return normalized ? `${normalized.start}-${Math.max(normalized.start, normalized.end - 1)}` : '';
     }
 
     function getRangeFloorValue(range) {
         const normalized = getRangeMeta(range);
-        return normalized ? `${normalized.start}-${normalized.end}` : '';
+        return normalized ? `${normalized.start}-${Math.max(normalized.start, normalized.end - 1)}` : '';
     }
 
     function appendMultilineValue(current, next) {
@@ -1899,7 +1905,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             return callbacks.confirmAutoTask(task);
         }
         if (typeof window.confirm !== 'function') return { action: 'confirm', postpone: 0 };
-        const ok = window.confirm(`${task.title}已达到触发条件。\n当前楼层：${task.currentCount}\n上次指针：${task.lastIndex}\n触发阈值：${task.threshold}\n处理范围：${task.start}-${task.end}（不含${task.end}）\n\n是否执行？`);
+        const ok = window.confirm(`${task.title}已达到触发条件。\n当前楼层：${task.currentCount}\n上次指针：${task.lastIndex}\n触发阈值：${task.threshold}\n处理楼层：${formatDisplayFloorRange(task.start, task.end)}\n\n是否执行？`);
         return { action: ok ? 'confirm' : 'cancel', postpone: 0 };
     }
 

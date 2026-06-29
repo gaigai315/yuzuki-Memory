@@ -2985,6 +2985,45 @@
     -webkit-overflow-scrolling: touch;
 }
 
+#yzm-memory-root .yzm-summary-optimize-target-summary {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+    padding: 10px 12px;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 9px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-summary-optimize-hidden-selection {
+    display: none;
+}
+
+#yzm-memory-root .yzm-summary-optimize-summary-info {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-summary-optimize-summary-info strong {
+    color: var(--yzm-title);
+    font-size: 13px;
+    line-height: 1.25;
+}
+
+#yzm-memory-root .yzm-summary-optimize-summary-info span {
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-summary-optimize-open-picker {
+    white-space: nowrap;
+}
+
 #yzm-memory-root .yzm-summary-optimize-count,
 #yzm-memory-root .yzm-summary-optimize-empty {
     color: var(--yzm-muted);
@@ -2994,7 +3033,7 @@
 
 #yzm-memory-root .yzm-summary-optimize-target-row {
     display: grid;
-    grid-template-columns: 18px minmax(0, 1fr);
+    grid-template-columns: 18px minmax(0, 1fr) auto;
     align-items: start;
     gap: 9px;
     min-width: 0;
@@ -3010,6 +3049,12 @@
 #yzm-memory-root .yzm-summary-optimize-target-row:hover {
     background: var(--yzm-hover);
     border-color: var(--yzm-border);
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-row-active {
+    background: rgba(101, 121, 218, 0.08);
+    border-color: var(--yzm-accent);
+    box-shadow: 0 0 0 1px rgba(101, 121, 218, 0.24);
 }
 
 #yzm-memory-root .yzm-summary-optimize-target-row input {
@@ -3047,6 +3092,46 @@
     color: var(--yzm-muted);
     font-size: 12px;
     line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-arrow {
+    align-self: center;
+    color: var(--yzm-muted);
+    font-size: 12px;
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-dialog {
+    width: min(640px, calc(100vw - 28px));
+    max-height: min(78vh, 720px);
+}
+
+#yzm-memory-root .yzm-summary-optimize-dialog-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    color: var(--yzm-title);
+    font-size: 19px;
+    font-weight: 800;
+}
+
+#yzm-memory-root .yzm-summary-optimize-dialog-title i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-summary-optimize-dialog-body {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-summary-optimize-dialog-list {
+    max-height: min(48vh, 390px);
+    padding-right: 2px;
+}
+
+#yzm-memory-root .yzm-summary-optimize-dialog-actions {
+    margin-top: 12px;
 }
 
 #yzm-memory-root .yzm-trace-execution-grid {
@@ -4615,7 +4700,44 @@
     font-weight: 700;
 }
 
+#yzm-memory-root .yzm-plugin-config-header-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
 #yzm-memory-root .yzm-plugin-config-header i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-plugin-config-update-notice {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    color: var(--yzm-icon);
+    background: transparent;
+    border: 0;
+    border-radius: 999px;
+    box-shadow: none;
+    cursor: pointer;
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-plugin-config-update-notice:hover,
+#yzm-memory-root .yzm-plugin-config-update-notice:focus-visible {
+    color: var(--yzm-icon);
+    background: transparent;
+    border-color: transparent;
+    outline: none;
+}
+
+#yzm-memory-root .yzm-plugin-config-update-notice:hover i,
+#yzm-memory-root .yzm-plugin-config-update-notice:focus-visible i {
     color: var(--yzm-icon);
 }
 

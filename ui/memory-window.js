@@ -4436,7 +4436,7 @@
             createTraceHeaderCard('总结优化', '对已有总结内容进行整理、合并与冲突修正。', 'fa-solid fa-wand-magic-sparkles'),
             createApiCard('当前目标总结', 'fa-solid fa-book-open', [
                 createApiField('', targetSelect),
-                createSummaryOptimizeTargetList('all'),
+                createSummaryOptimizeTargetSummary('all'),
             ]),
             note,
             createTraceExecutionCard({
@@ -4450,6 +4450,12 @@
             createTraceStartButton('开始优化', 'summaryOptimize')
         );
         return panel;
+    }
+
+    function getSummaryOptimizeTargetLabel(target = 'all') {
+        if (target === 'main') return '主线总结';
+        if (target === 'branch') return '支线总结';
+        return '全部总结';
     }
 
     function getSummaryOptimizeCandidateRecords(target = 'all') {
@@ -4467,55 +4473,211 @@
         return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
     }
 
-    function createSummaryOptimizeTargetList(target = 'all') {
-        const wrap = document.createElement('div');
-        wrap.className = 'yzm-summary-optimize-target-list';
-        wrap.dataset.yzmSummaryOptimizeTargetList = 'true';
+    function createSummaryOptimizeTargetSummary(target = 'all', selectedIds = null) {
         const candidates = getSummaryOptimizeCandidateRecords(target);
-        if (!candidates.length) {
-            const empty = document.createElement('div');
-            empty.className = 'yzm-summary-optimize-empty';
-            empty.textContent = '当前分类没有可优化的总结内容。';
-            wrap.appendChild(empty);
-            return wrap;
-        }
-        const selectedCount = document.createElement('div');
-        selectedCount.className = 'yzm-summary-optimize-count';
-        selectedCount.textContent = `已列出 ${candidates.length} 条，默认全选`;
-        wrap.appendChild(selectedCount);
-        candidates.forEach(({ table, record }, index) => {
-            const label = document.createElement('label');
-            label.className = 'yzm-summary-optimize-target-row';
-            const checkbox = document.createElement('input');
-            checkbox.type = 'checkbox';
-            checkbox.checked = true;
-            checkbox.dataset.yzmSummaryOptimizeRecordId = record.id;
-            const body = document.createElement('div');
-            body.className = 'yzm-summary-optimize-target-body';
-            const title = document.createElement('strong');
-            title.textContent = `${index + 1}. ${getSummaryPrimaryTitle(table, record)}`;
-            const meta = document.createElement('span');
-            const floorText = getSummaryFloorText(record);
-            const core = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
-            meta.textContent = [
-                getSummaryKind(record) === 'branch' ? '支线' : '主线',
-                floorText ? `楼层 ${floorText}` : '',
-                core ? `核心 ${core}` : '',
-            ].filter(Boolean).join(' · ');
-            const preview = document.createElement('small');
-            preview.textContent = truncateSummaryOptimizeText(getSummaryValue(record, ['总结内容']));
-            body.append(title, meta, preview);
-            label.append(checkbox, body);
-            wrap.appendChild(label);
+        const ids = selectedIds instanceof Set
+            ? selectedIds
+            : new Set();
+        const selectedCount = candidates.filter(({ record }) => ids.has(record.id)).length;
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-summary-optimize-target-summary';
+        wrap.dataset.yzmSummaryOptimizeTargetList = 'true';
+        wrap.dataset.yzmSummaryOptimizeTargetSummary = 'true';
+
+        const hidden = document.createElement('div');
+        hidden.className = 'yzm-summary-optimize-hidden-selection';
+        candidates.forEach(({ record }) => {
+            if (!ids.has(record.id)) return;
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.checked = true;
+            input.hidden = true;
+            input.dataset.yzmSummaryOptimizeRecordId = record.id;
+            hidden.appendChild(input);
         });
+
+        const info = document.createElement('div');
+        info.className = 'yzm-summary-optimize-summary-info';
+        const title = document.createElement('strong');
+        title.textContent = candidates.length
+            ? `已选择 ${selectedCount} / ${candidates.length} 条`
+            : '当前分类没有可优化的总结内容';
+        const desc = document.createElement('span');
+        desc.textContent = candidates.length
+            ? `${getSummaryOptimizeTargetLabel(target)}，点击按钮打开列表选择目标内容。`
+            : '请切换目标类型或先生成可优化的总结内容。';
+        info.append(title, desc);
+
+        const button = createIconButton('选择目标总结', 'fa-solid fa-list-check', 'yzm-api-button yzm-summary-optimize-open-picker');
+        button.disabled = candidates.length === 0;
+        wrap.append(hidden, info, button);
         return wrap;
+    }
+
+    function getSelectedSummaryOptimizeRecordIds(panel, target = 'all') {
+        const checkedIds = Array.from(panel?.querySelectorAll('[data-yzm-summary-optimize-record-id]:checked') || [])
+            .map((input) => input.dataset.yzmSummaryOptimizeRecordId)
+            .filter(Boolean);
+        if (checkedIds.length) return new Set(checkedIds);
+        return new Set();
     }
 
     function refreshSummaryOptimizeTargets(panel) {
         const select = panel?.querySelector('[data-yzm-summary-optimize-target]');
         const oldList = panel?.querySelector('[data-yzm-summary-optimize-target-list]');
         if (!select || !oldList) return;
-        oldList.replaceWith(createSummaryOptimizeTargetList(select.value || 'all'));
+        oldList.replaceWith(createSummaryOptimizeTargetSummary(select.value || 'all'));
+    }
+
+    function applySummaryOptimizeSelection(panel, target, selectedIds) {
+        const select = panel?.querySelector('[data-yzm-summary-optimize-target]');
+        const oldList = panel?.querySelector('[data-yzm-summary-optimize-target-list]');
+        if (!select || !oldList) return;
+        select.value = target || 'all';
+        oldList.replaceWith(createSummaryOptimizeTargetSummary(select.value || 'all', selectedIds));
+    }
+
+    function openSummaryOptimizeTargetDialog(root) {
+        const panel = root.querySelector('.yzm-summary-tool-panel');
+        const targetSelect = panel?.querySelector('[data-yzm-summary-optimize-target]');
+        const initialTarget = String(targetSelect?.value || 'all');
+        let dialogTarget = initialTarget;
+        let selectedIds = getSelectedSummaryOptimizeRecordIds(panel, initialTarget);
+
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-summary-optimize-target-modal');
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-summary-optimize-target-modal';
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-summary-optimize-target-dialog';
+        dialog.setAttribute('aria-label', '选择目标内容');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('div');
+        title.className = 'yzm-summary-optimize-dialog-title';
+        title.append(createIconNode('fa-solid fa-wand-magic-sparkles', ''), document.createTextNode('选择目标内容'));
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const body = document.createElement('div');
+        body.className = 'yzm-summary-optimize-dialog-body';
+        const selectWrap = createApiSelect(dialogTarget, [
+            { label: '全部总结', value: 'all' },
+            { label: '主线总结', value: 'main' },
+            { label: '支线总结', value: 'branch' },
+        ]);
+        const dialogSelect = selectWrap.querySelector('.yzm-api-select');
+        dialogSelect.dataset.yzmSummaryOptimizeDialogTarget = 'true';
+        const count = document.createElement('div');
+        count.className = 'yzm-summary-optimize-count';
+        const list = document.createElement('div');
+        list.className = 'yzm-summary-optimize-target-list yzm-summary-optimize-dialog-list';
+
+        const renderList = () => {
+            const candidates = getSummaryOptimizeCandidateRecords(dialogTarget);
+            const availableIds = new Set(candidates.map(({ record }) => record.id).filter(Boolean));
+            selectedIds = new Set([...selectedIds].filter((id) => availableIds.has(id)));
+            list.replaceChildren();
+            count.textContent = candidates.length
+                ? `已选择 ${[...selectedIds].filter((id) => availableIds.has(id)).length} / ${candidates.length} 条${dialogTarget === initialTarget ? '' : ''}`
+                : '当前分类没有可优化的总结内容';
+            if (!candidates.length) {
+                const empty = document.createElement('div');
+                empty.className = 'yzm-summary-optimize-empty';
+                empty.textContent = '当前分类没有可优化的总结内容。';
+                list.appendChild(empty);
+                return;
+            }
+            candidates.forEach(({ table, record }, index) => {
+                list.appendChild(createSummaryOptimizeTargetDialogRow(table, record, index, selectedIds.has(record.id)));
+            });
+        };
+
+        body.append(selectWrap, count, list);
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-structure-actions yzm-summary-optimize-dialog-actions';
+        const cancel = createButton('取消', 'yzm-add-table-cancel');
+        const confirm = createButton('确定', 'yzm-add-table-confirm');
+        actions.append(cancel, confirm);
+
+        const closeModal = () => {
+            overlay.remove();
+            document.removeEventListener('keydown', handleKeydown);
+        };
+        const confirmSelection = () => {
+            applySummaryOptimizeSelection(panel, dialogTarget, selectedIds);
+            closeModal();
+        };
+        const handleKeydown = (event) => {
+            if (event.key === 'Escape') closeModal();
+        };
+
+        dialogSelect.addEventListener('change', () => {
+            dialogTarget = dialogSelect.value || 'all';
+            selectedIds = new Set();
+            renderList();
+        });
+        list.addEventListener('change', (event) => {
+            const input = event.target;
+            if (!input?.matches?.('[data-yzm-summary-optimize-dialog-record-id]')) return;
+            const id = input.dataset.yzmSummaryOptimizeDialogRecordId;
+            if (!id) return;
+            if (input.checked) selectedIds.add(id);
+            else selectedIds.delete(id);
+            renderList();
+        });
+        close.onclick = closeModal;
+        cancel.onclick = closeModal;
+        confirm.onclick = confirmSelection;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        document.addEventListener('keydown', handleKeydown);
+
+        dialog.append(header, body, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+        renderList();
+        confirm.focus();
+    }
+
+    function createSummaryOptimizeTargetDialogRow(table, record, index, checked) {
+        const label = document.createElement('label');
+        label.className = checked
+            ? 'yzm-summary-optimize-target-row yzm-summary-optimize-target-row-active'
+            : 'yzm-summary-optimize-target-row';
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = checked;
+        checkbox.dataset.yzmSummaryOptimizeDialogRecordId = record.id;
+        const body = document.createElement('div');
+        body.className = 'yzm-summary-optimize-target-body';
+        const title = document.createElement('strong');
+        title.textContent = `${index + 1}. ${getSummaryPrimaryTitle(table, record)}`;
+        const meta = document.createElement('span');
+        const floorText = getSummaryFloorText(record);
+        const core = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
+        meta.textContent = [
+            getSummaryKind(record) === 'branch' ? '支线' : '主线',
+            floorText ? `楼层 ${floorText}` : '',
+            core ? `核心 ${core}` : '',
+        ].filter(Boolean).join(' · ');
+        const time = getSummaryValue(record, ['时间', '日期', '更新时间']);
+        const timeNode = document.createElement('span');
+        timeNode.textContent = time || '';
+        const preview = document.createElement('small');
+        preview.textContent = truncateSummaryOptimizeText(getSummaryValue(record, ['总结内容']), 108);
+        const arrow = createIconNode('fa-solid fa-chevron-right', 'yzm-summary-optimize-target-arrow');
+        body.append(title, meta, timeNode, preview);
+        label.append(checkbox, body, arrow);
+        return label;
     }
 
     function clampPointerToFloorCount(value, totalFloors) {
@@ -4525,16 +4687,16 @@
 
     function createSummaryRangeCard(totalFloors, startFloor = 0) {
         const lastFloorNumber = getLastChatFloorNumber(totalFloors);
-        const normalizedStart = clampPointerToFloorCount(startFloor, totalFloors);
+        const normalizedStart = clampPointerToFloorCount(startFloor, lastFloorNumber);
         const startInput = createTraceNumberInput(String(normalizedStart), 'start');
-        const endInput = createTraceNumberInput(String(totalFloors), 'end');
+        const endInput = createTraceNumberInput(String(lastFloorNumber), 'end');
         return createApiCard('总结范围', 'fa-regular fa-calendar', [
             createTraceRangeRow(
                 createApiField('起始楼层', createTraceUnitInput(startInput, '层')),
                 createIconNode('fa-solid fa-arrow-right', 'yzm-trace-range-arrow'),
-                createApiField('结束楼层（不含）', createTraceUnitInput(endInput, '层'))
+                createApiField('结束楼层', createTraceUnitInput(endInput, '层'))
             ),
-            createTraceHint(`范围按左闭右开计算：0 ~ 40 表示处理 0-39；当前末楼层 ${lastFloorNumber}，完整范围 0 ~ ${totalFloors}`),
+            createTraceHint(`填写酒馆正文楼层号，起止都包含；单层可填 ${lastFloorNumber}-${lastFloorNumber}。当前末楼层号 ${lastFloorNumber}，总楼层 ${totalFloors}，最大可填 ${lastFloorNumber}`),
         ]);
     }
 
@@ -4588,16 +4750,16 @@
 
     function createTraceRangeCard(totalFloors, startFloor = 0) {
         const lastFloorNumber = getLastChatFloorNumber(totalFloors);
-        const normalizedStart = clampPointerToFloorCount(startFloor, totalFloors);
+        const normalizedStart = clampPointerToFloorCount(startFloor, lastFloorNumber);
         const startInput = createTraceNumberInput(String(normalizedStart), 'start');
-        const endInput = createTraceNumberInput(String(totalFloors), 'end');
+        const endInput = createTraceNumberInput(String(lastFloorNumber), 'end');
         return createApiCard('追溯范围', 'fa-regular fa-calendar', [
             createTraceRangeRow(
                 createApiField('起始楼层', createTraceUnitInput(startInput, '层')),
                 createIconNode('fa-solid fa-arrow-right', 'yzm-trace-range-arrow'),
-                createApiField('结束楼层（不含）', createTraceUnitInput(endInput, '层'))
+                createApiField('结束楼层', createTraceUnitInput(endInput, '层'))
             ),
-            createTraceHint(`范围按左闭右开计算：0 ~ 40 表示处理 0-39；当前末楼层 ${lastFloorNumber}，完整范围 0 ~ ${totalFloors}`),
+            createTraceHint(`填写酒馆正文楼层号，起止都包含；单层可填 ${lastFloorNumber}-${lastFloorNumber}。当前末楼层号 ${lastFloorNumber}，总楼层 ${totalFloors}，最大可填 ${lastFloorNumber}`),
         ]);
     }
 
@@ -4787,14 +4949,21 @@
 
     function getTaskPanelRange(panel) {
         const totalFloors = getApproximateChatFloorCount();
-        const startFloor = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="start"]')?.value, 0, totalFloors, 0, 0));
-        const endFloor = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="end"]')?.value, 0, totalFloors, totalFloors, 0));
+        const lastFloorNumber = getLastChatFloorNumber(totalFloors);
+        const startFloor = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="start"]')?.value, 0, lastFloorNumber, 0, 0));
+        const endFloor = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="end"]')?.value, 0, lastFloorNumber, lastFloorNumber, 0));
         const fromFloor = Math.min(startFloor, endFloor);
-        const toFloor = Math.max(startFloor, endFloor);
+        const toFloorInclusive = Math.max(startFloor, endFloor);
         return {
             start: fromFloor,
-            end: toFloor,
+            end: Math.min(toFloorInclusive + 1, totalFloors),
         };
+    }
+
+    function formatTaskDisplayRange(start, end) {
+        const from = Math.max(0, Math.round(Number(start) || 0));
+        const exclusiveEnd = Math.max(from, Math.round(Number(end) || 0));
+        return `${from}-${Math.max(from, exclusiveEnd - 1)}`;
     }
 
     function getTaskPanelOptions(panel) {
@@ -5043,7 +5212,7 @@
 
             const info = document.createElement('div');
             info.className = 'yzm-auto-task-info';
-            info.textContent = `当前 ${task.currentCount} 层，上次指针 ${task.lastIndex}，阈值 ${task.threshold} 层。本次处理 ${task.start}-${task.end}（不含 ${task.end}），延迟的 ${task.delay} 层保留给后续上下文。`;
+            info.textContent = `当前 ${task.currentCount} 层，上次指针 ${task.lastIndex}，阈值 ${task.threshold} 层。本次处理楼层 ${formatTaskDisplayRange(task.start, task.end)}，延迟的 ${task.delay} 层保留给后续上下文。`;
 
             const postponeRow = document.createElement('label');
             postponeRow.className = 'yzm-auto-task-postpone';
@@ -5117,7 +5286,7 @@
 
             const meta = document.createElement('div');
             meta.className = 'yzm-task-result-meta';
-            meta.textContent = `当前批次 ${options.batchIndex || 1}/${options.batchTotal || 1}，范围 ${options.start ?? 0}-${options.end ?? 0}（不含 ${options.end ?? 0}）。`;
+            meta.textContent = `当前批次 ${options.batchIndex || 1}/${options.batchTotal || 1}，楼层 ${formatTaskDisplayRange(options.start ?? 0, options.end ?? 0)}。`;
 
             const preview = document.createElement('textarea');
             preview.className = 'yzm-task-result-preview';
@@ -5261,7 +5430,7 @@
             const confirmation = await openTaskResultConfirmDialog(ensureRoot(), {
                 title: `${getTaskActionLabel(action)}结果需要修正`,
                 description: options.batchIndex
-                    ? `第 ${options.batchIndex}/${options.batchTotal} 批，范围 ${options.start}-${options.end}（不含 ${options.end}）没有解析到有效写入。可直接修改模型返回内容后再次确认写入。`
+                    ? `第 ${options.batchIndex}/${options.batchTotal} 批，楼层 ${formatTaskDisplayRange(options.start, options.end)} 没有解析到有效写入。可直接修改模型返回内容后再次确认写入。`
                     : '模型返回内容没有解析到有效写入。可直接修改返回内容后再次确认写入。',
                 result,
                 compare: false,
@@ -5283,7 +5452,7 @@
             const confirmation = await openTaskResultConfirmDialog(ensureRoot(), {
                 title: `${getTaskActionLabel(action)}结果确认`,
                 description: options.batchIndex
-                    ? `第 ${options.batchIndex}/${options.batchTotal} 批，范围 ${options.start}-${options.end}（不含 ${options.end}）。确认后才会写入插件记忆。`
+                    ? `第 ${options.batchIndex}/${options.batchTotal} 批，楼层 ${formatTaskDisplayRange(options.start, options.end)}。确认后才会写入插件记忆。`
                     : (action === 'summaryOptimize' ? '请对比旧内容和新内容，确认后才会写入插件记忆。' : '非静默模式下，确认后才会写入插件记忆。'),
                 result,
                 compare: action === 'summaryOptimize',
@@ -5434,7 +5603,7 @@
                 if (action === 'summary' && batches.length > 1) {
                     const rangeStart = result.range?.start ?? batch.start;
                     const rangeEnd = result.range?.end ?? batch.end;
-                    showTaskToast(`手动总结第 ${index + 1}/${batches.length} 批完成（范围 ${rangeStart}-${rangeEnd}，不含 ${rangeEnd}）：写入 ${result.count || 0} 条。`, 'success');
+                    showTaskToast(`手动总结第 ${index + 1}/${batches.length} 批完成（楼层 ${formatTaskDisplayRange(rangeStart, rangeEnd)}）：写入 ${result.count || 0} 条。`, 'success');
                 }
                 if (!await waitForTaskBuffer('等待数据完全写入', 6)) break;
                 if (index < batches.length - 1 && !await waitForTaskBuffer('批次间冷却，避免触发限流', 5)) break;
@@ -7645,7 +7814,17 @@
     function createPluginConfigHeader() {
         const header = document.createElement('div');
         header.className = 'yzm-plugin-config-header';
-        header.append(createIconNode('fa-solid fa-gear', ''), document.createTextNode('插件配置'));
+        const title = document.createElement('span');
+        title.className = 'yzm-plugin-config-header-title';
+        title.append(createIconNode('fa-solid fa-gear', ''), document.createTextNode('插件配置'));
+        const noticeButton = document.createElement('button');
+        noticeButton.type = 'button';
+        noticeButton.className = 'yzm-plugin-config-update-notice';
+        noticeButton.setAttribute('aria-label', '查看当前版本更新通知');
+        noticeButton.title = '查看当前版本更新通知';
+        noticeButton.appendChild(createIconNode('fa-solid fa-circle-info', ''));
+        noticeButton.dataset.yzmAction = 'showUpdateNotice';
+        header.append(title, noticeButton);
         return header;
     }
 
@@ -9300,8 +9479,9 @@
         return String(YuzukiMemory.version || '').replace(/^v+/i, '').trim() || '0.0.0';
     }
 
-    function openUpdateNoticeDialog(root) {
+    function openUpdateNoticeDialog(root, options = {}) {
         const version = getCurrentPluginVersion();
+        const markSeen = options.markSeen !== false;
         const modalHost = getModalHost(root);
         removeModal(root, '.yzm-update-notice-modal');
 
@@ -9332,7 +9512,6 @@
         const list = document.createElement('ul');
         [
             '新增与柚月の手机头像联动功能：角色档案头像会自动匹配同名微信联系人头像。',
-            '微信未打开时也会后台读取柚月の手机微信数据；角色档案为用户本人时，会读取当前用户卡头像。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -9350,7 +9529,7 @@
         modalHost.appendChild(overlay);
 
         const markSeenAndClose = () => {
-            localStorage.setItem(UPDATE_NOTICE_VERSION_STORAGE_KEY, version);
+            if (markSeen) localStorage.setItem(UPDATE_NOTICE_VERSION_STORAGE_KEY, version);
             overlay.remove();
             document.removeEventListener('keydown', handleKeydown);
         };
@@ -11149,9 +11328,14 @@
                 const actionButton = target?.closest('[data-yzm-trace-action]');
                 const taskButton = target?.closest('[data-yzm-task-action]');
                 const batchSwitch = target?.closest('[data-yzm-task-batch-enabled]');
-                if (!actionButton && !taskButton && !batchSwitch) return;
+                const targetPicker = target?.closest('.yzm-summary-optimize-open-picker');
+                if (!actionButton && !taskButton && !batchSwitch && !targetPicker) return;
                 event.preventDefault();
                 event.stopPropagation();
+                if (targetPicker) {
+                    openSummaryOptimizeTargetDialog(root);
+                    return;
+                }
                 if (actionButton?.dataset.yzmTraceAction === 'editSummaryPointer') openSummaryPointerDialog(root);
                 if (actionButton?.dataset.yzmTraceAction === 'editHistorySummaryPointer') openHistorySummaryPointerDialog(root);
                 if (batchSwitch) {
@@ -11404,6 +11588,14 @@
                 const logViewerCopy = target?.closest?.('.yzm-log-viewer-copy');
                 const logViewerClear = target?.closest?.('.yzm-log-viewer-clear');
                 const logFilter = target?.closest?.('[data-yzm-log-level]');
+                const updateNoticeButton = target?.closest?.('[data-yzm-action="showUpdateNotice"]');
+
+                if (updateNoticeButton) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openUpdateNoticeDialog(root, { markSeen: false });
+                    return;
+                }
 
                 if (newButton) {
                     createNewTagPreset(root);
