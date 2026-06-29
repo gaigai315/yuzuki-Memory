@@ -202,7 +202,9 @@
         const depth = Math.max(1, Math.round(Number(settings.contextDepth) || 2));
         const contextItems = getContextChatItems();
         const requestItems = getRequestArrays(body).flatMap((target) => target.items || []);
-        const items = [...contextItems, ...requestItems];
+        const hasContextItems = Array.isArray(contextItems) && contextItems.length > 0;
+        const items = hasContextItems ? contextItems : requestItems;
+        const source = hasContextItems ? 'ctx.chat' : 'requestBody(fallback)';
         if (!items.length) return '';
         const collected = [];
         for (let index = items.length - 1; index >= 0 && collected.length < depth; index -= 1) {
@@ -214,6 +216,7 @@
             if (text) collected.unshift(text);
         }
         console.info('[yuzuki-Memory Vector] 检索上下文收集', {
+            source,
             contextMessages: contextItems.length,
             requestMessages: requestItems.length,
             collected: collected.length,
