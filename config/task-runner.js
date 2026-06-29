@@ -2061,7 +2061,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 } else if (result?.skipped || result?.postponed) {
                     shouldContinueBackfill = false;
                 } else {
-                    if (task.type === 'trace') notifyAutoTaskSuccess(task, result);
+                    notifyAutoTaskSuccess(task, result);
                     const latestState = callbacks.getState?.() || state;
                     const latestPointers = normalizePointers(latestState);
                     shouldContinueBackfill = !!buildPendingAutoTask(latestPointers, getChatLength(), settings, pluginSettings);
