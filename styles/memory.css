@@ -1724,6 +1724,32 @@
     border-radius: 999px;
     box-sizing: border-box;
     font-size: 15px;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-primary-character-avatar.yzm-phone-wechat-avatar,
+#yzm-memory-root .yzm-character-avatar.yzm-phone-wechat-avatar {
+    padding: 0;
+    color: inherit;
+    background: #fff;
+    border: 1px solid rgba(101, 121, 218, 0.24);
+}
+
+#yzm-memory-root .yzm-primary-character-avatar.yzm-phone-wechat-avatar > *,
+#yzm-memory-root .yzm-character-avatar.yzm-phone-wechat-avatar > * {
+    width: 100%;
+    height: 100%;
+    border-radius: inherit;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-primary-character-avatar.yzm-phone-wechat-avatar img,
+#yzm-memory-root .yzm-character-avatar.yzm-phone-wechat-avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: inherit;
 }
 
 #yzm-memory-root .yzm-primary-character-info {
@@ -5429,6 +5455,7 @@
     box-sizing: border-box;
     cursor: pointer;
     font-size: 28px;
+    overflow: hidden;
     transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
 }
 

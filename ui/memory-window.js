@@ -510,6 +510,273 @@
         return getRecordValue(record, getPrimaryColumn(table)) || '未命名';
     }
 
+    function normalizePhoneWechatLookupName(value) {
+        return String(value || '')
+            .trim()
+            .replace(/\s+/g, '')
+            .replace(/[（(][^（）()]*[）)]/g, '')
+            .toLowerCase();
+    }
+
+    let phoneWechatDataLoading = null;
+
+    function getPhoneWechatBaseUrl() {
+        const url = String(window.VirtualPhone?.extensionBaseUrl || '').trim();
+        return url || '';
+    }
+
+    function ensurePhoneWechatDataLoaded() {
+        const phone = window.VirtualPhone;
+        if (!phone?.storage) return null;
+        if (phone.wechatApp?.wechatData || phone.cachedWechatData) return Promise.resolve(phone.wechatApp?.wechatData || phone.cachedWechatData);
+        if (phoneWechatDataLoading) return phoneWechatDataLoading;
+
+        const baseUrl = getPhoneWechatBaseUrl();
+        if (!baseUrl) return null;
+
+        phoneWechatDataLoading = import(new URL('apps/wechat/wechat-data.js', baseUrl).href)
+            .then((module) => {
+                if (!module?.WechatData || !window.VirtualPhone?.storage) return null;
+                const data = window.VirtualPhone.wechatApp?.wechatData || new module.WechatData(window.VirtualPhone.storage);
+                window.VirtualPhone.cachedWechatData = data;
+                if (window.VirtualPhone.wechatApp && window.VirtualPhone.wechatApp.wechatData !== data) {
+                    window.VirtualPhone.wechatApp.wechatData = data;
+                }
+                return data;
+            })
+            .catch((error) => {
+                console.warn('[Yuzuki Memory] 后台加载小手机微信数据失败:', error);
+                return null;
+            })
+            .finally(() => {
+                phoneWechatDataLoading = null;
+                refreshPhoneWechatCharacterAvatars(document.getElementById(ROOT_ID));
+            });
+        return phoneWechatDataLoading;
+    }
+
+    function getPhoneWechatRuntime() {
+        const phone = window.VirtualPhone;
+        if (!phone) return { app: null, data: null };
+        const app = phone.wechatApp || null;
+        const data = app?.wechatData || phone.cachedWechatData || null;
+        if (!data) ensurePhoneWechatDataLoaded();
+        return {
+            app,
+            data,
+        };
+    }
+
+    function getSillyTavernUserAvatar() {
+        try {
+            const selectedAvatarEl = document.querySelector('#user_avatar_block .avatar-container.selected img');
+            if (selectedAvatarEl?.src) return selectedAvatarEl.src;
+            const topBarAvatar = document.querySelector('#rm_button_panel_persona img');
+            if (topBarAvatar?.src) return topBarAvatar.src;
+        } catch (error) {
+            console.warn('[Yuzuki Memory] 获取用户卡头像失败:', error);
+        }
+        return '';
+    }
+
+    function getSillyTavernUserName() {
+        const context = getContext() || {};
+        return String(context.name1 || context.userName || context.playerName || '').trim();
+    }
+
+    function getCharacterWechatLookupNames(table, record) {
+        const names = [
+            getRecordTitle(table, record),
+            getRecordValue(record, '角色名'),
+            getRecordValue(record, '姓名'),
+            getRecordValue(record, '名字'),
+            getRecordValue(record, '昵称'),
+        ];
+        const seen = new Set();
+        return names
+            .map((name) => String(name || '').trim())
+            .filter((name) => {
+                if (!name || name === '未命名') return false;
+                const key = normalizePhoneWechatLookupName(name);
+                if (!key || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+    }
+
+    function getPhoneWechatUserInfo(data) {
+        const info = data?.getUserInfo?.() || {};
+        const stName = getSillyTavernUserName();
+        const stAvatar = getSillyTavernUserAvatar();
+        return {
+            ...info,
+            name: String(info.name || stName || '我').trim(),
+            avatar: String(info.avatar || stAvatar || '').trim(),
+        };
+    }
+
+    function characterRecordMatchesPhoneUser(table, record, data) {
+        const names = getCharacterWechatLookupNames(table, record);
+        if (!names.length) return false;
+        const userInfo = getPhoneWechatUserInfo(data);
+        const userAliases = [
+            userInfo.name,
+            getSillyTavernUserName(),
+            '我',
+            '自己',
+            '本人',
+            '用户',
+            'user',
+            '{{user}}',
+        ];
+        const userKeys = new Set(userAliases.map(normalizePhoneWechatLookupName).filter(Boolean));
+        return names.some((name) => userKeys.has(normalizePhoneWechatLookupName(name)));
+    }
+
+    function findPhoneWechatContact(table, record) {
+        const { data } = getPhoneWechatRuntime();
+        if (!data) return null;
+        if (characterRecordMatchesPhoneUser(table, record, data)) {
+            return {
+                ...getPhoneWechatUserInfo(data),
+                id: 'phone_user',
+                yzmPhoneWechatUser: true,
+            };
+        }
+        const names = getCharacterWechatLookupNames(table, record);
+        for (const name of names) {
+            const contact = data.findContactByNameLoose?.(name, { includeChats: false })
+                || data.getContactByName?.(name);
+            if (contact) return contact;
+        }
+
+        const contacts = Array.isArray(data.getContacts?.()) ? data.getContacts() : [];
+        if (!contacts.length) return null;
+        const targetKeys = new Set(names.map(normalizePhoneWechatLookupName).filter(Boolean));
+        return contacts.find((contact) => {
+            const fields = [
+                contact?.name,
+                contact?.remark,
+                contact?.nickname,
+                contact?.alias,
+                contact?.displayName,
+            ];
+            return fields.some((field) => targetKeys.has(normalizePhoneWechatLookupName(field)));
+        }) || null;
+    }
+
+    function isPhoneWechatImageAvatar(value) {
+        const raw = String(value || '').trim();
+        if (!raw) return false;
+        return /^(https?:\/\/|data:image\/|\/|\.?\/|apps\/wechat\/avatars\/|avatars\/)/i.test(raw)
+            || /^[a-z0-9._-]+\.(png|jpe?g|webp|gif)$/i.test(raw);
+    }
+
+    function normalizePhoneWechatAvatarPath(value) {
+        const raw = String(value || '').trim().replace(/\\/g, '/');
+        if (!raw || raw === '👤' || raw === '👥') return '';
+        if (/^(https?:\/\/|data:image\/|blob:|\/)/i.test(raw)) return raw;
+
+        const baseUrl = getPhoneWechatBaseUrl();
+        if (!baseUrl) return isPhoneWechatImageAvatar(raw) ? raw : '';
+        const cleaned = raw
+            .replace(/^['"]|['"]$/g, '')
+            .replace(/^(?:\.\.?\/)+/g, '')
+            .replace(/^apps\/wechat\/avatars\//i, '')
+            .replace(/^wechat\/avatars\//i, '')
+            .replace(/^avatars\//i, '')
+            .replace(/^\.?\//, '');
+        if (!cleaned || /\s/.test(cleaned)) return '';
+        if (/^(male|female)\d+$/i.test(cleaned)) {
+            return new URL(`apps/wechat/avatars/${cleaned}.png`, baseUrl).href;
+        }
+        if (/^[a-z0-9._-]+\.(png|jpe?g|webp|gif)$/i.test(cleaned)) {
+            return new URL(`apps/wechat/avatars/${cleaned}`, baseUrl).href;
+        }
+        return '';
+    }
+
+    function resolvePhoneWechatAvatarUrl(contact, data) {
+        const directAvatar = normalizePhoneWechatAvatarPath(contact?.avatar);
+        if (directAvatar) return directAvatar;
+        if (!data) return '';
+
+        const keySet = new Set([
+            contact?.id,
+            contact?.contactId,
+            contact?.name,
+            contact?.remark,
+            contact?.nickname,
+        ].filter(Boolean).map((value) => String(value).trim()));
+
+        for (const key of keySet) {
+            const autoAvatar = normalizePhoneWechatAvatarPath(data.getContactAutoAvatar?.(key));
+            if (autoAvatar) return autoAvatar;
+        }
+
+        const autoMap = typeof data.getContactAutoAvatarMap === 'function' ? data.getContactAutoAvatarMap() : null;
+        if (autoMap && typeof autoMap === 'object') {
+            for (const key of keySet) {
+                const mappedAvatar = normalizePhoneWechatAvatarPath(autoMap[key]);
+                if (mappedAvatar) return mappedAvatar;
+            }
+        }
+
+        return '';
+    }
+
+    function renderPhoneWechatAvatarHtml(table, record) {
+        const { app, data } = getPhoneWechatRuntime();
+        const contact = findPhoneWechatContact(table, record);
+        if (!contact) return '';
+        const name = String(contact.name || getRecordTitle(table, record) || '').trim();
+        const avatar = String(contact.avatar || '').trim();
+        const defaultEmoji = contact.yzmPhoneWechatUser ? '😊' : '👤';
+        if (typeof app?.renderAvatar === 'function') {
+            try {
+                return String(app.renderAvatar(avatar, defaultEmoji, name) || '').trim();
+            } catch (error) {
+                console.warn('[Yuzuki Memory] 小手机微信头像渲染失败:', error);
+            }
+        }
+        const avatarUrl = resolvePhoneWechatAvatarUrl(contact, data);
+        if (avatarUrl) {
+            const escaped = avatarUrl
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;');
+            return `<img src="${escaped}" alt="">`;
+        }
+        return '';
+    }
+
+    function applyCharacterAvatarNode(avatar, table, record) {
+        const html = record ? renderPhoneWechatAvatarHtml(table, record) : '';
+        const nextKey = html || '__fallback__';
+        if (avatar.dataset.yzmPhoneWechatAvatarHtml === nextKey && avatar.childNodes.length > 0) return;
+        avatar.dataset.yzmPhoneWechatAvatarHtml = nextKey;
+        avatar.classList.toggle('yzm-phone-wechat-avatar', !!html);
+        avatar.innerHTML = '';
+        if (html) {
+            avatar.innerHTML = html;
+        } else {
+            avatar.appendChild(createIconNode('fa-solid fa-user', ''));
+        }
+    }
+
+    function refreshPhoneWechatCharacterAvatars(root) {
+        const table = getActiveTable();
+        if (!root || table?.id !== 'character_profile') return;
+        root.querySelectorAll('.yzm-primary-character-item[data-yzm-record-id]').forEach((item) => {
+            const avatar = item.querySelector('.yzm-primary-character-avatar');
+            const record = getRecords(table.id).find((entry) => entry.id === item.dataset.yzmRecordId);
+            if (avatar && record) applyCharacterAvatarNode(avatar, table, record);
+        });
+        const detailAvatar = root.querySelector('.yzm-character-view .yzm-character-avatar');
+        if (detailAvatar) applyCharacterAvatarNode(detailAvatar, table, getActiveRecord(table));
+    }
+
     function isBlankSummaryRecord(record) {
         return !getRecordValue(record, '总结内容').trim()
             && !getRecordValue(record, '未解决问题').trim()
@@ -3569,7 +3836,7 @@
 
         const avatar = document.createElement('div');
         avatar.className = 'yzm-primary-character-avatar';
-        avatar.appendChild(createIconNode('fa-solid fa-user', ''));
+        applyCharacterAvatarNode(avatar, table, record);
 
         const content = document.createElement('div');
         content.className = 'yzm-primary-character-info';
@@ -8253,7 +8520,7 @@
         avatar.setAttribute('role', 'button');
         avatar.setAttribute('tabindex', '0');
         avatar.setAttribute('aria-label', '编辑角色');
-        avatar.appendChild(createIconNode('fa-solid fa-user', ''));
+        applyCharacterAvatarNode(avatar, table, record);
 
         const name = document.createElement('div');
         name.className = 'yzm-character-name';
@@ -9061,8 +9328,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化记忆总结搜索功能：支持按楼层数字筛选主线/支线总结，也支持按标题、核心角色、总结正文、未解决问题和备注文字搜索。',
-            '清空记忆总结搜索框后会恢复显示全部总结条目。',
+            '新增与柚月の手机头像联动功能：角色档案头像会自动匹配同名微信联系人头像。',
+            '微信未打开时也会后台读取柚月の手机微信数据；角色档案为用户本人时，会读取当前用户卡头像。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -10734,6 +11001,24 @@
                 if (activeWorkspaceView !== 'api' || activeApiSectionId !== 'requestProbe') return;
                 renderApiWorkspace(root);
             });
+        }
+
+        if (root.dataset.yzmPhoneWechatAvatarBound !== 'true') {
+            root.dataset.yzmPhoneWechatAvatarBound = 'true';
+            let avatarRefreshTimer = null;
+            const scheduleAvatarRefresh = () => {
+                const shell = root.querySelector('.yzm-shell');
+                if (shell?.hidden) return;
+                window.clearTimeout(avatarRefreshTimer);
+                avatarRefreshTimer = window.setTimeout(() => refreshPhoneWechatCharacterAvatars(root), 120);
+            };
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') scheduleAvatarRefresh();
+            });
+            window.addEventListener('focus', scheduleAvatarRefresh);
+            window.addEventListener('phone:panelVisibility', scheduleAvatarRefresh);
+            window.addEventListener('phone:updateGlobalBadge', scheduleAvatarRefresh);
+            window.setInterval(scheduleAvatarRefresh, 2500);
         }
 
         if (root.dataset.yzmApiActionBound !== 'true') {
