@@ -2644,7 +2644,7 @@
     }
 
     function renderSummaryPrimaryList(list, table, activeRecordId) {
-        const records = getPrimaryDisplayRecords(table.id);
+        const records = getPrimaryDisplayRecords(table.id).filter((record) => summaryRecordMatchesPrimarySearch(record));
         const visibleRecords = records.filter((record) => !record.hidden);
         const hiddenRecords = records.filter((record) => record.hidden);
         const sortedRecords = [
@@ -2665,6 +2665,43 @@
             nodes.push(item);
         });
         replacePrimaryListChildren(list, nodes);
+    }
+
+    function getPrimarySearchQuery() {
+        return String(document.getElementById(ROOT_ID)?.querySelector('.yzm-primary-search .yzm-search-input')?.value || '').trim().toLowerCase();
+    }
+
+    function summaryRecordMatchesPrimarySearch(record) {
+        const query = getPrimarySearchQuery();
+        if (!query) return true;
+        if (!record) return false;
+
+        const floorMatches = query.match(/\d+/g) || [];
+        if (floorMatches.length) {
+            const ranges = [
+                parseSummaryFloorRange(getSummaryFloorText(record)),
+                getSummaryRecordTaskRange(record),
+                ...getSummarySegments(record).map((segment) => parseSummaryFloorRange(segment.floor) || (Number.isFinite(Number(segment.floor)) ? { start: Number(segment.floor), end: Number(segment.floor) } : null)),
+            ].filter(Boolean);
+            const matchesFloor = floorMatches.some((value) => {
+                const floor = Number.parseInt(value, 10);
+                if (!Number.isFinite(floor)) return false;
+                return ranges.some((range) => floor >= range.start && floor <= range.end);
+            });
+            if (matchesFloor) return true;
+        }
+
+        const values = record?.values && typeof record.values === 'object' ? record.values : {};
+        const segmentText = getSummarySegments(record)
+            .map((segment) => [segment.floor, segment.summary, segment.unresolved, segment.remark].filter(Boolean).join(' '))
+            .join(' ');
+        const haystack = [
+            getSummaryPrimaryTitle(getTables().find((table) => table.id === 'memory_summary') || getActiveTable(), record),
+            getSummaryFloorText(record),
+            ...Object.values(values).map((value) => String(value || '')),
+            segmentText,
+        ].join(' ').toLowerCase();
+        return haystack.includes(query);
     }
 
     function createPrimaryHiddenDivider() {
@@ -8994,12 +9031,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '剧情摘要页面改为按日期分组的折叠视图，长时间线会按天收纳，减少分散占用。',
-            '展开某一天后，内部摘要以紧凑时间段行展示，方便快速扫读同一天的剧情进度。',
-            '剧情摘要支持同一天紧凑写法：[x年x月x日,08:00-09:15]|内容:...;[09:25-12:15]|内容:...，后续时间段会自动继承当天日期。',
-            '分批追溯写入同一天剧情摘要时，会按日期和时间合并排序，并跳过完全重复的时间段内容。',
-            '每条剧情摘要左侧圆点仍可点击编辑对应条目，原有主线/支线摘要数据格式保持兼容。',
-            '修复 localStorage 容量超限时会导致填表结果保存失败的问题；当前会话记忆现在以酒馆聊天文件元数据为主存储，localStorage 仅作为缓存/迁移来源。',
+            '优化记忆总结搜索功能：支持按楼层数字筛选主线/支线总结，也支持按标题、核心角色、总结正文、未解决问题和备注文字搜索。',
+            '清空记忆总结搜索框后会恢复显示全部总结条目。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11331,6 +11364,12 @@
         if (primarySearchInput && primarySearchInput.dataset.yzmBound !== 'true') {
             primarySearchInput.dataset.yzmBound = 'true';
             primarySearchInput.addEventListener('input', () => {
+                const table = getActiveTable();
+                if (table && isSummaryLikeTable(table.id)) {
+                    renderPrimaryList(root);
+                    bindPanelInteractions(root);
+                    return;
+                }
                 const query = primarySearchInput.value.trim().toLowerCase();
                 root.querySelectorAll('.yzm-primary-item').forEach((item) => {
                     const name = item.textContent?.toLowerCase() || '';
