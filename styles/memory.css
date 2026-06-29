@@ -1,4 +1,5 @@
-#yzm-memory-root {
+#yzm-memory-root,
+#yzm-memory-global-modal-root {
     position: fixed !important;
     inset: 0 !important;
     top: 0 !important;
@@ -41,7 +42,13 @@
     --yzm-mobile-primary-width: 132px;
 }
 
-#yzm-memory-root .yzm-shell[data-yzm-theme="dark"] {
+#yzm-memory-global-modal-root {
+    padding: 0;
+    pointer-events: none;
+}
+
+#yzm-memory-root .yzm-shell[data-yzm-theme="dark"],
+#yzm-memory-global-modal-root[data-yzm-theme="dark"] {
     --yzm-bg: rgba(8, 15, 35, 0.92);
     --yzm-panel-bg: rgba(10, 18, 42, 0.78);
     --yzm-surface: rgba(18, 29, 62, 0.72);
@@ -6576,7 +6583,8 @@
     overflow-wrap: anywhere;
 }
 
-#yzm-memory-root .yzm-structure-modal {
+#yzm-memory-root .yzm-structure-modal,
+#yzm-memory-global-modal-root .yzm-structure-modal {
     position: absolute;
     inset: 0;
     z-index: 20;
@@ -6589,7 +6597,8 @@
     pointer-events: auto;
 }
 
-#yzm-memory-root .yzm-structure-dialog {
+#yzm-memory-root .yzm-structure-dialog,
+#yzm-memory-global-modal-root .yzm-structure-dialog {
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -6605,12 +6614,87 @@
     box-shadow: var(--yzm-shadow);
 }
 
+#yzm-memory-global-modal-root .yzm-structure-header,
+#yzm-memory-global-modal-root .yzm-task-result-actions,
+#yzm-memory-global-modal-root .yzm-auto-task-actions,
+#yzm-memory-global-modal-root .yzm-api-button,
+#yzm-memory-global-modal-root .yzm-add-table-confirm,
+#yzm-memory-global-modal-root .yzm-structure-close {
+    box-sizing: border-box;
+    font: inherit;
+}
+
+#yzm-memory-global-modal-root .yzm-structure-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+#yzm-memory-global-modal-root .yzm-structure-close {
+    position: relative;
+    z-index: 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    padding: 0;
+    color: inherit;
+    background: transparent;
+    border: 0;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 22px;
+    line-height: 1;
+    touch-action: manipulation;
+}
+
+#yzm-memory-global-modal-root .yzm-structure-close:hover,
+#yzm-memory-global-modal-root .yzm-add-table-confirm:hover {
+    background: var(--yzm-hover);
+}
+
+#yzm-memory-global-modal-root .yzm-add-table-confirm,
+#yzm-memory-global-modal-root .yzm-api-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 30px;
+    padding: 0 9px;
+    color: var(--yzm-text);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 9px;
+    cursor: pointer;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+#yzm-memory-global-modal-root .yzm-config-number-input {
+    width: 82px;
+    min-height: 34px;
+    padding: 0 10px;
+    color: var(--yzm-text) !important;
+    background: var(--yzm-input-bg) !important;
+    border: 1px solid var(--yzm-border);
+    border-radius: 9px;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 14px;
+    outline: 0;
+    appearance: textfield;
+    -moz-appearance: textfield;
+}
+
 #yzm-memory-root .yzm-structure-header {
     justify-content: space-between;
     gap: 10px;
 }
 
-#yzm-memory-root .yzm-structure-title {
+#yzm-memory-root .yzm-structure-title,
+#yzm-memory-global-modal-root .yzm-structure-title {
     color: var(--yzm-title);
     font-size: 15px;
     line-height: 1.2;
@@ -6625,11 +6709,14 @@
 }
 
 #yzm-memory-root .yzm-task-result-dialog,
-#yzm-memory-root .yzm-auto-task-dialog {
+#yzm-memory-root .yzm-auto-task-dialog,
+#yzm-memory-global-modal-root .yzm-task-result-dialog,
+#yzm-memory-global-modal-root .yzm-auto-task-dialog {
     width: min(720px, 100%);
 }
 
-#yzm-memory-root .yzm-task-result-dialog {
+#yzm-memory-root .yzm-task-result-dialog,
+#yzm-memory-global-modal-root .yzm-task-result-dialog {
     max-height: min(82vh, 720px);
 }
 
@@ -6665,13 +6752,16 @@
 }
 
 #yzm-memory-root .yzm-task-result-meta,
-#yzm-memory-root .yzm-auto-task-info {
+#yzm-memory-root .yzm-auto-task-info,
+#yzm-memory-global-modal-root .yzm-task-result-meta,
+#yzm-memory-global-modal-root .yzm-auto-task-info {
     color: var(--yzm-muted);
     font-size: 13px;
     line-height: 1.5;
 }
 
-#yzm-memory-root .yzm-task-result-preview {
+#yzm-memory-root .yzm-task-result-preview,
+#yzm-memory-global-modal-root .yzm-task-result-preview {
     width: 100%;
     min-height: 260px;
     max-height: 52vh;
@@ -6691,30 +6781,35 @@
     -webkit-overflow-scrolling: touch;
 }
 
-#yzm-memory-root .yzm-task-result-compare {
+#yzm-memory-root .yzm-task-result-compare,
+#yzm-memory-global-modal-root .yzm-task-result-compare {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 10px;
     min-width: 0;
 }
 
-#yzm-memory-root .yzm-task-result-compare-pane {
+#yzm-memory-root .yzm-task-result-compare-pane,
+#yzm-memory-global-modal-root .yzm-task-result-compare-pane {
     display: grid;
     gap: 6px;
     min-width: 0;
 }
 
-#yzm-memory-root .yzm-task-result-compare-pane strong {
+#yzm-memory-root .yzm-task-result-compare-pane strong,
+#yzm-memory-global-modal-root .yzm-task-result-compare-pane strong {
     color: var(--yzm-title);
     font-size: 13px;
     line-height: 1.25;
 }
 
-#yzm-memory-root .yzm-task-result-compare-text {
+#yzm-memory-root .yzm-task-result-compare-text,
+#yzm-memory-global-modal-root .yzm-task-result-compare-text {
     min-height: 280px;
 }
 
-#yzm-memory-root .yzm-auto-task-postpone {
+#yzm-memory-root .yzm-auto-task-postpone,
+#yzm-memory-global-modal-root .yzm-auto-task-postpone {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -6722,12 +6817,15 @@
     font-size: 13px;
 }
 
-#yzm-memory-root .yzm-auto-task-postpone .yzm-config-number-input {
+#yzm-memory-root .yzm-auto-task-postpone .yzm-config-number-input,
+#yzm-memory-global-modal-root .yzm-auto-task-postpone .yzm-config-number-input {
     width: 84px;
 }
 
 #yzm-memory-root .yzm-task-result-actions,
-#yzm-memory-root .yzm-auto-task-actions {
+#yzm-memory-root .yzm-auto-task-actions,
+#yzm-memory-global-modal-root .yzm-task-result-actions,
+#yzm-memory-global-modal-root .yzm-auto-task-actions {
     display: flex;
     justify-content: flex-end;
     gap: 8px;
@@ -7441,7 +7539,8 @@
         font-size: 12px;
     }
 
-    #yzm-memory-root .yzm-task-result-compare {
+    #yzm-memory-root .yzm-task-result-compare,
+    #yzm-memory-global-modal-root .yzm-task-result-compare {
         grid-template-columns: minmax(0, 1fr);
     }
 

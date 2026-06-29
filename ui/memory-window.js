@@ -6,6 +6,7 @@
     const EXTENSION_ENTRY_ID = 'yzm-memory-extension-entry';
     const EXTENSION_ROW_ID = 'yzm-memory-extension-row';
     const EXTENSION_ICON_ID = 'yzm-memory-extension-icon';
+    const GLOBAL_MODAL_ROOT_ID = 'yzm-memory-global-modal-root';
     const FLOATING_ROOT_ID = 'yzm-memory-floating-root';
     const FLOATING_BUTTON_ID = 'yzm-memory-floating-button';
     const DISPLAY_NAME = '柚月の记忆';
@@ -154,6 +155,7 @@
         traceBatchEnabled: true,
         traceBatchSize: 40,
         traceBatchDelay: 2,
+        traceDirectTrigger: true,
         summaryBatchEnabled: true,
         summaryBatchSize: 40,
         traceRunMode: 'confirm',
@@ -1408,14 +1410,8 @@
         const entries = Object.entries(visibility);
         const state = getState();
         let changed = false;
-        const plotSummaryTable = getTables().find((entry) => entry.id === 'plot_summary');
-        if (plotSummaryTable?.hidden === true) {
-            plotSummaryTable.hidden = false;
-            changed = true;
-        }
         if (!entries.length) return changed;
         entries.forEach(([tableId, visible]) => {
-            if (tableId === 'plot_summary' && visible === false) return;
             const table = getTables().find((entry) => entry.id === tableId);
             if (!table || isFixedTable(tableId)) return;
             const nextHidden = visible === false;
@@ -1497,6 +1493,7 @@
             traceBatchEnabled: typeof source.traceBatchEnabled === 'boolean' ? source.traceBatchEnabled : DEFAULT_PLUGIN_SETTINGS.traceBatchEnabled,
             traceBatchSize: Math.round(normalizeNumberSetting(source.traceBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchSize, 0)),
             traceBatchDelay: Math.round(normalizeNumberSetting(source.traceBatchDelay, 0, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchDelay, 0)),
+            traceDirectTrigger: typeof source.traceDirectTrigger === 'boolean' ? source.traceDirectTrigger : DEFAULT_PLUGIN_SETTINGS.traceDirectTrigger,
             summaryBatchEnabled: typeof source.summaryBatchEnabled === 'boolean' ? source.summaryBatchEnabled : DEFAULT_PLUGIN_SETTINGS.summaryBatchEnabled,
             summaryBatchSize: Math.round(normalizeNumberSetting(source.summaryBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.summaryBatchSize, 0)),
             traceRunMode: source.traceRunMode === 'silent' ? 'silent' : DEFAULT_PLUGIN_SETTINGS.traceRunMode,
@@ -8633,7 +8630,19 @@
                 '多等几层再执行，让本批末尾剧情有后续上下文；这几层不会写入本批。',
                 'fa-regular fa-clock',
                 createTraceUnitInput(createConfigNumberInput(settings.traceBatchDelay, 'traceBatchDelay'), '层')
-            )
+            ),
+            createPluginConfigRow(
+                '发起模式',
+                '触发前静默发起；关闭后达到条件时先弹窗确认。',
+                'fa-solid fa-bolt',
+                createConfigSwitch(settings.traceDirectTrigger, 'traceDirectTrigger')
+            ),
+            createTraceRunModeSettings({
+                radioName: 'yzm-config-trace-run-mode',
+                confirmLabel: '弹窗确认（推荐）',
+                confirmDesc: '每批处理后弹窗确认，便于检查填表结果再写入。',
+                silentDesc: '自动完成全部批次并直接写入，完成后仅显示最终结果。',
+            })
         );
         return panel;
     }
@@ -9483,7 +9492,17 @@
     }
 
     function getGlobalModalHost(root) {
-        return root || document.getElementById(ROOT_ID) || document.body;
+        const memoryRoot = document.getElementById(ROOT_ID) || root;
+        let host = document.getElementById(GLOBAL_MODAL_ROOT_ID);
+        if (!host) {
+            host = document.createElement('div');
+            host.id = GLOBAL_MODAL_ROOT_ID;
+            host.className = 'yzm-global-modal-root';
+            const shell = memoryRoot?.querySelector?.('.yzm-shell');
+            if (shell?.dataset?.yzmTheme) host.dataset.yzmTheme = shell.dataset.yzmTheme;
+            document.body.appendChild(host);
+        }
+        return host;
     }
 
     function removeModal(root, selector = '.yzm-structure-modal') {
@@ -9530,7 +9549,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '新增与柚月の手机头像联动功能：角色档案头像会自动匹配同名微信联系人头像。',
+            '优化完善批量填表的静默/非静默模式。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11853,6 +11872,15 @@
                 if (target?.matches?.('.yzm-auto-summary-number-input[data-yzm-auto-summary-setting]')) {
                     normalizeAutoSummaryNumberInput(target);
                     updateAutoSummarySetting(target.dataset.yzmAutoSummarySetting, Number(target.value));
+                    return;
+                }
+                if (target instanceof HTMLInputElement && target.name === 'yzm-config-trace-run-mode') {
+                    const panel = target.closest('.yzm-fill-batch-settings');
+                    panel?.querySelectorAll('.yzm-trace-radio-active').forEach((node) => {
+                        node.classList.remove('yzm-trace-radio-active');
+                    });
+                    target.closest('.yzm-trace-radio')?.classList.add('yzm-trace-radio-active');
+                    updatePluginSetting('traceRunMode', target.value === 'silent' ? 'silent' : 'confirm');
                     return;
                 }
                 if (!target?.matches?.('.yzm-config-number-input[data-yzm-plugin-setting]')) return;
