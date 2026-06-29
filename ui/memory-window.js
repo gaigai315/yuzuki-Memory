@@ -9577,6 +9577,74 @@
         }, 120);
     }
 
+    function isSummaryCoreCharacterColumn(column = '') {
+        return /^(核心角色|角色名|主视角|character)$/i.test(cleanColumnName(column));
+    }
+
+    function uniqueNormalizedColumns(columns = []) {
+        const seen = new Set();
+        return columns
+            .map(normalizeColumnDefinition)
+            .filter(Boolean)
+            .filter((column) => {
+                const key = cleanColumnName(column);
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+    }
+
+    function ensureMemorySummaryColumns(columns = [], kind = 'main') {
+        const normalized = uniqueNormalizedColumns(columns);
+        const hasTitle = normalized.some((column) => cleanColumnName(column) === '总结标题');
+        const hasCore = normalized.some(isSummaryCoreCharacterColumn);
+        const next = hasTitle ? normalized : ['总结标题', ...normalized];
+        if (kind === 'branch' && !hasCore) next.splice(1, 0, '核心角色');
+        return next.filter((column) => kind === 'branch' || !isSummaryCoreCharacterColumn(column));
+    }
+
+    function getSpecialStructureSets(table) {
+        if (table?.id === 'plot_summary') {
+            const columns = table.columns || [];
+            const main = columns.find((column) => cleanColumnName(column) === '主线') || '#主线';
+            const branch = columns.find((column) => cleanColumnName(column) === '支线') || '#支线';
+            return [
+                { key: 'main', label: '主线摘要结构', columns: [main] },
+                { key: 'branch', label: '支线摘要结构', columns: [branch] },
+            ];
+        }
+        if (table?.id === 'memory_summary') {
+            const columns = table.columns?.length ? table.columns : ['总结标题', '核心角色', '楼层数', '总结内容', '未解决问题', '备注'];
+            return [
+                { key: 'main', label: '主线总结结构', columns: ensureMemorySummaryColumns(columns, 'main') },
+                { key: 'branch', label: '支线总结结构', columns: ensureMemorySummaryColumns(columns, 'branch') },
+            ];
+        }
+        return null;
+    }
+
+    function createStructureColumnsField(labelText, columns = []) {
+        const field = document.createElement('label');
+        field.className = 'yzm-record-field yzm-record-field-wide';
+        const label = document.createElement('span');
+        label.className = 'yzm-record-field-label';
+        label.textContent = labelText;
+        const textarea = document.createElement('textarea');
+        textarea.className = 'yzm-structure-columns-input';
+        textarea.value = columns.join(', ');
+        textarea.setAttribute('aria-label', labelText);
+        textarea.dataset.yzmStructureColumns = labelText;
+        field.append(label, textarea);
+        return field;
+    }
+
+    function readStructureColumns(textarea) {
+        return String(textarea?.value || '')
+            .split(/[,，\n]/)
+            .map(normalizeColumnDefinition)
+            .filter(Boolean);
+    }
+
     function openTableEditor(root, item = getActiveTableItem(root)) {
         const tableId = item?.dataset?.yzmTableId;
         const table = getTables().find((entry) => entry.id === tableId);
@@ -9611,10 +9679,23 @@
         nameInput.value = table.name;
         nameInput.setAttribute('aria-label', '表格名称');
 
-        const columnsInput = document.createElement('textarea');
-        columnsInput.className = 'yzm-structure-columns-input';
-        columnsInput.value = table.columns.join(', ');
-        columnsInput.setAttribute('aria-label', '列名列表');
+        const specialSets = getSpecialStructureSets(table);
+        let columnsInput = null;
+        const columnsWrap = document.createElement('div');
+        columnsWrap.className = 'yzm-record-fields';
+        if (specialSets) {
+            specialSets.forEach((set) => {
+                const field = createStructureColumnsField(set.label, set.columns);
+                field.querySelector('textarea').dataset.yzmStructureKind = set.key;
+                columnsWrap.appendChild(field);
+            });
+        } else {
+            columnsInput = document.createElement('textarea');
+            columnsInput.className = 'yzm-structure-columns-input';
+            columnsInput.value = table.columns.join(', ');
+            columnsInput.setAttribute('aria-label', '列名列表');
+            columnsWrap.appendChild(columnsInput);
+        }
 
         const iconPicker = document.createElement('div');
         iconPicker.className = 'yzm-icon-picker';
@@ -9637,7 +9718,7 @@
         actions.appendChild(save);
 
         header.append(title, close);
-        dialog.append(header, nameInput, iconPicker, columnsInput, hint, actions);
+        dialog.append(header, nameInput, iconPicker, columnsWrap, hint, actions);
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
@@ -9656,10 +9737,18 @@
             const nextName = nameInput.value.trim() || table.name;
             table.name = nextName;
             table.icon = nextIcon;
-            table.columns = columnsInput.value
-                .split(/[,，\n]/)
-                .map(normalizeColumnDefinition)
-                .filter(Boolean);
+            if (specialSets) {
+                const mainColumns = readStructureColumns(columnsWrap.querySelector('[data-yzm-structure-kind="main"]'));
+                const branchColumns = readStructureColumns(columnsWrap.querySelector('[data-yzm-structure-kind="branch"]'));
+                table.columns = table.id === 'memory_summary'
+                    ? uniqueNormalizedColumns([
+                        ...ensureMemorySummaryColumns(mainColumns, 'main'),
+                        ...ensureMemorySummaryColumns(branchColumns, 'branch'),
+                    ])
+                    : uniqueNormalizedColumns([...mainColumns, ...branchColumns]);
+            } else {
+                table.columns = readStructureColumns(columnsInput);
+            }
 
             item.querySelector('[data-yzm-table-name]')?.replaceChildren(createTableIcon(table), document.createTextNode(nextName));
 
@@ -10433,6 +10522,16 @@
         return fields;
     }
 
+    function createMainSummaryRecordFields(table, record) {
+        const fields = document.createElement('div');
+        fields.className = 'yzm-record-fields yzm-summary-main-record-fields';
+        ensureMemorySummaryColumns(table?.columns || [], 'main').forEach((column) => {
+            const name = cleanColumnName(column);
+            fields.appendChild(createRecordInput(name, getRecordValue(record, name), isRecordEditorMultilineField(table, name)));
+        });
+        return fields;
+    }
+
     function refreshSummarySegmentEditorTitles(fields) {
         fields.querySelectorAll('.yzm-summary-segment-editor').forEach((block, index) => {
             const title = block.querySelector('.yzm-summary-segment-editor-header strong');
@@ -10451,6 +10550,7 @@
 
     function isRecordEditorMultilineField(table, column) {
         if (table?.id === 'plot_summary') return column === '主线' || column === '支线';
+        if (table?.id === 'memory_summary') return ['核心角色', '总结内容', '未解决问题', '备注'].includes(cleanColumnName(column));
         return getCharacterDetailColumns(table).includes(column);
     }
 
@@ -10639,9 +10739,12 @@
         close.setAttribute('aria-label', `关闭编辑${editorLabel}`);
         close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
 
-        const isBranchSummaryRecord = table.id === 'memory_summary' && getSummaryKind(record) === 'branch';
-        const fields = isBranchSummaryRecord ? createBranchSummaryRecordFields(table, record) : document.createElement('div');
-        if (!isBranchSummaryRecord) {
+        const isMemorySummaryRecord = table.id === 'memory_summary';
+        const isBranchSummaryRecord = isMemorySummaryRecord && getSummaryKind(record) === 'branch';
+        const fields = isBranchSummaryRecord
+            ? createBranchSummaryRecordFields(table, record)
+            : (isMemorySummaryRecord ? createMainSummaryRecordFields(table, record) : document.createElement('div'));
+        if (!isBranchSummaryRecord && !isMemorySummaryRecord) {
             fields.className = 'yzm-record-fields';
             table.columns.forEach((column) => {
                 const name = cleanColumnName(column);
@@ -10734,10 +10837,14 @@
                 return;
             }
 
-            record.values = Object.fromEntries((table.columns || []).map((column) => {
+            const recordColumns = isMemorySummaryRecord
+                ? ensureMemorySummaryColumns(table.columns || [], isBranchSummaryRecord ? 'branch' : 'main')
+                : (table.columns || []);
+            record.values = Object.fromEntries(recordColumns.map((column) => {
                 const name = cleanColumnName(column);
                 return [name, values[name] || ''];
             }));
+            if (isMemorySummaryRecord && !isBranchSummaryRecord) record.values.核心角色 = '';
             const records = getRecords(table.id);
             if (isNewRecord) records.push(record);
             const mergedRecord = isBranchSummaryRecord ? mergeBranchSummaryIntoExisting(table, record) : null;
