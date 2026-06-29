@@ -11,6 +11,7 @@
     let pollTimer = null;
     let sessionSwitching = false;
     let chatSaveTimer = null;
+    const quotaBlockedSessions = new Set();
 
     function getContext() {
         if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') {
@@ -98,10 +99,11 @@
         return error?.name === 'QuotaExceededError' || error?.code === 22;
     }
 
-    function cleanupLocalStorageForQuota(sessionId = getCurrentSessionId()) {
+    function cleanupLocalStorageForQuota(sessionId = getCurrentSessionId(), options = {}) {
         let cleaned = 0;
         const primaryKey = getPrimaryStorageKey(sessionId);
-        const keepKeys = new Set([primaryKey].filter(Boolean));
+        const keepCurrent = options.keepCurrent !== false;
+        const keepKeys = new Set(keepCurrent ? [primaryKey].filter(Boolean) : []);
         try {
             Object.keys(localStorage).forEach((key) => {
                 const shouldRemove = key.startsWith('yzm_memory_branch_snapshots:')
@@ -114,6 +116,17 @@
             console.warn('[yuzuki-Memory] Failed to cleanup localStorage quota pressure.', error);
         }
         return cleaned;
+    }
+
+    function cleanupMemoryCache(options = {}) {
+        const sessionId = options.sessionId || getCurrentSessionId();
+        const cleaned = cleanupLocalStorageForQuota(sessionId, { keepCurrent: options.keepCurrent !== false });
+        if (options.keepCurrent === false && sessionId) quotaBlockedSessions.delete(sessionId);
+        return {
+            cleaned,
+            sessionId,
+            keptCurrent: options.keepCurrent !== false,
+        };
     }
 
     function writePayloadToLocalStorage(keys, payload, sessionId) {
@@ -135,10 +148,14 @@
     }
 
     function tryWritePayloadToLocalStorage(keys, payload, sessionId) {
+        if (sessionId && quotaBlockedSessions.has(sessionId)) return false;
         try {
-            return writePayloadToLocalStorage(keys, payload, sessionId);
+            const saved = writePayloadToLocalStorage(keys, payload, sessionId);
+            if (saved && sessionId) quotaBlockedSessions.delete(sessionId);
+            return saved;
         } catch (error) {
             if (!isQuotaExceeded(error)) throw error;
+            if (sessionId) quotaBlockedSessions.add(sessionId);
             console.warn('[yuzuki-Memory] localStorage quota still exceeded; chat metadata save will be used as primary storage.', {
                 sessionId,
                 payloadLength: JSON.stringify(payload).length,
@@ -564,5 +581,6 @@
         isSessionSwitching,
         getStorageKey,
         getDebugInfo,
+        cleanupMemoryCache,
     });
 })();

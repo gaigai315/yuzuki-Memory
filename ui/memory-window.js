@@ -2034,6 +2034,24 @@
         closeMoreMenu(root);
     }
 
+    function cleanupMemoryCache(root) {
+        const storage = getStorage();
+        if (!storage?.cleanupMemoryCache) {
+            window.alert('存储模块尚未加载，暂时无法清理缓存。');
+            return;
+        }
+        if (!window.confirm('确定清理插件本地缓存吗？\n\n将清理旧聊天缓存和分支快照，当前聊天记忆会先保存到酒馆聊天元数据中。不会删除 API 预设、提示词方案或全局设置。')) return;
+
+        saveState({ force: true, immediate: true });
+        const result = storage.cleanupMemoryCache({ keepCurrent: false });
+        closeMoreMenu(root);
+        if (typeof toastr !== 'undefined') {
+            toastr.success(`已清理 ${result.cleaned || 0} 项本地缓存。`, '柚月记忆', { timeOut: 3000 });
+        } else {
+            window.alert(`已清理 ${result.cleaned || 0} 项本地缓存。`);
+        }
+    }
+
     function resetManualPointers(options = {}) {
         const state = getState();
         state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
@@ -2215,6 +2233,7 @@
             createIconButton('导出', 'fa-solid fa-file-export', 'yzm-top-more-item'),
             createIconButton('导入', 'fa-solid fa-file-import', 'yzm-top-more-item'),
             createThemeButton(shell, 'yzm-top-more-item yzm-theme-button'),
+            createIconButton('清理缓存', 'fa-solid fa-broom', 'yzm-top-more-item yzm-top-clean-cache'),
             createIconButton('重置结构', 'fa-solid fa-rotate-right', 'yzm-top-more-item yzm-top-reset-structure')
         );
 
@@ -10848,6 +10867,16 @@
                 event.preventDefault();
                 event.stopPropagation();
                 resetCurrentChatState(root);
+            });
+        }
+
+        const cleanCacheButton = root.querySelector('.yzm-top-clean-cache');
+        if (cleanCacheButton && cleanCacheButton.dataset.yzmBound !== 'true') {
+            cleanCacheButton.dataset.yzmBound = 'true';
+            cleanCacheButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                cleanupMemoryCache(root);
             });
         }
 
