@@ -4987,6 +4987,27 @@
         else if (action === 'summaryOptimize') result = await YuzukiMemory.TaskRunner.runSummaryOptimize(state, taskOptions);
         else return { success: false, error: '未知任务类型。' };
 
+        if (!result?.success && String(result?.text || result?.preview || '').trim()) {
+            const confirmation = await openTaskResultConfirmDialog(ensureRoot(), {
+                title: `${getTaskActionLabel(action)}结果需要修正`,
+                description: options.batchIndex
+                    ? `第 ${options.batchIndex}/${options.batchTotal} 批，范围 ${options.start}-${options.end}（不含 ${options.end}）没有解析到有效写入。可直接修改模型返回内容后再次确认写入。`
+                    : '模型返回内容没有解析到有效写入。可直接修改返回内容后再次确认写入。',
+                result,
+                compare: false,
+            });
+            if (!confirmation || confirmation.cancelled || confirmation.action === 'cancel') {
+                taskRunnerStopRequested = true;
+                taskRunnerAbortController?.abort?.();
+                return { ...result, cancelled: true, error: result.error || '用户取消写入。' };
+            }
+            if (confirmation && typeof confirmation === 'object' && 'text' in confirmation) {
+                result = YuzukiMemory.TaskRunner.rebuildTaskResultFromText(action, result, confirmation.text);
+                if (!result?.success) return result;
+                state = getState();
+                result = commitTaskResult(action, state, result);
+            }
+        }
         if (!result?.success) return result;
         if (!options.silent) {
             const confirmation = await openTaskResultConfirmDialog(ensureRoot(), {
