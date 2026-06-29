@@ -696,9 +696,10 @@
                 console.warn('[yuzuki-Memory Vector] rerank 跳过：RerankClient 未加载');
             }
 
-            const finalThreshold = rerankSettings.enabled ? 0.001 : settings.threshold;
-            const finalResults = candidates
-                .filter((item) => item.score >= finalThreshold)
+            const finalThreshold = rerankSettings.enabled ? null : settings.threshold;
+            const finalResults = (rerankSettings.enabled
+                ? candidates
+                : candidates.filter((item) => item.score >= finalThreshold))
                 .slice(0, targetCount);
             console.info('[yuzuki-Memory Vector] 搜索输出', {
                 count: finalResults.length,
