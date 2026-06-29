@@ -4696,7 +4696,7 @@
                 createIconNode('fa-solid fa-arrow-right', 'yzm-trace-range-arrow'),
                 createApiField('结束楼层', createTraceUnitInput(endInput, '层'))
             ),
-            createTraceHint(`填写酒馆正文楼层号，起止都包含；单层可填 ${lastFloorNumber}-${lastFloorNumber}。当前末楼层号 ${lastFloorNumber}，总楼层 ${totalFloors}，最大可填 ${lastFloorNumber}`),
+            createTraceHint(`楼层范围采用左闭右开区间，包含起始楼层，不包含结束楼层。当前总楼层 ${totalFloors}，最高楼层号 ${lastFloorNumber}。`),
         ]);
     }
 
@@ -4759,7 +4759,7 @@
                 createIconNode('fa-solid fa-arrow-right', 'yzm-trace-range-arrow'),
                 createApiField('结束楼层', createTraceUnitInput(endInput, '层'))
             ),
-            createTraceHint(`填写酒馆正文楼层号，起止都包含；单层可填 ${lastFloorNumber}-${lastFloorNumber}。当前末楼层号 ${lastFloorNumber}，总楼层 ${totalFloors}，最大可填 ${lastFloorNumber}`),
+            createTraceHint(`楼层范围采用左闭右开区间，包含起始楼层，不包含结束楼层。当前总楼层 ${totalFloors}，最高楼层号 ${lastFloorNumber}。`),
         ]);
     }
 
@@ -4953,17 +4953,17 @@
         const startFloor = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="start"]')?.value, 0, lastFloorNumber, 0, 0));
         const endFloor = Math.round(normalizeNumberSetting(panel?.querySelector('[data-yzm-trace-range="end"]')?.value, 0, lastFloorNumber, lastFloorNumber, 0));
         const fromFloor = Math.min(startFloor, endFloor);
-        const toFloorInclusive = Math.max(startFloor, endFloor);
+        const toFloorExclusive = Math.max(startFloor, endFloor);
         return {
             start: fromFloor,
-            end: Math.min(toFloorInclusive + 1, totalFloors),
+            end: Math.min(toFloorExclusive, totalFloors),
         };
     }
 
     function formatTaskDisplayRange(start, end) {
         const from = Math.max(0, Math.round(Number(start) || 0));
         const exclusiveEnd = Math.max(from, Math.round(Number(end) || 0));
-        return `${from}-${Math.max(from, exclusiveEnd - 1)}`;
+        return `${from}-${exclusiveEnd}`;
     }
 
     function getTaskPanelOptions(panel) {

@@ -1635,11 +1635,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     function buildTaskRangeText(range, kind = 'trace') {
         const start = Math.max(0, Math.round(Number(range?.start) || 0));
         const end = Math.max(start, Math.round(Number(range?.end) || 0));
+        const total = Math.max(0, Math.round(Number(range?.total) || 0));
+        const lastFloor = Math.max(0, total - 1);
         const label = kind === 'summary' ? '总结' : '追溯填表';
         return compactLines([
             `【本次${label}任务】`,
             `处理楼层范围：${start} ~ ${end}（左闭右开，不含 ${end}）`,
-            `实际聊天条目数：${Array.isArray(range?.messages) ? range.messages.length : 0}`,
+            `当前总楼层：${total}；最高楼层号：${lastFloor}。`,
+            `实际处理聊天条目数：${Array.isArray(range?.messages) ? range.messages.length : 0}`,
             '聊天内容已按原始楼层编号标注为 [楼层 N]。',
         ]);
     }
