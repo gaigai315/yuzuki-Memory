@@ -500,13 +500,34 @@
                 if (reasoning) fullReasoning += reasoning;
                 if (content) fullText += content;
             } catch (_error) {
-                // Ignore malformed keepalive/debug lines in SSE text fallback.
+                const fallback = extractMalformedStreamText(jsonText);
+                if (fallback.reasoning) fullReasoning += fallback.reasoning;
+                if (fallback.content) fullText += fallback.content;
             }
         });
         return {
             text: stripThinking(fullText || fullReasoning),
             truncated,
         };
+    }
+
+    function extractMalformedStreamText(jsonText = '') {
+        const raw = String(jsonText || '').trim();
+        if (!raw || raw.includes('[DONE]')) return { content: '', reasoning: '' };
+
+        const readJsonStringField = (field) => {
+            const match = raw.match(new RegExp(`"${field}"\\s*:\\s*"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"`));
+            if (!match?.[1]) return '';
+            try {
+                return JSON.parse(`"${match[1]}"`);
+            } catch {
+                return match[1];
+            }
+        };
+
+        const content = readJsonStringField('content') || readJsonStringField('text');
+        const reasoning = readJsonStringField('reasoning_content');
+        return { content: content || (reasoning ? '' : raw), reasoning };
     }
 
     function formatResponseParseError(error, response, rawText = '') {
@@ -561,7 +582,9 @@
                         if (reasoning) fullReasoning += reasoning;
                     } catch (error) {
                         if (/安全策略|内容被|unauthori|csrf|forbidden/i.test(String(error?.message || ''))) throw error;
-                        if (jsonText.trim() && !jsonText.includes('[DONE]') && !jsonText.trim().startsWith('{')) fullText += jsonText;
+                        const fallback = extractMalformedStreamText(jsonText);
+                        if (fallback.content) fullText += fallback.content;
+                        if (fallback.reasoning) fullReasoning += fallback.reasoning;
                     }
                 }
                 if (done) break;
