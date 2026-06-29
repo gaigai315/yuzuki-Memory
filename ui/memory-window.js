@@ -3784,12 +3784,15 @@
             const book = store.getBook();
             if (!book) return;
             try {
+                const stats = store.getBookStats(book);
+                const force = stats.total > 0 && stats.done >= stats.total;
                 const result = await store.vectorizeBook(store.selectedBookId, (done, total) => {
                     const title = root.querySelector('.yzm-vector-detail-title-text');
                     if (title) title.textContent = `${book.name}（向量化 ${done}/${total}）`;
-                });
+                }, { force });
                 refreshVectorAfterAction(root);
-                window.alert(result.errors ? `向量化完成：成功 ${result.count} 条，失败 ${result.errors} 条。` : `向量化完成：新增 ${result.count} 条。`);
+                const actionText = force ? '重新向量化完成' : '向量化完成';
+                window.alert(result.errors ? `${actionText}：成功 ${result.count} 条，失败 ${result.errors} 条。` : `${actionText}：完成 ${result.count} 条。`);
             } catch (error) {
                 window.alert(String(error?.message || error || '向量化失败'));
                 refreshVectorAfterAction(root);

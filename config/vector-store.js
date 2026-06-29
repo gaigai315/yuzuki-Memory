@@ -476,14 +476,22 @@
             }
         }
 
-        async vectorizeBook(bookId = this.selectedBookId, progressCallback = null) {
+        async vectorizeBook(bookId = this.selectedBookId, progressCallback = null, options = {}) {
             await this.whenReady();
             const book = this.library[bookId];
             if (!book) throw new Error('向量书不存在');
+            const force = options && typeof options === 'object' && options.force === true;
             const pending = book.chunks
                 .map((chunk, index) => ({ chunk, index }))
-                .filter(({ index }) => !book.vectorized[index] || !Array.isArray(book.vectors[index]));
+                .filter(({ index }) => force || !book.vectorized[index] || !Array.isArray(book.vectors[index]));
             if (!pending.length) return { success: true, count: 0, errors: 0 };
+
+            if (force) {
+                pending.forEach(({ index }) => {
+                    book.vectors[index] = null;
+                    book.vectorized[index] = false;
+                });
+            }
 
             let success = 0;
             let errors = 0;
