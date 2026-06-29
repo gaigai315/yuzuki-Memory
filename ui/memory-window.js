@@ -2676,13 +2676,22 @@
         if (!query) return true;
         if (!record) return false;
 
+        const ranges = [
+            parseSummaryFloorRange(getSummaryFloorText(record)),
+            getSummaryRecordTaskRange(record),
+            ...getSummarySegments(record).map((segment) => parseSummaryFloorRange(segment.floor) || (Number.isFinite(Number(segment.floor)) ? { start: Number(segment.floor), end: Number(segment.floor) } : null)),
+        ].filter(Boolean);
+        const rangeQuery = query.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
+        if (rangeQuery) {
+            const start = Number.parseInt(rangeQuery[1], 10);
+            const end = Number.parseInt(rangeQuery[2], 10);
+            if (Number.isFinite(start) && Number.isFinite(end)) {
+                return ranges.some((range) => range.start === Math.min(start, end) && range.end === Math.max(start, end));
+            }
+        }
+
         const floorMatches = query.match(/\d+/g) || [];
         if (floorMatches.length) {
-            const ranges = [
-                parseSummaryFloorRange(getSummaryFloorText(record)),
-                getSummaryRecordTaskRange(record),
-                ...getSummarySegments(record).map((segment) => parseSummaryFloorRange(segment.floor) || (Number.isFinite(Number(segment.floor)) ? { start: Number(segment.floor), end: Number(segment.floor) } : null)),
-            ].filter(Boolean);
             const matchesFloor = floorMatches.some((value) => {
                 const floor = Number.parseInt(value, 10);
                 if (!Number.isFinite(floor)) return false;
