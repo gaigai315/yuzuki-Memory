@@ -325,11 +325,18 @@
 
     function isMemoryInjectionMessage(message) {
         if (!message || typeof message !== 'object') return false;
+        const content = getPrimaryTextFromMessage(message);
+        const name = String(message.name || message.identifier || '').trim();
         return message.isGaigaiData === true
             || message.isGaigaiPrompt === true
             || message.yzmMemoryInjectionType === 'summary'
             || message.yzmMemoryInjectionType === 'table'
-            || message.yzmMemoryInjectionType === 'prompt';
+            || message.yzmMemoryInjectionType === 'prompt'
+            || content.includes('【当前世界状态参考 -')
+            || content.includes('【前情提要 -')
+            || content.includes('【剧情摘要】')
+            || name === 'SYSTEM (提示词)'
+            || name.includes('提示词');
     }
 
     function removeExistingMemoryInjections(chat) {

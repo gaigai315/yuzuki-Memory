@@ -17,6 +17,7 @@
     let bindRetryTimer = null;
     let activeSessionId = '';
     let lastManualEditAt = 0;
+    let pendingRegenerateFloor = -1;
     const swipeResolveTimers = {};
 
     function clone(value) {
@@ -80,7 +81,11 @@
     }
 
     function saveState(state, sessionId = getSessionId()) {
-        return !!YuzukiMemory.Storage?.saveState?.(state, getFallbackState(), sessionId, { allowDuringSwitch: true });
+        return !!YuzukiMemory.Storage?.saveState?.(state, getFallbackState(), sessionId, {
+            allowDuringSwitch: true,
+            force: true,
+            saveOrigin: 'auto',
+        });
     }
 
     function markManualEdit(timestamp = Date.now()) {
@@ -444,7 +449,13 @@
             if (!table?.id || table.id === 'memory_summary') return;
             state.records[table.id] = clone(Array.isArray(snapshot.records[table.id]) ? snapshot.records[table.id] : []);
         });
-        saveState(state, sessionId);
+        if (!saveState(state, sessionId)) {
+            console.warn('[yuzuki-Memory] Branch snapshot restore failed to persist state.', {
+                key: String(options.key || ''),
+                sessionId,
+            });
+            return false;
+        }
         if (options.dispatch !== false) {
             window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
                 detail: { source: 'branch-snapshot', key: String(options.key || '') },
@@ -474,7 +485,10 @@
         if (!sessionId || !chat.length) return { restored: false, reason: 'empty' };
 
         const lastMessage = chat[chat.length - 1];
-        const targetIndex = isAssistantMessage(lastMessage) ? chat.length - 1 : chat.length;
+        const pendingTarget = Number(pendingRegenerateFloor);
+        const targetIndex = Number.isFinite(pendingTarget) && pendingTarget >= 0
+            ? Math.round(pendingTarget)
+            : (isAssistantMessage(lastMessage) ? chat.length - 1 : chat.length);
         const targetKey = String(targetIndex);
 
         const baseKey = findBaseSnapshotKey(targetIndex);
@@ -487,6 +501,7 @@
         const state = loadState(sessionId);
         const result = restoreBaseBeforeTarget(targetIndex, baseKey, { state, sessionId });
         if (result?.restored) delete snapshots[targetKey];
+        if (result?.restored || result?.reason === 'current_state_kept') pendingRegenerateFloor = -1;
         persistSnapshots(sessionId);
         return result;
     }
@@ -618,9 +633,11 @@
         if (!isRealtimeEnabled()) return;
         const target = Math.round(Number(floor));
         if (!Number.isFinite(target) || target < 0) return;
+        pendingRegenerateFloor = target;
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
         const result = baseKey ? restoreBaseBeforeTarget(target, baseKey) : null;
         if (result?.restored) delete snapshots[String(target)];
+        if (result?.restored) pendingRegenerateFloor = -1;
         persistSnapshots();
     }
 
@@ -661,7 +678,15 @@
             scheduleSwipeResolve(floor, 420);
         }, true);
         document.addEventListener('click', (event) => {
-            const button = event.target?.closest?.('[data-i18n="Regenerate"], #option_regenerate, .regenerate_response');
+            const button = event.target?.closest?.([
+                '[data-i18n="Regenerate"]',
+                '[title="Regenerate"]',
+                '[aria-label="Regenerate"]',
+                '#option_regenerate',
+                '#send_but_sheld',
+                '.regenerate_response',
+                '.mes_regenerate',
+            ].join(','));
             if (!button) return;
             handleRegenerate(getRegenerateTargetFloor(button));
         }, true);
