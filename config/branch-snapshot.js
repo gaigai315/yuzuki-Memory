@@ -203,27 +203,43 @@
         return hashText(JSON.stringify(records || {}));
     }
 
+    function getStateSnapshotMeta(state) {
+        const records = normalizeTableRecords(state);
+        return {
+            records,
+            count: countSnapshotRecords(records),
+            hash: getSnapshotRecordsHash(records),
+            updatedAt: Number(state?.updatedAt || state?.ts || 0),
+            manualEditedAt: Number(state?.manualEditedAt || 0),
+            saveOrigin: String(state?.saveOrigin || ''),
+        };
+    }
+
+    function getSnapshotMeta(snapshot) {
+        const records = snapshot?.records || {};
+        return {
+            records,
+            count: countSnapshotRecords(records),
+            hash: getSnapshotRecordsHash(records),
+            updatedAt: Number(snapshot?.timestamp || 0),
+        };
+    }
+
     function protectNewerCurrentState(state, snapshot, options = {}) {
         if (options.force === true) return false;
-        const currentRecords = normalizeTableRecords(state);
-        const snapshotRecords = snapshot?.records || {};
-        const currentCount = countSnapshotRecords(currentRecords);
-        const snapshotCount = countSnapshotRecords(snapshotRecords);
-        const currentHash = getSnapshotRecordsHash(currentRecords);
-        const snapshotHash = getSnapshotRecordsHash(snapshotRecords);
-        const currentUpdatedAt = Number(state?.updatedAt || state?.ts || 0);
-        const snapshotUpdatedAt = Number(snapshot?.timestamp || 0);
-        const looksUserOrTaskEdited = currentUpdatedAt > snapshotUpdatedAt
-            || Number(state?.manualEditedAt || 0) > snapshotUpdatedAt
+        const current = getStateSnapshotMeta(state);
+        const target = getSnapshotMeta(snapshot);
+        const looksUserOrTaskEdited = current.updatedAt > target.updatedAt
+            || current.manualEditedAt > target.updatedAt
             || state?.saveOrigin === 'manual';
 
-        if (!looksUserOrTaskEdited || currentHash === snapshotHash) return false;
-        if (currentCount >= snapshotCount) {
+        if (!looksUserOrTaskEdited || current.hash === target.hash) return false;
+        if (current.count >= target.count) {
             console.warn('[yuzuki-Memory] Branch snapshot restore skipped; current memory is newer/richer than snapshot.', {
-                currentCount,
-                snapshotCount,
-                currentUpdatedAt,
-                snapshotUpdatedAt,
+                currentCount: current.count,
+                snapshotCount: target.count,
+                currentUpdatedAt: current.updatedAt,
+                snapshotUpdatedAt: target.updatedAt,
                 key: String(options.key || ''),
             });
             return true;
@@ -322,6 +338,41 @@
         return String(baseKey) === '-1' && Number(targetIndex) > HIGH_FLOOR_GENESIS_GUARD;
     }
 
+    function restoreBaseBeforeTarget(targetIndex, baseKey, options = {}) {
+        const sessionId = options.sessionId || ensureSessionLoaded(getSessionId());
+        if (!sessionId || !baseKey) return { restored: false, reason: 'missing_base', targetIndex, baseKey };
+        const baseSnapshot = snapshots[String(baseKey)];
+        if (!baseSnapshot?.records) return { restored: false, reason: 'missing_base_snapshot', targetIndex, baseKey };
+
+        const targetKey = String(targetIndex);
+        const targetSnapshot = snapshots[targetKey];
+        const state = options.state || loadState(sessionId);
+        const current = getStateSnapshotMeta(state);
+        const base = getSnapshotMeta(baseSnapshot);
+        const target = getSnapshotMeta(targetSnapshot);
+        const currentMatchesDiscardedTarget = !!targetSnapshot?.records && current.hash === target.hash;
+        const currentMatchesBase = current.hash === base.hash;
+        const force = currentMatchesDiscardedTarget || options.force === true;
+
+        if (!force && !currentMatchesBase) {
+            const snapshotUpdatedAt = Number(baseSnapshot?.timestamp || 0);
+            const looksManual = current.manualEditedAt > snapshotUpdatedAt || state?.saveOrigin === 'manual';
+            if (looksManual && current.updatedAt > snapshotUpdatedAt) {
+                saveSnapshot(baseKey, { state, sessionId });
+                return { restored: false, reason: 'current_state_kept', targetIndex, baseKey };
+            }
+        }
+
+        const restored = restoreSnapshot(baseKey, { state, sessionId, force });
+        return {
+            restored,
+            targetIndex,
+            baseKey,
+            forced: force,
+            reason: restored ? 'restored' : 'restore_skipped',
+        };
+    }
+
     function restoreSnapshot(key, options = {}) {
         const sessionId = ensureSessionLoaded(options.sessionId || getSessionId());
         if (!sessionId) return false;
@@ -409,10 +460,10 @@
         }
 
         const state = loadState(sessionId);
-        restoreSnapshot(baseKey, { state });
+        const result = restoreBaseBeforeTarget(targetIndex, baseKey, { state, sessionId });
         delete snapshots[targetKey];
         persistSnapshots(sessionId);
-        return { restored: true, targetIndex, baseKey };
+        return result;
     }
 
     function captureMessageSnapshot(index, options = {}) {
@@ -543,7 +594,7 @@
         const target = Math.round(Number(floor));
         if (!Number.isFinite(target) || target < 0) return;
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
-        if (baseKey) restoreSnapshot(baseKey);
+        if (baseKey) restoreBaseBeforeTarget(target, baseKey);
         delete snapshots[String(target)];
         persistSnapshots();
     }
