@@ -629,10 +629,12 @@
         const message = chat[target];
         if (!isAssistantMessage(message)) return;
         if (shouldSkipMessage(target, message, options)) return;
-        const shouldRollbackBeforeApply = options.rollbackBeforeApply === true
-            || YuzukiMemory.BranchSnapshot?.consumeApplyRollbackFloor?.(target) === true;
+        const consumedSwipeRollback = YuzukiMemory.BranchSnapshot?.consumeApplyRollbackFloor?.(target) === true;
+        const shouldRollbackBeforeApply = options.rollbackBeforeApply === true || consumedSwipeRollback;
         if (shouldRollbackBeforeApply && YuzukiMemory.BranchSnapshot?.isRealtimeEnabled?.()) {
-            YuzukiMemory.BranchSnapshot?.rollbackBeforeMessage?.(target, { force: options.force === true });
+            YuzukiMemory.BranchSnapshot?.rollbackBeforeMessage?.(target, {
+                force: options.force === true || consumedSwipeRollback,
+            });
         }
         const text = getMessageText(message);
         console.info('[yuzuki-Memory Realtime] process message', {
