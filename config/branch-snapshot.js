@@ -19,6 +19,7 @@
     let lastManualEditAt = 0;
     const swipeResolveTimers = {};
     const pendingRequestRollbackFloors = new Map();
+    const processedMessageSignatures = {};
 
     function clone(value) {
         try {
@@ -214,6 +215,29 @@
         if (!Number.isFinite(target) || target < 0) return false;
         pendingRequestRollbackFloors.set(`${sessionId}:${target}`, Date.now() + Math.max(1000, Number(ttl) || 180000));
         return true;
+    }
+
+    function getProcessedMessageKey(floor, sessionId = getSessionId()) {
+        const target = Math.round(Number(floor));
+        if (!Number.isFinite(target) || target < 0) return '';
+        return `${sessionId || 'default'}:${target}`;
+    }
+
+    function getProcessedMessageSignature(floor) {
+        const key = getProcessedMessageKey(floor);
+        return key ? processedMessageSignatures[key] || '' : '';
+    }
+
+    function setProcessedMessageSignature(floor, signature = '') {
+        const key = getProcessedMessageKey(floor);
+        if (!key) return false;
+        if (signature) processedMessageSignatures[key] = String(signature);
+        else delete processedMessageSignatures[key];
+        return true;
+    }
+
+    function clearProcessedMessageSignature(floor) {
+        return setProcessedMessageSignature(floor, '');
     }
 
     function consumeRequestRollbackFloors(sessionId = getSessionId()) {
@@ -448,6 +472,7 @@
             ? Math.min(...pendingFloors)
             : (isAssistantMessage(lastMessage) ? chat.length - 1 : chat.length);
         const targetKey = String(targetIndex);
+        clearProcessedMessageSignature(targetIndex);
 
         const baseKey = findBaseSnapshotKey(targetIndex);
         if (!baseKey) return { restored: false, reason: 'missing_base', targetIndex };
@@ -537,6 +562,7 @@
         const sessionId = ensureSessionLoaded(options.sessionId || getSessionId());
         const target = Math.max(0, Math.round(Number(floor) || 0));
         if (!sessionId) return { restored: false, reason: 'missing_session', target };
+        clearProcessedMessageSignature(target);
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
         if (!baseKey) {
             if (target === 0) {
@@ -583,6 +609,7 @@
         if (!isRealtimeEnabled()) return;
         const floor = Math.max(0, Math.round(Number(id) || 0));
         markRequestRollbackFloor(floor);
+        clearProcessedMessageSignature(floor);
         const baseKey = floor === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(floor);
         if (baseKey && !isUnsafeGenesisRestore(floor, baseKey)) restoreSnapshot(baseKey, { force: true });
         const restoredBranch = restoreCurrentBranchSnapshot(floor);
@@ -623,6 +650,7 @@
         const target = Math.round(Number(floor));
         if (!Number.isFinite(target) || target < 0) return;
         markRequestRollbackFloor(target);
+        clearProcessedMessageSignature(target);
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
         if (baseKey) restoreSnapshot(baseKey, { force: true });
         delete snapshots[String(target)];
@@ -653,6 +681,7 @@
             eventSource.on(eventTypes.MESSAGE_SWIPED, (id) => {
                 const floor = Math.max(0, Math.round(Number(id) || 0));
                 markRequestRollbackFloor(floor);
+                clearProcessedMessageSignature(floor);
                 rollbackToBaseBeforeFloor(floor);
                 scheduleSwipeResolve(floor, 180);
             });
@@ -664,6 +693,7 @@
             if (!chat.length) return;
             const floor = getMessageFloorFromElement(button, chat.length - 1);
             markRequestRollbackFloor(floor);
+            clearProcessedMessageSignature(floor);
             rollbackToBaseBeforeFloor(floor);
             scheduleSwipeResolve(floor, 420);
         }, true);
@@ -686,6 +716,9 @@
         captureCurrentStateSnapshot,
         markManualEdit,
         markRequestRollbackFloor,
+        getProcessedMessageSignature,
+        setProcessedMessageSignature,
+        clearProcessedMessageSignature,
         prepareBeforeRequest,
         rollbackBeforeMessage,
         restoreForCurrentChatPosition,

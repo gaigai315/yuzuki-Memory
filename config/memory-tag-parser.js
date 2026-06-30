@@ -17,7 +17,6 @@
     let bindRetryTimer = null;
     const processedSignatures = new Set();
     const processedSignatureQueue = [];
-    const processedMessageSignatures = {};
     const pendingTimers = {};
 
     const DEFAULT_TABLES = [
@@ -469,7 +468,11 @@
         try {
             count = applyRowsToState(state, rows);
             if (count) {
-                YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, { allowDuringSwitch: true });
+                YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, {
+                    allowDuringSwitch: true,
+                    force: true,
+                    saveOrigin: 'auto',
+                });
                 YuzukiMemory.BranchSnapshot?.captureMessageSnapshot?.(floor, { state });
                 if (options.dispatch !== false) {
                     window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', { detail: { source: 'memory-tag-parser', count } }));
@@ -529,11 +532,10 @@
 
     function shouldSkipMessage(floor, message, options = {}) {
         if (options.force === true) return false;
-        const key = String(Math.max(0, Math.round(Number(floor) || 0)));
+        const snapshot = YuzukiMemory.BranchSnapshot?.getProcessedMessageSignature?.(floor);
         const signature = getMessageProcessSignature(message);
         if (!signature) return false;
-        if (processedMessageSignatures[key] === signature) return true;
-        processedMessageSignatures[key] = signature;
+        if (snapshot === signature) return true;
         return false;
     }
 
@@ -549,7 +551,10 @@
             YuzukiMemory.BranchSnapshot?.rollbackBeforeMessage?.(target, { force: options.force === true });
         }
         const text = getMessageText(message);
-        applyMemoryText(text, { floor: target, force: options.force === true });
+        const result = applyMemoryText(text, { floor: target, force: options.force === true });
+        if (result?.success) {
+            YuzukiMemory.BranchSnapshot?.setProcessedMessageSignature?.(target, getMessageProcessSignature(message));
+        }
     }
 
     function scheduleProcessMessage(floor, options = {}) {
