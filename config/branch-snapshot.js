@@ -18,6 +18,7 @@
     let activeSessionId = '';
     let lastManualEditAt = 0;
     const swipeResolveTimers = {};
+    const pendingRequestRollbackFloors = new Map();
 
     function clone(value) {
         try {
@@ -205,6 +206,32 @@
 
     function getSnapshotRecordsHash(records = {}) {
         return hashText(JSON.stringify(records || {}));
+    }
+
+    function markRequestRollbackFloor(floor, ttl = 180000) {
+        const sessionId = getSessionId() || 'default';
+        const target = Math.round(Number(floor));
+        if (!Number.isFinite(target) || target < 0) return false;
+        pendingRequestRollbackFloors.set(`${sessionId}:${target}`, Date.now() + Math.max(1000, Number(ttl) || 180000));
+        return true;
+    }
+
+    function consumeRequestRollbackFloors(sessionId = getSessionId()) {
+        const safeSessionId = sessionId || 'default';
+        const prefix = `${safeSessionId}:`;
+        const now = Date.now();
+        const floors = [];
+        for (const [key, expiresAt] of pendingRequestRollbackFloors.entries()) {
+            if (!Number.isFinite(expiresAt) || expiresAt <= now) {
+                pendingRequestRollbackFloors.delete(key);
+                continue;
+            }
+            if (!key.startsWith(prefix)) continue;
+            const floor = Number.parseInt(key.slice(prefix.length), 10);
+            if (Number.isFinite(floor) && floor >= 0) floors.push(floor);
+            pendingRequestRollbackFloors.delete(key);
+        }
+        return Array.from(new Set(floors)).sort((a, b) => a - b);
     }
 
     function protectNewerCurrentState(state, snapshot, options = {}) {
@@ -415,8 +442,11 @@
         const chat = getChat();
         if (!sessionId || !chat.length) return { restored: false, reason: 'empty' };
 
+        const pendingFloors = consumeRequestRollbackFloors(sessionId);
         const lastMessage = chat[chat.length - 1];
-        const targetIndex = isAssistantMessage(lastMessage) ? chat.length - 1 : chat.length;
+        const targetIndex = pendingFloors.length
+            ? Math.min(...pendingFloors)
+            : (isAssistantMessage(lastMessage) ? chat.length - 1 : chat.length);
         const targetKey = String(targetIndex);
 
         const baseKey = findBaseSnapshotKey(targetIndex);
@@ -427,10 +457,15 @@
         }
 
         const state = loadState(sessionId);
-        restoreSnapshot(baseKey, { state });
-        delete snapshots[targetKey];
+        const currentHash = getSnapshotRecordsHash(normalizeTableRecords(state));
+        const baseHash = getSnapshotRecordsHash(snapshots[String(baseKey)]?.records || {});
+        const targetHash = getSnapshotRecordsHash(snapshots[targetKey]?.records || {});
+        const isCleanTargetOutput = !!snapshots[targetKey] && currentHash === targetHash;
+        const force = currentHash === baseHash || isCleanTargetOutput;
+        const restored = restoreSnapshot(baseKey, { state, force });
+        if (restored) delete snapshots[targetKey];
         persistSnapshots(sessionId);
-        return { restored: true, targetIndex, baseKey };
+        return { restored, targetIndex, baseKey, force };
     }
 
     function captureMessageSnapshot(index, options = {}) {
@@ -494,7 +529,7 @@
             console.warn(`[yuzuki-Memory] Swipe rollback skipped: only genesis snapshot exists for floor ${target}.`);
             return false;
         }
-        return restoreSnapshot(baseKey, { sessionId });
+        return restoreSnapshot(baseKey, { sessionId, force: true });
     }
 
     function rollbackBeforeMessage(floor, options = {}) {
@@ -513,7 +548,11 @@
         if (isUnsafeGenesisRestore(target, baseKey)) {
             return { restored: false, reason: 'unsafe_genesis', target, baseKey };
         }
-        const restored = restoreSnapshot(baseKey, { sessionId, force: options.force === true, state: options.state });
+        const state = options.state || loadState(sessionId);
+        const currentHash = getSnapshotRecordsHash(normalizeTableRecords(state));
+        const targetHash = getSnapshotRecordsHash(snapshots[String(target)]?.records || {});
+        const force = options.force === true || (!!snapshots[String(target)] && currentHash === targetHash);
+        const restored = restoreSnapshot(baseKey, { sessionId, force, state });
         if (restored) delete snapshots[String(target)];
         persistSnapshots(sessionId);
         return { restored, target, baseKey };
@@ -543,8 +582,9 @@
     function handleSwipe(id, options = {}) {
         if (!isRealtimeEnabled()) return;
         const floor = Math.max(0, Math.round(Number(id) || 0));
+        markRequestRollbackFloor(floor);
         const baseKey = floor === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(floor);
-        if (baseKey && !isUnsafeGenesisRestore(floor, baseKey)) restoreSnapshot(baseKey);
+        if (baseKey && !isUnsafeGenesisRestore(floor, baseKey)) restoreSnapshot(baseKey, { force: true });
         const restoredBranch = restoreCurrentBranchSnapshot(floor);
         if (!restoredBranch) delete snapshots[String(floor)];
         persistSnapshots();
@@ -582,8 +622,9 @@
         if (!isRealtimeEnabled()) return;
         const target = Math.round(Number(floor));
         if (!Number.isFinite(target) || target < 0) return;
+        markRequestRollbackFloor(target);
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
-        if (baseKey) restoreSnapshot(baseKey);
+        if (baseKey) restoreSnapshot(baseKey, { force: true });
         delete snapshots[String(target)];
         persistSnapshots();
     }
@@ -611,6 +652,7 @@
         if (eventTypes.MESSAGE_SWIPED) {
             eventSource.on(eventTypes.MESSAGE_SWIPED, (id) => {
                 const floor = Math.max(0, Math.round(Number(id) || 0));
+                markRequestRollbackFloor(floor);
                 rollbackToBaseBeforeFloor(floor);
                 scheduleSwipeResolve(floor, 180);
             });
@@ -621,6 +663,7 @@
             const chat = getChat();
             if (!chat.length) return;
             const floor = getMessageFloorFromElement(button, chat.length - 1);
+            markRequestRollbackFloor(floor);
             rollbackToBaseBeforeFloor(floor);
             scheduleSwipeResolve(floor, 420);
         }, true);
@@ -642,6 +685,7 @@
         captureMessageSnapshot,
         captureCurrentStateSnapshot,
         markManualEdit,
+        markRequestRollbackFloor,
         prepareBeforeRequest,
         rollbackBeforeMessage,
         restoreForCurrentChatPosition,

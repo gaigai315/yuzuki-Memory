@@ -21,6 +21,12 @@
         'scenario',
         'personaDescription',
     ]);
+    const MEMORY_INJECTION_MARKERS = [
+        '【前情提要 -',
+        '【当前世界状态参考 -',
+        '【记忆只读数据库 -',
+        '【剧情摘要】',
+    ];
     let retryTimer = null;
 
     function safeDeepClone(value) {
@@ -139,6 +145,32 @@
             cloned.content = YuzukiMemory.VariableInjector?.resolveRuntimeVariables?.(cloned.content) || cloned.content;
         }
         return cloned;
+    }
+
+    function isMemoryInjectionMessage(message) {
+        if (!message || typeof message !== 'object') return false;
+        if (
+            message.isGaigaiData === true
+            || message.isGaigaiPrompt === true
+            || message.isGaigaiVector === true
+            || message.isYuzukiVector === true
+            || !!message.yzmMemoryInjectionType
+        ) {
+            return true;
+        }
+        const text = getPrimaryTextFromMessage(message);
+        return MEMORY_INJECTION_MARKERS.some((marker) => text.includes(marker));
+    }
+
+    function removeExistingMemoryInjections(chat) {
+        if (!Array.isArray(chat)) return 0;
+        let removed = 0;
+        for (let index = chat.length - 1; index >= 0; index -= 1) {
+            if (!isMemoryInjectionMessage(chat[index])) continue;
+            chat.splice(index, 1);
+            removed += 1;
+        }
+        return removed;
     }
 
     function makePromptMessage(state) {
@@ -340,6 +372,7 @@
 
         const settings = getSettings();
         if (!settings.injectMemoryTable) return chat;
+        const removedStaleInjections = removeExistingMemoryInjections(chat);
 
         const state = storage.loadState(injector.createDefaultState?.());
         const extensionPromptResult = options.processExtensionPrompts === true
@@ -528,6 +561,7 @@
             injected,
             messages: chat.length,
             fallback: insertionOps.length,
+            removedStaleInjections,
             initialAnchorIndexes,
             extensionPromptAnchors: extensionPromptResult.anchors,
             macroRegistration: macroDebug,
