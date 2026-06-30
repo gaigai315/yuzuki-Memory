@@ -664,17 +664,15 @@
         return false;
     }
 
-    function handleSwipe(id, options = {}) {
+    function resolveSwipeFloor(id, options = {}) {
         if (!isRealtimeEnabled()) return;
         const floor = Math.max(0, Math.round(Number(id) || 0));
-        prepareSwipeFloor(floor);
-        const restoredBranch = false;
         if (!isGenerationBusy()) {
             reapplyCurrentMessage(floor);
         }
         const retry = Math.max(0, Math.round(Number(options.retry) || 0));
-        if (!restoredBranch && retry < 2 && !isGenerationBusy()) {
-            window.setTimeout(() => handleSwipe(floor, { retry: retry + 1 }), 350);
+        if (retry < 2 && !isGenerationBusy()) {
+            window.setTimeout(() => resolveSwipeFloor(floor, { retry: retry + 1 }), 350);
         }
     }
 
@@ -684,7 +682,7 @@
         window.clearTimeout(swipeResolveTimers[timerKey]);
         swipeResolveTimers[timerKey] = window.setTimeout(() => {
             delete swipeResolveTimers[timerKey];
-            handleSwipe(target);
+            resolveSwipeFloor(target);
         }, Math.max(0, Math.round(Number(delay) || 0)));
     }
 
@@ -746,8 +744,8 @@
             const chat = getChat();
             if (!chat.length) return;
             const floor = getMessageFloorFromElement(button, chat.length - 1);
-            prepareSwipeFloor(floor);
-            scheduleSwipeResolve(floor, 520);
+            markRequestRollbackFloor(floor);
+            markApplyRollbackFloor(floor);
         }, true);
         document.addEventListener('click', (event) => {
             const button = event.target?.closest?.('[data-i18n="Regenerate"], #option_regenerate, .regenerate_response');
