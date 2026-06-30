@@ -155,7 +155,6 @@
         traceBatchEnabled: true,
         traceBatchSize: 40,
         traceBatchDelay: 2,
-        traceDirectTrigger: true,
         summaryBatchEnabled: true,
         summaryBatchSize: 40,
         traceRunMode: 'confirm',
@@ -1493,7 +1492,7 @@
             traceBatchEnabled: typeof source.traceBatchEnabled === 'boolean' ? source.traceBatchEnabled : DEFAULT_PLUGIN_SETTINGS.traceBatchEnabled,
             traceBatchSize: Math.round(normalizeNumberSetting(source.traceBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchSize, 0)),
             traceBatchDelay: Math.round(normalizeNumberSetting(source.traceBatchDelay, 0, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchDelay, 0)),
-            traceDirectTrigger: typeof source.traceDirectTrigger === 'boolean' ? source.traceDirectTrigger : DEFAULT_PLUGIN_SETTINGS.traceDirectTrigger,
+            traceDirectTrigger: true,
             summaryBatchEnabled: typeof source.summaryBatchEnabled === 'boolean' ? source.summaryBatchEnabled : DEFAULT_PLUGIN_SETTINGS.summaryBatchEnabled,
             summaryBatchSize: Math.round(normalizeNumberSetting(source.summaryBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.summaryBatchSize, 0)),
             traceRunMode: source.traceRunMode === 'silent' ? 'silent' : DEFAULT_PLUGIN_SETTINGS.traceRunMode,
@@ -8631,12 +8630,6 @@
                 'fa-regular fa-clock',
                 createTraceUnitInput(createConfigNumberInput(settings.traceBatchDelay, 'traceBatchDelay'), '层')
             ),
-            createPluginConfigRow(
-                '发起模式',
-                '触发前静默发起；关闭后达到条件时先弹窗确认。',
-                'fa-solid fa-bolt',
-                createConfigSwitch(settings.traceDirectTrigger, 'traceDirectTrigger')
-            ),
             createTraceRunModeSettings({
                 radioName: 'yzm-config-trace-run-mode',
                 confirmLabel: '弹窗确认（推荐）',
@@ -9549,7 +9542,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化完善批量填表的静默/非静默模式。',
+            '优化批量填表非静默功能。',
+            '修复旧记忆表格向量化导入新记忆插件虚假绑定。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

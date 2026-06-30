@@ -748,6 +748,24 @@
             ].join('\n');
         }
 
+        importBooksAsNew(rawLibrary) {
+            const normalizedLibrary = this.normalizeLibrary(rawLibrary);
+            const imported = {};
+            Object.entries(normalizedLibrary).forEach(([sourceId, book]) => {
+                let nextId = this.createId('yzm_imported_book');
+                while (this.library[nextId] || imported[nextId]) {
+                    nextId = this.createId('yzm_imported_book');
+                }
+                imported[nextId] = {
+                    ...book,
+                    createTime: book.createTime || Date.now(),
+                    updateTime: Date.now(),
+                    sourceBookId: String(sourceId || ''),
+                };
+            });
+            return imported;
+        }
+
         async importLibrary(fileOrText) {
             const text = typeof fileOrText === 'string' ? fileOrText : await this.readFile(fileOrText);
             if (this.isLegacyLibraryBackup(text)) {
@@ -755,7 +773,7 @@
             }
             const jsonText = text.startsWith(BACKUP_HEADER) ? text.slice(BACKUP_HEADER.length).trim() : text.trim();
             const parsed = JSON.parse(jsonText);
-            const nextLibrary = this.normalizeLibrary(parsed.library || parsed);
+            const nextLibrary = this.importBooksAsNew(parsed.library || parsed);
             Object.assign(this.library, nextLibrary);
             this.selectedBookId = Object.keys(nextLibrary)[0] || this.selectedBookId;
             await this.saveLibrary();
@@ -917,7 +935,7 @@
         }
 
         async importLegacyLibrary(text) {
-            const nextLibrary = this.parseLegacyLibraryBackup(text);
+            const nextLibrary = this.importBooksAsNew(this.parseLegacyLibraryBackup(text));
             Object.assign(this.library, nextLibrary);
             this.selectedBookId = Object.keys(nextLibrary)[0] || this.selectedBookId;
             await this.saveLibrary();

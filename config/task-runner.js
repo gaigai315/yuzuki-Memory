@@ -203,7 +203,7 @@
             traceBatchEnabled: settings?.traceBatchEnabled !== false,
             traceBatchSize: Math.max(1, Math.round(Number(settings?.traceBatchSize) || 40)),
             traceBatchDelay: Math.max(0, Math.round(Number(settings?.traceBatchDelay ?? 2) || 0)),
-            traceDirectTrigger: settings?.traceDirectTrigger !== false,
+            traceDirectTrigger: true,
             traceRunMode: settings?.traceRunMode === 'silent' ? 'silent' : 'confirm',
         };
     }
@@ -2002,17 +2002,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 
     async function runAutoTraceTask(state, task, callbacks = {}) {
         const pluginSettings = getPluginSettings();
-        const shouldRun = pluginSettings.traceDirectTrigger ? { action: 'confirm', postpone: 0 } : await confirmAutoTask(task, callbacks);
-        if (shouldRun?.action !== 'confirm') return { skipped: true };
-        if (Number(shouldRun.postpone) > 0) {
-            const pointers = normalizePointers(state);
-            pointers.trace = Math.max(0, task.currentCount - task.threshold + Math.round(Number(shouldRun.postpone) || 0));
-            callbacks.saveState?.();
-            return { postponed: true };
-        }
 
         const autoSave = pluginSettings.traceRunMode === 'silent';
-        if (pluginSettings.traceDirectTrigger) notifyAutoTaskStarted(task);
+        notifyAutoTaskStarted(task);
         const result = await runTrace(state, {
             start: task.start,
             end: task.end,
@@ -2085,7 +2077,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             let continueDelay = AUTO_TASK_BACKFILL_NEXT_MS;
             try {
                 autoSummaryPromptOpen = task.type === 'trace'
-                    ? (!pluginSettings.traceDirectTrigger || pluginSettings.traceRunMode !== 'silent')
+                    ? pluginSettings.traceRunMode !== 'silent'
                     : (!settings.directTrigger || !settings.autoSave);
                 const result = task.type === 'trace'
                     ? await runAutoTraceTask(state, task, callbacks)
