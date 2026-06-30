@@ -17,7 +17,6 @@
     let bindRetryTimer = null;
     let activeSessionId = '';
     let lastManualEditAt = 0;
-    let pendingRegenerateFloor = -1;
     const swipeResolveTimers = {};
 
     function clone(value) {
@@ -208,43 +207,27 @@
         return hashText(JSON.stringify(records || {}));
     }
 
-    function getStateSnapshotMeta(state) {
-        const records = normalizeTableRecords(state);
-        return {
-            records,
-            count: countSnapshotRecords(records),
-            hash: getSnapshotRecordsHash(records),
-            updatedAt: Number(state?.updatedAt || state?.ts || 0),
-            manualEditedAt: Number(state?.manualEditedAt || 0),
-            saveOrigin: String(state?.saveOrigin || ''),
-        };
-    }
-
-    function getSnapshotMeta(snapshot) {
-        const records = snapshot?.records || {};
-        return {
-            records,
-            count: countSnapshotRecords(records),
-            hash: getSnapshotRecordsHash(records),
-            updatedAt: Number(snapshot?.timestamp || 0),
-        };
-    }
-
     function protectNewerCurrentState(state, snapshot, options = {}) {
         if (options.force === true) return false;
-        const current = getStateSnapshotMeta(state);
-        const target = getSnapshotMeta(snapshot);
-        const looksUserOrTaskEdited = current.updatedAt > target.updatedAt
-            || current.manualEditedAt > target.updatedAt
+        const currentRecords = normalizeTableRecords(state);
+        const snapshotRecords = snapshot?.records || {};
+        const currentCount = countSnapshotRecords(currentRecords);
+        const snapshotCount = countSnapshotRecords(snapshotRecords);
+        const currentHash = getSnapshotRecordsHash(currentRecords);
+        const snapshotHash = getSnapshotRecordsHash(snapshotRecords);
+        const currentUpdatedAt = Number(state?.updatedAt || state?.ts || 0);
+        const snapshotUpdatedAt = Number(snapshot?.timestamp || 0);
+        const looksUserOrTaskEdited = currentUpdatedAt > snapshotUpdatedAt
+            || Number(state?.manualEditedAt || 0) > snapshotUpdatedAt
             || state?.saveOrigin === 'manual';
 
-        if (!looksUserOrTaskEdited || current.hash === target.hash) return false;
-        if (current.count >= target.count) {
+        if (!looksUserOrTaskEdited || currentHash === snapshotHash) return false;
+        if (currentCount >= snapshotCount) {
             console.warn('[yuzuki-Memory] Branch snapshot restore skipped; current memory is newer/richer than snapshot.', {
-                currentCount: current.count,
-                snapshotCount: target.count,
-                currentUpdatedAt: current.updatedAt,
-                snapshotUpdatedAt: target.updatedAt,
+                currentCount,
+                snapshotCount,
+                currentUpdatedAt,
+                snapshotUpdatedAt,
                 key: String(options.key || ''),
             });
             return true;
@@ -357,52 +340,6 @@
         return String(baseKey) === '-1' && Number(targetIndex) > HIGH_FLOOR_GENESIS_GUARD;
     }
 
-    function restoreBaseBeforeTarget(targetIndex, baseKey, options = {}) {
-        const sessionId = options.sessionId || ensureSessionLoaded(getSessionId());
-        if (!sessionId || !baseKey) return { restored: false, reason: 'missing_base', targetIndex, baseKey };
-        const baseSnapshot = snapshots[String(baseKey)];
-        if (!baseSnapshot?.records) return { restored: false, reason: 'missing_base_snapshot', targetIndex, baseKey };
-
-        const targetKey = String(targetIndex);
-        const targetSnapshot = snapshots[targetKey];
-        const state = options.state || loadState(sessionId);
-        const current = getStateSnapshotMeta(state);
-        const base = getSnapshotMeta(baseSnapshot);
-        const target = getSnapshotMeta(targetSnapshot);
-        const currentMatchesDiscardedTarget = !!targetSnapshot?.records && current.hash === target.hash;
-        const currentMatchesBase = current.hash === base.hash;
-        const force = currentMatchesDiscardedTarget || options.force === true;
-
-        if (currentMatchesBase) {
-            return {
-                restored: true,
-                targetIndex,
-                baseKey,
-                forced: false,
-                alreadyBase: true,
-                reason: 'already_base',
-            };
-        }
-
-        if (!force) {
-            const snapshotUpdatedAt = Number(baseSnapshot?.timestamp || 0);
-            const looksManual = current.manualEditedAt > snapshotUpdatedAt || state?.saveOrigin === 'manual';
-            if (looksManual && current.updatedAt > snapshotUpdatedAt) {
-                saveSnapshot(baseKey, { state, sessionId });
-                return { restored: false, reason: 'current_state_kept', targetIndex, baseKey };
-            }
-        }
-
-        const restored = restoreSnapshot(baseKey, { state, sessionId, force });
-        return {
-            restored,
-            targetIndex,
-            baseKey,
-            forced: force,
-            reason: restored ? 'restored' : 'restore_skipped',
-        };
-    }
-
     function restoreSnapshot(key, options = {}) {
         const sessionId = ensureSessionLoaded(options.sessionId || getSessionId());
         if (!sessionId) return false;
@@ -449,13 +386,7 @@
             if (!table?.id || table.id === 'memory_summary') return;
             state.records[table.id] = clone(Array.isArray(snapshot.records[table.id]) ? snapshot.records[table.id] : []);
         });
-        if (!saveState(state, sessionId)) {
-            console.warn('[yuzuki-Memory] Branch snapshot restore failed to persist state.', {
-                key: String(options.key || ''),
-                sessionId,
-            });
-            return false;
-        }
+        if (!saveState(state, sessionId)) return false;
         if (options.dispatch !== false) {
             window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
                 detail: { source: 'branch-snapshot', key: String(options.key || '') },
@@ -485,11 +416,7 @@
         if (!sessionId || !chat.length) return { restored: false, reason: 'empty' };
 
         const lastMessage = chat[chat.length - 1];
-        const pendingTarget = Number(pendingRegenerateFloor);
-        const hasPendingRegenerate = Number.isFinite(pendingTarget) && pendingTarget >= 0;
-        const isRerollRequest = hasPendingRegenerate || isAssistantMessage(lastMessage);
-        if (!isRerollRequest) return { restored: false, reason: 'new_message', targetIndex: chat.length };
-        const targetIndex = hasPendingRegenerate ? Math.round(pendingTarget) : chat.length - 1;
+        const targetIndex = isAssistantMessage(lastMessage) ? chat.length - 1 : chat.length;
         const targetKey = String(targetIndex);
 
         const baseKey = findBaseSnapshotKey(targetIndex);
@@ -500,11 +427,10 @@
         }
 
         const state = loadState(sessionId);
-        const result = restoreBaseBeforeTarget(targetIndex, baseKey, { state, sessionId });
-        if (result?.restored) delete snapshots[targetKey];
-        if (result?.restored || result?.reason === 'current_state_kept') pendingRegenerateFloor = -1;
+        restoreSnapshot(baseKey, { state });
+        delete snapshots[targetKey];
         persistSnapshots(sessionId);
-        return result;
+        return { restored: true, targetIndex, baseKey };
     }
 
     function captureMessageSnapshot(index, options = {}) {
@@ -571,6 +497,28 @@
         return restoreSnapshot(baseKey, { sessionId });
     }
 
+    function rollbackBeforeMessage(floor, options = {}) {
+        if (!isRealtimeEnabled()) return { restored: false, reason: 'disabled' };
+        const sessionId = ensureSessionLoaded(options.sessionId || getSessionId());
+        const target = Math.max(0, Math.round(Number(floor) || 0));
+        if (!sessionId) return { restored: false, reason: 'missing_session', target };
+        const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
+        if (!baseKey) {
+            if (target === 0) {
+                saveSnapshot(-1, { state: options.state || loadState(sessionId), sessionId });
+                return { restored: false, reason: 'seeded_genesis', target };
+            }
+            return { restored: false, reason: 'missing_base', target };
+        }
+        if (isUnsafeGenesisRestore(target, baseKey)) {
+            return { restored: false, reason: 'unsafe_genesis', target, baseKey };
+        }
+        const restored = restoreSnapshot(baseKey, { sessionId, force: options.force === true, state: options.state });
+        if (restored) delete snapshots[String(target)];
+        persistSnapshots(sessionId);
+        return { restored, target, baseKey };
+    }
+
     function restoreForCurrentChatPosition(options = {}) {
         if (!isRealtimeEnabled()) return false;
         const sessionId = ensureSessionLoaded(options.sessionId || getSessionId());
@@ -634,11 +582,9 @@
         if (!isRealtimeEnabled()) return;
         const target = Math.round(Number(floor));
         if (!Number.isFinite(target) || target < 0) return;
-        pendingRegenerateFloor = target;
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
-        const result = baseKey ? restoreBaseBeforeTarget(target, baseKey) : null;
-        if (result?.restored) delete snapshots[String(target)];
-        if (result?.restored) pendingRegenerateFloor = -1;
+        if (baseKey) restoreSnapshot(baseKey);
+        delete snapshots[String(target)];
         persistSnapshots();
     }
 
@@ -679,14 +625,7 @@
             scheduleSwipeResolve(floor, 420);
         }, true);
         document.addEventListener('click', (event) => {
-            const button = event.target?.closest?.([
-                '[data-i18n="Regenerate"]',
-                '[title="Regenerate"]',
-                '[aria-label="Regenerate"]',
-                '#option_regenerate',
-                '.regenerate_response',
-                '.mes_regenerate',
-            ].join(','));
+            const button = event.target?.closest?.('[data-i18n="Regenerate"], #option_regenerate, .regenerate_response');
             if (!button) return;
             handleRegenerate(getRegenerateTargetFloor(button));
         }, true);
@@ -704,6 +643,7 @@
         captureCurrentStateSnapshot,
         markManualEdit,
         prepareBeforeRequest,
+        rollbackBeforeMessage,
         restoreForCurrentChatPosition,
         restoreSnapshot,
         getSnapshotKeys: () => Object.keys(snapshots).sort((a, b) => Number(a) - Number(b)),

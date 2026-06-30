@@ -1961,14 +1961,8 @@
         }));
     }
 
-    function confirmManualSave(detail = {}) {
-        saveState({ force: true, saveOrigin: 'manual' });
-        dispatchManualStateUpdated(detail);
-    }
-
     function persistStateOrReload(root, message, verify = {}) {
-        const needsVerification = !!(verify.tableId && verify.recordId);
-        const saved = saveState(needsVerification ? { force: true, saveOrigin: 'auto' } : { force: true });
+        const saved = saveState({ force: true });
         if (saved) {
             if (!verify.tableId || !verify.recordId) {
                 dispatchManualStateUpdated({ tableId: verify.tableId || '', recordId: verify.recordId || '' });
@@ -1992,7 +1986,7 @@
                 storage: debugInfo || null,
             });
             if (verified) {
-                confirmManualSave({
+                dispatchManualStateUpdated({
                     tableId: verify.tableId,
                     recordId: verify.recordId,
                     exists: shouldExist,
