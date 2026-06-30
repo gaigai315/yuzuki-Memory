@@ -552,6 +552,13 @@
             if (!isAssistantMessage(message)) return;
             const text = getMessageText(message);
             if (!text.trim()) return;
+            if (typeof YuzukiMemory.MemoryTagParser?.processMessage === 'function') {
+                YuzukiMemory.MemoryTagParser.processMessage(floor, {
+                    force: true,
+                    rollbackBeforeApply: true,
+                });
+                return;
+            }
             YuzukiMemory.MemoryTagParser?.applyMemoryText?.(text, { floor, dispatch: true, force: true });
         }, 220);
     }
@@ -631,12 +638,13 @@
         markRequestRollbackFloor(floor);
         markApplyRollbackFloor(floor);
         clearProcessedMessageSignature(floor);
+        YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(floor);
         const baseKey = floor === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(floor);
         if (baseKey && !isUnsafeGenesisRestore(floor, baseKey)) restoreSnapshot(baseKey, { force: true });
-        const restoredBranch = restoreCurrentBranchSnapshot(floor);
-        if (!restoredBranch) delete snapshots[String(floor)];
+        const restoredBranch = false;
+        delete snapshots[String(floor)];
         persistSnapshots();
-        if (!restoredBranch && !isGenerationBusy()) {
+        if (!isGenerationBusy()) {
             reapplyCurrentMessage(floor);
         }
         const retry = Math.max(0, Math.round(Number(options.retry) || 0));
@@ -673,6 +681,7 @@
         markRequestRollbackFloor(target);
         markApplyRollbackFloor(target);
         clearProcessedMessageSignature(target);
+        YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(target);
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
         if (baseKey) restoreSnapshot(baseKey, { force: true });
         delete snapshots[String(target)];
@@ -705,6 +714,7 @@
                 markRequestRollbackFloor(floor);
                 markApplyRollbackFloor(floor);
                 clearProcessedMessageSignature(floor);
+                YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(floor);
                 rollbackToBaseBeforeFloor(floor);
                 scheduleSwipeResolve(floor, 180);
             });
@@ -718,6 +728,7 @@
             markRequestRollbackFloor(floor);
             markApplyRollbackFloor(floor);
             clearProcessedMessageSignature(floor);
+            YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(floor);
             rollbackToBaseBeforeFloor(floor);
             scheduleSwipeResolve(floor, 420);
         }, true);

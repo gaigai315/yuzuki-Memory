@@ -659,6 +659,13 @@
         }, Math.max(0, Math.round(Number(options.delay) || 500)));
     }
 
+    function clearPendingMessage(floor) {
+        const rawFloor = Number(floor);
+        const key = String(Number.isFinite(rawFloor) && rawFloor >= 0 ? Math.round(rawFloor) : 'latest');
+        window.clearTimeout(pendingTimers[key]);
+        delete pendingTimers[key];
+    }
+
     function bind() {
         if (bound) return;
         const ctx = getContext();
@@ -688,6 +695,8 @@
         extractMemoryRows,
         parseMemoryText,
         applyMemoryText,
+        processMessage,
+        clearPendingMessage,
         applyRowsToState,
         cleanColumnName,
         isAppendColumn,
