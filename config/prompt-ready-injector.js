@@ -323,11 +323,27 @@
         return !(hitDisabled && !hitEnabled);
     }
 
+    function isMemoryInjectionMessage(message) {
+        if (!message || typeof message !== 'object') return false;
+        return message.isGaigaiData === true
+            || message.isGaigaiPrompt === true
+            || message.yzmMemoryInjectionType === 'summary'
+            || message.yzmMemoryInjectionType === 'table'
+            || message.yzmMemoryInjectionType === 'prompt';
+    }
+
+    function removeExistingMemoryInjections(chat) {
+        for (let i = chat.length - 1; i >= 0; i -= 1) {
+            if (isMemoryInjectionMessage(chat[i])) chat.splice(i, 1);
+        }
+    }
+
     function processLegacyMemoryAnchors(chat, options = {}) {
         if (!Array.isArray(chat)) return chat;
         const injector = YuzukiMemory.VariableInjector;
         const storage = YuzukiMemory.Storage;
         if (!injector || !storage) return chat;
+        removeExistingMemoryInjections(chat);
 
         if (window.isSummarizing || options.disableMemoryInjection === true) {
             chat.forEach((message) => {
@@ -545,6 +561,7 @@
     async function processPromptReadyChat(input) {
         const container = resolveChatContainer(input);
         if (!Array.isArray(container.chat)) return input;
+        YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
         const injectedChat = processLegacyMemoryAnchors(safeDeepClone(container.chat), {
             disableFallback: true,
             processExtensionPrompts: true,
@@ -569,6 +586,7 @@
         if (!data || !Array.isArray(data.chat)) {
             const fallback = resolveChatContainer(event);
             if (Array.isArray(fallback.chat)) {
+                YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
                 const injected = processLegacyMemoryAnchors(safeDeepClone(fallback.chat), {
                     disableFallback: true,
                     processExtensionPrompts: true,
@@ -578,6 +596,7 @@
             return;
         }
 
+        YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
         const safeChat = safeDeepClone(data.chat);
         const safeEvent = Object.assign({}, data, { chat: safeChat });
         processLegacyMemoryAnchors(safeEvent.chat, {

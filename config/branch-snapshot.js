@@ -327,6 +327,20 @@
         return true;
     }
 
+    function captureBaseSnapshotBeforeMessage(index, options = {}) {
+        if (!isRealtimeEnabled()) return false;
+        const sessionId = ensureSessionLoaded(options.sessionId || getSessionId());
+        const floor = Math.max(0, Math.round(Number(index) || 0));
+        if (!sessionId) return false;
+        const baseKey = String(floor - 1);
+        if (snapshots[baseKey]) return false;
+        const state = options.state || loadState(sessionId);
+        snapshots[baseKey] = createSnapshot(state, baseKey, options);
+        pruneSnapshots();
+        if (options.persist !== false) persistSnapshots(sessionId);
+        return true;
+    }
+
     function findBaseSnapshotKey(targetIndex) {
         for (let index = Math.round(Number(targetIndex) || 0) - 1; index >= -1; index -= 1) {
             if (snapshots[String(index)]) return String(index);
@@ -354,7 +368,18 @@
         const currentMatchesBase = current.hash === base.hash;
         const force = currentMatchesDiscardedTarget || options.force === true;
 
-        if (!force && !currentMatchesBase) {
+        if (currentMatchesBase) {
+            return {
+                restored: true,
+                targetIndex,
+                baseKey,
+                forced: false,
+                alreadyBase: true,
+                reason: 'already_base',
+            };
+        }
+
+        if (!force) {
             const snapshotUpdatedAt = Number(baseSnapshot?.timestamp || 0);
             const looksManual = current.manualEditedAt > snapshotUpdatedAt || state?.saveOrigin === 'manual';
             if (looksManual && current.updatedAt > snapshotUpdatedAt) {
@@ -461,7 +486,7 @@
 
         const state = loadState(sessionId);
         const result = restoreBaseBeforeTarget(targetIndex, baseKey, { state, sessionId });
-        delete snapshots[targetKey];
+        if (result?.restored) delete snapshots[targetKey];
         persistSnapshots(sessionId);
         return result;
     }
@@ -594,8 +619,8 @@
         const target = Math.round(Number(floor));
         if (!Number.isFinite(target) || target < 0) return;
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
-        if (baseKey) restoreBaseBeforeTarget(target, baseKey);
-        delete snapshots[String(target)];
+        const result = baseKey ? restoreBaseBeforeTarget(target, baseKey) : null;
+        if (result?.restored) delete snapshots[String(target)];
         persistSnapshots();
     }
 
@@ -649,6 +674,7 @@
         bind,
         isRealtimeEnabled,
         saveSnapshot,
+        captureBaseSnapshotBeforeMessage,
         captureMessageSnapshot,
         captureCurrentStateSnapshot,
         markManualEdit,

@@ -458,16 +458,17 @@
         if (options.force !== true && hasProcessedText(text)) return { success: false, count: 0, skipped: true };
         if (!rows.length || applying) return { success: false, count: 0 };
         const state = YuzukiMemory.Storage?.loadState?.(createDefaultState()) || createDefaultState();
+        const chat = getContext()?.chat;
+        const floor = Number.isFinite(Number(options.floor))
+            ? Math.round(Number(options.floor))
+            : (Array.isArray(chat) ? chat.length - 1 : -1);
+        YuzukiMemory.BranchSnapshot?.captureBaseSnapshotBeforeMessage?.(floor, { state });
         let count = 0;
         applying = true;
         try {
             count = applyRowsToState(state, rows);
             if (count) {
                 YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, { allowDuringSwitch: true });
-                const chat = getContext()?.chat;
-                const floor = Number.isFinite(Number(options.floor))
-                    ? Math.round(Number(options.floor))
-                    : (Array.isArray(chat) ? chat.length - 1 : -1);
                 YuzukiMemory.BranchSnapshot?.captureMessageSnapshot?.(floor, { state });
                 if (options.dispatch !== false) {
                     window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', { detail: { source: 'memory-tag-parser', count } }));
