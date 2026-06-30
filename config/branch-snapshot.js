@@ -486,9 +486,10 @@
 
         const lastMessage = chat[chat.length - 1];
         const pendingTarget = Number(pendingRegenerateFloor);
-        const targetIndex = Number.isFinite(pendingTarget) && pendingTarget >= 0
-            ? Math.round(pendingTarget)
-            : (isAssistantMessage(lastMessage) ? chat.length - 1 : chat.length);
+        const hasPendingRegenerate = Number.isFinite(pendingTarget) && pendingTarget >= 0;
+        const isRerollRequest = hasPendingRegenerate || isAssistantMessage(lastMessage);
+        if (!isRerollRequest) return { restored: false, reason: 'new_message', targetIndex: chat.length };
+        const targetIndex = hasPendingRegenerate ? Math.round(pendingTarget) : chat.length - 1;
         const targetKey = String(targetIndex);
 
         const baseKey = findBaseSnapshotKey(targetIndex);
@@ -683,7 +684,6 @@
                 '[title="Regenerate"]',
                 '[aria-label="Regenerate"]',
                 '#option_regenerate',
-                '#send_but_sheld',
                 '.regenerate_response',
                 '.mes_regenerate',
             ].join(','));

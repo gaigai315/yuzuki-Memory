@@ -345,12 +345,21 @@
         }
     }
 
+    function chatContainsMemoryAnchor(chat) {
+        return chat.some((message) => {
+            const text = getPrimaryTextFromMessage(message);
+            const matched = !!text && MEMORY_VAR_PATTERN.test(text);
+            MEMORY_VAR_PATTERN.lastIndex = 0;
+            return matched;
+        });
+    }
+
     function processLegacyMemoryAnchors(chat, options = {}) {
         if (!Array.isArray(chat)) return chat;
         const injector = YuzukiMemory.VariableInjector;
         const storage = YuzukiMemory.Storage;
         if (!injector || !storage) return chat;
-        removeExistingMemoryInjections(chat);
+        if (chatContainsMemoryAnchor(chat)) removeExistingMemoryInjections(chat);
 
         if (window.isSummarizing || options.disableMemoryInjection === true) {
             chat.forEach((message) => {
