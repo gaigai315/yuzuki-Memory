@@ -454,9 +454,28 @@
         return count;
     }
 
+    function getRecordCounts(state) {
+        const records = state?.records && typeof state.records === 'object' ? state.records : {};
+        return Object.fromEntries(Object.entries(records).map(([tableId, tableRecords]) => [
+            tableId,
+            Array.isArray(tableRecords) ? tableRecords.length : 0,
+        ]));
+    }
+
     function applyMemoryText(text, options = {}) {
         const rows = extractMemoryRows(text);
-        if (!rows.length || applying) return { success: false, count: 0 };
+        const hasMemoryTag = MEMORY_TAG_PATTERN.test(String(text || ''));
+        MEMORY_TAG_PATTERN.lastIndex = 0;
+        if (!rows.length || applying) {
+            console.info('[yuzuki-Memory Realtime] apply skipped', {
+                floor: options.floor,
+                textLength: String(text || '').length,
+                hasMemoryTag,
+                rows: rows.length,
+                applying,
+            });
+            return { success: false, count: 0 };
+        }
         const state = YuzukiMemory.Storage?.loadState?.(createDefaultState()) || createDefaultState();
         const chat = getContext()?.chat;
         const floor = Number.isFinite(Number(options.floor))
@@ -468,15 +487,37 @@
         try {
             count = applyRowsToState(state, rows);
             if (count) {
-                YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, {
+                const saved = YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, {
                     allowDuringSwitch: true,
                     force: true,
                     saveOrigin: 'auto',
                 });
+                const storedState = YuzukiMemory.Storage?.loadState?.(createDefaultState());
+                console.info('[yuzuki-Memory Realtime] memory rows applied', {
+                    floor,
+                    rows: rows.length,
+                    applied: count,
+                    saved: !!saved,
+                    stateCounts: getRecordCounts(state),
+                    storedCounts: getRecordCounts(storedState),
+                });
+                if (!saved) {
+                    console.warn('[yuzuki-Memory Realtime] save failed after applying memory rows', {
+                        floor,
+                        rows: rows.length,
+                        applied: count,
+                    });
+                    return { success: false, count: 0, saveFailed: true };
+                }
                 YuzukiMemory.BranchSnapshot?.captureMessageSnapshot?.(floor, { state });
                 if (options.dispatch !== false) {
                     window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', { detail: { source: 'memory-tag-parser', count } }));
                 }
+            } else {
+                console.info('[yuzuki-Memory Realtime] parsed rows but nothing applied', {
+                    floor,
+                    rows: rows.length,
+                });
             }
             return { success: count > 0, count };
         } finally {
@@ -487,8 +528,10 @@
     function getMessageText(message) {
         if (!message || typeof message !== 'object') return String(message || '');
         const swipeId = Number(message.swipe_id ?? 0);
+        const primary = String(message.mes || message.content || message.text || '');
+        if (primary) return primary;
         if (Array.isArray(message.swipes) && message.swipes.length > swipeId) return String(message.swipes[swipeId] || '');
-        return String(message.mes || message.content || message.text || '');
+        return '';
     }
 
     function isAssistantMessage(message) {
@@ -547,10 +590,18 @@
         const message = chat[target];
         if (!isAssistantMessage(message)) return;
         if (shouldSkipMessage(target, message, options)) return;
-        if (YuzukiMemory.BranchSnapshot?.isRealtimeEnabled?.()) {
+        if (options.rollbackBeforeApply === true && YuzukiMemory.BranchSnapshot?.isRealtimeEnabled?.()) {
             YuzukiMemory.BranchSnapshot?.rollbackBeforeMessage?.(target, { force: options.force === true });
         }
         const text = getMessageText(message);
+        console.info('[yuzuki-Memory Realtime] process message', {
+            floor: target,
+            textLength: text.length,
+            hasMemoryTag: /<(Memory|GaigaiMemory|memory|tableEdit|gaigaimemory|tableedit)>[\s\S]*?<\/\1>/i.test(text),
+            hasMes: typeof message?.mes === 'string' && message.mes.length > 0,
+            swipesLength: Array.isArray(message?.swipes) ? message.swipes.length : 0,
+            swipeId: Number(message?.swipe_id ?? 0),
+        });
         const result = applyMemoryText(text, { floor: target, force: options.force === true });
         if (result?.success) {
             YuzukiMemory.BranchSnapshot?.setProcessedMessageSignature?.(target, getMessageProcessSignature(message));

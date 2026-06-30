@@ -471,7 +471,10 @@
         await applyPreRequestHiding();
         const hiddenTexts = YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || [];
         removeHiddenMessagesFromBody(rawBody, hiddenTexts);
-        YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
+        const isDryRunLike = !!(rawBody?.dryRun || rawBody?.isDryRun || rawBody?.quiet || rawBody?.bg || rawBody?.no_update);
+        if (!isDryRunLike) {
+            YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
+        }
         const hasMemoryDataVariable = bodyContainsMemoryDataVariable(rawBody);
         const hasVectorVariable = bodyContainsVectorVariable(rawBody);
         const hasAnyMemoryVariable = bodyContainsAnyMemoryVariable(rawBody);

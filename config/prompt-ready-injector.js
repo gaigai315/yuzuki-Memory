@@ -576,9 +576,15 @@
         return { type: '', chat: null, owner: null };
     }
 
+    function isDryRunLike(value) {
+        const data = value?.detail || value || {};
+        return !!(data.dryRun || data.isDryRun || data.quiet || data.bg || data.no_update);
+    }
+
     async function processPromptReadyChat(input) {
         const container = resolveChatContainer(input);
         if (!Array.isArray(container.chat)) return input;
+        if (isDryRunLike(input)) return input;
         YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
         const injectedChat = processLegacyMemoryAnchors(safeDeepClone(container.chat), {
             disableFallback: true,
@@ -598,6 +604,7 @@
 
     function handlePromptReadyEvent(event) {
         if (YuzukiMemory.PromptReadyInjector?.activeInstallId !== INSTALL_ID) return;
+        if (isDryRunLike(event)) return;
         const detailHasChat = !!(event && event.detail && Array.isArray(event.detail.chat));
         const eventHasChat = !!(event && Array.isArray(event.chat));
         const data = detailHasChat ? event.detail : (eventHasChat ? event : (event?.detail || event));

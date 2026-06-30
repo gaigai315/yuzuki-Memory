@@ -103,8 +103,10 @@
     function getMessageText(message) {
         if (!message || typeof message !== 'object') return String(message || '');
         const swipeId = Number(message.swipe_id ?? 0);
+        const primary = String(message.mes || message.content || message.text || '');
+        if (primary) return primary;
         if (Array.isArray(message.swipes) && message.swipes.length > swipeId) return String(message.swipes[swipeId] || '');
-        return String(message.mes || message.content || message.text || '');
+        return '';
     }
 
     function isAssistantMessage(message) {
