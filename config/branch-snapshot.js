@@ -586,17 +586,33 @@
 
     function prepareSwipeFloor(floor) {
         if (!isRealtimeEnabled()) return false;
+        const sessionId = ensureSessionLoaded();
         const target = Math.max(0, Math.round(Number(floor) || 0));
         markRequestRollbackFloor(target);
         markApplyRollbackFloor(target);
         clearProcessedMessageSignature(target);
         YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(target);
+        const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
         const restored = rollbackToBaseBeforeFloor(target);
         delete snapshots[String(target)];
         Object.keys(branchSnapshots).forEach((key) => {
             if (key.startsWith(`${target}:`)) delete branchSnapshots[key];
         });
-        persistSnapshots();
+        persistSnapshots(sessionId);
+        console.info('[yuzuki-Memory Swipe] prepared floor rollback', {
+            target,
+            baseKey,
+            restored,
+            snapshotKeys: Object.keys(snapshots).sort((a, b) => Number(a) - Number(b)),
+        });
+        window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
+            detail: {
+                source: 'branch-snapshot',
+                key: String(baseKey || target),
+                swipePrepared: true,
+                restored,
+            },
+        }));
         return restored;
     }
 
@@ -721,7 +737,7 @@
             eventSource.on(eventTypes.MESSAGE_SWIPED, (id) => {
                 const floor = Math.max(0, Math.round(Number(id) || 0));
                 prepareSwipeFloor(floor);
-                scheduleSwipeResolve(floor, 180);
+                scheduleSwipeResolve(floor, 350);
             });
         }
         document.addEventListener('click', (event) => {
@@ -731,7 +747,7 @@
             if (!chat.length) return;
             const floor = getMessageFloorFromElement(button, chat.length - 1);
             prepareSwipeFloor(floor);
-            scheduleSwipeResolve(floor, 420);
+            scheduleSwipeResolve(floor, 520);
         }, true);
         document.addEventListener('click', (event) => {
             const button = event.target?.closest?.('[data-i18n="Regenerate"], #option_regenerate, .regenerate_response');
