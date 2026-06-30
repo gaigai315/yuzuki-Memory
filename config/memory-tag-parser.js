@@ -105,6 +105,10 @@
             .filter(Boolean);
     }
 
+    function cleanPrimaryValue(value = '') {
+        return String(value || '').trim().replace(/^\[|\]$/g, '').trim();
+    }
+
     function parseFieldSegment(segment) {
         const match = String(segment || '').match(/^([^:：]+)[:：]([\s\S]*)$/);
         if (!match) return null;
@@ -210,7 +214,7 @@
         return { time, content };
     }
 
-    function parseMemoryText(text) {
+    function parseMemoryText(text, state = createDefaultState()) {
         const cleanText = String(text || '').replace(COMMENT_PATTERN, '\n');
         const rows = [];
         let currentTable = '';
@@ -244,6 +248,24 @@
                     return;
                 }
             }
+            const segments = splitSegments(line);
+            if (segments.length >= 3) {
+                const firstLooksTable = !!findTable(state, segments[0]);
+                const tableName = firstLooksTable ? segments[0] : currentTable;
+                const primaryValue = cleanPrimaryValue(firstLooksTable ? segments[1] : segments[0]);
+                const fieldSegments = firstLooksTable ? segments.slice(2) : segments.slice(1);
+                const values = {};
+                fieldSegments.forEach((segment) => {
+                    const parsed = parseFieldSegment(segment);
+                    if (!parsed || !parsed.field) return;
+                    const fieldName = parsed.field.replace(/^#/, '').trim();
+                    values[fieldName] = parsed.value;
+                });
+                if (tableName && primaryValue && Object.keys(values).length) {
+                    rows.push({ table: tableName, primaryValue, values });
+                    return;
+                }
+            }
             const keyMatch = line.match(/^\[([^\]]+)\]\s*(?:\||$)([\s\S]*)$/);
             if (!keyMatch || !currentTable) return;
             const primaryValue = keyMatch[1].trim();
@@ -269,6 +291,16 @@
         MEMORY_TAG_PATTERN.lastIndex = 0;
         while ((match = MEMORY_TAG_PATTERN.exec(String(text || ''))) !== null) {
             rows.push(...parseMemoryText(match[2]));
+        }
+        return rows;
+    }
+
+    function extractMemoryRowsForState(text, state) {
+        const rows = [];
+        let match;
+        MEMORY_TAG_PATTERN.lastIndex = 0;
+        while ((match = MEMORY_TAG_PATTERN.exec(String(text || ''))) !== null) {
+            rows.push(...parseMemoryText(match[2], state));
         }
         return rows;
     }
@@ -454,9 +486,9 @@
     }
 
     function applyMemoryText(text, options = {}) {
-        const rows = extractMemoryRows(text);
-        if (!rows.length || applying) return { success: false, count: 0 };
         const state = YuzukiMemory.Storage?.loadState?.(createDefaultState()) || createDefaultState();
+        const rows = extractMemoryRowsForState(text, state);
+        if (!rows.length || applying) return { success: false, count: 0 };
         const chat = getContext()?.chat;
         const floor = Number.isFinite(Number(options.floor))
             ? Math.round(Number(options.floor))
@@ -467,7 +499,15 @@
         try {
             count = applyRowsToState(state, rows);
             if (count) {
-                YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, { allowDuringSwitch: true });
+                const saved = YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, {
+                    allowDuringSwitch: true,
+                    force: true,
+                    saveOrigin: 'auto',
+                });
+                if (!saved) {
+                    console.warn('[yuzuki-Memory] 实时填表写入保存失败。', { floor, count });
+                    return { success: false, count: 0, saveFailed: true };
+                }
                 YuzukiMemory.BranchSnapshot?.captureMessageSnapshot?.(floor, { state });
                 if (options.dispatch !== false) {
                     window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', { detail: { source: 'memory-tag-parser', count } }));
