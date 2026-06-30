@@ -65,6 +65,7 @@
     const CHAT_REQUEST_COOLDOWN_MS = 1500;
     const AUTO_TASK_BACKFILL_RETRY_MS = 15000;
     const AUTO_TASK_BACKFILL_NEXT_MS = 2500;
+    const USER_INPUT_RETRY_MS = 3000;
 
     function isGenerationBusy() {
         const ctx = getContext();
@@ -85,6 +86,18 @@
         if (activeCount > 0) return true;
         const lastFinishedAt = Number(state.lastFinishedAt ?? window.yzmMemoryLastChatRequestFinishedAt) || 0;
         return lastFinishedAt > 0 && Date.now() - lastFinishedAt < CHAT_REQUEST_COOLDOWN_MS;
+    }
+
+    function isUserTextInputActive() {
+        const active = document.activeElement;
+        if (!active || active === document.body) return false;
+        const tagName = String(active.tagName || '').toLowerCase();
+        if (tagName === 'textarea') return true;
+        if (tagName === 'input') {
+            const type = String(active.type || 'text').toLowerCase();
+            return !['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'file', 'color'].includes(type);
+        }
+        return active.isContentEditable === true;
     }
 
     function isPluginTaskBusy() {
@@ -264,7 +277,7 @@
         return String(text || '')
             .replace(/<Memory>[\s\S]*?<\/Memory>/gi, '')
             .replace(/<GaigaiMemory>[\s\S]*?<\/GaigaiMemory>/gi, '')
-            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/gi, '')
+            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:_[^{}]+)?|MEMORY_TABLE(?:_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\}\}/gi, '')
             .trim();
     }
 
@@ -572,7 +585,7 @@
             .replace(/\{\{user\}\}/g, names.user)
             .replace(/\{\{char\}\}/g, names.char)
             .replace(/\{\{BRANCH_SUMMARY_NAMES\}\}/gi, () => buildBranchSummaryNamesText(state))
-            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS)\}\}/gi, () => suppressMemoryTables ? '' : buildDatabaseSchemaText(state, options))
+            .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS)\}\}/gi, () => suppressMemoryTables ? '' : buildDatabaseSchemaText(state, options))
             .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName) || ''))
             .replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSpecificSummaryText?.(state, summaryKey) || ''))
             .replace(/\{\{MEMORY_TABLE\}\}/gi, () => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildAllTablesText?.(state) || tablesToReferenceText(state, options)))
@@ -1705,6 +1718,23 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return { messages, range };
     }
 
+    function buildRecentChatContextMessage(options = {}) {
+        if (options.optimizeContextEnabled !== true) return null;
+        const chatLength = getChatLength();
+        if (!chatLength) return null;
+        const count = Math.min(Math.max(1, Math.round(Number(options.optimizeContextCount) || 10)), 200);
+        const start = Math.max(0, chatLength - count);
+        const range = chatMessagesFromRange(start, chatLength);
+        if (!range.messages.length) return null;
+        return {
+            role: 'system',
+            content: [
+                `【最近聊天上下文】以下为当前聊天最后 ${range.messages.length} 条可用消息，仅用于辅助判断待优化表格的称呼、状态和时间顺序；不得据此编造待优化表格中没有依据的新条目。`,
+                ...range.messages.map((message) => message.content),
+            ].join('\n'),
+        };
+    }
+
     async function runTrace(state, options = {}) {
         const built = buildTraceMessages(state, options);
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
@@ -1739,11 +1769,21 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     async function runTraceOptimize(state, options = {}) {
-        const prompt = resolveTaskPromptVariables(compactLines([getActivePromptScheme(state)?.prompts?.traceOptimize, getDefaultOptimizePrompt('trace'), options.note]), state, options);
+        const scheme = getActivePromptScheme(state);
+        const prompt = resolveTaskPromptVariables(compactLines([scheme?.prompts?.traceOptimize, getDefaultOptimizePrompt('trace')]), state, options);
+        const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, {
+            ...options,
+            suppressMemoryData: true,
+        });
+        const recentContextMessage = buildRecentChatContextMessage(options);
+        const note = String(options.note || '').trim();
+        const tableText = tablesToReferenceText(state, options) || '（暂无）';
         const messages = withMemoryPrefill([
-            { role: 'system', content: prompt },
-            { role: 'user', content: `【待优化表格】\n${tablesToReferenceText(state, options) || '（暂无）'}\n\n请按系统提示词要求输出优化后的结果。` },
-        ]);
+            historianPrompt ? { role: 'system', content: historianPrompt } : null,
+            recentContextMessage,
+            { role: 'system', content: `【待优化表格】\n${tableText}` },
+            { role: 'user', content: `${prompt}${note ? `\n\n【本次重点优化建议】\n${note}` : ''}\n\n请根据以上待优化表格和优化要求输出优化后的结果。` },
+        ].filter(Boolean));
         const response = await generate(messages, { ...options, kind: 'traceOptimize' });
         if (!response.success) return response;
         const parsed = parseTraceResponse(response.text);
@@ -2004,6 +2044,16 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const pluginSettings = getPluginSettings();
 
         const autoSave = pluginSettings.traceRunMode === 'silent';
+        if (!autoSave) {
+            const shouldRun = await confirmAutoTask(task, callbacks);
+            if (shouldRun?.action !== 'confirm') return { skipped: true };
+            if (Number(shouldRun.postpone) > 0) {
+                const pointers = normalizePointers(state);
+                pointers.trace = Math.max(0, task.currentCount - task.threshold + Math.round(Number(shouldRun.postpone) || 0));
+                callbacks.saveState?.();
+                return { postponed: true };
+            }
+        }
         notifyAutoTaskStarted(task);
         const result = await runTrace(state, {
             start: task.start,
@@ -2055,6 +2105,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             }
             if (isPluginTaskBusy() || isGenerationBusy() || isChatRequestBusy()) {
                 scheduleAutoSummary(callbacks, 2000);
+                return;
+            }
+            if (isUserTextInputActive()) {
+                scheduleAutoSummary(callbacks, USER_INPUT_RETRY_MS);
                 return;
             }
             const state = callbacks.getState?.();
@@ -2123,8 +2177,19 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             autoTaskSessionId = currentSessionId;
             autoTaskBaselineChatLength = Math.max(0, chatLength - 1);
         }
-        if (chatLength <= autoTaskBaselineChatLength) return;
         if (!isLatestAssistantMessage()) return;
+        if (chatLength <= autoTaskBaselineChatLength) {
+            const state = callbacks.getState?.();
+            if (!state) return;
+            const task = buildPendingAutoTask(
+                normalizePointers(state),
+                chatLength,
+                getAutoSummarySettings(),
+                getPluginSettings()
+            );
+            if (!task) return;
+            autoTaskBaselineChatLength = Math.max(0, chatLength - 1);
+        }
         autoTaskArmed = true;
         scheduleAutoSummary(callbacks);
     }

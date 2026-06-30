@@ -10,9 +10,9 @@
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
     const CHARACTER_PROFILE_TABLE_ID = 'character_profile';
     const DEFAULT_STATE_REVISION = 13;
-    const MEMORY_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/gi;
-    const ANCHOR_VARIABLE_PATTERN = /^\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}$/i;
-    const STRUCTURED_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT)\s*\}\}/gi;
+    const MEMORY_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/gi;
+    const ANCHOR_VARIABLE_PATTERN = /^\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}$/i;
+    const STRUCTURED_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT)\s*\}\}/gi;
     const VECTOR_CLEANUP_VARIABLE_PATTERN = /\{\{\s*VECTOR_MEMORY\s*\}\}/gi;
     const MEMORY_DATA_VARIABLE_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY)\s*\}\}/i;
     const MEMORY_DATA_ANCHOR_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}/gi;
@@ -272,6 +272,8 @@
         if (upper.startsWith('MEMORY_SUMMARY_')) return `{{MEMORY_SUMMARY_${normalized.slice('MEMORY_SUMMARY_'.length)}}}`;
         if (upper === 'DATABASE_SCHEMA') return '{{DATABASE_SCHEMA}}';
         if (upper === 'TABLE_DEFINITIONS') return '{{TABLE_DEFINITIONS}}';
+        if (upper === 'TARGET_TABLE_DEFINITIONS') return '{{TARGET_TABLE_DEFINITIONS}}';
+        if (upper === 'OPTIMIZE_TABLE_DEFINITIONS') return '{{OPTIMIZE_TABLE_DEFINITIONS}}';
         if (upper === 'BRANCH_SUMMARY_NAMES') return '{{BRANCH_SUMMARY_NAMES}}';
         if (upper === 'MEMORY_SUMMARY') return '{{MEMORY_SUMMARY}}';
         if (upper === 'MEMORY_TABLE') return '{{MEMORY_TABLE}}';
@@ -569,7 +571,7 @@
             if (tableName) return buildSpecificTableText(state, tableName);
             const summaryKey = getSpecificAnchorName(match, 'MEMORY_SUMMARY');
             if (summaryKey) return buildSpecificSummaryText(state, summaryKey);
-            if (key === '{{DATABASE_SCHEMA}}' || key === '{{TABLE_DEFINITIONS}}') return buildDatabaseSchemaText(state);
+            if (key === '{{DATABASE_SCHEMA}}' || key === '{{TABLE_DEFINITIONS}}' || key === '{{TARGET_TABLE_DEFINITIONS}}' || key === '{{OPTIMIZE_TABLE_DEFINITIONS}}') return buildDatabaseSchemaText(state);
             if (key === '{{BRANCH_SUMMARY_NAMES}}') return buildBranchSummaryNamesText(state);
             if (key === '{{MEMORY_TABLE}}') return buildAllTablesText(state);
             if (key === '{{MEMORY_SUMMARY}}') return buildSummaryText(state);
@@ -1209,7 +1211,7 @@
         if (key === '{{MEMORY_PROMPT}}') {
             node.isGaigaiPrompt = true;
             if (!node.name && !node.identifier) node.name = 'SYSTEM (提示词)';
-        } else if (key === '{{DATABASE_SCHEMA}}' || key === '{{TABLE_DEFINITIONS}}') {
+        } else if (key === '{{DATABASE_SCHEMA}}' || key === '{{TABLE_DEFINITIONS}}' || key === '{{TARGET_TABLE_DEFINITIONS}}' || key === '{{OPTIMIZE_TABLE_DEFINITIONS}}') {
             node.isGaigaiPrompt = true;
             if (!node.name && !node.identifier) node.name = 'SYSTEM (数据库结构)';
         } else if (key === '{{VECTOR_MEMORY}}') {
@@ -1319,6 +1321,8 @@
             '{{MEMORY_PROMPT}}': allowMemoryPrompt ? buildMemoryPromptText(state) : '{{MEMORY_PROMPT}}',
             '{{DATABASE_SCHEMA}}': allowTable ? buildDatabaseSchemaText(state) : '{{DATABASE_SCHEMA}}',
             '{{TABLE_DEFINITIONS}}': allowTable ? buildDatabaseSchemaText(state) : '{{TABLE_DEFINITIONS}}',
+            '{{TARGET_TABLE_DEFINITIONS}}': allowTable ? buildDatabaseSchemaText(state) : '{{TARGET_TABLE_DEFINITIONS}}',
+            '{{OPTIMIZE_TABLE_DEFINITIONS}}': allowTable ? buildDatabaseSchemaText(state) : '{{OPTIMIZE_TABLE_DEFINITIONS}}',
             '{{VECTOR_MEMORY}}': settings.injectVectorMemory ? resolveRuntimeVariables(vectorText) : '{{VECTOR_MEMORY}}',
             '{{user}}': names.user,
             '{{char}}': names.char,
@@ -1340,7 +1344,7 @@
             if (name === 'MEMORY_PROMPT') return buildMemoryPromptText(state);
             if (name === 'MEMORY_SUMMARY') return buildSummaryText(state);
             if (name === 'MEMORY_TABLE') return buildAllTablesText(state);
-            if (name === 'DATABASE_SCHEMA' || name === 'TABLE_DEFINITIONS') return buildDatabaseSchemaText(state);
+            if (name === 'DATABASE_SCHEMA' || name === 'TABLE_DEFINITIONS' || name === 'TARGET_TABLE_DEFINITIONS' || name === 'OPTIMIZE_TABLE_DEFINITIONS') return buildDatabaseSchemaText(state);
             if (name === 'BRANCH_SUMMARY_NAMES') return buildBranchSummaryNamesText(state);
             return '';
         };
@@ -1354,6 +1358,8 @@
             'MEMORY_TABLE',
             'DATABASE_SCHEMA',
             'TABLE_DEFINITIONS',
+            'TARGET_TABLE_DEFINITIONS',
+            'OPTIMIZE_TABLE_DEFINITIONS',
             'BRANCH_SUMMARY_NAMES',
         ]);
         return Array.from(names);

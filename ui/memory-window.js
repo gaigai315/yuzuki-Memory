@@ -4390,6 +4390,7 @@
                 createApiField('', targetSelect),
                 createTraceTextBlock('将对当前选定记忆中的追溯内容进行优化。'),
             ]),
+            createTraceOptimizeContextCard(),
             createApiCard('重点优化建议（可选）', 'fa-regular fa-lightbulb', [
                 note,
             ]),
@@ -4403,6 +4404,23 @@
             createTraceStartButton('开始优化', 'traceOptimize')
         );
         return panel;
+    }
+
+    function createTraceOptimizeContextCard() {
+        const contextCountInput = createTraceNumberInput('10');
+        const input = contextCountInput.querySelector('.yzm-api-input');
+        if (input) {
+            input.min = '1';
+            input.max = '200';
+            input.dataset.yzmOptimizeContextCount = 'true';
+        }
+        const switchButton = createConfigSwitch(false);
+        switchButton.dataset.yzmOptimizeContextToggle = 'true';
+        return createApiCard('最近聊天上下文', 'fa-regular fa-comments', [
+            createTraceSwitchRow(switchButton, '注入最近聊天上下文'),
+            createApiField('最近聊天条数', createTraceUnitInput(contextCountInput, '条')),
+            createTraceTextBlock('开启后，优化请求会额外携带最近 N 条聊天内容；关闭时仅使用待优化表格和优化提示词。'),
+        ]);
     }
 
     function createManualSummaryPanel() {
@@ -4809,6 +4827,13 @@
         return card;
     }
 
+    function createTraceSwitchRow(switchButton, labelText) {
+        const row = document.createElement('div');
+        row.className = 'yzm-trace-switch-row';
+        row.append(switchButton, document.createTextNode(labelText));
+        return row;
+    }
+
     function createTraceBatchSettings(taskKind = 'trace') {
         const settings = getPluginSettings();
         const isSummary = taskKind === 'summary';
@@ -4988,6 +5013,10 @@
             .map((input) => input.dataset.yzmSummaryOptimizeRecordId)
             .filter(Boolean);
         const note = String(panel?.querySelector('[data-yzm-task-note]')?.value || '').trim();
+        const optimizeContextEnabled = panel?.querySelector('[data-yzm-optimize-context-toggle]')?.classList.contains('yzm-config-switch-on') === true;
+        const optimizeContextCountInput = panel?.querySelector('[data-yzm-optimize-context-count]');
+        const optimizeContextCount = Math.round(normalizeNumberSetting(optimizeContextCountInput?.value, 1, 200, 10, 0));
+        if (optimizeContextCountInput) optimizeContextCountInput.value = String(optimizeContextCount);
         const silent = panel?.querySelector('.yzm-trace-radio-active input')?.value === 'silent';
         const batchSizeInput = panel?.querySelector('[data-yzm-task-batch-size]');
         const batchSizeKey = batchSizeInput?.dataset.yzmTaskBatchSize || '';
@@ -4999,6 +5028,8 @@
             summaryTarget,
             summaryRecordIds,
             note,
+            optimizeContextEnabled,
+            optimizeContextCount,
             silent,
             batchEnabled: !!settings[batchEnabledKey],
             batchSize: Math.round(normalizeNumberSetting(batchSizeInput?.value, 1, 9999, settings[batchSizeKey] || 40, 0)),
@@ -5181,7 +5212,6 @@
                 settled = true;
                 if (activeTaskResultDialogCloser === closeWith) activeTaskResultDialogCloser = null;
                 editableTextarea.blur();
-                close.focus();
                 overlay.remove();
                 document.removeEventListener('keydown', handleKeydown);
                 resolve(value);
@@ -5197,7 +5227,6 @@
             });
             dialog.addEventListener('click', (event) => event.stopPropagation());
             document.addEventListener('keydown', handleKeydown);
-            editableTextarea.focus();
         });
     }
 
@@ -5270,8 +5299,6 @@
             });
             dialog.addEventListener('click', (event) => event.stopPropagation());
             document.addEventListener('keydown', handleKeydown);
-            postponeInput.focus();
-            postponeInput.select();
         });
     }
 
@@ -5558,6 +5585,15 @@
         try {
             const canBatch = action === 'trace' || action === 'summary';
             const batches = canBatch ? buildTaskBatches(options) : [{ start: options.start, end: options.end }];
+            if (options.silent) {
+                const firstBatch = batches[0] || { start: options.start, end: options.end };
+                const lastBatch = batches[batches.length - 1] || firstBatch;
+                const rangeText = (action === 'trace' || action === 'summary')
+                    ? `楼层 ${formatTaskDisplayRange(firstBatch.start, lastBatch.end)}`
+                    : '当前目标';
+                const batchText = batches.length > 1 ? `，共 ${batches.length} 批` : '';
+                showTaskToast(`${getTaskActionLabel(action)}已开始（${rangeText}${batchText}），正在请求 API。`, 'info');
+            }
             const llmSnapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.() || null;
             const results = [];
             for (let index = 0; index < batches.length; index += 1) {
@@ -9544,6 +9580,9 @@
         [
             '优化批量填表非静默功能。',
             '修复旧记忆表格向量化导入新记忆插件虚假绑定。',
+            '修复自动总结确认弹窗抢占聊天输入焦点。',
+            '优化填表优化的功能。',
+            '修复批量填表自动发起弹窗确认逻辑。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11439,10 +11478,15 @@
                 const actionButton = target?.closest('[data-yzm-trace-action]');
                 const taskButton = target?.closest('[data-yzm-task-action]');
                 const batchSwitch = target?.closest('[data-yzm-task-batch-enabled]');
-                if (!actionButton && !taskButton && !batchSwitch) return;
+                const optimizeContextSwitch = target?.closest('[data-yzm-optimize-context-toggle]');
+                if (!actionButton && !taskButton && !batchSwitch && !optimizeContextSwitch) return;
                 event.preventDefault();
                 event.stopPropagation();
                 if (actionButton?.dataset.yzmTraceAction === 'editPointer') openTracePointerDialog(root);
+                if (optimizeContextSwitch) {
+                    toggleConfigSwitch(optimizeContextSwitch);
+                    return;
+                }
                 if (batchSwitch) {
                     updateTaskBatchEnabled(batchSwitch);
                     return;
