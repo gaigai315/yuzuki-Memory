@@ -10,6 +10,9 @@
     const DEFAULT_SEPARATOR = '===';
     const BOOK_KIND_SUMMARY = 'summary';
     const BOOK_KIND_CHARACTER_PROFILE = 'character_profile';
+    const MAX_VECTOR_CHUNK_CHARS = 4000;
+    const VECTOR_CHUNK_OVERLAP_CHARS = 180;
+    const MAX_VECTOR_BATCH_CHARS = 16000;
 
     class VectorStore {
         constructor() {
@@ -308,18 +311,67 @@
             return true;
         }
 
+        splitLongTextPart(text, maxChars = MAX_VECTOR_CHUNK_CHARS, overlapChars = VECTOR_CHUNK_OVERLAP_CHARS) {
+            const source = String(text || '').trim();
+            if (!source) return [];
+            if (source.length <= maxChars) return [source];
+
+            const chunks = [];
+            let current = '';
+            const paragraphs = source
+                .replace(/\r\n/g, '\n')
+                .split(/\n{2,}/)
+                .map((part) => part.trim())
+                .filter(Boolean);
+            const units = paragraphs.length > 1
+                ? paragraphs
+                : source.replace(/([。！？!?；;])/g, '$1\n').split(/\n+/).map((part) => part.trim()).filter(Boolean);
+
+            const pushCurrent = () => {
+                const value = current.trim();
+                if (value) chunks.push(value);
+                current = '';
+            };
+
+            const appendUnit = (unit) => {
+                const value = String(unit || '').trim();
+                if (!value) return;
+                if (value.length > maxChars) {
+                    pushCurrent();
+                    for (let cursor = 0; cursor < value.length; cursor += Math.max(1, maxChars - overlapChars)) {
+                        chunks.push(value.slice(cursor, cursor + maxChars).trim());
+                    }
+                    return;
+                }
+                const separator = current ? '\n\n' : '';
+                if ((current.length + separator.length + value.length) > maxChars) {
+                    pushCurrent();
+                }
+                current = current ? `${current}${separator}${value}` : value;
+            };
+
+            units.forEach(appendUnit);
+            pushCurrent();
+            return chunks.filter(Boolean);
+        }
+
+        normalizeChunks(chunks) {
+            const source = Array.isArray(chunks) ? chunks : [chunks];
+            return source.flatMap((chunk) => this.splitLongTextPart(chunk)).filter(Boolean);
+        }
+
         splitText(text, separator = DEFAULT_SEPARATOR) {
             const source = String(text || '');
             const parts = separator === '\\n' || separator === '\n'
                 ? source.split(/\n+/)
                 : source.split(separator);
-            return parts.map((part) => part.trim()).filter(Boolean);
+            return this.normalizeChunks(parts);
         }
 
         async setBookChunks(bookId, chunks) {
             const book = this.library[bookId];
             if (!book) return false;
-            const nextChunks = chunks.map((chunk) => String(chunk || '').trim()).filter(Boolean);
+            const nextChunks = this.normalizeChunks(chunks);
             const previousVectors = new Map();
             book.chunks.forEach((chunk, index) => {
                 if (book.vectorized[index] && Array.isArray(book.vectors[index])) {
@@ -346,7 +398,7 @@
         }
 
         async syncSummaryToBook(chunks, sessionId = 'default', bookName = '') {
-            const normalizedChunks = Array.isArray(chunks) ? chunks.map((chunk) => String(chunk || '').trim()).filter(Boolean) : [];
+            const normalizedChunks = this.normalizeChunks(chunks);
             if (!normalizedChunks.length) return { success: false, count: 0, error: '总结内容为空' };
 
             const id = `yzm_summary_book_${String(sessionId || 'default').replace(/[^\w-]/g, '_')}`;
@@ -410,7 +462,7 @@
         }
 
         async syncCharacterProfilesToBook(chunks, sessionId = 'default', bookName = '') {
-            const normalizedChunks = Array.isArray(chunks) ? chunks.map((chunk) => String(chunk || '').trim()).filter(Boolean) : [];
+            const normalizedChunks = this.normalizeChunks(chunks);
             const id = this.getCharacterProfileBookId(sessionId);
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话角色档案';
@@ -481,6 +533,9 @@
             const book = this.library[bookId];
             if (!book) throw new Error('向量书不存在');
             const force = options && typeof options === 'object' && options.force === true;
+            if (Array.isArray(book.chunks) && book.chunks.some((chunk) => String(chunk || '').length > MAX_VECTOR_CHUNK_CHARS)) {
+                await this.setBookChunks(bookId, book.chunks);
+            }
             const pending = book.chunks
                 .map((chunk, index) => ({ chunk, index }))
                 .filter(({ index }) => force || !book.vectorized[index] || !Array.isArray(book.vectors[index]));
@@ -496,11 +551,20 @@
             let success = 0;
             let errors = 0;
             let batchSize = 10;
-            for (let cursor = 0; cursor < pending.length; cursor += batchSize) {
+            for (let cursor = 0; cursor < pending.length;) {
                 const batchStart = cursor;
-                const batch = pending.slice(cursor, cursor + batchSize);
+                const batch = [];
+                let batchChars = 0;
+                while (cursor < pending.length && batch.length < batchSize) {
+                    const item = pending[cursor];
+                    const length = String(item.chunk || '').length;
+                    if (batch.length && batchChars + length > MAX_VECTOR_BATCH_CHARS) break;
+                    batch.push(item);
+                    batchChars += length;
+                    cursor += 1;
+                }
                 try {
-                    progressCallback?.(Math.min(cursor + batch.length, pending.length), pending.length);
+                    progressCallback?.(Math.min(cursor, pending.length), pending.length);
                     const vectors = await YuzukiMemory.EmbeddingClient.embed(batch.map((item) => item.chunk));
                     batch.forEach((item, offset) => {
                         const vector = vectors[offset];
@@ -517,7 +581,7 @@
                     const message = String(error?.message || error || '');
                     if (/429|rate|limit/i.test(message) && batchSize > 1) {
                         batchSize = Math.max(1, Math.floor(batchSize / 2));
-                        cursor = batchStart - batchSize;
+                        cursor = batchStart;
                         await new Promise((resolve) => setTimeout(resolve, 10000));
                         continue;
                     }

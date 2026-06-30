@@ -3837,7 +3837,8 @@
                 const defaultName = file.name.replace(/\.[^.]+$/, '');
                 const name = window.prompt('请输入书名（留空则使用文件名）：', defaultName);
                 if (name === null) return;
-                await store.importBook(file, name || defaultName);
+                const result = await store.importBook(file, name || defaultName);
+                window.alert(`导入完成：已分割为 ${result.count || 0} 段。`);
             } else {
                 await store.importLibrary(file);
             }
@@ -9584,6 +9585,7 @@
             '优化填表优化的功能。',
             '修复批量填表自动发起弹窗确认逻辑。',
             '修复重roll和swipe的逻辑。',
+            '向量化优化新增自助切分。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
