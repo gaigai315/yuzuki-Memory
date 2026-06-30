@@ -15,8 +15,8 @@
     let bound = false;
     let applying = false;
     let bindRetryTimer = null;
-    const processedSignatures = new Set();
-    const processedSignatureQueue = [];
+    const processedMessageSignatures = {};
+    const pendingTimers = {};
 
     const DEFAULT_TABLES = [
         { id: 'plot_summary', name: '剧情摘要', icon: 'timeline', columns: ['#主线', '#支线'] },
@@ -455,7 +455,6 @@
 
     function applyMemoryText(text, options = {}) {
         const rows = extractMemoryRows(text);
-        if (options.force !== true && hasProcessedText(text)) return { success: false, count: 0, skipped: true };
         if (!rows.length || applying) return { success: false, count: 0 };
         const state = YuzukiMemory.Storage?.loadState?.(createDefaultState()) || createDefaultState();
         const chat = getContext()?.chat;
@@ -500,15 +499,51 @@
         return `${source.length}:${hash}`;
     }
 
-    function hasProcessedText(text = '') {
-        const signature = getTextSignature(text);
-        if (processedSignatures.has(signature)) return true;
-        processedSignatures.add(signature);
-        processedSignatureQueue.push(signature);
-        while (processedSignatureQueue.length > 50) {
-            processedSignatures.delete(processedSignatureQueue.shift());
-        }
+    function getMessageProcessSignature(message) {
+        if (!message || typeof message !== 'object') return '';
+        const swipeId = Number(message.swipe_id ?? 0);
+        const swipesLength = Array.isArray(message.swipes) ? message.swipes.length : 0;
+        const extra = message.extra && typeof message.extra === 'object' ? message.extra : {};
+        return [
+            message.is_user === true || message.role === 'user' ? 'u' : 'a',
+            swipeId,
+            swipesLength,
+            getTextSignature(getMessageText(message)),
+            String(extra.gen_id ?? extra.generation_id ?? extra.swipe_generation_id ?? ''),
+            String(message.send_date ?? message.gen_started ?? extra.send_date ?? ''),
+        ].join('|');
+    }
+
+    function shouldSkipMessage(floor, message, options = {}) {
+        if (options.force === true) return false;
+        const key = String(Math.max(0, Math.round(Number(floor) || 0)));
+        const signature = getMessageProcessSignature(message);
+        if (!signature) return false;
+        if (processedMessageSignatures[key] === signature) return true;
+        processedMessageSignatures[key] = signature;
         return false;
+    }
+
+    function processMessage(floor, options = {}) {
+        const chat = getContext()?.chat;
+        if (!Array.isArray(chat) || !chat.length) return;
+        const rawFloor = Number(floor);
+        const target = Number.isFinite(rawFloor) && rawFloor >= 0 ? Math.round(rawFloor) : chat.length - 1;
+        const message = chat[target];
+        if (!isAssistantMessage(message)) return;
+        if (shouldSkipMessage(target, message, options)) return;
+        const text = getMessageText(message);
+        applyMemoryText(text, { floor: target, force: options.force === true });
+    }
+
+    function scheduleProcessMessage(floor, options = {}) {
+        const rawFloor = Number(floor);
+        const key = String(Number.isFinite(rawFloor) && rawFloor >= 0 ? Math.round(rawFloor) : 'latest');
+        window.clearTimeout(pendingTimers[key]);
+        pendingTimers[key] = window.setTimeout(() => {
+            delete pendingTimers[key];
+            processMessage(floor, options);
+        }, Math.max(0, Math.round(Number(options.delay) || 500)));
     }
 
     function bind() {
@@ -521,19 +556,13 @@
             bindRetryTimer = window.setTimeout(bind, 1000);
             return;
         }
-        const handler = () => {
-            window.setTimeout(() => {
-                const chat = getContext()?.chat;
-                const message = Array.isArray(chat) ? chat[chat.length - 1] : null;
-                if (!isAssistantMessage(message)) return;
-                const text = getMessageText(message);
-                applyMemoryText(text, { floor: Array.isArray(chat) ? chat.length - 1 : -1 });
-            }, 0);
-        };
+        const latestHandler = () => scheduleProcessMessage(-1);
+        const renderedHandler = (id) => scheduleProcessMessage(id);
         [
-            eventTypes?.MESSAGE_RECEIVED,
-            eventTypes?.GENERATION_ENDED,
-        ].filter(Boolean).forEach((eventName) => {
+            [eventTypes?.CHARACTER_MESSAGE_RENDERED, renderedHandler],
+            [eventTypes?.MESSAGE_RECEIVED, latestHandler],
+            [eventTypes?.GENERATION_ENDED, latestHandler],
+        ].filter(([eventName]) => Boolean(eventName)).forEach(([eventName, handler]) => {
             if (typeof eventSource?.on === 'function') eventSource.on(eventName, handler);
         });
         bound = true;
