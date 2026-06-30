@@ -584,6 +584,22 @@
         return restoreSnapshot(baseKey, { sessionId, force: true });
     }
 
+    function prepareSwipeFloor(floor) {
+        if (!isRealtimeEnabled()) return false;
+        const target = Math.max(0, Math.round(Number(floor) || 0));
+        markRequestRollbackFloor(target);
+        markApplyRollbackFloor(target);
+        clearProcessedMessageSignature(target);
+        YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(target);
+        const restored = rollbackToBaseBeforeFloor(target);
+        delete snapshots[String(target)];
+        Object.keys(branchSnapshots).forEach((key) => {
+            if (key.startsWith(`${target}:`)) delete branchSnapshots[key];
+        });
+        persistSnapshots();
+        return restored;
+    }
+
     function rollbackBeforeMessage(floor, options = {}) {
         if (!isRealtimeEnabled()) return { restored: false, reason: 'disabled' };
         const sessionId = ensureSessionLoaded(options.sessionId || getSessionId());
@@ -635,15 +651,8 @@
     function handleSwipe(id, options = {}) {
         if (!isRealtimeEnabled()) return;
         const floor = Math.max(0, Math.round(Number(id) || 0));
-        markRequestRollbackFloor(floor);
-        markApplyRollbackFloor(floor);
-        clearProcessedMessageSignature(floor);
-        YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(floor);
-        const baseKey = floor === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(floor);
-        if (baseKey && !isUnsafeGenesisRestore(floor, baseKey)) restoreSnapshot(baseKey, { force: true });
+        prepareSwipeFloor(floor);
         const restoredBranch = false;
-        delete snapshots[String(floor)];
-        persistSnapshots();
         if (!isGenerationBusy()) {
             reapplyCurrentMessage(floor);
         }
@@ -711,11 +720,7 @@
         if (eventTypes.MESSAGE_SWIPED) {
             eventSource.on(eventTypes.MESSAGE_SWIPED, (id) => {
                 const floor = Math.max(0, Math.round(Number(id) || 0));
-                markRequestRollbackFloor(floor);
-                markApplyRollbackFloor(floor);
-                clearProcessedMessageSignature(floor);
-                YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(floor);
-                rollbackToBaseBeforeFloor(floor);
+                prepareSwipeFloor(floor);
                 scheduleSwipeResolve(floor, 180);
             });
         }
@@ -725,11 +730,7 @@
             const chat = getChat();
             if (!chat.length) return;
             const floor = getMessageFloorFromElement(button, chat.length - 1);
-            markRequestRollbackFloor(floor);
-            markApplyRollbackFloor(floor);
-            clearProcessedMessageSignature(floor);
-            YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(floor);
-            rollbackToBaseBeforeFloor(floor);
+            prepareSwipeFloor(floor);
             scheduleSwipeResolve(floor, 420);
         }, true);
         document.addEventListener('click', (event) => {
