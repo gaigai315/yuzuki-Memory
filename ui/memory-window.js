@@ -9583,6 +9583,7 @@
             '修复自动总结确认弹窗抢占聊天输入焦点。',
             '优化填表优化的功能。',
             '修复批量填表自动发起弹窗确认逻辑。',
+            '修复重roll和swipe的逻辑。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

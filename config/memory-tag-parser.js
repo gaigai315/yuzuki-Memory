@@ -567,9 +567,11 @@
     function getMessageText(message) {
         if (!message || typeof message !== 'object') return String(message || '');
         const swipeId = Number(message.swipe_id ?? 0);
+        if (Array.isArray(message.swipes) && message.swipes.length > swipeId) {
+            return String(message.swipes[swipeId] ?? '');
+        }
         const primary = String(message.mes || message.content || message.text || '');
         if (primary) return primary;
-        if (Array.isArray(message.swipes) && message.swipes.length > swipeId) return String(message.swipes[swipeId] || '');
         return '';
     }
 
@@ -621,6 +623,17 @@
         return false;
     }
 
+    function isGenerationBusy() {
+        const ctx = getContext();
+        return window.is_send_press === true
+            || window.isStreaming === true
+            || window.isGenerating === true
+            || Number(window.yzmMemoryChatRequestActiveCount || 0) > 0
+            || ctx?.is_send_press === true
+            || ctx?.isStreaming === true
+            || ctx?.generationStarted === true;
+    }
+
     function processMessage(floor, options = {}) {
         const chat = getContext()?.chat;
         if (!Array.isArray(chat) || !chat.length) return;
@@ -628,12 +641,33 @@
         const target = Number.isFinite(rawFloor) && rawFloor >= 0 ? Math.round(rawFloor) : chat.length - 1;
         const message = chat[target];
         if (!isAssistantMessage(message)) return;
-        if (shouldSkipMessage(target, message, options)) return;
-        const consumedSwipeRollback = YuzukiMemory.BranchSnapshot?.consumeApplyRollbackFloor?.(target) === true;
+        const swipeId = Number(message?.swipe_id ?? 0);
+        if (Array.isArray(message?.swipes) && message.swipes.length > swipeId && typeof message.swipes[swipeId] !== 'string') {
+            console.info('[yuzuki-Memory Realtime] skipped non-string swipe branch', {
+                floor: target,
+                swipeId,
+                swipesLength: message.swipes.length,
+                swipeType: typeof message.swipes[swipeId],
+            });
+            return;
+        }
+        const consumedSwipeMode = YuzukiMemory.BranchSnapshot?.consumeSwipeModeFloor?.(target) === true;
+        if (options.force !== true && !consumedSwipeMode && isGenerationBusy()) {
+            console.info('[yuzuki-Memory Realtime] skipped while generation busy', {
+                floor: target,
+                swipeId,
+                swipesLength: Array.isArray(message?.swipes) ? message.swipes.length : 0,
+                activeRequests: Number(window.yzmMemoryChatRequestActiveCount || 0),
+            });
+            return;
+        }
+        if (!consumedSwipeMode && shouldSkipMessage(target, message, options)) return;
+        const consumedSwipeRollback = consumedSwipeMode
+            || YuzukiMemory.BranchSnapshot?.consumeApplyRollbackFloor?.(target) === true;
         const shouldRollbackBeforeApply = options.rollbackBeforeApply === true || consumedSwipeRollback;
         if (shouldRollbackBeforeApply && YuzukiMemory.BranchSnapshot?.isRealtimeEnabled?.()) {
             YuzukiMemory.BranchSnapshot?.rollbackBeforeMessage?.(target, {
-                force: options.force === true || consumedSwipeRollback,
+                force: consumedSwipeMode || options.force === true || consumedSwipeRollback,
             });
         }
         const text = getMessageText(message);
@@ -644,6 +678,9 @@
             hasMes: typeof message?.mes === 'string' && message.mes.length > 0,
             swipesLength: Array.isArray(message?.swipes) ? message.swipes.length : 0,
             swipeId: Number(message?.swipe_id ?? 0),
+            swipeMode: consumedSwipeMode,
+            activeRequests: Number(window.yzmMemoryChatRequestActiveCount || 0),
+            textPreview: text.slice(0, 180),
         });
         const result = applyMemoryText(text, { floor: target, force: options.force === true });
         if (result?.success) {
@@ -678,12 +715,9 @@
             bindRetryTimer = window.setTimeout(bind, 1000);
             return;
         }
-        const latestHandler = () => scheduleProcessMessage(-1);
         const renderedHandler = (id) => scheduleProcessMessage(id);
         [
             [eventTypes?.CHARACTER_MESSAGE_RENDERED, renderedHandler],
-            [eventTypes?.MESSAGE_RECEIVED, latestHandler],
-            [eventTypes?.GENERATION_ENDED, latestHandler],
         ].filter(([eventName]) => Boolean(eventName)).forEach(([eventName, handler]) => {
             if (typeof eventSource?.on === 'function') eventSource.on(eventName, handler);
         });

@@ -18,8 +18,10 @@
     let activeSessionId = '';
     let lastManualEditAt = 0;
     const swipeResolveTimers = {};
+    const swipePrepareDedupe = new Map();
     const pendingRequestRollbackFloors = new Map();
     const pendingApplyRollbackFloors = new Map();
+    const pendingSwipeModeFloors = new Map();
     const processedMessageSignatures = {};
 
     function clone(value) {
@@ -67,6 +69,7 @@
         return window.is_send_press === true
             || window.isStreaming === true
             || window.isGenerating === true
+            || Number(window.yzmMemoryChatRequestActiveCount || 0) > 0
             || ctx?.is_send_press === true
             || ctx?.isStreaming === true
             || ctx?.generationStarted === true;
@@ -104,9 +107,11 @@
     function getMessageText(message) {
         if (!message || typeof message !== 'object') return String(message || '');
         const swipeId = Number(message.swipe_id ?? 0);
+        if (Array.isArray(message.swipes) && message.swipes.length > swipeId) {
+            return String(message.swipes[swipeId] ?? '');
+        }
         const primary = String(message.mes || message.content || message.text || '');
         if (primary) return primary;
-        if (Array.isArray(message.swipes) && message.swipes.length > swipeId) return String(message.swipes[swipeId] || '');
         return '';
     }
 
@@ -212,6 +217,18 @@
         return hashText(JSON.stringify(records || {}));
     }
 
+    function getRecordCounts(state) {
+        const records = state?.records && typeof state.records === 'object' ? state.records : {};
+        return Object.fromEntries(Object.entries(records).map(([tableId, tableRecords]) => [
+            tableId,
+            Array.isArray(tableRecords) ? tableRecords.length : 0,
+        ]));
+    }
+
+    function isSessionSwitching() {
+        return YuzukiMemory.Storage?.isSessionSwitching?.() === true;
+    }
+
     function markRequestRollbackFloor(floor, ttl = 180000) {
         const sessionId = getSessionId() || 'default';
         const target = Math.round(Number(floor));
@@ -225,6 +242,14 @@
         const target = Math.round(Number(floor));
         if (!Number.isFinite(target) || target < 0) return false;
         pendingApplyRollbackFloors.set(`${sessionId}:${target}`, Date.now() + Math.max(1000, Number(ttl) || 180000));
+        return true;
+    }
+
+    function markSwipeModeFloor(floor, ttl = 180000) {
+        const sessionId = getSessionId() || 'default';
+        const target = Math.round(Number(floor));
+        if (!Number.isFinite(target) || target < 0) return false;
+        pendingSwipeModeFloors.set(`${sessionId}:${target}`, Date.now() + Math.max(1000, Number(ttl) || 180000));
         return true;
     }
 
@@ -275,6 +300,15 @@
         const key = `${sessionId || 'default'}:${target}`;
         const expiresAt = pendingApplyRollbackFloors.get(key);
         pendingApplyRollbackFloors.delete(key);
+        return Number.isFinite(expiresAt) && expiresAt > Date.now();
+    }
+
+    function consumeSwipeModeFloor(floor, sessionId = getSessionId()) {
+        const target = Math.round(Number(floor));
+        if (!Number.isFinite(target) || target < 0) return false;
+        const key = `${sessionId || 'default'}:${target}`;
+        const expiresAt = pendingSwipeModeFloors.get(key);
+        pendingSwipeModeFloors.delete(key);
         return Number.isFinite(expiresAt) && expiresAt > Date.now();
     }
 
@@ -458,9 +492,20 @@
             state.records[table.id] = clone(Array.isArray(snapshot.records[table.id]) ? snapshot.records[table.id] : []);
         });
         if (!saveState(state, sessionId)) return false;
+        const storedState = loadState(sessionId);
+        console.info('[yuzuki-Memory] branch snapshot restored to storage', {
+            key: String(options.key || ''),
+            sessionId,
+            snapshotCounts: getRecordCounts({ records: snapshot.records }),
+            storedCounts: getRecordCounts(storedState),
+        });
         if (options.dispatch !== false) {
             window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
-                detail: { source: 'branch-snapshot', key: String(options.key || '') },
+                detail: {
+                    source: 'branch-snapshot',
+                    key: String(options.key || ''),
+                    storedCounts: getRecordCounts(storedState),
+                },
             }));
         }
         return true;
@@ -494,6 +539,17 @@
         const targetKey = String(targetIndex);
         clearProcessedMessageSignature(targetIndex);
 
+        const prevIndex = targetIndex - 1;
+        const prevMessage = prevIndex >= 0 ? chat[prevIndex] : null;
+        if (prevMessage?.is_user === true && !snapshots[String(prevIndex)]) {
+            saveSnapshot(prevIndex, { state: loadState(sessionId), sessionId });
+            console.info('[yuzuki-Memory] request-time user snapshot seeded', {
+                prevIndex,
+                targetIndex,
+                snapshotKeys: Object.keys(snapshots).sort((a, b) => Number(a) - Number(b)),
+            });
+        }
+
         const baseKey = findBaseSnapshotKey(targetIndex);
         if (!baseKey) return { restored: false, reason: 'missing_base', targetIndex };
         if (isUnsafeGenesisRestore(targetIndex, baseKey)) {
@@ -508,7 +564,7 @@
         const isCleanTargetOutput = !!snapshots[targetKey] && currentHash === targetHash;
         const force = currentHash === baseHash || isCleanTargetOutput;
         const restored = restoreSnapshot(baseKey, { state, force });
-        if (restored) delete snapshots[targetKey];
+        if (snapshots[targetKey]) delete snapshots[targetKey];
         persistSnapshots(sessionId);
         return { restored, targetIndex, baseKey, force };
     }
@@ -550,6 +606,15 @@
             const chat = getChat();
             const message = chat[Math.max(0, Math.round(Number(floor) || 0))];
             if (!isAssistantMessage(message)) return;
+            const swipeId = Number(message?.swipe_id ?? 0);
+            if (Array.isArray(message?.swipes) && message.swipes.length <= swipeId) {
+                console.info('[yuzuki-Memory Swipe] replay skipped: current swipe branch is not ready', {
+                    floor,
+                    swipeId,
+                    swipesLength: message.swipes.length,
+                });
+                return;
+            }
             const text = getMessageText(message);
             if (!text.trim()) return;
             if (typeof YuzukiMemory.MemoryTagParser?.processMessage === 'function') {
@@ -568,6 +633,14 @@
         const mesId = Number(mes?.getAttribute?.('mesid'));
         if (Number.isFinite(mesId)) return Math.max(0, Math.round(mesId));
         return Math.max(0, Math.round(Number(fallback) || 0));
+    }
+
+    function getLastAssistantFloor(fallback = -1) {
+        const chat = getChat();
+        for (let index = chat.length - 1; index >= 0; index -= 1) {
+            if (isAssistantMessage(chat[index])) return index;
+        }
+        return Math.max(-1, Math.round(Number(fallback) || -1));
     }
 
     function rollbackToBaseBeforeFloor(floor, options = {}) {
@@ -590,6 +663,7 @@
         const target = Math.max(0, Math.round(Number(floor) || 0));
         markRequestRollbackFloor(target);
         markApplyRollbackFloor(target);
+        markSwipeModeFloor(target);
         clearProcessedMessageSignature(target);
         YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(target);
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
@@ -670,10 +744,6 @@
         if (!isGenerationBusy()) {
             reapplyCurrentMessage(floor);
         }
-        const retry = Math.max(0, Math.round(Number(options.retry) || 0));
-        if (retry < 2 && !isGenerationBusy()) {
-            window.setTimeout(() => resolveSwipeFloor(floor, { retry: retry + 1 }), 350);
-        }
     }
 
     function scheduleSwipeResolve(floor, delay = 180) {
@@ -686,15 +756,35 @@
         }, Math.max(0, Math.round(Number(delay) || 0)));
     }
 
+    function handleSwipeFloor(floor, source = 'event', resolveDelay = 220) {
+        if (isSessionSwitching()) {
+            console.info('[yuzuki-Memory Swipe] skipped during session switch', { floor, source });
+            return;
+        }
+        const target = Math.max(0, Math.round(Number(floor) || 0));
+        const sessionId = getSessionId() || 'default';
+        const dedupeKey = `${sessionId}:${target}`;
+        const now = Date.now();
+        const lastPreparedAt = Number(swipePrepareDedupe.get(dedupeKey) || 0);
+        const shouldPrepare = now - lastPreparedAt > 120;
+        if (shouldPrepare) {
+            swipePrepareDedupe.set(dedupeKey, now);
+            console.info('[yuzuki-Memory Swipe] rollback requested', { floor: target, source });
+            prepareSwipeFloor(target);
+        } else {
+            console.info('[yuzuki-Memory Swipe] duplicate rollback skipped', { floor: target, source });
+        }
+        if (Number.isFinite(Number(resolveDelay)) && Number(resolveDelay) >= 0) {
+            scheduleSwipeResolve(target, resolveDelay);
+        }
+    }
+
     function getRegenerateTargetFloor(button) {
         const mes = button?.closest?.('.mes');
         const mesId = Number(mes?.getAttribute?.('mesid'));
         if (Number.isFinite(mesId)) return Math.max(0, Math.round(mesId));
         const chat = getChat();
-        for (let index = chat.length - 1; index >= 0; index -= 1) {
-            if (isAssistantMessage(chat[index])) return index;
-        }
-        return chat.length ? chat.length - 1 : -1;
+        return getLastAssistantFloor(chat.length ? chat.length - 1 : -1);
     }
 
     function handleRegenerate(floor) {
@@ -703,12 +793,20 @@
         if (!Number.isFinite(target) || target < 0) return;
         markRequestRollbackFloor(target);
         markApplyRollbackFloor(target);
+        markSwipeModeFloor(target);
         clearProcessedMessageSignature(target);
         YuzukiMemory.MemoryTagParser?.clearPendingMessage?.(target);
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
-        if (baseKey) restoreSnapshot(baseKey, { force: true });
+        const restored = baseKey ? restoreSnapshot(baseKey, { force: true }) : false;
         delete snapshots[String(target)];
         persistSnapshots();
+        console.info('[yuzuki-Memory Regenerate] prepared floor rollback', {
+            target,
+            baseKey,
+            restored,
+            snapshotKeys: Object.keys(snapshots).sort((a, b) => Number(a) - Number(b)),
+        });
+        scheduleSwipeResolve(target, 500);
     }
 
     function handleChatChanged() {
@@ -733,9 +831,7 @@
         if (eventTypes.CHAT_CHANGED) eventSource.on(eventTypes.CHAT_CHANGED, handleChatChanged);
         if (eventTypes.MESSAGE_SWIPED) {
             eventSource.on(eventTypes.MESSAGE_SWIPED, (id) => {
-                const floor = Math.max(0, Math.round(Number(id) || 0));
-                prepareSwipeFloor(floor);
-                scheduleSwipeResolve(floor, 350);
+                handleSwipeFloor(id, 'MESSAGE_SWIPED', 350);
             });
         }
         document.addEventListener('click', (event) => {
@@ -743,9 +839,8 @@
             if (!button) return;
             const chat = getChat();
             if (!chat.length) return;
-            const floor = getMessageFloorFromElement(button, chat.length - 1);
-            markRequestRollbackFloor(floor);
-            markApplyRollbackFloor(floor);
+            const floor = getMessageFloorFromElement(button, getLastAssistantFloor(chat.length - 1));
+            handleSwipeFloor(floor, 'DOM', -1);
         }, true);
         document.addEventListener('click', (event) => {
             const button = event.target?.closest?.('[data-i18n="Regenerate"], #option_regenerate, .regenerate_response');
@@ -768,6 +863,7 @@
         markRequestRollbackFloor,
         markApplyRollbackFloor,
         consumeApplyRollbackFloor,
+        consumeSwipeModeFloor,
         getProcessedMessageSignature,
         setProcessedMessageSignature,
         clearProcessedMessageSignature,
