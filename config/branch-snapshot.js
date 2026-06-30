@@ -19,6 +19,7 @@
     let lastManualEditAt = 0;
     const swipeResolveTimers = {};
     const pendingRequestRollbackFloors = new Map();
+    const pendingApplyRollbackFloors = new Map();
     const processedMessageSignatures = {};
 
     function clone(value) {
@@ -219,6 +220,14 @@
         return true;
     }
 
+    function markApplyRollbackFloor(floor, ttl = 180000) {
+        const sessionId = getSessionId() || 'default';
+        const target = Math.round(Number(floor));
+        if (!Number.isFinite(target) || target < 0) return false;
+        pendingApplyRollbackFloors.set(`${sessionId}:${target}`, Date.now() + Math.max(1000, Number(ttl) || 180000));
+        return true;
+    }
+
     function getProcessedMessageKey(floor, sessionId = getSessionId()) {
         const target = Math.round(Number(floor));
         if (!Number.isFinite(target) || target < 0) return '';
@@ -258,6 +267,15 @@
             pendingRequestRollbackFloors.delete(key);
         }
         return Array.from(new Set(floors)).sort((a, b) => a - b);
+    }
+
+    function consumeApplyRollbackFloor(floor, sessionId = getSessionId()) {
+        const target = Math.round(Number(floor));
+        if (!Number.isFinite(target) || target < 0) return false;
+        const key = `${sessionId || 'default'}:${target}`;
+        const expiresAt = pendingApplyRollbackFloors.get(key);
+        pendingApplyRollbackFloors.delete(key);
+        return Number.isFinite(expiresAt) && expiresAt > Date.now();
     }
 
     function protectNewerCurrentState(state, snapshot, options = {}) {
@@ -611,6 +629,7 @@
         if (!isRealtimeEnabled()) return;
         const floor = Math.max(0, Math.round(Number(id) || 0));
         markRequestRollbackFloor(floor);
+        markApplyRollbackFloor(floor);
         clearProcessedMessageSignature(floor);
         const baseKey = floor === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(floor);
         if (baseKey && !isUnsafeGenesisRestore(floor, baseKey)) restoreSnapshot(baseKey, { force: true });
@@ -652,6 +671,7 @@
         const target = Math.round(Number(floor));
         if (!Number.isFinite(target) || target < 0) return;
         markRequestRollbackFloor(target);
+        markApplyRollbackFloor(target);
         clearProcessedMessageSignature(target);
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
         if (baseKey) restoreSnapshot(baseKey, { force: true });
@@ -683,6 +703,7 @@
             eventSource.on(eventTypes.MESSAGE_SWIPED, (id) => {
                 const floor = Math.max(0, Math.round(Number(id) || 0));
                 markRequestRollbackFloor(floor);
+                markApplyRollbackFloor(floor);
                 clearProcessedMessageSignature(floor);
                 rollbackToBaseBeforeFloor(floor);
                 scheduleSwipeResolve(floor, 180);
@@ -695,6 +716,7 @@
             if (!chat.length) return;
             const floor = getMessageFloorFromElement(button, chat.length - 1);
             markRequestRollbackFloor(floor);
+            markApplyRollbackFloor(floor);
             clearProcessedMessageSignature(floor);
             rollbackToBaseBeforeFloor(floor);
             scheduleSwipeResolve(floor, 420);
@@ -718,6 +740,8 @@
         captureCurrentStateSnapshot,
         markManualEdit,
         markRequestRollbackFloor,
+        markApplyRollbackFloor,
+        consumeApplyRollbackFloor,
         getProcessedMessageSignature,
         setProcessedMessageSignature,
         clearProcessedMessageSignature,

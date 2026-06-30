@@ -216,9 +216,48 @@
         const rows = [];
         let currentTable = '';
         let currentPlotKind = '';
+        const knownTableNames = [
+            '剧情摘要',
+            '主线摘要',
+            '支线摘要',
+            '角色档案',
+            '物品追踪',
+            '世界设定',
+            '记忆总结',
+        ];
+        const parseInlineTableLine = (line) => {
+            const parts = splitSegments(line);
+            if (parts.length < 2) return false;
+            const tableToken = parts[0].replace(/^#+/, '').trim();
+            const matchedTable = knownTableNames.find((name) => normalizeName(name) === normalizeName(tableToken));
+            if (!matchedTable) return false;
+            const keyPartIndex = parts.findIndex((part, index) => index > 0 && /^\[[^\]]+\]$/.test(part.trim()));
+            if (keyPartIndex < 0) return false;
+            const primaryValue = parts[keyPartIndex].trim().replace(/^\[|\]$/g, '').trim();
+            const body = parts.slice(keyPartIndex + 1).join('|').trim().replace(/^内容\s*[:：]\s*/, '');
+            const plotKind = getPlotKind(matchedTable) || getPlotKind(primaryValue);
+            if (plotKind || normalizeName(matchedTable) === normalizeName('剧情摘要')) {
+                rows.push(...expandPlotRows(plotKind || 'main', body, primaryValue));
+                return true;
+            }
+            const values = {};
+            splitSegments(body).forEach((segment) => {
+                const parsed = parseFieldSegment(segment);
+                if (!parsed || !parsed.field) return;
+                const fieldName = parsed.field.replace(/^#/, '').trim();
+                values[fieldName] = parsed.value;
+            });
+            rows.push({
+                table: matchedTable,
+                primaryValue,
+                values,
+            });
+            return true;
+        };
         cleanText.split(/\r?\n/).forEach((rawLine) => {
             const line = rawLine.trim();
             if (!line) return;
+            if (parseInlineTableLine(line)) return;
             if (line.startsWith('#')) {
                 const plotHeaderMatch = line.match(/^#+\s*(主线摘要|支线摘要)([\s\S]*)$/);
                 if (plotHeaderMatch) {
@@ -590,7 +629,9 @@
         const message = chat[target];
         if (!isAssistantMessage(message)) return;
         if (shouldSkipMessage(target, message, options)) return;
-        if (options.rollbackBeforeApply === true && YuzukiMemory.BranchSnapshot?.isRealtimeEnabled?.()) {
+        const shouldRollbackBeforeApply = options.rollbackBeforeApply === true
+            || YuzukiMemory.BranchSnapshot?.consumeApplyRollbackFloor?.(target) === true;
+        if (shouldRollbackBeforeApply && YuzukiMemory.BranchSnapshot?.isRealtimeEnabled?.()) {
             YuzukiMemory.BranchSnapshot?.rollbackBeforeMessage?.(target, { force: options.force === true });
         }
         const text = getMessageText(message);
