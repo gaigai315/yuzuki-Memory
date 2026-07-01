@@ -3327,7 +3327,6 @@
         const header = document.createElement('div');
         header.className = 'yzm-vector-book-row yzm-vector-book-head';
         header.append(
-            document.createElement('span'),
             createVectorHeadCell('书名'),
             createVectorHeadCell('向量化状态')
         );
@@ -3352,11 +3351,6 @@
         row.title = book.name;
         row.setAttribute('aria-label', book.name);
 
-        const check = document.createElement('span');
-        check.className = book.active ? 'yzm-vector-book-check yzm-vector-book-check-on' : 'yzm-vector-book-check';
-        check.dataset.yzmVectorBookToggle = book.id;
-        if (book.active) check.appendChild(createIconNode('fa-solid fa-check', ''));
-
         const icon = document.createElement('span');
         icon.className = 'yzm-vector-book-icon';
         icon.appendChild(createIconNode('fa-solid fa-book-open', ''));
@@ -3366,7 +3360,7 @@
         name.textContent = book.name;
         name.title = book.name;
 
-        row.append(check, icon, name, createVectorStatus(book));
+        row.append(icon, name, createVectorStatus(book));
         return row;
     }
 
@@ -8843,7 +8837,7 @@
         const enableRow = createPluginConfigRow(
             '启用填表',
             '关闭后实时填表和自动批量填表都不会触发；总结功能不受影响。',
-            'fa-solid fa-toggle-on',
+            '',
             createConfigSwitch(settings.enableFilling, 'enableFilling')
         );
 
@@ -11508,24 +11502,12 @@
                 const target = event.target instanceof Element ? event.target : null;
                 const actionButton = target?.closest('[data-yzm-vector-action]');
                 const bookButton = target?.closest('[data-yzm-vector-book-id]');
-                const toggle = target?.closest('[data-yzm-vector-book-toggle]');
                 const pager = target?.closest('[data-yzm-vector-page]');
 
                 if (actionButton) {
                     event.preventDefault();
                     event.stopPropagation();
                     await handleVectorAction(root, actionButton.dataset.yzmVectorAction);
-                    return;
-                }
-
-                if (toggle) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    const store = await ensureVectorStoreReady();
-                    if (!store) return;
-                    const bookId = toggle.dataset.yzmVectorBookToggle;
-                    store.toggleActiveBook(bookId, !store.getActiveBooks().includes(bookId));
-                    renderVectorWorkspace(root);
                     return;
                 }
 

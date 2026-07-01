@@ -1104,7 +1104,7 @@
 
 #yzm-memory-root .yzm-vector-book-row {
     display: grid;
-    grid-template-columns: 18px minmax(0, 1fr) 72px;
+    grid-template-columns: minmax(0, 1fr) 72px;
     align-items: center;
     gap: 6px;
     min-height: 36px;
@@ -1132,11 +1132,11 @@
     font-weight: 600;
 }
 
-#yzm-memory-root .yzm-vector-book-head span:nth-child(2) {
+#yzm-memory-root .yzm-vector-book-head span:nth-child(1) {
     text-align: left;
 }
 
-#yzm-memory-root .yzm-vector-book-head span:nth-child(3) {
+#yzm-memory-root .yzm-vector-book-head span:nth-child(2) {
     text-align: center;
 }
 
@@ -1148,24 +1148,6 @@
 
 #yzm-memory-root .yzm-vector-book-row-bound {
     border-color: rgba(232, 145, 44, 0.72);
-}
-
-#yzm-memory-root .yzm-vector-book-check {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 14px;
-    height: 14px;
-    border: 1px solid var(--yzm-border);
-    border-radius: 4px;
-    box-sizing: border-box;
-    color: var(--yzm-icon-active);
-    font-size: 8px;
-}
-
-#yzm-memory-root .yzm-vector-book-check-on {
-    background: rgba(255, 255, 255, 0.26);
-    border-color: rgba(255, 255, 255, 0.52);
 }
 
 #yzm-memory-root .yzm-vector-book-name {
@@ -1190,15 +1172,14 @@
 }
 
 #yzm-memory-root .yzm-primary-compact-mode .yzm-vector-book-row {
-    grid-template-columns: 18px minmax(0, 1fr) 54px;
+    grid-template-columns: minmax(0, 1fr) 54px;
 }
 
 #yzm-memory-root .yzm-primary-tight-mode .yzm-vector-book-row {
     grid-template-columns: minmax(0, 1fr) 50px;
 }
 
-#yzm-memory-root .yzm-primary-tight-mode .yzm-vector-book-head,
-#yzm-memory-root .yzm-primary-tight-mode .yzm-vector-book-check {
+#yzm-memory-root .yzm-primary-tight-mode .yzm-vector-book-head {
     display: none;
 }
 
@@ -2334,10 +2315,6 @@
     padding: 0;
     border: 0;
     border-radius: 999px;
-}
-
-#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-check {
-    display: none;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-icon {
@@ -4757,6 +4734,14 @@
     padding: 10px 16px;
     border-bottom: 1px solid var(--yzm-border-soft);
     box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-plugin-config-row:has(.yzm-plugin-config-row-body-no-icon) {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+#yzm-memory-root .yzm-plugin-config-row-body-no-icon + .yzm-plugin-config-row-action {
+    grid-column: 2;
 }
 
 #yzm-memory-root .yzm-plugin-config-row-icon {
