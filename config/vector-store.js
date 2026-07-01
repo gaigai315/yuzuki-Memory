@@ -3,6 +3,8 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const STORAGE_BOOK_NAME = 'Yuzuki_Memory_Vector_Library';
+    const LEGACY_STORAGE_BOOK_NAME = 'Memory_Vector_Database';
+    const STORAGE_BOOK_NAMES = [STORAGE_BOOK_NAME, LEGACY_STORAGE_BOOK_NAME];
     const ACTIVE_BOOKS_KEY = 'yzm_memory_active_vector_books';
     const BACKUP_HEADER = '=== Yuzuki Memory Vector Library ===';
     const LEGACY_BACKUP_HEADER = '=== Gaigai 向量缓存文件 (图书馆版) ===';
@@ -170,30 +172,31 @@
             if (!document.getElementById('yzm-hide-vector-library')) {
                 const style = document.createElement('style');
                 style.id = 'yzm-hide-vector-library';
-                style.textContent = `
-                    option[value="${STORAGE_BOOK_NAME}"],
-                    li[data-value="${STORAGE_BOOK_NAME}"],
-                    [data-name="${STORAGE_BOOK_NAME}"],
-                    [data-uid="${STORAGE_BOOK_NAME}"] {
+                style.textContent = STORAGE_BOOK_NAMES.map((name) => `
+                    option[value="${name}"],
+                    li[data-value="${name}"],
+                    [data-name="${name}"],
+                    [data-uid="${name}"] {
                         display: none !important;
                     }
-                `;
+                `).join('\n');
                 document.head.appendChild(style);
             }
 
+            const matchesStorageBookName = (value) => STORAGE_BOOK_NAMES.includes(String(value || '').trim());
             const hideMatches = () => {
                 document.querySelectorAll('option, li, .world_info_entry, label').forEach((node) => {
                     let shouldHide = false;
 
                     if (
-                        node.value === STORAGE_BOOK_NAME ||
-                        node.getAttribute('data-uid') === STORAGE_BOOK_NAME ||
-                        node.getAttribute('data-name') === STORAGE_BOOK_NAME ||
-                        node.getAttribute('data-value') === STORAGE_BOOK_NAME ||
-                        node.title === STORAGE_BOOK_NAME
+                        matchesStorageBookName(node.value) ||
+                        matchesStorageBookName(node.getAttribute('data-uid')) ||
+                        matchesStorageBookName(node.getAttribute('data-name')) ||
+                        matchesStorageBookName(node.getAttribute('data-value')) ||
+                        matchesStorageBookName(node.title)
                     ) {
                         shouldHide = true;
-                    } else if ((node.textContent || '').includes(STORAGE_BOOK_NAME)) {
+                    } else if (STORAGE_BOOK_NAMES.some((name) => (node.textContent || '').includes(name))) {
                         if (
                             node.classList.contains('inline-drawer-header') ||
                             node.classList.contains('binder-header')

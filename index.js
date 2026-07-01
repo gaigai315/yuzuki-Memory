@@ -18,6 +18,7 @@
         'config/branch-snapshot.js',
         'config/prompt-library.js',
         'config/llm-client.js',
+        'config/worldbook-manager.js',
         'config/task-runner.js',
         'config/embedding-client.js',
         'config/rerank-client.js',

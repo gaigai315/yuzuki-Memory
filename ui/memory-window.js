@@ -298,6 +298,10 @@
         return YuzukiMemory.VectorStore;
     }
 
+    function getWorldbookManager() {
+        return YuzukiMemory.WorldbookManager;
+    }
+
     function getState() {
         if (!memoryState) {
             loadedSessionId = getStorage()?.getCurrentSessionId?.() || null;
@@ -4600,7 +4604,6 @@
         const table = getTables().find((entry) => entry.id === FIXED_TABLE_ID);
         if (!table) return [];
         return getPrimaryDisplayRecords(table.id)
-            .filter((record) => !record.hidden)
             .filter((record) => getSummaryValue(record, ['总结内容']).trim())
             .filter((record) => target === 'all' || getSummaryKind(record) === target)
             .map((record) => ({ table, record }));
@@ -4804,6 +4807,8 @@
         const core = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
         meta.textContent = [
             getSummaryKind(record) === 'branch' ? '支线' : '主线',
+            record.hidden ? '已隐藏' : '',
+            record.vectorSynced === true ? '已同步向量化' : '',
             floorText ? `楼层 ${floorText}` : '',
             core ? `核心 ${core}` : '',
         ].filter(Boolean).join(' · ');
@@ -5754,6 +5759,9 @@
                 if (action === 'summary') updateManualPointerSetting('summary', result.range?.end ?? batch.end);
                 markTaskStateUpdated(action, result);
                 refreshAfterTask(root, { persist: false });
+                if (action === 'summary' && getAutoSummarySettings().autoVectorizeAfterHistory === true) {
+                    await syncSummaryToVectorBook({ vectorize: true });
+                }
                 taskRunnerProgressLabel = batches.length > 1 ? `第 ${index + 1}/${batches.length} 批已写入` : '已写入';
                 syncVisibleTaskButtons(root);
                 if (action === 'summary' && batches.length > 1) {
@@ -5779,8 +5787,8 @@
             const result = mergeTaskResults(results, action);
             markTaskStateUpdated(action, result);
             refreshAfterTask(root, { persist: false });
-            if (action === 'summary' && getAutoSummarySettings().autoVectorizeAfterHistory === true) {
-                await syncSummaryToVectorBook({ vectorize: true });
+            if (action === 'summaryOptimize' && getAutoSummarySettings().autoVectorizeAfterHistory === true) {
+                await syncSummaryToVectorBook({ vectorize: true, hideAfterSync: true });
             }
             await waitForTaskBuffer('最终缓冲，等待数据完全落盘', 2);
             if (!options.silent) showTaskToast(`${getTaskActionLabel(action)}完成：共 ${results.length} 批，写入 ${result.count || 0} 条。`, 'success');
@@ -7962,8 +7970,10 @@
             createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
             createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标，点击即可打开记忆插件。拖动后会记住位置。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon')),
-            createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled')))
+            createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
+            createTaskWorldbookPanel()
         );
+        window.setTimeout(() => refreshTaskWorldbookList(ensureRoot()), 0);
         return card;
     }
 
@@ -8019,6 +8029,105 @@
         wrap.className = 'yzm-plugin-config-inline';
         wrap.append(...controls);
         return wrap;
+    }
+
+    function getTaskWorldbookSelection() {
+        return getWorldbookManager()?.getSelectionState?.(getState()) || { enabled: false, initialized: false, ids: [] };
+    }
+
+    function saveTaskWorldbookSelection(nextSelection = {}) {
+        const selection = getWorldbookManager()?.applySelectionState?.(getState(), nextSelection) || null;
+        saveState({ force: true, saveOrigin: 'manual' });
+        dispatchManualStateUpdated({ source: 'worldbook-selection' });
+        return selection;
+    }
+
+    function createTaskWorldbookPanel() {
+        const selection = getTaskWorldbookSelection();
+        const panel = document.createElement('div');
+        panel.className = 'yzm-task-worldbook-panel';
+
+        const header = createPluginConfigRow(
+            '任务世界书',
+            '勾选后，手动/自动追溯、总结和优化任务会额外读取下方选中的酒馆世界书。',
+            'fa-solid fa-book-atlas',
+            createConfigSwitch(selection.enabled, 'taskWorldbookEnabled')
+        );
+        header.classList.add('yzm-task-worldbook-header');
+        const tools = document.createElement('div');
+        tools.className = 'yzm-task-worldbook-tools';
+        const summary = document.createElement('span');
+        summary.className = 'yzm-task-worldbook-summary';
+        summary.dataset.yzmTaskWorldbookSummary = 'true';
+        summary.textContent = selection.enabled
+            ? `已选择 ${selection.ids.length} 本`
+            : '未启用';
+        const refresh = createIconButton('刷新世界书', 'fa-solid fa-rotate', 'yzm-api-button yzm-task-worldbook-refresh');
+        tools.append(summary, refresh);
+
+        const list = document.createElement('div');
+        list.className = 'yzm-task-worldbook-list';
+        list.dataset.yzmTaskWorldbookList = 'true';
+        list.hidden = !selection.enabled;
+        list.textContent = selection.enabled ? '正在读取当前可用世界书...' : '世界书注入已关闭。';
+
+        panel.append(header, tools, list);
+        return panel;
+    }
+
+    function createTaskWorldbookRow(source, selection) {
+        const manager = getWorldbookManager();
+        const checked = selection.initialized && manager?.matchesSelection?.(source, selection.ids);
+        const row = document.createElement('label');
+        row.className = checked ? 'yzm-task-worldbook-item yzm-task-worldbook-item-active' : 'yzm-task-worldbook-item';
+
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.className = 'yzm-task-worldbook-choice';
+        input.value = source.id;
+        input.checked = !!checked;
+
+        const body = document.createElement('span');
+        body.className = 'yzm-task-worldbook-item-body';
+        const name = document.createElement('strong');
+        name.textContent = source.name;
+        const activeCount = Number(source.entries?.length || 0);
+        const totalCount = Number(source.totalEntries ?? activeCount);
+        const disabledText = activeCount ? '' : (totalCount > 0 ? '（无开启条目）' : '（读取失败或为空）');
+        const countText = totalCount > activeCount ? `${activeCount}/${totalCount} 条可注入` : `${activeCount} 条`;
+        const meta = document.createElement('span');
+        meta.textContent = `${source.sourceLabel || '世界书'} · ${countText}${disabledText}`;
+        body.append(name, meta);
+        row.append(input, body);
+        return row;
+    }
+
+    async function refreshTaskWorldbookList(root = ensureRoot(), options = {}) {
+        const list = root?.querySelector?.('[data-yzm-task-worldbook-list]');
+        const summary = root?.querySelector?.('[data-yzm-task-worldbook-summary]');
+        const manager = getWorldbookManager();
+        if (!list || !summary || !manager) return;
+        const selection = getTaskWorldbookSelection();
+        summary.textContent = selection.enabled ? `已选择 ${selection.ids.length} 本` : '未启用';
+        list.hidden = !selection.enabled;
+        if (!selection.enabled) {
+            list.textContent = '世界书注入已关闭。';
+            return;
+        }
+        list.textContent = '正在读取当前可用世界书...';
+        try {
+            const sources = await manager.listAvailableWorldbooks({ includeEntries: true, force: options.force === true });
+            if (!sources.length) {
+                list.textContent = '未读取到酒馆世界书列表。';
+                return;
+            }
+            const isSelectedSource = (source) => selection.initialized && manager.matchesSelection?.(source, selection.ids);
+            const displaySources = [...sources].sort((a, b) => Number(isSelectedSource(b)) - Number(isSelectedSource(a)));
+            list.replaceChildren(...displaySources.map((source) => createTaskWorldbookRow(source, selection)));
+        } catch (error) {
+            console.warn('[yuzuki-Memory] 世界书列表渲染失败:', error);
+            list.textContent = '世界书读取失败，请稍后重试。';
+        }
     }
 
     function createConfigSwitch(isOn = false, settingKey = '') {
@@ -9683,14 +9792,13 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复并对齐记忆表格导入导出功能。',
-            '优化批量填表非静默功能。',
-            '修复旧记忆表格向量化导入新记忆插件虚假绑定。',
-            '修复自动总结确认弹窗抢占聊天输入焦点。',
-            '优化填表优化的功能。',
-            '修复批量填表自动发起弹窗确认逻辑。',
-            '修复重roll和swipe的逻辑。',
-            '向量化优化新增自助切分。',
+            '新增当前聊天记忆表格与总结的一键导出、导入入口。',
+            '导入记忆备份时会覆盖当前聊天的表格和总结，不会影响向量化书库。',
+            '修复已隐藏或已同步向量化的总结无法参与总结优化的问题。',
+            '总结优化保存后会按自动总结设置同步到向量化书库。',
+            '优化手动分段总结的向量化同步时机，每批写入后立即同步。',
+            '新增任务世界书选择，可按当前聊天独立勾选酒馆世界书参与追溯、总结和优化任务。',
+            '任务世界书会作为独立 system 消息放在破甲提示词与角色背景资料之后注入。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11913,11 +12021,19 @@
                 const logViewerClear = target?.closest?.('.yzm-log-viewer-clear');
                 const logFilter = target?.closest?.('[data-yzm-log-level]');
                 const updateNoticeButton = target?.closest?.('[data-yzm-action="showUpdateNotice"]');
+                const worldbookRefresh = target?.closest?.('.yzm-task-worldbook-refresh');
 
                 if (updateNoticeButton) {
                     event.preventDefault();
                     event.stopPropagation();
                     openUpdateNoticeDialog(root, { markSeen: false });
+                    return;
+                }
+
+                if (worldbookRefresh) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    void refreshTaskWorldbookList(root, { force: true });
                     return;
                 }
 
@@ -12016,7 +12132,10 @@
                     const isOn = toggleConfigSwitch(configSwitch);
                     const autoSummarySettingKey = configSwitch.dataset.yzmAutoSummarySetting;
                     const pluginSettingKey = configSwitch.dataset.yzmPluginSetting;
-                    if (autoSummarySettingKey) {
+                    if (pluginSettingKey === 'taskWorldbookEnabled') {
+                        saveTaskWorldbookSelection({ enabled: isOn, initialized: getTaskWorldbookSelection().initialized });
+                        void refreshTaskWorldbookList(root);
+                    } else if (autoSummarySettingKey) {
                         updateAutoSummarySetting(autoSummarySettingKey, isOn);
                         const status = configSwitch.closest('.yzm-auto-summary-control-row')?.querySelector('.yzm-auto-summary-status');
                         if (status) status.textContent = isOn ? '已启用' : '未启用';
@@ -12038,6 +12157,20 @@
             });
             configView.addEventListener('change', (event) => {
                 const target = event.target;
+                if (target?.matches?.('.yzm-task-worldbook-choice')) {
+                    const container = target.closest('[data-yzm-task-worldbook-list]');
+                    const ids = Array.from(container?.querySelectorAll('.yzm-task-worldbook-choice:checked') || [])
+                        .map((input) => input.value)
+                        .filter(Boolean);
+                    saveTaskWorldbookSelection({ initialized: true, ids });
+                    const summary = root.querySelector('[data-yzm-task-worldbook-summary]');
+                    if (summary) summary.textContent = `已选择 ${ids.length} 本`;
+                    container?.querySelectorAll('.yzm-task-worldbook-item').forEach((item) => {
+                        const input = item.querySelector('.yzm-task-worldbook-choice');
+                        item.classList.toggle('yzm-task-worldbook-item-active', input?.checked === true);
+                    });
+                    return;
+                }
                 if (target?.matches?.('.yzm-auto-summary-number-input[data-yzm-auto-summary-setting]')) {
                     normalizeAutoSummaryNumberInput(target);
                     updateAutoSummarySetting(target.dataset.yzmAutoSummarySetting, Number(target.value));

@@ -469,6 +469,19 @@
         return compactLines(lines);
     }
 
+    async function buildWorldbookContextMessage(state, options = {}) {
+        if (options.includeWorldbook === false) return null;
+        try {
+            return await YuzukiMemory.WorldbookManager?.buildWorldbookMessage?.(state, {
+                includeEntries: true,
+                force: options.forceWorldbookRefresh === true,
+            }) || null;
+        } catch (error) {
+            console.warn('[yuzuki-Memory] 读取任务世界书失败:', error);
+            return null;
+        }
+    }
+
     function stateTables(state) {
         return Array.isArray(state?.tables) ? state.tables : [];
     }
@@ -1441,7 +1454,7 @@
             .filter(Boolean));
         const targetKind = String(options.summaryTarget || options.tableId || 'all');
         const records = stateRecords(state, FIXED_SUMMARY_TABLE_ID)
-            .filter((record) => record && !record.hidden)
+            .filter((record) => record)
             .filter((record) => String(record?.values?.总结内容 || record?.values?.summary || '').trim())
             .filter((record) => !selectedIds.size || selectedIds.has(String(record.id || '')))
             .filter((record) => selectedIds.size || targetKind === 'all' || getSummaryRecordKind(record) === targetKind);
@@ -1676,7 +1689,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         ]);
     }
 
-    function buildTraceMessages(state, options = {}) {
+    async function buildTraceMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
         const taskPromptOptions = {
@@ -1685,18 +1698,20 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         };
         const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, taskPromptOptions);
         const tracePrompt = resolveTaskPromptVariables(getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options), state, taskPromptOptions);
+        const worldbookMessage = await buildWorldbookContextMessage(state, options);
         const messages = withMemoryPrefill([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText() },
+            worldbookMessage,
             { role: 'system', content: buildTaskRangeText(range, 'trace') },
             ...range.messages,
             { role: 'system', content: tracePrompt },
             { role: 'user', content: '请立即根据以上待追溯聊天内容和批量追溯填表提示词执行任务。' },
-        ], '<Memory>');
+        ].filter(Boolean), '<Memory>');
         return { messages, range };
     }
 
-    function buildSummaryMessages(state, options = {}) {
+    async function buildSummaryMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
         const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, {
@@ -1707,14 +1722,16 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             ...options,
             suppressMemoryTables: true,
         });
+        const worldbookMessage = await buildWorldbookContextMessage(state, options);
         const messages = withMemoryPrefill([
             { role: 'system', content: historianPrompt },
-            { role: 'system', content: buildTaskRangeText(range, 'summary') },
             { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
+            worldbookMessage,
+            { role: 'system', content: buildTaskRangeText(range, 'summary') },
             ...range.messages,
             { role: 'system', content: summaryPrompt },
             { role: 'user', content: '请立即根据以上待总结聊天内容和总结提示词执行任务。' },
-        ]);
+        ].filter(Boolean));
         return { messages, range };
     }
 
@@ -1736,7 +1753,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     async function runTrace(state, options = {}) {
-        const built = buildTraceMessages(state, options);
+        const built = await buildTraceMessages(state, options);
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
         const response = await generate(built.messages, { ...options, kind: 'trace' });
         if (!response.success) return response;
@@ -1746,7 +1763,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     async function runSummary(state, options = {}) {
-        const built = buildSummaryMessages(state, options);
+        const built = await buildSummaryMessages(state, options);
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
         const response = await generate(built.messages, { ...options, kind: 'summary' });
         if (!response.success) return response;
@@ -1776,10 +1793,13 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             suppressMemoryData: true,
         });
         const recentContextMessage = buildRecentChatContextMessage(options);
+        const worldbookMessage = await buildWorldbookContextMessage(state, options);
         const note = String(options.note || '').trim();
         const tableText = tablesToReferenceText(state, options) || '（暂无）';
         const messages = withMemoryPrefill([
             historianPrompt ? { role: 'system', content: historianPrompt } : null,
+            { role: 'system', content: buildRuntimeBackgroundText() },
+            worldbookMessage,
             recentContextMessage,
             { role: 'system', content: `【待优化表格】\n${tableText}` },
             { role: 'user', content: `${prompt}${note ? `\n\n【本次重点优化建议】\n${note}` : ''}\n\n请根据以上待优化表格和优化要求输出优化后的结果。` },
@@ -1809,12 +1829,15 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             ? compactLines([`【本次重点优化建议】\n${note}`, getSummaryOptimizeResponseFormatPrompt()])
             : (schemePrompt || getDefaultOptimizePrompt('summary'));
         const prompt = resolveTaskPromptVariables(promptSource, state, options);
+        const worldbookMessage = await buildWorldbookContextMessage(state, options);
         const messages = withMemoryPrefill([
             { role: 'system', content: historianPrompt },
+            { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
+            worldbookMessage,
             { role: 'user', content: `【待优化总结】\n${summaries || '（暂无）'}` },
             { role: 'system', content: prompt },
             { role: 'user', content: '请立即根据以上待优化总结和优化要求输出优化后的 <Memory> 总结。' },
-        ]);
+        ].filter(Boolean));
         const response = await generate(messages, { ...options, kind: 'summaryOptimize' });
         if (!response.success) return response;
         const payloads = parseSummaryResponse(response.text);

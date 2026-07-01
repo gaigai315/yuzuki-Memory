@@ -4884,6 +4884,99 @@
     font-size: 13px;
 }
 
+#yzm-memory-root .yzm-task-worldbook-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-task-worldbook-header {
+    border-bottom: 1px solid var(--yzm-border-soft);
+}
+
+#yzm-memory-root .yzm-task-worldbook-tools {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--yzm-border-soft);
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-task-worldbook-summary {
+    min-width: 0;
+    color: var(--yzm-muted);
+    font-size: 12px;
+}
+
+#yzm-memory-root .yzm-task-worldbook-list {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    max-height: 260px;
+    padding: 10px 16px 14px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-task-worldbook-item {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+    padding: 10px;
+    color: var(--yzm-text);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 8px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-task-worldbook-item-active {
+    border-color: var(--yzm-active-bg);
+    box-shadow: 0 8px 18px rgba(84, 112, 226, 0.12);
+}
+
+#yzm-memory-root .yzm-task-worldbook-choice {
+    width: 16px;
+    min-width: 16px;
+    height: 16px;
+    margin: 2px 0 0;
+    accent-color: var(--yzm-active-bg);
+}
+
+#yzm-memory-root .yzm-task-worldbook-item-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-task-worldbook-item-body strong,
+#yzm-memory-root .yzm-task-worldbook-item-body span {
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-task-worldbook-item-body strong {
+    color: var(--yzm-title);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-task-worldbook-item-body span {
+    color: var(--yzm-muted);
+    font-size: 11px;
+}
+
 #yzm-memory-root .yzm-config-number-input::-webkit-outer-spin-button,
 #yzm-memory-root .yzm-config-number-input::-webkit-inner-spin-button {
     margin: 0;
