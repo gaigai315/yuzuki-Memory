@@ -2048,6 +2048,74 @@
         }
     }
 
+    function showMemoryIoMessage(message, type = 'success') {
+        if (typeof toastr !== 'undefined') {
+            const fn = typeof toastr[type] === 'function' ? toastr[type] : toastr.info;
+            fn.call(toastr, message, '柚月记忆', { timeOut: 3000 });
+            return;
+        }
+        window.alert(message);
+    }
+
+    function exportCurrentMemoryTables(root) {
+        const memoryIo = YuzukiMemory.MemoryIO;
+        if (!memoryIo?.downloadBackup) {
+            window.alert('导入导出模块尚未加载。');
+            return;
+        }
+        const state = getState();
+        const stats = memoryIo.getStats?.(state) || {};
+        memoryIo.downloadBackup(state, 'yuzuki_memory_tables');
+        closeMoreMenu(root);
+        showMemoryIoMessage(`已导出 ${stats.tableCount || 0} 张表、${stats.recordCount || 0} 条记录。`);
+    }
+
+    async function importCurrentMemoryTables(root, file) {
+        const memoryIo = YuzukiMemory.MemoryIO;
+        if (!memoryIo?.parseFile || !memoryIo?.importIntoState) {
+            window.alert('导入导出模块尚未加载。');
+            return;
+        }
+        if (!file) return;
+        if (!window.confirm('导入会覆盖当前聊天的所有记忆表格和总结内容，不会导入向量化书库。确定继续吗？')) return;
+
+        try {
+            const raw = await memoryIo.parseFile(file);
+            const nextState = memoryIo.importIntoState(getState(), raw);
+            const stats = memoryIo.getStats?.(nextState) || {};
+            memoryState = nextState;
+            loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
+            if (!saveState({ force: true, immediate: true })) {
+                memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+                window.alert('当前会话尚未就绪，导入结果未保存。');
+                return;
+            }
+            dispatchManualStateUpdated({ source: 'import', tableId: nextState.activeTableId || '' });
+            closeRecordActionMenu(root);
+            setMobileDetailOpen(root, false);
+            activeWorkspaceView = 'table';
+            refreshActiveWorkspace(root);
+            closeMoreMenu(root);
+            showMemoryIoMessage(`导入完成：${stats.tableCount || 0} 张表、${stats.recordCount || 0} 条记录。`);
+        } catch (error) {
+            window.alert(`导入失败：${error?.message || error}`);
+        }
+    }
+
+    function openMemoryImportPicker(root) {
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,.txt,application/json,text/plain';
+        input.style.display = 'none';
+        input.addEventListener('change', () => {
+            const file = input.files?.[0] || null;
+            input.remove();
+            importCurrentMemoryTables(root, file);
+        }, { once: true });
+        document.body.appendChild(input);
+        input.click();
+    }
+
     function resetManualPointers(options = {}) {
         const state = getState();
         state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
@@ -2226,8 +2294,8 @@
             createIconButton('新增', 'fa-solid fa-plus', 'yzm-top-more-item yzm-top-add-record'),
             createIconButton('清表', 'fa-solid fa-eraser', 'yzm-top-more-item yzm-top-clear-table'),
             createIconButton('整理', 'fa-solid fa-layer-group', 'yzm-top-more-item yzm-top-organize-structure'),
-            createIconButton('导出', 'fa-solid fa-file-export', 'yzm-top-more-item'),
-            createIconButton('导入', 'fa-solid fa-file-import', 'yzm-top-more-item'),
+            createIconButton('导出', 'fa-solid fa-file-export', 'yzm-top-more-item yzm-top-export-memory'),
+            createIconButton('导入', 'fa-solid fa-file-import', 'yzm-top-more-item yzm-top-import-memory'),
             createThemeButton(shell, 'yzm-top-more-item yzm-theme-button'),
             createIconButton('清理缓存', 'fa-solid fa-broom', 'yzm-top-more-item yzm-top-clean-cache'),
             createIconButton('重置结构', 'fa-solid fa-rotate-right', 'yzm-top-more-item yzm-top-reset-structure')
@@ -4180,6 +4248,42 @@
         syncMergedBranchSummaryValues(target);
         appendUniqueMultilineValue(target.values, '未解决问题', record.values?.未解决问题);
         appendUniqueMultilineValue(target.values, '备注', record.values?.备注);
+
+        const recordIndex = records.findIndex((entry) => entry === record || String(entry?.id || '') === String(record.id || ''));
+        if (recordIndex > -1) records.splice(recordIndex, 1);
+        return target;
+    }
+
+    function mergeCharacterProfileIntoExisting(table, record) {
+        if (!table || table.id !== 'character_profile' || !record) return null;
+        const primary = getPrimaryColumn(table);
+        const characterName = String(record.values?.[primary] || '').trim();
+        if (!characterName) return null;
+        const records = getRecords(table.id);
+        const target = records.find((entry) => (
+            entry
+            && entry !== record
+            && String(entry?.values?.[primary] || '').trim() === characterName
+        ));
+        if (!target) return null;
+
+        target.values = target.values && typeof target.values === 'object' ? target.values : {};
+        target.values[primary] = characterName;
+        (table.columns || []).forEach((column) => {
+            const name = cleanColumnName(column);
+            if (name === primary) return;
+            const nextValue = String(record.values?.[name] || '').trim();
+            if (!nextValue) return;
+            const currentValue = String(target.values?.[name] || '').trim();
+            if (!currentValue) {
+                target.values[name] = nextValue;
+                return;
+            }
+            if (currentValue === nextValue) return;
+            if (isRecordEditorMultilineField(table, name)) {
+                appendUniqueMultilineValue(target.values, name, nextValue);
+            }
+        });
 
         const recordIndex = records.findIndex((entry) => entry === record || String(entry?.id || '') === String(record.id || ''));
         if (recordIndex > -1) records.splice(recordIndex, 1);
@@ -9579,6 +9683,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
+            '修复并对齐记忆表格导入导出功能。',
             '优化批量填表非静默功能。',
             '修复旧记忆表格向量化导入新记忆插件虚假绑定。',
             '修复自动总结确认弹窗抢占聊天输入焦点。',
@@ -10902,7 +11007,9 @@
             if (isMemorySummaryRecord && !isBranchSummaryRecord) record.values.核心角色 = '';
             const records = getRecords(table.id);
             if (isNewRecord) records.push(record);
-            const mergedRecord = isBranchSummaryRecord ? mergeBranchSummaryIntoExisting(table, record) : null;
+            const mergedRecord = isBranchSummaryRecord
+                ? mergeBranchSummaryIntoExisting(table, record)
+                : mergeCharacterProfileIntoExisting(table, record);
             if (mergedRecord) record = mergedRecord;
             setActiveRecordId(table.id, record.id);
             if (!persistStateOrReload(root, '当前会话尚未就绪，记录修改未保存。', {
@@ -11039,6 +11146,27 @@
                 event.preventDefault();
                 event.stopPropagation();
                 cleanupMemoryCache(root);
+            });
+        }
+
+        const exportMemoryButton = root.querySelector('.yzm-top-export-memory');
+        if (exportMemoryButton && exportMemoryButton.dataset.yzmBound !== 'true') {
+            exportMemoryButton.dataset.yzmBound = 'true';
+            exportMemoryButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                exportCurrentMemoryTables(root);
+            });
+        }
+
+        const importMemoryButton = root.querySelector('.yzm-top-import-memory');
+        if (importMemoryButton && importMemoryButton.dataset.yzmBound !== 'true') {
+            importMemoryButton.dataset.yzmBound = 'true';
+            importMemoryButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                closeMoreMenu(root);
+                openMemoryImportPicker(root);
             });
         }
 

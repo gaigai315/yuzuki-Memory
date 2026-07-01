@@ -288,6 +288,23 @@
         return !!targetChatId && stateIds.some((id) => extractSessionChatId(id) === targetChatId);
     }
 
+    function isMigratableChatMetadataState(state, sessionId) {
+        if (!state || typeof state !== 'object' || !sessionId) return false;
+        if (isCompatibleStateSession(state, sessionId)) return true;
+        const hasTables = Array.isArray(state.tables) && state.tables.length > 0;
+        const hasRecords = countRecords(state) > 0 || countMeaningfulRecords(state) > 0;
+        if (!hasTables && !hasRecords) return false;
+
+        const stateIds = uniqueValues([state.sessionId, state.id, ...(Array.isArray(state.sessionAliases) ? state.sessionAliases : [])]);
+        const currentAliases = getCurrentSessionAliases();
+        if (!currentAliases.includes(sessionId)) return false;
+        console.info('[yuzuki-Memory] Chat metadata session mismatch treated as branch/create-chat migration.', {
+            from: stateIds,
+            to: sessionId,
+        });
+        return true;
+    }
+
     function stampSession(state, sessionId) {
         if (!state || typeof state !== 'object') return state;
         return Object.assign({}, state, {
@@ -465,10 +482,15 @@
                 .filter(Boolean);
 
             const metadataState = sessionId === getCurrentSessionId() ? readChatMetadataState() : null;
-            const compatibleMetadata = isCompatibleStateSession(metadataState, sessionId) ? metadataState : null;
+            const compatibleMetadata = isMigratableChatMetadataState(metadataState, sessionId) ? metadataState : null;
             const sourceState = compatibleMetadata || pickBestState(localStates);
             const normalized = normalizeState(sourceState ? stampSession(sourceState, sessionId) : null, fallbackState);
-            if (!compatibleMetadata && sourceState && sessionId === getCurrentSessionId()) {
+            const metadataNeedsMigration = compatibleMetadata
+                && !isCompatibleStateSession(compatibleMetadata, sessionId)
+                && sessionId === getCurrentSessionId();
+            if (metadataNeedsMigration) {
+                saveState(normalized, fallbackState, sessionId, { force: true, saveOrigin: 'migration', immediate: true });
+            } else if (!compatibleMetadata && sourceState && sessionId === getCurrentSessionId()) {
                 saveState(normalized, fallbackState, sessionId, { force: true, saveOrigin: 'migration', immediate: true });
             } else if (sourceState && sourceState.sessionId && sourceState.sessionId !== sessionId) {
                 saveState(normalized, fallbackState, sessionId, { force: true, saveOrigin: 'migration' });
