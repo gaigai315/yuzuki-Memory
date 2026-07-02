@@ -9724,10 +9724,16 @@
 
     #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row,
     #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row {
-        grid-template-columns: 30px minmax(0, 1fr) auto;
+        grid-template-columns: 30px minmax(0, 1fr);
         gap: 8px 10px;
         min-height: 60px;
         padding: 10px;
+        align-items: start;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-row-body-no-icon),
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-row-body-no-icon) {
+        grid-template-columns: minmax(0, 1fr);
     }
 
     #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row-icon,
@@ -9763,6 +9769,19 @@
         height: 24px;
     }
 
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row-action,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row-action {
+        grid-column: 2;
+        grid-row: 2;
+        justify-content: flex-end;
+        width: 100%;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row-body-no-icon + .yzm-plugin-config-row-action,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row-body-no-icon + .yzm-plugin-config-row-action {
+        grid-column: 1;
+    }
+
     #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-config-number-input,
     #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-config-number-input {
         width: 56px;
@@ -9790,13 +9809,13 @@
 
     #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-inline),
     #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-inline) {
-        grid-template-columns: 30px minmax(0, 1fr) auto;
+        grid-template-columns: 30px minmax(0, 1fr);
     }
 
     #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-inline) .yzm-plugin-config-row-action,
     #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-inline) .yzm-plugin-config-row-action {
-        grid-column: 3;
-        grid-row: 1;
+        grid-column: 2;
+        grid-row: 2;
         justify-content: flex-end;
     }
 }
