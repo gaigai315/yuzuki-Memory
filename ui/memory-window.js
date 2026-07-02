@@ -127,6 +127,7 @@
         { id: 'historian', label: '史官破限', icon: 'fa-regular fa-clipboard' },
         { id: 'trace', label: '追溯提示词', icon: 'fa-regular fa-clipboard' },
         { id: 'summary', label: '总结提示词', icon: 'fa-regular fa-clipboard' },
+        { id: 'timedPrompt', label: '定时注入提示词', icon: 'fa-regular fa-clock' },
     ];
     const PROMPT_SCHEME_PROMPT_IDS = ['historian', 'traceRealtime', 'traceBatch', 'trace', 'traceOptimize', 'summary', 'summaryOptimize'];
     const PROMPT_SCHEME_MODE_OPTIONS = {
@@ -1172,6 +1173,7 @@
         return {
             id: '',
             name: String(name || '').trim(),
+            timedPromptInjection: normalizeTimedPromptInjection(),
             prompts: {
                 historian: String(defaults.historian || ''),
                 traceRealtime: String(defaults.traceRealtime || defaults.trace || ''),
@@ -1198,6 +1200,7 @@
             name,
             builtin: rawScheme.builtin === true,
             tableVisibility: normalizePromptSchemeTableVisibility(rawScheme.tableVisibility),
+            timedPromptInjection: normalizeTimedPromptInjection(rawScheme.timedPromptInjection || rawScheme.timedInjection),
             prompts: {
                 historian: String(prompts.historian || ''),
                 traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
@@ -1210,6 +1213,33 @@
             modes: {
                 trace: String(rawScheme.modes?.trace || rawScheme.modes?.table || 'realtime'),
             },
+        };
+    }
+
+    function createTimedPromptRuleId() {
+        return `timed_prompt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function normalizeTimedPromptRule(rawRule, index = 0) {
+        const source = rawRule && typeof rawRule === 'object' ? rawRule : {};
+        const interval = Math.round(normalizeNumberSetting(source.interval ?? source.every ?? source.floorInterval, 1, 9999, 8, 0));
+        return {
+            id: String(source.id || createTimedPromptRuleId()),
+            name: String(source.name || `提示词 ${String(index + 1).padStart(2, '0')}`).trim(),
+            interval,
+            content: String(source.content ?? source.prompt ?? source.text ?? ''),
+            enabled: source.enabled !== false,
+        };
+    }
+
+    function normalizeTimedPromptInjection(source = {}) {
+        const raw = source && typeof source === 'object' ? source : {};
+        const rawRules = Array.isArray(raw.rules)
+            ? raw.rules
+            : (Array.isArray(raw.items) ? raw.items : (Array.isArray(raw.prompts) ? raw.prompts : []));
+        return {
+            enabled: raw.enabled === true,
+            rules: rawRules.map(normalizeTimedPromptRule).filter((rule) => rule.content || rule.name),
         };
     }
 
@@ -1452,6 +1482,7 @@
             name: String(name || '').trim() || `${draft.name}（自定义）`,
             builtin: false,
             tableVisibility: captureCurrentTableVisibility(),
+            timedPromptInjection: normalizeTimedPromptInjection(draft.timedPromptInjection),
             prompts: { ...(draft.prompts || {}) },
             modes: { ...(draft.modes || {}) },
         });
@@ -1479,6 +1510,18 @@
         }
         draft.modes = draft.modes || {};
         draft.modes[sectionId] = modeId;
+        return draft;
+    }
+
+    function updateActivePromptSchemeTimedInjection(updater) {
+        let draft = getActivePromptSchemeDraft();
+        const current = normalizeTimedPromptInjection(draft.timedPromptInjection);
+        const next = typeof updater === 'function' ? updater(current) : updater;
+        const normalized = normalizeTimedPromptInjection(next);
+        if (draft.builtin && JSON.stringify(current) !== JSON.stringify(normalized)) {
+            draft = forkBuiltinPromptSchemeDraft();
+        }
+        draft.timedPromptInjection = normalized;
         return draft;
     }
 
@@ -6001,6 +6044,7 @@
     function createPromptSchemePanel(section) {
         if (section.id === 'info') return createPromptSchemeInfoPanel(section);
         if (section.id === 'historian') return createHistorianPromptSchemePanel(section);
+        if (section.id === 'timedPrompt') return createTimedPromptSchemePanel(section);
 
         const panel = document.createElement('section');
         panel.className = 'yzm-scheme-panel';
@@ -6159,6 +6203,233 @@
         return panel;
     }
 
+    function createTimedPromptSchemePanel(section) {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-scheme-panel yzm-timed-prompt-panel';
+        const config = normalizeTimedPromptInjection(getActivePromptSchemeDraft().timedPromptInjection);
+
+        const header = document.createElement('div');
+        header.className = 'yzm-scheme-header';
+        const title = document.createElement('div');
+        title.className = 'yzm-scheme-title';
+        title.append(createIconNode(section.icon, ''), document.createTextNode('定时注入提示词'));
+        const desc = document.createElement('div');
+        desc.className = 'yzm-scheme-desc';
+        desc.textContent = getPromptSchemeDescription(section.id);
+        header.append(title, desc);
+
+        const switchButton = createConfigSwitch(config.enabled);
+        switchButton.dataset.yzmTimedPromptToggle = 'global';
+        const settingRow = document.createElement('div');
+        settingRow.className = 'yzm-timed-prompt-setting-row';
+        const settingText = document.createElement('div');
+        settingText.className = 'yzm-timed-prompt-setting-text';
+        const settingTitle = document.createElement('strong');
+        settingTitle.textContent = '启用定时注入';
+        const settingDesc = document.createElement('span');
+        settingDesc.textContent = '开启后，达到设定楼层间隔时，会在用户本次真实消息后方临时插入对应提示词。';
+        settingText.append(settingTitle, settingDesc);
+        settingRow.append(settingText, switchButton);
+
+        const addButton = createIconButton('新增提示词', 'fa-solid fa-plus', 'yzm-api-button yzm-api-button-primary');
+        addButton.dataset.yzmTimedPromptAdd = 'true';
+        const configCard = createApiCard('功能设置', 'fa-solid fa-gear', [
+            settingRow,
+            createApiActions([]),
+        ]);
+        configCard.querySelector('.yzm-api-actions')?.appendChild(addButton);
+
+        const listCard = document.createElement('section');
+        listCard.className = 'yzm-config-card yzm-api-card yzm-timed-prompt-list-card';
+        const listHeader = document.createElement('div');
+        listHeader.className = 'yzm-config-card-title yzm-api-card-title yzm-timed-prompt-list-header';
+        const listTitle = document.createElement('span');
+        listTitle.append(createIconNode('fa-solid fa-list', ''), document.createTextNode('提示词列表'));
+        const listCount = document.createElement('small');
+        listCount.textContent = `共 ${config.rules.length} 条提示词`;
+        listHeader.append(listTitle, listCount);
+
+        const list = document.createElement('div');
+        list.className = 'yzm-timed-prompt-list';
+        if (config.rules.length) {
+            list.append(...config.rules.map((rule, index) => createTimedPromptRuleRow(rule, index)));
+        } else {
+            const empty = document.createElement('div');
+            empty.className = 'yzm-timed-prompt-empty';
+            empty.textContent = '暂无定时注入提示词。';
+            list.appendChild(empty);
+        }
+        listCard.append(listHeader, list);
+
+        const footer = createApiActions([
+            ['保存设置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveScheme'],
+        ]);
+        footer.querySelector('[data-yzm-api-action="saveScheme"]')?.setAttribute('data-yzm-scheme-action', 'save');
+
+        panel.append(header, configCard, listCard, footer);
+        return panel;
+    }
+
+    function createTimedPromptRuleRow(rule, index) {
+        const row = document.createElement('section');
+        row.className = 'yzm-timed-prompt-rule';
+        row.dataset.yzmTimedPromptRuleId = rule.id;
+
+        const main = document.createElement('div');
+        main.className = 'yzm-timed-prompt-rule-main';
+        const top = document.createElement('div');
+        top.className = 'yzm-timed-prompt-rule-top';
+        const toggleWrap = document.createElement('label');
+        toggleWrap.className = 'yzm-timed-prompt-toggle-wrap';
+        const toggle = createConfigSwitch(rule.enabled);
+        toggle.dataset.yzmTimedPromptToggle = 'rule';
+        toggle.dataset.yzmTimedPromptRuleId = rule.id;
+        toggle.setAttribute('aria-label', `${rule.name || '提示词'}启用状态`);
+        toggleWrap.append(toggle);
+        const title = document.createElement('div');
+        title.className = 'yzm-timed-prompt-rule-title';
+        const titleText = document.createElement('span');
+        titleText.textContent = rule.name || `提示词 ${String(index + 1).padStart(2, '0')}`;
+        title.append(titleText);
+        top.append(toggleWrap, title);
+        const meta = document.createElement('div');
+        meta.className = 'yzm-timed-prompt-rule-meta';
+        meta.textContent = `每隔 ${rule.interval || 8} 楼触发`;
+        const preview = document.createElement('div');
+        preview.className = 'yzm-timed-prompt-rule-preview';
+        const content = String(rule.content || '').replace(/\s+/g, ' ').trim();
+        preview.textContent = content ? content.slice(0, 86) : '未填写注入内容';
+        main.append(top, meta, preview);
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-timed-prompt-rule-actions';
+        const editButton = createIconButton('编辑', 'fa-regular fa-pen-to-square', 'yzm-api-button yzm-timed-prompt-edit');
+        editButton.dataset.yzmTimedPromptEdit = rule.id;
+        const deleteButton = createIconButton('删除', 'fa-regular fa-trash-can', 'yzm-api-button yzm-api-button-danger yzm-timed-prompt-delete');
+        deleteButton.dataset.yzmTimedPromptDelete = rule.id;
+        actions.append(editButton, deleteButton);
+
+        row.append(main, actions);
+        return row;
+    }
+
+    function createTimedPromptInput(value, field, ruleId = '', type = 'text') {
+        const input = document.createElement('input');
+        input.className = 'yzm-api-input yzm-timed-prompt-input';
+        input.type = type;
+        input.value = String(value || '');
+        input.dataset.yzmTimedPromptField = field;
+        if (ruleId) input.dataset.yzmTimedPromptRuleId = ruleId;
+        if (type === 'number') input.inputMode = 'numeric';
+        return input;
+    }
+
+    function createTimedPromptUnitInput(input, unit) {
+        const wrap = document.createElement('div');
+        wrap.className = 'yzm-timed-prompt-unit-input';
+        const suffix = document.createElement('span');
+        suffix.textContent = unit;
+        wrap.append(input, suffix);
+        return wrap;
+    }
+
+    function openTimedPromptRuleDialog(root, ruleId = '') {
+        const config = normalizeTimedPromptInjection(getActivePromptSchemeDraft().timedPromptInjection);
+        const target = String(ruleId || '');
+        const sourceRule = config.rules.find((rule) => rule.id === target) || null;
+        const isEdit = !!sourceRule;
+        const draftRule = normalizeTimedPromptRule(sourceRule || {
+            id: createTimedPromptRuleId(),
+            name: `提示词 ${String(config.rules.length + 1).padStart(2, '0')}`,
+            interval: 8,
+            content: '',
+            enabled: true,
+        }, config.rules.length);
+
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-timed-prompt-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-timed-prompt-modal';
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-timed-prompt-dialog';
+        dialog.setAttribute('aria-label', isEdit ? '编辑定时注入提示词' : '新增定时注入提示词');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = isEdit ? '编辑提示词' : '新增提示词';
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const nameInput = createTimedPromptInput(draftRule.name, 'name', '', 'text');
+        nameInput.placeholder = '例如：剧情推进提醒';
+        const intervalInput = createTimedPromptInput(String(draftRule.interval), 'interval', '', 'number');
+        intervalInput.min = '1';
+        intervalInput.max = '9999';
+        intervalInput.step = '1';
+        const contentTextarea = document.createElement('textarea');
+        contentTextarea.className = 'yzm-timed-prompt-textarea yzm-timed-prompt-modal-textarea';
+        contentTextarea.placeholder = '填写达到楼层间隔后要临时注入到用户消息末尾的提示词...';
+        contentTextarea.value = draftRule.content;
+        contentTextarea.spellcheck = false;
+
+        const form = document.createElement('div');
+        form.className = 'yzm-timed-prompt-form';
+        form.append(
+            createApiField('名称', nameInput),
+            createApiField('每隔多少楼触发', createTimedPromptUnitInput(intervalInput, '楼')),
+            createApiField('注入内容', contentTextarea, 'yzm-timed-prompt-content-field'),
+        );
+
+        const footer = document.createElement('div');
+        footer.className = 'yzm-scheme-modal-footer';
+        const hint = document.createElement('span');
+        hint.className = 'yzm-scheme-modal-counter';
+        hint.textContent = '保存后只会写入当前记忆方案。';
+        const cancelButton = createIconButton('取消', 'fa-solid fa-xmark', 'yzm-api-button');
+        const saveButton = createIconButton('保存', 'fa-regular fa-floppy-disk', 'yzm-api-button yzm-api-button-primary');
+        footer.append(hint, cancelButton, saveButton);
+
+        dialog.append(header, form, footer);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+        window.setTimeout(() => nameInput.focus(), 0);
+
+        const closeModal = () => overlay.remove();
+        close.onclick = closeModal;
+        cancelButton.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        saveButton.addEventListener('click', () => {
+            const nextRule = normalizeTimedPromptRule({
+                ...draftRule,
+                name: nameInput.value,
+                interval: intervalInput.value,
+                content: contentTextarea.value,
+                enabled: draftRule.enabled,
+            }, config.rules.length);
+            if (!String(nextRule.name || '').trim()) {
+                window.alert('请填写提示词名称。');
+                return;
+            }
+            if (!String(nextRule.content || '').trim()) {
+                window.alert('请填写注入内容。');
+                return;
+            }
+            upsertTimedPromptRule(nextRule);
+            closeModal();
+            renderPromptSchemeWorkspace(root);
+        });
+    }
+
     function createPromptSchemeCurrentCard() {
         const card = document.createElement('section');
         card.className = 'yzm-config-card yzm-api-card yzm-scheme-current-card';
@@ -6303,6 +6574,28 @@
         saveState();
         renderPromptSchemeWorkspace(root);
         renderPrimaryList(root);
+        showPromptSchemeSaveFeedback(root);
+    }
+
+    function showPromptSchemeSaveFeedback(root) {
+        showTaskToast('记忆方案已保存。', 'success');
+        const button = root.querySelector('.yzm-scheme-view [data-yzm-scheme-action="save"]');
+        if (!button) return;
+        const icon = button.querySelector('i');
+        const label = button.querySelector('span');
+        const originalIcon = icon?.className || '';
+        const originalText = label?.textContent || button.textContent || '';
+        button.classList.add('yzm-api-button-saved');
+        if (icon) icon.className = 'fa-solid fa-check';
+        if (label) label.textContent = '已保存';
+        button.disabled = true;
+        window.setTimeout(() => {
+            if (!button.isConnected) return;
+            button.classList.remove('yzm-api-button-saved');
+            if (icon) icon.className = originalIcon;
+            if (label) label.textContent = originalText;
+            button.disabled = false;
+        }, 1200);
     }
 
     function deleteActivePromptScheme(root) {
@@ -6348,6 +6641,77 @@
         refreshPromptSchemeNav(root);
         renderPrimaryList(root);
         return true;
+    }
+
+    function addTimedPromptRule(root) {
+        openTimedPromptRuleDialog(root);
+    }
+
+    function editTimedPromptRule(root, ruleId) {
+        openTimedPromptRuleDialog(root, ruleId);
+    }
+
+    function upsertTimedPromptRule(rule) {
+        const nextRule = normalizeTimedPromptRule(rule);
+        updateActivePromptSchemeTimedInjection((config) => {
+            const index = config.rules.findIndex((entry) => entry.id === nextRule.id);
+            if (index < 0) {
+                return {
+                    ...config,
+                    rules: [...config.rules, nextRule],
+                };
+            }
+            const rules = [...config.rules];
+            rules[index] = {
+                ...rules[index],
+                ...nextRule,
+            };
+            return {
+                ...config,
+                rules,
+            };
+        });
+    }
+
+    function deleteTimedPromptRule(root, ruleId) {
+        const target = String(ruleId || '');
+        if (!target) return;
+        updateActivePromptSchemeTimedInjection((config) => ({
+            ...config,
+            rules: config.rules.filter((rule) => rule.id !== target),
+        }));
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function setTimedPromptGlobalEnabled(isEnabled) {
+        updateActivePromptSchemeTimedInjection((config) => ({
+            ...config,
+            enabled: isEnabled === true,
+        }));
+    }
+
+    function setTimedPromptRuleEnabled(ruleId, isEnabled) {
+        const target = String(ruleId || '');
+        updateActivePromptSchemeTimedInjection((config) => ({
+            ...config,
+            rules: config.rules.map((rule) => rule.id === target ? { ...rule, enabled: isEnabled === true } : rule),
+        }));
+    }
+
+    function updateTimedPromptRuleField(ruleId, field, value) {
+        const target = String(ruleId || '');
+        const key = String(field || '');
+        if (!target || !['name', 'interval', 'content'].includes(key)) return;
+        updateActivePromptSchemeTimedInjection((config) => ({
+            ...config,
+            rules: config.rules.map((rule) => {
+                if (rule.id !== target) return rule;
+                if (key === 'interval') {
+                    return { ...rule, interval: Math.round(normalizeNumberSetting(value, 1, 9999, rule.interval || 8, 0)) };
+                }
+                return { ...rule, [key]: String(value || '') };
+            }),
+        }));
     }
 
     function createPromptSchemeOrganizerRow(scheme, index) {
@@ -6450,6 +6814,7 @@
     function getPromptSchemeDescription(sectionId) {
         if (sectionId === 'info') return '管理记忆方案的基础信息、自动加载与导入导出。';
         if (sectionId === 'historian') return '控制史官视角、叙事边界和破限输出规则。';
+        if (sectionId === 'timedPrompt') return '按设定楼层间隔，在用户发送消息时自动隐式注入修正提示词。';
         if (sectionId === 'trace') return '控制追溯填表与追溯优化的提示词。';
         return '控制手动/自动总结与总结优化的提示词。';
     }
@@ -9858,6 +10223,7 @@
             '向量化书架按当前会话绑定状态排序，已绑定书籍会置顶显示。',
             '修复合并预设中 {{MEMORY_TABLE_表名}} 被普通 {{MEMORY_TABLE}} 提前吞掉的问题。',
             '优化移动端折叠侧栏后的布局，主内容区文字、按钮和输入控件会自动放大，并避免长说明被挤成竖排。',
+            '记忆方案新增“定时注入提示词”，可按楼层间隔将修正提示词临时拼接到本轮用户消息末尾。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11889,11 +12255,44 @@
                 const modeButton = target?.closest('[data-yzm-scheme-mode]');
                 const autoLoadToggle = target?.closest('[data-yzm-scheme-autoload-toggle]');
                 const expandButton = target?.closest('[data-yzm-scheme-expand]');
+                const timedPromptToggle = target?.closest('[data-yzm-timed-prompt-toggle]');
+                const timedPromptAdd = target?.closest('[data-yzm-timed-prompt-add]');
+                const timedPromptEdit = target?.closest('[data-yzm-timed-prompt-edit]');
+                const timedPromptDelete = target?.closest('[data-yzm-timed-prompt-delete]');
                 if (autoLoadToggle) {
                     event.preventDefault();
                     event.stopPropagation();
                     const isOn = toggleConfigSwitch(autoLoadToggle);
                     togglePromptSchemeAutoLoad(root, isOn);
+                    return;
+                }
+                if (timedPromptToggle) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const isOn = toggleConfigSwitch(timedPromptToggle);
+                    if (timedPromptToggle.dataset.yzmTimedPromptToggle === 'global') {
+                        setTimedPromptGlobalEnabled(isOn);
+                    } else {
+                        setTimedPromptRuleEnabled(timedPromptToggle.dataset.yzmTimedPromptRuleId || '', isOn);
+                    }
+                    return;
+                }
+                if (timedPromptAdd) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    addTimedPromptRule(root);
+                    return;
+                }
+                if (timedPromptEdit) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    editTimedPromptRule(root, timedPromptEdit.dataset.yzmTimedPromptEdit || '');
+                    return;
+                }
+                if (timedPromptDelete) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    deleteTimedPromptRule(root, timedPromptDelete.dataset.yzmTimedPromptDelete || '');
                     return;
                 }
                 if (modeButton) {
@@ -11941,6 +12340,14 @@
             });
             schemeView.addEventListener('input', (event) => {
                 const target = event.target;
+                if (target?.matches?.('[data-yzm-timed-prompt-field]')) {
+                    updateTimedPromptRuleField(
+                        target.dataset.yzmTimedPromptRuleId || '',
+                        target.dataset.yzmTimedPromptField || '',
+                        target.value,
+                    );
+                    return;
+                }
                 if (!target?.matches?.('.yzm-scheme-textarea[data-yzm-scheme-field]')) return;
                 updateActivePromptSchemeDraftPrompt(target.dataset.yzmSchemeField, target.value);
                 const counter = root.querySelector(`[data-yzm-scheme-counter="${escapeSelectorValue(target.dataset.yzmSchemeField)}"]`);

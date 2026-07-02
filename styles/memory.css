@@ -3408,6 +3408,223 @@
     line-height: 1.5;
 }
 
+#yzm-memory-root .yzm-timed-prompt-panel {
+    display: grid;
+    gap: 12px;
+}
+
+#yzm-memory-root .yzm-timed-prompt-setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-timed-prompt-setting-text {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-timed-prompt-setting-text strong,
+#yzm-memory-root .yzm-timed-prompt-rule-title {
+    color: var(--yzm-text);
+    font-size: 13px;
+    line-height: 1.3;
+    font-weight: 700;
+}
+
+#yzm-memory-root .yzm-timed-prompt-setting-text span {
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-timed-prompt-list-card {
+    display: grid;
+    gap: 12px;
+    min-width: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-timed-prompt-list-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+#yzm-memory-root .yzm-timed-prompt-list-header small {
+    color: var(--yzm-muted);
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-timed-prompt-list {
+    display: grid;
+    gap: 10px;
+}
+
+#yzm-memory-root .yzm-timed-prompt-rule {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 8px;
+    box-sizing: border-box;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-timed-prompt-rule-main {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-timed-prompt-rule-top {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-timed-prompt-rule-title {
+    min-width: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-timed-prompt-rule-title span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-timed-prompt-rule-meta,
+#yzm-memory-root .yzm-timed-prompt-rule-preview {
+    min-width: 0;
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-timed-prompt-rule-preview {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-timed-prompt-rule-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-timed-prompt-toggle-wrap {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--yzm-muted);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-timed-prompt-rule-top .yzm-config-switch {
+    --yzm-switch-knob-size: 10px;
+    --yzm-switch-knob-offset: 2px;
+    --yzm-switch-travel: 12px;
+    width: 26px;
+    min-width: 26px;
+    height: 16px;
+}
+
+#yzm-memory-root .yzm-timed-prompt-input,
+#yzm-memory-root .yzm-timed-prompt-textarea {
+    width: 100%;
+    color: var(--yzm-text) !important;
+    background: var(--yzm-input-bg) !important;
+    border: 1px solid var(--yzm-border);
+    border-radius: 8px;
+    box-shadow: none;
+    box-sizing: border-box;
+    font: inherit;
+    font-size: 12px;
+    outline: none;
+}
+
+#yzm-memory-root .yzm-timed-prompt-input {
+    min-height: 34px;
+    padding: 0 10px;
+}
+
+#yzm-memory-root .yzm-timed-prompt-textarea {
+    min-height: 48px;
+    padding: 8px 10px;
+    line-height: 1.45;
+    resize: vertical;
+}
+
+#yzm-memory-root .yzm-timed-prompt-content-field {
+    grid-column: 1 / -1;
+}
+
+#yzm-memory-root .yzm-timed-prompt-unit-input {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    background: var(--yzm-input-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 8px;
+    box-sizing: border-box;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-timed-prompt-unit-input .yzm-timed-prompt-input {
+    border: 0;
+    border-radius: 0;
+    background: transparent !important;
+}
+
+#yzm-memory-root .yzm-timed-prompt-unit-input span {
+    flex: 0 0 auto;
+    padding: 0 10px 0 2px;
+    color: var(--yzm-muted);
+    font-size: 12px;
+}
+
+#yzm-memory-root .yzm-timed-prompt-dialog {
+    width: min(620px, calc(100vw - 28px));
+}
+
+#yzm-memory-root .yzm-timed-prompt-form {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 180px;
+    gap: 12px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-timed-prompt-modal-textarea {
+    min-height: 170px;
+}
+
+#yzm-memory-root .yzm-timed-prompt-empty {
+    padding: 14px;
+    color: var(--yzm-muted);
+    background: var(--yzm-row-bg);
+    border: 1px dashed var(--yzm-border);
+    border-radius: 8px;
+    font-size: 12px;
+    text-align: center;
+}
+
 #yzm-memory-root .yzm-scheme-textarea:focus {
     border-color: color-mix(in srgb, var(--yzm-icon-active) 48%, var(--yzm-border));
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--yzm-icon-active) 14%, transparent);
@@ -4454,6 +4671,18 @@
 
 #yzm-memory-root .yzm-api-button-primary i {
     color: var(--yzm-icon-active);
+}
+
+#yzm-memory-root .yzm-api-button-saved,
+#yzm-memory-root .yzm-api-button-saved i {
+    color: #fff;
+}
+
+#yzm-memory-root .yzm-api-button-saved {
+    background: linear-gradient(135deg, #35b876, #46c98b);
+    border-color: transparent;
+    box-shadow: 0 8px 18px rgba(53, 184, 118, 0.24);
+    opacity: 1;
 }
 
 #yzm-memory-root .yzm-api-button-danger,
@@ -9817,5 +10046,117 @@
         grid-column: 2;
         grid-row: 2;
         justify-content: flex-end;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-timed-prompt-rule-top .yzm-config-switch,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-timed-prompt-rule-top .yzm-config-switch {
+        --yzm-switch-knob-size: 10px;
+        --yzm-switch-knob-offset: 2px;
+        --yzm-switch-travel: 12px;
+        width: 26px;
+        min-width: 26px;
+        height: 16px;
+    }
+}
+
+@media (max-width: 760px) {
+    #yzm-memory-root .yzm-timed-prompt-setting-row {
+        align-items: flex-start;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-rule,
+    #yzm-memory-root .yzm-timed-prompt-form {
+        grid-template-columns: 1fr;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-rule-actions {
+        justify-content: flex-end;
+        gap: 8px;
+        width: 100%;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-input,
+    #yzm-memory-root .yzm-timed-prompt-textarea {
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-rule-actions .yzm-api-button {
+        min-width: 0;
+        min-height: 28px;
+        padding: 0 8px;
+        font-size: 11px;
+    }
+}
+
+@media (max-width: 420px) {
+    #yzm-memory-root .yzm-timed-prompt-setting-row {
+        flex-direction: column;
+        gap: 8px;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-rule-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: center;
+        justify-content: stretch;
+        gap: 6px;
+        width: 100%;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-rule {
+        padding: 8px;
+        gap: 8px;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-rule-main {
+        gap: 4px;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-setting-text strong,
+    #yzm-memory-root .yzm-timed-prompt-rule-title {
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-setting-text span,
+    #yzm-memory-root .yzm-timed-prompt-list-header small,
+    #yzm-memory-root .yzm-timed-prompt-toggle-wrap {
+        font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-rule-top .yzm-timed-prompt-toggle-wrap > span {
+        display: none;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-rule-actions .yzm-api-button {
+        justify-content: center;
+        width: 100%;
+        min-width: 0;
+        min-height: 26px;
+        padding: 0 5px;
+        font-size: 10px;
+        white-space: nowrap;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-rule-top .yzm-config-switch {
+        --yzm-switch-knob-size: 10px;
+        --yzm-switch-knob-offset: 2px;
+        --yzm-switch-travel: 12px;
+        width: 26px;
+        min-width: 26px;
+        height: 16px;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-input,
+    #yzm-memory-root .yzm-timed-prompt-textarea {
+        min-height: 30px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-textarea {
+        min-height: 64px;
+    }
+
+    #yzm-memory-root .yzm-timed-prompt-modal-textarea {
+        min-height: 140px;
     }
 }

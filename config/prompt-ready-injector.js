@@ -7,6 +7,7 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const INSTALL_ID = `prompt-ready-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const TIMED_PROMPT_STATE_KEY = 'yzm_memory_timed_prompt_injection_state';
     const MEMORY_VAR_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT)\s*\}\}/i;
     const STRIP_MEMORY_VAR_PATTERN = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT)\s*\}\}/gi;
     const SPECIFIC_TABLE_PATTERN = /\{\{\s*MEMORY_TABLE\s*_\s*([^{}]+?)\s*\}\}/i;
@@ -133,6 +134,7 @@
         delete cloned.isGaigaiPrompt;
         delete cloned.isYuzukiVector;
         delete cloned.isGaigaiVector;
+        delete cloned.isYuzukiTimedPrompt;
         delete cloned.yzmMemoryInjectionType;
         delete cloned.yzmMemoryTableId;
         delete cloned.yzmMemorySummaryId;
@@ -160,6 +162,142 @@
         }
         const text = getPrimaryTextFromMessage(message);
         return MEMORY_INJECTION_MARKERS.some((marker) => text.includes(marker));
+    }
+
+    function isRealUserMessage(message) {
+        if (!message || typeof message !== 'object') return false;
+        if (isMemoryInjectionMessage(message)) return false;
+        if (message.isPhoneMessage || message.isMusicMessage || message.isYuzukiTimedPrompt) return false;
+        const role = String(message.role || '').toLowerCase();
+        const isUser = role === 'user' || message.is_user === true || message.is_user === 'true';
+        return isUser && !!getPrimaryTextFromMessage(message).trim();
+    }
+
+    function getLastRealUserMessageIndex(chat) {
+        if (!Array.isArray(chat)) return -1;
+        for (let index = chat.length - 1; index >= 0; index -= 1) {
+            if (isRealUserMessage(chat[index])) return index;
+        }
+        return -1;
+    }
+
+    function loadTimedPromptState() {
+        try {
+            const raw = JSON.parse(localStorage.getItem(TIMED_PROMPT_STATE_KEY) || '{}');
+            return raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
+        } catch (_error) {
+            return {};
+        }
+    }
+
+    function saveTimedPromptState(state) {
+        try {
+            const entries = Object.entries(state || {})
+                .sort((a, b) => Number(b[1]?.updatedAt || 0) - Number(a[1]?.updatedAt || 0))
+                .slice(0, 600);
+            localStorage.setItem(TIMED_PROMPT_STATE_KEY, JSON.stringify(Object.fromEntries(entries)));
+        } catch (_error) {
+            // Non-critical: duplicated timed prompt injection is still bounded by request cloning.
+        }
+    }
+
+    function getLatestUserFloorStats(promptChat) {
+        const context = getContext();
+        const contextChat = Array.isArray(context?.chat) ? context.chat : [];
+        if (contextChat.length) {
+            let latestNonSystemIndex = -1;
+            for (let index = contextChat.length - 1; index >= 0; index -= 1) {
+                const message = contextChat[index];
+                const role = String(message?.role || '').toLowerCase();
+                if (message?.is_system === true || role === 'system') continue;
+                latestNonSystemIndex = index;
+                break;
+            }
+            let latestUserIndex = -1;
+            for (let index = contextChat.length - 1; index >= 0; index -= 1) {
+                const message = contextChat[index];
+                const role = String(message?.role || '').toLowerCase();
+                if (message?.is_user === true || role === 'user') {
+                    latestUserIndex = index;
+                    break;
+                }
+            }
+            return {
+                floor: latestUserIndex >= 0 ? latestUserIndex + 1 : 0,
+                isCurrentUserTurn: latestUserIndex >= 0 && latestUserIndex === latestNonSystemIndex,
+            };
+        }
+
+        const promptIndex = getLastRealUserMessageIndex(promptChat);
+        return {
+            floor: promptIndex >= 0 ? promptIndex + 1 : 0,
+            isCurrentUserTurn: promptIndex >= 0,
+        };
+    }
+
+    function getTimedPromptStateKey(sessionId, schemeId, ruleId) {
+        return [
+            String(sessionId || 'default'),
+            String(schemeId || 'default_scheme'),
+            String(ruleId || ''),
+        ].join('::');
+    }
+
+    function shouldTriggerTimedPromptRule(rule, stats, state, sessionId, schemeId) {
+        const interval = Math.max(1, Math.min(9999, Math.round(Number(rule?.interval) || 1)));
+        const floor = Math.max(0, Math.round(Number(stats?.floor) || 0));
+        if (!floor || floor < interval) return false;
+        const key = getTimedPromptStateKey(sessionId, schemeId, rule?.id);
+        const lastFloor = Math.max(0, Math.round(Number(state?.[key]?.lastFloor) || 0));
+        if (lastFloor && floor - lastFloor < interval) return false;
+        state[key] = { lastFloor: floor, updatedAt: Date.now() };
+        return true;
+    }
+
+    function appendTextToMessage(message, extraText) {
+        const original = getPrimaryTextFromMessage(message);
+        const addition = String(extraText || '').trim();
+        if (!addition) return false;
+        setPrimaryTextToMessage(message, [original, addition].filter(Boolean).join('\n\n'));
+        return true;
+    }
+
+    function makeTimedPromptContent(rule) {
+        const rawContent = String(rule?.content || '').trim();
+        if (!rawContent) return '';
+        const content = YuzukiMemory.VariableInjector?.resolveRuntimeVariables?.(rawContent) || rawContent;
+        const ruleName = String(rule?.name || '').trim();
+        return ruleName ? `【定时注入提示词：${ruleName}】\n${content}` : `【定时注入提示词】\n${content}`;
+    }
+
+    function injectTimedPromptMessages(chat, state) {
+        if (!Array.isArray(chat)) return 0;
+        const scheme = YuzukiMemory.VariableInjector?.getActivePromptScheme?.(state) || null;
+        const config = YuzukiMemory.VariableInjector?.normalizeTimedPromptInjection?.(scheme?.timedPromptInjection) || { enabled: false, rules: [] };
+        if (!config.enabled || !config.rules.length) return 0;
+        const userIndex = getLastRealUserMessageIndex(chat);
+        if (userIndex < 0) return 0;
+        const stats = getLatestUserFloorStats(chat);
+        if (stats.isCurrentUserTurn === false) return 0;
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || 'default';
+        const timedState = loadTimedPromptState();
+        const dueRules = config.rules.filter((rule) => (
+            rule?.enabled !== false
+            && String(rule?.content || '').trim()
+            && shouldTriggerTimedPromptRule(rule, stats, timedState, sessionId, scheme?.id || '')
+        ));
+        if (!dueRules.length) return 0;
+        saveTimedPromptState(timedState);
+        const content = dueRules.map(makeTimedPromptContent).filter(Boolean).join('\n\n');
+        if (!content || !appendTextToMessage(chat[userIndex], content)) return 0;
+        console.info('[yuzuki-Memory] timed prompt injection finished.', {
+            floor: stats.floor,
+            injected: dueRules.length,
+            mode: 'append_to_user',
+            scheme: scheme?.name || '',
+            rules: dueRules.map((rule) => rule.name || rule.id),
+        });
+        return dueRules.length;
     }
 
     function removeExistingMemoryInjections(chat) {
@@ -647,12 +785,16 @@
                 injected += op.messages.length;
             });
 
+        const timedPromptInjections = injectTimedPromptMessages(chat, state);
+        injected += timedPromptInjections;
+
         console.info('[yuzuki-Memory] legacy opmt-compatible injection finished.', {
             anchors,
             injected,
             messages: chat.length,
             fallback: insertionOps.length,
             removedStaleInjections,
+            timedPromptInjections,
             initialAnchorIndexes,
             extensionPromptAnchors: extensionPromptResult.anchors,
             reorderedTableAnchors,

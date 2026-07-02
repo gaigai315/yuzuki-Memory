@@ -191,6 +191,7 @@
         return {
             id: String(rawScheme.id || ''),
             name,
+            timedPromptInjection: normalizeTimedPromptInjection(rawScheme.timedPromptInjection || rawScheme.timedInjection),
             prompts: {
                 historian: String(prompts.historian || ''),
                 traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
@@ -203,6 +204,29 @@
             modes: {
                 trace: String(rawScheme.modes?.trace || rawScheme.modes?.table || 'realtime'),
             },
+        };
+    }
+
+    function normalizeTimedPromptRule(rawRule, index = 0) {
+        const source = rawRule && typeof rawRule === 'object' ? rawRule : {};
+        const interval = Math.max(1, Math.min(9999, Math.round(Number(source.interval ?? source.every ?? source.floorInterval ?? 8) || 8)));
+        return {
+            id: String(source.id || `timed_prompt_${index + 1}`),
+            name: String(source.name || `提示词 ${String(index + 1).padStart(2, '0')}`).trim(),
+            interval,
+            content: String(source.content ?? source.prompt ?? source.text ?? ''),
+            enabled: source.enabled !== false,
+        };
+    }
+
+    function normalizeTimedPromptInjection(source = {}) {
+        const raw = source && typeof source === 'object' ? source : {};
+        const rawRules = Array.isArray(raw.rules)
+            ? raw.rules
+            : (Array.isArray(raw.items) ? raw.items : (Array.isArray(raw.prompts) ? raw.prompts : []));
+        return {
+            enabled: raw.enabled === true,
+            rules: rawRules.map(normalizeTimedPromptRule).filter((rule) => rule.content || rule.name),
         };
     }
 
@@ -1585,6 +1609,8 @@
         buildMemoryText,
         buildMemoryMessages,
         buildMemoryDataMessages,
+        getActivePromptScheme,
+        normalizeTimedPromptInjection,
         buildSummaryMessageEntries,
         buildTableMessageEntries,
         createPromptMemoryMessage,
