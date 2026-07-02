@@ -503,7 +503,10 @@
                 disableMemoryPromptInjection: phonePermissions ? !phonePermissions.allowPrompt : false,
                 disableSummaryInjection: phonePermissions ? !phonePermissions.allowSummary : false,
                 disableTableInjection: phonePermissions ? !phonePermissions.allowTable : false,
-                disableDefaultMemoryInjection: hasMemoryDataVariable,
+                // Some presets merge world info and prompts into one system/user message.
+                // A raw MEMORY anchor there does not guarantee the anchor survived and
+                // produced marked memory messages, so let VariableInjector fall back
+                // after it checks the final body for existing memory data.
                 preserveUnresolvedVectorAnchors: true,
             })
             : rawBody;
