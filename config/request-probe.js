@@ -512,17 +512,29 @@
             promptString: typeof rawBody.prompt === 'string',
         });
         logVariableLocations(rawBody);
+        const shouldDeferMemoryAnchorsToVariableInjector = hasVectorVariable && YuzukiMemory.EmbeddingClient?.loadSettings?.()?.enabled === true;
         if (
             typeof YuzukiMemory.PromptReadyInjector?.processPromptReadyChatSync === 'function'
             && (hasAnyMemoryVariable || !hasMemoryInjectionMarkers)
+            && !shouldDeferMemoryAnchorsToVariableInjector
         ) {
             getRequestArrays(rawBody).forEach((target) => {
                 YuzukiMemory.PromptReadyInjector.processPromptReadyChatSync(target.items, {
                     disableFallback: hasMemoryDataVariable,
+                    commitTimedPromptState: true,
                 });
             });
+        } else if (shouldDeferMemoryAnchorsToVariableInjector) {
+            console.info('[yuzuki-Memory] defer memory anchors to VariableInjector because vector recall may enrich character profile.');
         } else if (hasMemoryInjectionMarkers) {
             console.info('[yuzuki-Memory] final request already contains memory injections; skip prompt-ready fallback to preserve anchor order.');
+        }
+        if (typeof YuzukiMemory.PromptReadyInjector?.processTimedPromptInjection === 'function') {
+            getRequestArrays(rawBody).forEach((target) => {
+                YuzukiMemory.PromptReadyInjector.processTimedPromptInjection(target.items, {
+                    commitTimedPromptState: true,
+                });
+            });
         }
         const body = YuzukiMemory.VariableInjector?.processBody
             ? await YuzukiMemory.VariableInjector.processBody(rawBody, {
