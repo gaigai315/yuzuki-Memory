@@ -3620,6 +3620,11 @@
     function createVectorSegmentRow(segment) {
         const row = document.createElement('div');
         row.className = 'yzm-vector-segment-row';
+        row.dataset.yzmVectorSegmentIndex = String(segment.index);
+        row.setAttribute('role', 'button');
+        row.setAttribute('tabindex', '0');
+        row.setAttribute('aria-label', `预览分段 ${segment.id}`);
+        row.title = '点击预览完整分段内容';
         const id = document.createElement('span');
         id.textContent = segment.id;
         const text = document.createElement('span');
@@ -3630,6 +3635,58 @@
         status.textContent = getVectorStatusText(segment.status);
         row.append(id, text, status);
         return row;
+    }
+
+    function openVectorSegmentPreview(root, segmentIndex) {
+        const store = getVectorStore();
+        const book = store?.getBook?.();
+        const index = Number.parseInt(segmentIndex, 10);
+        if (!book || !Number.isFinite(index) || index < 0) return;
+        const text = String(book.chunks?.[index] || '');
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-vector-preview-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-vector-preview-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-vector-preview-dialog';
+        dialog.setAttribute('aria-label', `预览分段 ${String(index + 1).padStart(5, '0')}`);
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header yzm-vector-preview-header';
+
+        const titleWrap = document.createElement('div');
+        titleWrap.className = 'yzm-vector-preview-title-wrap';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title yzm-vector-preview-title';
+        title.textContent = `分段 ${String(index + 1).padStart(5, '0')}`;
+        const meta = document.createElement('span');
+        meta.className = 'yzm-vector-preview-meta';
+        meta.textContent = `${book.name || '未命名书籍'} · ${text.length.toLocaleString()} 字`;
+        titleWrap.append(title, meta);
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭分段预览');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+        const content = document.createElement('div');
+        content.className = 'yzm-vector-preview-content';
+        content.textContent = text || '该分段没有内容。';
+
+        const closeModal = () => overlay.remove();
+        close.addEventListener('click', closeModal);
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+
+        header.append(titleWrap, close);
+        dialog.append(header, content);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
     }
 
     async function ensureVectorStoreReady() {
@@ -3799,7 +3856,7 @@
         modalHost.appendChild(overlay);
 
         const closeModal = () => {
-            if (document.activeElement === textarea) textarea.blur();
+            if (document.activeElement === contentInput) contentInput.blur();
             overlay.remove();
         };
         close.onclick = closeModal;
@@ -9786,13 +9843,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '新增当前聊天记忆表格与总结的一键导出、导入入口。',
-            '导入记忆备份时会覆盖当前聊天的表格和总结，不会影响向量化书库。',
-            '修复已隐藏或已同步向量化的总结无法参与总结优化的问题。',
-            '总结优化保存后会按自动总结设置同步到向量化书库。',
-            '优化手动分段总结的向量化同步时机，每批写入后立即同步。',
-            '新增任务世界书选择，可按当前聊天独立勾选酒馆世界书参与追溯、总结和优化任务。',
-            '任务世界书会作为独立 system 消息放在破甲提示词与角色背景资料之后注入。',
+            '向量化书籍的分段内容新增预览弹窗。',
+            '点击任意分段条目即可查看完整内容，预览窗口支持滚动和移动端触控滚动。',
+            '优化移动端折叠侧栏后的显示尺寸，主内容区文字、按钮和输入控件会自动放大。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11502,6 +11555,7 @@
                 const target = event.target instanceof Element ? event.target : null;
                 const actionButton = target?.closest('[data-yzm-vector-action]');
                 const bookButton = target?.closest('[data-yzm-vector-book-id]');
+                const segmentRow = target?.closest('[data-yzm-vector-segment-index]');
                 const pager = target?.closest('[data-yzm-vector-page]');
 
                 if (actionButton) {
@@ -11526,6 +11580,13 @@
                     return;
                 }
 
+                if (segmentRow) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openVectorSegmentPreview(root, segmentRow.dataset.yzmVectorSegmentIndex);
+                    return;
+                }
+
                 if (pager) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -11534,6 +11595,16 @@
                     if (pager.dataset.yzmVectorPage === 'segment') vectorUiState.segmentPage += delta;
                     renderVectorWorkspace(root);
                 }
+            });
+
+            root.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' && event.key !== ' ') return;
+                const target = event.target instanceof Element ? event.target : null;
+                const segmentRow = target?.closest('[data-yzm-vector-segment-index]');
+                if (!segmentRow) return;
+                event.preventDefault();
+                event.stopPropagation();
+                openVectorSegmentPreview(root, segmentRow.dataset.yzmVectorSegmentIndex);
             });
 
             root.addEventListener('contextmenu', (event) => {

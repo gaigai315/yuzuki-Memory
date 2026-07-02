@@ -1604,6 +1604,16 @@
     font-size: 11px;
 }
 
+#yzm-memory-root .yzm-vector-segment-row[data-yzm-vector-segment-index] {
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-vector-segment-row[data-yzm-vector-segment-index]:hover,
+#yzm-memory-root .yzm-vector-segment-row[data-yzm-vector-segment-index]:focus-visible {
+    background: var(--yzm-hover);
+    outline: 0;
+}
+
 #yzm-memory-root .yzm-vector-segment-head {
     min-height: 30px;
     color: var(--yzm-muted);
@@ -7287,6 +7297,58 @@
     width: min(720px, 100%);
 }
 
+#yzm-memory-root .yzm-vector-preview-dialog {
+    width: min(680px, 100%);
+    max-height: min(720px, 100%);
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-vector-preview-header {
+    flex: 0 0 auto;
+}
+
+#yzm-memory-root .yzm-vector-preview-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-vector-preview-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-vector-preview-meta {
+    overflow: hidden;
+    color: var(--yzm-muted);
+    font-size: 11px;
+    font-weight: 400;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-vector-preview-content {
+    flex: 1 1 auto;
+    min-height: 160px;
+    max-height: min(560px, 68vh);
+    padding: 12px;
+    overflow: auto;
+    color: var(--yzm-text);
+    background: var(--yzm-input-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 10px;
+    box-sizing: border-box;
+    font-size: 13px;
+    line-height: 1.65;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    -webkit-overflow-scrolling: touch;
+}
+
 #yzm-memory-root .yzm-record-fields {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -7991,6 +8053,21 @@
         min-height: 34px;
         padding: 7px 8px;
         font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-vector-preview-dialog {
+        width: 100%;
+        max-height: 100%;
+        padding: 10px;
+        border-radius: 12px;
+    }
+
+    #yzm-memory-root .yzm-vector-preview-content {
+        min-height: 220px;
+        max-height: calc(100vh - 170px);
+        padding: 10px;
+        font-size: 12px;
+        line-height: 1.6;
     }
 
     #yzm-memory-root .yzm-primary-character-item {
@@ -9602,5 +9679,124 @@
 
     #yzm-memory-root .yzm-trace-panel .yzm-config-card {
         padding: 7px;
+    }
+}
+
+@media (max-width: 760px) and (pointer: coarse) {
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-config-view,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-api-view,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-scheme-view,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-config-view,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-api-view,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-scheme-view {
+        padding: 10px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-config-content,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-api-content,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-scheme-content,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-config-content,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-api-content,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-scheme-content {
+        gap: 8px;
+        margin-top: 6px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-config-card,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-api-card,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-scheme-editor-card,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-config-card,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-api-card,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-scheme-editor-card {
+        padding: 10px;
+        border-radius: 11px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-config-card-title,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-api-card-title,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-scheme-card-title,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-config-card-title,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-api-card-title,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-scheme-card-title {
+        gap: 7px;
+        font-size: 14px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row {
+        grid-template-columns: 30px minmax(0, 1fr) auto;
+        gap: 8px 10px;
+        min-height: 60px;
+        padding: 10px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row-icon,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row-icon {
+        width: 30px;
+        height: 30px;
+        font-size: 13px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-title,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-title {
+        gap: 4px;
+        padding-right: 2px;
+        font-size: 13px;
+        line-height: 1.35;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-title span,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-hint,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-title span,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-hint {
+        font-size: 11px;
+        line-height: 1.45;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-config-switch,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-config-switch {
+        --yzm-switch-knob-size: 16px;
+        --yzm-switch-knob-offset: 3px;
+        --yzm-switch-travel: 16px;
+        width: 40px;
+        min-width: 40px;
+        height: 24px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-config-number-input,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-config-number-input {
+        width: 56px;
+        min-height: 28px;
+        padding: 0 8px;
+        font-size: 13px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-api-input,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-api-select,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-api-input,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-api-select {
+        min-height: 30px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-api-button,
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-api-mini-button,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-api-button,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-api-mini-button {
+        min-height: 30px;
+        padding: 0 10px;
+        font-size: 12px;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-inline),
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-inline) {
+        grid-template-columns: 30px minmax(0, 1fr) auto;
+    }
+
+    #yzm-memory-root .yzm-shell-body.yzm-sidebar-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-inline) .yzm-plugin-config-row-action,
+    #yzm-memory-root .yzm-workspace.yzm-primary-collapsed .yzm-plugin-config-row:has(.yzm-plugin-config-inline) .yzm-plugin-config-row-action {
+        grid-column: 3;
+        grid-row: 1;
+        justify-content: flex-end;
     }
 }
