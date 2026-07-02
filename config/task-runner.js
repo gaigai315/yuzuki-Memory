@@ -1470,7 +1470,7 @@
         const keepIds = new Set((Array.isArray(keepRecordIds) ? keepRecordIds : [keepRecordIds]).filter(Boolean).map(String));
         let cleanupCount = 0;
         const nextRecords = records.filter((record) => {
-            if (keepIds.has(String(record?.id || ''))) return true;
+            const shouldKeepRecord = keepIds.has(String(record?.id || ''));
             if (Array.isArray(record?.summarySegments) && record.summarySegments.length) {
                 const before = record.summarySegments.length;
                 record.summarySegments = record.summarySegments.filter((segment) => {
@@ -1487,8 +1487,10 @@
                     syncSummarySegmentsToValues(record);
                     return true;
                 }
+                if (shouldKeepRecord) return true;
                 if (before !== record.summarySegments.length) return false;
             }
+            if (shouldKeepRecord) return true;
             const task = getSummaryRecordTaskMeta(record);
             const recordRange = getRangeMeta(task?.range) || getSummaryRecordFloorRange(record);
             if (!isSmallSummaryRecord(record, table, task) || !recordRange) return true;
