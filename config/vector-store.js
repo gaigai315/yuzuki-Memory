@@ -276,6 +276,7 @@
 
         listBooks() {
             const activeBooks = this.getActiveBooks();
+            const activeOrder = new Map(activeBooks.map((id, index) => [id, index]));
             return Object.entries(this.library).map(([id, book]) => {
                 const stats = this.getBookStats(book);
                 return {
@@ -293,7 +294,13 @@
                     createTime: book.createTime,
                     updateTime: book.updateTime,
                 };
-            }).sort((a, b) => b.updateTime - a.updateTime);
+            }).sort((a, b) => {
+                if (a.active !== b.active) return a.active ? -1 : 1;
+                if (a.active && b.active) {
+                    return (activeOrder.get(a.id) ?? 0) - (activeOrder.get(b.id) ?? 0);
+                }
+                return b.updateTime - a.updateTime;
+            });
         }
 
         async createBook(name = '未命名书籍') {

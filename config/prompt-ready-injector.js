@@ -355,6 +355,58 @@
         return !(hitDisabled && !hitEnabled);
     }
 
+    function normalizeTableAnchorOrder(chat, worldInfoEntries) {
+        if (!Array.isArray(chat)) return 0;
+        let movedCount = 0;
+        const genericTablePattern = /\{\{\s*MEMORY_TABLE\s*\}\}/i;
+        const specificTablePattern = /\{\{\s*MEMORY_TABLE\s*_\s*[^{}]+?\s*\}\}/gi;
+        chat.forEach((message) => {
+            const text = getPrimaryTextFromMessage(message);
+            if (!text || !isAnchorAllowed(message, text, worldInfoEntries)) return;
+            const genericMatch = text.match(genericTablePattern);
+            if (!genericMatch || genericMatch.index <= 0) return;
+            const beforeGeneric = text.slice(0, genericMatch.index);
+            const movedAnchors = [];
+            const cleanedBefore = beforeGeneric.replace(specificTablePattern, (match) => {
+                movedAnchors.push(match);
+                return '';
+            });
+            if (!movedAnchors.length) return;
+            const afterGeneric = text.slice(genericMatch.index + genericMatch[0].length);
+            const nextText = `${cleanedBefore}${genericMatch[0]}\n${movedAnchors.join('\n')}${afterGeneric}`;
+            setPrimaryTextToMessage(message, nextText);
+            movedCount += movedAnchors.length;
+        });
+
+        const genericIndex = chat.findIndex((message) => {
+            const text = getPrimaryTextFromMessage(message);
+            return /^\s*\{\{\s*MEMORY_TABLE\s*\}\}\s*$/i.test(text)
+                && isAnchorAllowed(message, text, worldInfoEntries);
+        });
+        if (genericIndex < 0) return movedCount;
+
+        const moved = [];
+        const kept = [];
+        const genericMessage = chat[genericIndex];
+        chat.forEach((message, index) => {
+            const text = getPrimaryTextFromMessage(message);
+            const isSpecificTableAnchor = /^\s*\{\{\s*MEMORY_TABLE\s*_\s*[^{}]+?\s*\}\}\s*$/i.test(text)
+                && isAnchorAllowed(message, text, worldInfoEntries);
+            if (index < genericIndex && isSpecificTableAnchor) {
+                moved.push(message);
+            } else {
+                kept.push(message);
+            }
+        });
+        if (!moved.length) return movedCount;
+
+        const insertIndex = kept.indexOf(genericMessage);
+        if (insertIndex < 0) return movedCount;
+        kept.splice(insertIndex + 1, 0, ...moved);
+        chat.splice(0, chat.length, ...kept);
+        return movedCount + moved.length;
+    }
+
     function processLegacyMemoryAnchors(chat, options = {}) {
         if (!Array.isArray(chat)) return chat;
         const injector = YuzukiMemory.VariableInjector;
@@ -391,6 +443,7 @@
         }));
         const promptMessage = makePromptMessage(state);
         const worldInfoEntries = getWorldInfoAnchorEntries();
+        const reorderedTableAnchors = normalizeTableAnchorOrder(chat, worldInfoEntries);
 
         let replacedSummary = false;
         let replacedTable = false;
@@ -417,6 +470,44 @@
                 else replacedSummary = true;
             }
         });
+
+        for (let i = 0; i < chat.length; i += 1) {
+            const message = chat[i];
+            let text = getPrimaryTextFromMessage(message);
+            if (!text || !SPECIFIC_TABLE_PATTERN.test(text)) {
+                SPECIFIC_TABLE_PATTERN.lastIndex = 0;
+                MEMORY_VAR_PATTERN.lastIndex = 0;
+                continue;
+            }
+            SPECIFIC_TABLE_PATTERN.lastIndex = 0;
+            MEMORY_VAR_PATTERN.lastIndex = 0;
+
+            if (!isAnchorAllowed(message, text, worldInfoEntries)) {
+                setPrimaryTextToMessage(message, stripMemoryVars(text));
+                if (!getPrimaryTextFromMessage(message).trim()) message._yzmDelete = true;
+                continue;
+            }
+
+            const specificTableRegex = new RegExp(SPECIFIC_TABLE_PATTERN.source, 'gi');
+            let match = specificTableRegex.exec(text);
+            while (match) {
+                anchors += 1;
+                const targetIndex = tableMessages.findIndex((entry) => matchesTable(entry, match[1]));
+                if (targetIndex >= 0) {
+                    const extractedTableMessage = tableMessages.splice(targetIndex, 1)[0];
+                    if (message.gaigaiPhoneSignal) extractedTableMessage.gaigaiPhoneSignal = message.gaigaiPhoneSignal;
+                    injected += 1;
+                    spliceAnchor(chat, i, text, { 0: match[0], index: match.index }, [extractedTableMessage]);
+                    i -= 1;
+                    break;
+                }
+
+                text = text.replace(match[0], '');
+                setPrimaryTextToMessage(message, text);
+                specificTableRegex.lastIndex = 0;
+                match = specificTableRegex.exec(text);
+            }
+        }
 
         let hasAllowedSummaryAnchor = false;
         let hasAllowedTableAnchor = false;
@@ -465,8 +556,8 @@
                 const messages = targetIndex >= 0 && !replacedSummary ? [summaryMessages.splice(targetIndex, 1)[0]] : [];
                 injected += messages.length;
                 if (messages.length) replacedSummary = true;
-                const count = spliceAnchor(chat, i, text, { 0: specificSummary[0], index: specificSummary.index }, messages);
-                i += Math.max(count - 1, 0);
+                spliceAnchor(chat, i, text, { 0: specificSummary[0], index: specificSummary.index }, messages);
+                i -= 1;
                 continue;
             }
 
@@ -478,8 +569,8 @@
                 const messages = targetIndex >= 0 ? [tableMessages.splice(targetIndex, 1)[0]] : [];
                 injected += messages.length;
                 if (messages.length) replacedTable = true;
-                const count = spliceAnchor(chat, i, text, { 0: specificTable[0], index: specificTable.index }, messages);
-                i += Math.max(count - 1, 0);
+                spliceAnchor(chat, i, text, { 0: specificTable[0], index: specificTable.index }, messages);
+                i -= 1;
                 continue;
             }
 
@@ -490,8 +581,8 @@
                 const messages = replacedSummary ? [] : summaryMessages.splice(0);
                 replacedSummary = true;
                 injected += messages.length;
-                const count = spliceAnchor(chat, i, text, { 0: summaryMatch[0], index: summaryMatch.index }, messages);
-                i += Math.max(count - 1, 0);
+                spliceAnchor(chat, i, text, { 0: summaryMatch[0], index: summaryMatch.index }, messages);
+                i -= 1;
                 continue;
             }
 
@@ -502,8 +593,8 @@
                 const messages = replacedTable ? [] : tableMessages.splice(0);
                 replacedTable = true;
                 injected += messages.length;
-                const count = spliceAnchor(chat, i, text, { 0: tableMatch[0], index: tableMatch.index }, messages);
-                i += Math.max(count - 1, 0);
+                spliceAnchor(chat, i, text, { 0: tableMatch[0], index: tableMatch.index }, messages);
+                i -= 1;
                 continue;
             }
 
@@ -518,8 +609,8 @@
                 if (messages.some((entry) => entry.yzmMemoryInjectionType === 'summary')) replacedSummary = true;
                 if (messages.some((entry) => entry.yzmMemoryInjectionType === 'table')) replacedTable = true;
                 injected += messages.length;
-                const count = spliceAnchor(chat, i, text, { 0: smartMatch[0], index: smartMatch.index }, messages);
-                i += Math.max(count - 1, 0);
+                spliceAnchor(chat, i, text, { 0: smartMatch[0], index: smartMatch.index }, messages);
+                i -= 1;
             }
         }
 
@@ -564,6 +655,7 @@
             removedStaleInjections,
             initialAnchorIndexes,
             extensionPromptAnchors: extensionPromptResult.anchors,
+            reorderedTableAnchors,
             macroRegistration: macroDebug,
         });
         return chat;

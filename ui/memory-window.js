@@ -2369,13 +2369,22 @@
         bindPanelInteractions(root);
     }
 
-    function renderVectorWorkspace(root) {
+    function renderVectorWorkspace(root, options = {}) {
+        if (options.selectFirstVisible === true) syncVectorSelectedBookToFirstVisible();
         const primaryView = root.querySelector('.yzm-vector-primary-view');
         const workspaceView = root.querySelector('.yzm-vector-workspace-view');
         if (primaryView) primaryView.replaceWith(createVectorPrimaryView());
         if (workspaceView) workspaceView.replaceWith(createVectorWorkspaceView());
         updateWorkspaceMode(root);
         bindPanelInteractions(root);
+    }
+
+    function syncVectorSelectedBookToFirstVisible() {
+        const store = getVectorStore();
+        const firstBook = store?.listBooks?.()[0];
+        if (firstBook && store.selectedBookId !== firstBook.id) {
+            store.selectBook(firstBook.id);
+        }
     }
 
     function createOverviewRow() {
@@ -2859,8 +2868,9 @@
             event.preventDefault();
             event.stopPropagation();
             store.toggleActiveBook(bookId, !isBoundToCurrentChat);
+            vectorUiState.bookPage = 1;
             closeRecordActionMenu(root);
-            renderVectorWorkspace(root);
+            renderVectorWorkspace(root, { selectFirstVisible: true });
         });
 
         const vectorizeButton = createIconButton('向量化', 'fa-solid fa-wand-magic-sparkles', 'yzm-record-action-delete yzm-record-action-muted');
@@ -9845,7 +9855,9 @@
         [
             '向量化书籍的分段内容新增预览弹窗。',
             '点击任意分段条目即可查看完整内容，预览窗口支持滚动和移动端触控滚动。',
-            '优化移动端折叠侧栏后的显示尺寸，主内容区文字、按钮和输入控件会自动放大。',
+            '向量化书架按当前会话绑定状态排序，已绑定书籍会置顶显示。',
+            '修复合并预设中 {{MEMORY_TABLE_表名}} 被普通 {{MEMORY_TABLE}} 提前吞掉的问题。',
+            '优化移动端折叠侧栏后的布局，主内容区文字、按钮和输入控件会自动放大，并避免长说明被挤成竖排。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11520,7 +11532,7 @@
                 clearSidebarActionActive(root);
                 vectorButton.classList.add('yzm-sidebar-action-active');
                 updateWorkspaceMode(root);
-                getVectorStore()?.whenReady?.().then(() => renderVectorWorkspace(root));
+                getVectorStore()?.whenReady?.().then(() => renderVectorWorkspace(root, { selectFirstVisible: true }));
             });
         }
 

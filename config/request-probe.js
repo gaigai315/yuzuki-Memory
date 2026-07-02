@@ -417,6 +417,25 @@
         return scan(body);
     }
 
+    function bodyContainsMemoryInjectionMarkers(body) {
+        return getRequestArrays(body).some((target) => target.items.some((item) => {
+            if (
+                item?.isGaigaiData === true
+                || item?.isGaigaiPrompt === true
+                || item?.yzmMemoryInjectionType === 'summary'
+                || item?.yzmMemoryInjectionType === 'table'
+                || item?.yzmMemoryInjectionType === 'prompt'
+            ) {
+                return true;
+            }
+            const text = getMessageText(item);
+            return text.includes('【前情提要 -')
+                || text.includes('【当前世界状态参考 -')
+                || text.includes('【记忆只读数据库 -')
+                || text.includes('【剧情摘要】');
+        }));
+    }
+
     function logVariableLocations(body) {
         const pattern = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}/gi;
         const hits = [];
@@ -436,6 +455,9 @@
         };
         walk(body, 'body');
         console.info('[yuzuki-Memory] final request variable locations', hits.length ? hits : 'none');
+        console.info('[yuzuki-Memory] final request variable order', hits.length
+            ? hits.map((hit) => `${hit.path}: ${(hit.matches || []).join(' -> ')}`).join(' | ')
+            : 'none');
         return hits;
     }
 
@@ -478,22 +500,29 @@
         const hasMemoryDataVariable = bodyContainsMemoryDataVariable(rawBody);
         const hasVectorVariable = bodyContainsVectorVariable(rawBody);
         const hasAnyMemoryVariable = bodyContainsAnyMemoryVariable(rawBody);
+        const hasMemoryInjectionMarkers = bodyContainsMemoryInjectionMarkers(rawBody);
         const scanTargets = getRequestArrays(rawBody).map((target) => `${target.key}:${target.items.length}`);
         console.info(`[yuzuki-Memory] final request variable scan memory=${hasMemoryDataVariable} vector=${hasVectorVariable} arrays=${scanTargets.join(',') || 'none'} promptString=${typeof rawBody.prompt === 'string'}`);
         console.info('[yuzuki-Memory] final request variable scan detail', {
             hasMemoryDataVariable,
             hasVectorVariable,
             hasAnyMemoryVariable,
+            hasMemoryInjectionMarkers,
             arrays: scanTargets,
             promptString: typeof rawBody.prompt === 'string',
         });
         logVariableLocations(rawBody);
-        if (typeof YuzukiMemory.PromptReadyInjector?.processPromptReadyChatSync === 'function') {
+        if (
+            typeof YuzukiMemory.PromptReadyInjector?.processPromptReadyChatSync === 'function'
+            && (hasAnyMemoryVariable || !hasMemoryInjectionMarkers)
+        ) {
             getRequestArrays(rawBody).forEach((target) => {
                 YuzukiMemory.PromptReadyInjector.processPromptReadyChatSync(target.items, {
                     disableFallback: hasMemoryDataVariable,
                 });
             });
+        } else if (hasMemoryInjectionMarkers) {
+            console.info('[yuzuki-Memory] final request already contains memory injections; skip prompt-ready fallback to preserve anchor order.');
         }
         const body = YuzukiMemory.VariableInjector?.processBody
             ? await YuzukiMemory.VariableInjector.processBody(rawBody, {
