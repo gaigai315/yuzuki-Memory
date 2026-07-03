@@ -65,6 +65,7 @@
     const CHAT_REQUEST_COOLDOWN_MS = 1500;
     const AUTO_TASK_BACKFILL_RETRY_MS = 15000;
     const AUTO_TASK_BACKFILL_NEXT_MS = 2500;
+    const AUTO_TASK_SKIPPED_NEXT_MS = 800;
     const USER_INPUT_RETRY_MS = 3000;
 
     function isGenerationBusy() {
@@ -1513,6 +1514,25 @@
         return cleanupCount;
     }
 
+    function isSameSummaryRange(candidateRange, targetRange) {
+        const candidate = getRangeMeta(candidateRange);
+        const target = getRangeMeta(targetRange);
+        if (!candidate || !target || candidate.start !== target.start) return false;
+        return candidate.end === target.end || candidate.end === target.end - 1;
+    }
+
+    function findExistingHistorySummaryRecord(state, range) {
+        const target = getRangeMeta(range);
+        if (!target) return null;
+        return stateRecords(state, FIXED_SUMMARY_TABLE_ID).find((record) => {
+            if (!String(record?.values?.总结内容 || record?.values?.summary || '').trim()) return false;
+            const task = getSummaryRecordTaskMeta(record);
+            const taskRange = getRangeMeta(task?.range);
+            if (taskRange) return isSameSummaryRange(taskRange, target);
+            return isSameSummaryRange(getSummaryRecordFloorRange(record), target);
+        }) || null;
+    }
+
     function applyTraceResult(state, resultRows) {
         if (resultRows?.memoryRows && YuzukiMemory.MemoryTagParser?.applyRowsToState) {
             return YuzukiMemory.MemoryTagParser.applyRowsToState(state, resultRows.memoryRows);
@@ -1987,12 +2007,15 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         };
     }
 
-    function buildPendingAutoTask(pointers, chatLength, settings, pluginSettings) {
+    function buildPendingAutoTask(pointers, chatLength, settings, pluginSettings, options = {}) {
+        const skippedTypes = new Set(Array.isArray(options.skippedTypes) ? options.skippedTypes : []);
         const traceTask = buildAutoTraceTask(pointers, chatLength, pluginSettings);
-        if (traceTask) return traceTask;
+        if (traceTask && !skippedTypes.has(traceTask.type)) return traceTask;
         const historyTask = buildAutoTask('history', pointers, chatLength, settings);
-        if (historyTask) return historyTask;
-        return buildAutoTask('summary', pointers, chatLength, settings);
+        if (historyTask && !skippedTypes.has(historyTask.type)) return historyTask;
+        const summaryTask = buildAutoTask('summary', pointers, chatLength, settings);
+        if (summaryTask && !skippedTypes.has(summaryTask.type)) return summaryTask;
+        return null;
     }
 
     async function confirmAutoTask(task, callbacks = {}) {
@@ -2017,6 +2040,31 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     async function runAutoSummaryTask(state, task, settings, callbacks = {}) {
+        if (task.type === 'history') {
+            const existingRecord = findExistingHistorySummaryRecord(state, { start: task.start, end: task.end });
+            if (existingRecord) {
+                const pointers = normalizePointers(state);
+                pointers.historySummary = Math.max(pointers.historySummary, task.end);
+                if (pointers.summary < pointers.historySummary) pointers.summary = pointers.historySummary;
+                callbacks.saveState?.();
+                callbacks.onUpdate?.({
+                    success: true,
+                    skipped: true,
+                    duplicate: true,
+                    range: { start: task.start, end: task.end },
+                    record: existingRecord,
+                });
+                console.info(`[yuzuki-Memory] 自动大总结 ${formatDisplayFloorRange(task.start, task.end)} 已存在，已推进大/小总结指针。`);
+                return {
+                    success: true,
+                    skipped: true,
+                    duplicate: true,
+                    range: { start: task.start, end: task.end },
+                    record: existingRecord,
+                };
+            }
+        }
+
         const shouldRun = settings.directTrigger ? { action: 'confirm', postpone: 0 } : await confirmAutoTask(task, callbacks);
         if (shouldRun?.action !== 'confirm') return { skipped: true };
         if (Number(shouldRun.postpone) > 0) {
@@ -2163,27 +2211,53 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             }
 
             autoSummaryRunning = true;
+            const skippedTypes = new Set();
             let shouldContinueBackfill = false;
             let continueDelay = AUTO_TASK_BACKFILL_NEXT_MS;
             try {
-                autoSummaryPromptOpen = task.type === 'trace'
-                    ? pluginSettings.traceRunMode !== 'silent'
-                    : (!settings.directTrigger || !settings.autoSave);
-                const result = task.type === 'trace'
-                    ? await runAutoTraceTask(state, task, callbacks)
-                    : await runAutoSummaryTask(state, task, settings, callbacks);
-                if (result?.success === false) {
-                    console.warn('[yuzuki-Memory] Auto task skipped:', result.error);
-                    notifyAutoTaskFailure(task, result.error);
-                    shouldContinueBackfill = true;
-                    continueDelay = AUTO_TASK_BACKFILL_RETRY_MS;
-                } else if (result?.skipped || result?.postponed) {
-                    shouldContinueBackfill = false;
-                } else {
-                    notifyAutoTaskSuccess(task, result);
-                    const latestState = callbacks.getState?.() || state;
-                    const latestPointers = normalizePointers(latestState);
-                    shouldContinueBackfill = !!buildPendingAutoTask(latestPointers, getChatLength(), settings, pluginSettings);
+                let activeTask = task;
+                let activeState = state;
+                while (activeTask) {
+                    autoSummaryPromptOpen = activeTask.type === 'trace'
+                        ? pluginSettings.traceRunMode !== 'silent'
+                        : (!settings.directTrigger || !settings.autoSave);
+                    const result = activeTask.type === 'trace'
+                        ? await runAutoTraceTask(activeState, activeTask, callbacks)
+                        : await runAutoSummaryTask(activeState, activeTask, settings, callbacks);
+                    if (result?.success === false) {
+                        console.warn('[yuzuki-Memory] Auto task skipped:', result.error);
+                        notifyAutoTaskFailure(activeTask, result.error);
+                        shouldContinueBackfill = true;
+                        continueDelay = AUTO_TASK_BACKFILL_RETRY_MS;
+                        break;
+                    }
+                    if (result?.skipped || result?.postponed) {
+                        skippedTypes.add(activeTask.type);
+                        activeState = callbacks.getState?.() || activeState;
+                        activeTask = buildPendingAutoTask(
+                            normalizePointers(activeState),
+                            getChatLength(),
+                            settings,
+                            pluginSettings,
+                            { skippedTypes: [...skippedTypes] }
+                        );
+                        shouldContinueBackfill = !!activeTask;
+                        continueDelay = AUTO_TASK_SKIPPED_NEXT_MS;
+                        continue;
+                    }
+
+                    notifyAutoTaskSuccess(activeTask, result);
+                    activeState = callbacks.getState?.() || activeState;
+                    activeTask = buildPendingAutoTask(
+                        normalizePointers(activeState),
+                        getChatLength(),
+                        settings,
+                        pluginSettings,
+                        { skippedTypes: [...skippedTypes] }
+                    );
+                    shouldContinueBackfill = !!activeTask;
+                    continueDelay = AUTO_TASK_BACKFILL_NEXT_MS;
+                    break;
                 }
             } catch (error) {
                 console.warn('[yuzuki-Memory] Auto task failed:', error);
