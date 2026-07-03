@@ -1584,6 +1584,17 @@
         return nextSettings;
     }
 
+    function saveFillModeSetting(mode) {
+        const normalizedMode = mode === 'batch' ? 'batch' : 'realtime';
+        updatePluginSetting('fillMode', normalizedMode);
+        if (normalizedMode === 'batch') updatePluginSetting('traceBatchEnabled', true);
+        return normalizedMode;
+    }
+
+    function getActiveFillMode() {
+        return getPluginSettings().fillMode === 'batch' ? 'batch' : 'realtime';
+    }
+
     function applyHiddenFloorsFromSettings(options = {}) {
         const settings = getPluginSettings();
         if (!settings.hideFloorsEnabled && !options.force) return;
@@ -6059,7 +6070,7 @@
         desc.textContent = getPromptSchemeDescription(section.id);
         header.append(title, desc);
 
-        const tracePromptField = getActivePromptSchemeDraft().modes?.trace === 'batch' ? 'traceBatch' : 'traceRealtime';
+        const tracePromptField = getActiveFillMode() === 'batch' ? 'traceBatch' : 'traceRealtime';
         const fields = section.id === 'trace'
             ? [tracePromptField, 'traceOptimize']
             : ['summary', 'summaryOptimize'];
@@ -6156,7 +6167,9 @@
     function createPromptSchemeModeGroup(sectionId) {
         const options = PROMPT_SCHEME_MODE_OPTIONS[sectionId];
         if (!options) return null;
-        const activeMode = getActivePromptSchemeDraft().modes?.[sectionId] || options[0]?.id || '';
+        const activeMode = sectionId === 'trace'
+            ? getActiveFillMode()
+            : (getActivePromptSchemeDraft().modes?.[sectionId] || options[0]?.id || '');
         const group = document.createElement('div');
         group.className = 'yzm-scheme-mode-group';
         group.dataset.yzmSchemeModeGroup = sectionId;
@@ -10218,12 +10231,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '向量化书籍的分段内容新增预览弹窗。',
-            '点击任意分段条目即可查看完整内容，预览窗口支持滚动和移动端触控滚动。',
-            '向量化书架按当前会话绑定状态排序，已绑定书籍会置顶显示。',
-            '修复合并预设中 {{MEMORY_TABLE_表名}} 被普通 {{MEMORY_TABLE}} 提前吞掉的问题。',
-            '优化移动端折叠侧栏后的布局，主内容区文字、按钮和输入控件会自动放大，并避免长说明被挤成竖排。',
-            '记忆方案新增“定时注入提示词”，可按楼层间隔将修正提示词临时拼接到本轮用户消息末尾。',
+            '修复填表模式切换保存逻辑：实时填表/批量填表现在会立即写入全局设置，不再需要点“保存整套方案”才生效。',
+            '修复自动大总结后支线小总结分段未清理的问题，大总结覆盖范围内的主线和支线小总结都会同步清理。',
+            '优化隐藏楼层发送前过滤逻辑：对齐旧记忆插件的隐藏标记方式，按酒馆楼层隐藏状态剔除请求内容，避免隐藏楼层漏发。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -12299,7 +12309,9 @@
                     event.preventDefault();
                     event.stopPropagation();
                     const sectionId = modeButton.dataset.yzmSchemeModeSection || '';
-                    updateActivePromptSchemeMode(sectionId, modeButton.dataset.yzmSchemeMode || '');
+                    const modeId = modeButton.dataset.yzmSchemeMode || '';
+                    if (sectionId === 'trace') saveFillModeSetting(modeId);
+                    updateActivePromptSchemeMode(sectionId, modeId);
                     modeButton.closest('[data-yzm-scheme-mode-group]')?.querySelectorAll('.yzm-scheme-mode-button').forEach((button) => {
                         button.classList.toggle('yzm-scheme-mode-button-active', button === modeButton);
                     });
@@ -12537,9 +12549,7 @@
                 }
 
                 if (fillModeButton) {
-                    const mode = fillModeButton.dataset.yzmFillMode === 'batch' ? 'batch' : 'realtime';
-                    updatePluginSetting('fillMode', mode);
-                    if (mode === 'batch') updatePluginSetting('traceBatchEnabled', true);
+                    const mode = saveFillModeSetting(fillModeButton.dataset.yzmFillMode);
                     root.querySelectorAll('[data-yzm-fill-mode]').forEach((button) => {
                         button.classList.toggle('yzm-fill-mode-choice-active', button === fillModeButton);
                     });

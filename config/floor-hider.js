@@ -182,28 +182,6 @@
         return shouldHide;
     }
 
-    function getCurrentHiddenMessageTexts() {
-        const context = getContext();
-        const chat = context?.chat;
-        if (!Array.isArray(chat)) return [];
-        return chat
-            .filter((message) => (
-                (message?.is_yzm_hidden_floor === true && message?.is_system === true)
-                || (
-                    message?.is_system === true
-                    && (
-                        String(message?.role || '').toLowerCase() !== 'system'
-                        || message?.isGaigaiData === true
-                        || message?.isGaigaiPrompt === true
-                        || message?.isGaigaiVector === true
-                        || message?.isYuzukiVector === true
-                    )
-                )
-            ))
-            .map((message) => String(message?.mes || message?.content || message?.text || '').trim())
-            .filter(Boolean);
-    }
-
     async function saveChat(context) {
         if (typeof context?.saveChat === 'function') {
             await context.saveChat();
@@ -246,7 +224,7 @@
     }
 
     async function hideIndices(chat, indices, label, options = {}) {
-        if (!indices.length) return { success: true, count: 0, indices: [], hiddenTexts: getCurrentHiddenMessageTexts() };
+        if (!indices.length) return { success: true, count: 0, indices: [] };
         const context = options.context || getContext();
         let count = 0;
         indices.forEach((index) => {
@@ -258,7 +236,7 @@
         });
         await saveChat(context);
         console.log(`[yuzuki-Memory] ${label}：隐藏 ${count} 条。`);
-        return { success: true, count, indices: [...indices], hiddenTexts: getCurrentHiddenMessageTexts() };
+        return { success: true, count, indices: [...indices] };
     }
 
     async function applyContextLimitHiding(options = {}) {
@@ -272,7 +250,7 @@
         if (!Array.isArray(chat) || !chat.length) return { success: false, skipped: true, reason: 'no_chat' };
 
         const indices = collectIndicesToHide(chat, keepFloors);
-        if (!indices.length) return { success: true, count: 0, indices: [], hiddenTexts: getCurrentHiddenMessageTexts() };
+        if (!indices.length) return { success: true, count: 0, indices: [] };
 
         running = true;
         try {
@@ -296,7 +274,7 @@
         if (!Array.isArray(chat) || !chat.length) return { success: false, skipped: true, reason: 'no_chat' };
 
         const summaryPointer = getSummaryPointer(options);
-        if (summaryPointer <= 0) return { success: true, count: 0, indices: [], hiddenTexts: getCurrentHiddenMessageTexts() };
+        if (summaryPointer <= 0) return { success: true, count: 0, indices: [] };
         if (summaryPointer > chat.length) {
             console.info('[yuzuki-Memory] 总结后隐藏跳过：总结指针超过当前聊天长度，可能是清空/删减聊天后的旧指针。', {
                 summaryPointer,
@@ -305,7 +283,7 @@
             return { success: false, skipped: true, reason: 'stale_summary_pointer', summaryPointer, chatLength: chat.length };
         }
         const indices = collectSummaryIndicesToHide(chat, summaryPointer);
-        if (!indices.length) return { success: true, count: 0, indices: [], hiddenTexts: getCurrentHiddenMessageTexts() };
+        if (!indices.length) return { success: true, count: 0, indices: [] };
 
         running = true;
         try {
@@ -335,7 +313,6 @@
         loadAutoSummarySettings,
         collectIndicesToHide,
         collectSummaryIndicesToHide,
-        getCurrentHiddenMessageTexts,
         applyContextLimitHiding,
         applySummaryPointerHiding,
         applyConfiguredHiding,

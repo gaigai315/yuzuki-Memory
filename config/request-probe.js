@@ -134,6 +134,8 @@
 
     function getMessageText(message) {
         if (!message || typeof message !== 'object') return String(message || '');
+        const swipeId = Number(message.swipe_id ?? 0);
+        if (Array.isArray(message.swipes) && message.swipes.length > swipeId) return String(message.swipes[swipeId] || '');
         if (typeof message.content === 'string') return message.content;
         if (typeof message.mes === 'string') return message.mes;
         if (typeof message.text === 'string') return message.text;
@@ -157,19 +159,101 @@
         return '';
     }
 
-    function removeHiddenMessagesFromBody(body, hiddenTexts = []) {
+    function isPluginLikeRequestMessage(message) {
+        return !!(
+            message?.isGaigaiData
+            || message?.isGaigaiPrompt
+            || message?.isGaigaiVector
+            || message?.isYuzukiVector
+            || message?.yzmMemoryInternal
+            || message?.gaigaiPhoneSignal
+            || message?.yzmMemoryInjectionType
+        );
+    }
+
+    function isContextDialogueMessage(message) {
+        if (!message || typeof message !== 'object') return false;
+        if (isPluginLikeRequestMessage(message)) return false;
+        if (message.is_user === true || message.is_user === false) return true;
+        const role = String(message.role || '').toLowerCase();
+        return role === 'user' || role === 'assistant' || role === 'model' || role === 'human';
+    }
+
+    function isHiddenContextMessage(message) {
+        return !!(
+            message
+            && message.is_system === true
+            && isContextDialogueMessage(message)
+        );
+    }
+
+    function getHiddenContextInfo() {
+        const contextItems = getContextChatItems();
+        const dialogue = [];
+        contextItems.forEach((message, index) => {
+            if (!isContextDialogueMessage(message)) return;
+            dialogue.push({
+                index,
+                role: getMessageRoleKind(message),
+                hidden: isHiddenContextMessage(message),
+            });
+        });
+        return { dialogue };
+    }
+
+    function isRequestDialogueMessage(message) {
+        if (!message || typeof message !== 'object') return false;
+        if (isPluginLikeRequestMessage(message)) return false;
+        return !!getMessageRoleKind(message);
+    }
+
+    function getHiddenRequestIndexesByContext(targetItems, contextDialogue) {
+        const hiddenIndexes = new Set();
+        if (!Array.isArray(targetItems) || !targetItems.length || !Array.isArray(contextDialogue) || !contextDialogue.length) {
+            return hiddenIndexes;
+        }
+        let contextCursor = contextDialogue.length - 1;
+        for (let requestIndex = targetItems.length - 1; requestIndex >= 0; requestIndex -= 1) {
+            const item = targetItems[requestIndex];
+            if (!isRequestDialogueMessage(item)) continue;
+            const requestRole = getMessageRoleKind(item);
+            let matchedIndex = -1;
+            for (let ctxIndex = contextCursor; ctxIndex >= 0; ctxIndex -= 1) {
+                const ctxEntry = contextDialogue[ctxIndex];
+                if (ctxEntry.role !== requestRole) continue;
+                matchedIndex = ctxIndex;
+                break;
+            }
+            if (matchedIndex < 0) continue;
+            const matched = contextDialogue[matchedIndex];
+            if (matched.hidden) hiddenIndexes.add(requestIndex);
+            contextCursor = matchedIndex - 1;
+        }
+        return hiddenIndexes;
+    }
+
+    function removeHiddenMessagesFromBody(body, hiddenInfo = {}) {
         const targets = getRequestArrays(body);
-        if (!targets.length || !hiddenTexts.length) return body;
-        const hiddenSet = new Set(hiddenTexts.map((text) => String(text || '').trim()).filter(Boolean));
-        if (!hiddenSet.size) return body;
+        if (!targets.length) return body;
+        const info = hiddenInfo && typeof hiddenInfo === 'object' ? hiddenInfo : {};
+        const contextDialogue = Array.isArray(info.dialogue) ? info.dialogue : [];
+        if (!contextDialogue.some((entry) => entry?.hidden)) return body;
+        let removed = 0;
         targets.forEach((target) => {
-            const kept = target.items.filter((item) => {
-                if (item?.is_yzm_hidden_floor === true) return false;
-                const text = getMessageText(item).trim();
-                return !hiddenSet.has(text);
+            const hiddenIndexes = getHiddenRequestIndexesByContext(target.items, contextDialogue);
+            const kept = target.items.filter((item, index) => {
+                const shouldRemove = item?.is_yzm_hidden_floor === true || hiddenIndexes.has(index);
+                if (shouldRemove) removed += 1;
+                return !shouldRemove;
             });
             target.items.splice(0, target.items.length, ...kept);
         });
+        if (removed > 0) {
+            console.info('[yuzuki-Memory] hidden context messages removed from final request.', {
+                removed,
+                hiddenContextMessages: contextDialogue.filter((entry) => entry?.hidden).length,
+            });
+        }
         return body;
     }
 
@@ -491,8 +575,7 @@
             console.info('[yuzuki-Memory] phone request memory permissions detected', phonePermissions);
         }
         await applyPreRequestHiding();
-        const hiddenTexts = YuzukiMemory.FloorHider?.getCurrentHiddenMessageTexts?.() || [];
-        removeHiddenMessagesFromBody(rawBody, hiddenTexts);
+        removeHiddenMessagesFromBody(rawBody, getHiddenContextInfo());
         const isDryRunLike = !!(rawBody?.dryRun || rawBody?.isDryRun || rawBody?.quiet || rawBody?.bg || rawBody?.no_update);
         if (!isDryRunLike) {
             YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
