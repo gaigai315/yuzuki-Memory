@@ -10280,6 +10280,7 @@
             '优化隐藏楼层发送前过滤逻辑：对齐旧记忆插件的隐藏标记方式，按酒馆楼层隐藏状态剔除请求内容，避免隐藏楼层漏发。',
             '新增表格列名前缀 *：实时填表/批量填表只会在对应单元格为空时自动写入，已有内容不会被 AI 自动覆盖，用户手动修改不受影响。',
             '新增世界设定向量化：世界设定可像角色档案一样整理向量化，并在 {{MEMORY_TABLE}} / {{MEMORY_TABLE_世界设定}} 中回填召回内容。',
+            '优化移动端显示：剧情摘要整理列表显示时间段，前栏折叠后右侧剧情摘要和记忆总结正文会放大并增加行距。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -10596,15 +10597,26 @@
         return row;
     }
 
+    function formatPlotOrganizerTitle(entry) {
+        const date = String(entry?.date || '').trim();
+        const startTime = String(entry?.startTime || '').trim();
+        const endTime = String(entry?.endTime || '').trim();
+        const timeRange = startTime && startTime !== '—'
+            ? [startTime, endTime && endTime !== '—' ? endTime : ''].filter(Boolean).join('-')
+            : '';
+        return [date, timeRange].filter(Boolean).join(' ') || entry?.title || '未记录时间';
+    }
+
     function createPlotOrganizerRow(entry, index) {
         const row = document.createElement('div');
         row.className = entry.hidden ? 'yzm-organizer-row yzm-organizer-row-hidden' : 'yzm-organizer-row';
         row.dataset.yzmOrganizerRecordId = entry.id;
+        const displayTitle = formatPlotOrganizerTitle(entry);
 
         const checkbox = document.createElement('input');
         checkbox.className = 'yzm-organizer-check';
         checkbox.type = 'checkbox';
-        checkbox.setAttribute('aria-label', `选择 ${entry.title}`);
+        checkbox.setAttribute('aria-label', `选择 ${displayTitle}`);
 
         const indexNode = document.createElement('span');
         indexNode.className = 'yzm-organizer-index';
@@ -10613,14 +10625,14 @@
         const text = document.createElement('div');
         text.className = 'yzm-organizer-text';
         const title = document.createElement('strong');
-        title.textContent = entry.date || entry.title;
+        title.textContent = displayTitle;
         const meta = document.createElement('span');
         meta.textContent = entry.text || entry.raw || '未填写事件概要';
         text.append(title, meta);
 
         const handle = createIconButton('拖动排序', 'fa-solid fa-grip-lines', 'yzm-organizer-drag-handle');
         handle.dataset.yzmOrganizerDragHandle = 'true';
-        handle.setAttribute('aria-label', `拖动 ${entry.date || entry.title} 排序`);
+        handle.setAttribute('aria-label', `拖动 ${displayTitle} 排序`);
 
         row.append(checkbox, indexNode, text, handle);
         return row;
@@ -10896,7 +10908,7 @@
 
         const hint = document.createElement('div');
         hint.className = 'yzm-structure-hint';
-        hint.textContent = '隐藏只影响当前会话当前表的展示，不会删除条目，也不会写入全局配置。';
+        hint.textContent = '隐藏会让选中条目不再通过表格变量注入；不会删除条目，也不会写入全局配置。';
 
         dialog.append(header, toolbar, list, hint);
         overlay.appendChild(dialog);

@@ -8750,6 +8750,89 @@
         word-break: normal;
     }
 
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-view {
+        padding: 8px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-list {
+        gap: 8px;
+        padding: 8px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-day-header {
+        min-height: 40px;
+        padding: 8px 9px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-day-title strong {
+        font-size: 14px;
+        line-height: 1.25;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-day-meta {
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-day-body {
+        gap: 8px;
+        padding: 8px 9px 10px 11px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-card {
+        grid-template-columns: 17px minmax(72px, 86px) minmax(0, 1fr);
+        gap: 6px;
+        align-items: flex-start;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-card-time {
+        min-height: 23px;
+        padding: 3px 6px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-card-text {
+        font-size: 12px;
+        line-height: 1.48;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-status {
+        font-size: 9px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-view {
+        padding: 9px;
+        gap: 12px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-title {
+        font-size: 19px;
+        line-height: 1.25;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-card-title {
+        font-size: 14px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-list {
+        padding: 9px 11px 11px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-row {
+        gap: 4px;
+        min-height: 44px;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-time-wrap {
+        font-size: 12px;
+        line-height: 1.35;
+    }
+
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-timeline-event,
+    #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-summary-text-body {
+        font-size: 13px;
+        line-height: 1.6;
+    }
+
     #yzm-memory-root .yzm-empty-table-view {
         min-height: 260px;
     }
