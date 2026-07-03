@@ -336,6 +336,20 @@
         return parts.length ? `- ${parts.join('；')}` : '';
     }
 
+    function compactWorldSettingChunk(text = '') {
+        const source = String(text || '').trim();
+        if (!source) return '';
+        if (!source.includes('\n')) return source.startsWith('- ') ? source : `- ${source}`;
+        const rawParts = source
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => line.replace(/^[-•]\s*/, '').trim())
+            .filter((line) => !/^【世界设定[:：][^】]+】$/.test(line))
+            .filter(Boolean);
+        return rawParts.length ? `- ${rawParts.join('；')}` : '';
+    }
+
     async function getVectorInjectionText(body) {
         const store = YuzukiMemory.VectorStore;
         const client = YuzukiMemory.EmbeddingClient;
@@ -375,16 +389,23 @@
                 ? store.getActiveBooksByKind('character_profile')
                 : activeBooks.filter((bookId) => typeof store.isCharacterProfileBook === 'function' && store.isCharacterProfileBook(bookId));
             const characterBookSet = new Set(characterBookIds);
-            const genericBookIds = activeBooks.filter((bookId) => !characterBookSet.has(bookId));
+            const worldSettingBookIds = typeof store.getActiveBooksByKind === 'function'
+                ? store.getActiveBooksByKind('world_setting')
+                : activeBooks.filter((bookId) => typeof store.isWorldSettingBook === 'function' && store.isWorldSettingBook(bookId));
+            const worldSettingBookSet = new Set(worldSettingBookIds);
+            const genericBookIds = activeBooks.filter((bookId) => !characterBookSet.has(bookId) && !worldSettingBookSet.has(bookId));
             const searchPromise = Promise.all([
                 genericBookIds.length ? store.search(query, genericBookIds) : Promise.resolve([]),
                 characterBookIds.length ? store.search(query, characterBookIds) : Promise.resolve([]),
+                worldSettingBookIds.length ? store.search(query, worldSettingBookIds) : Promise.resolve([]),
             ]);
             const timeoutPromise = new Promise((_, reject) => {
                 window.setTimeout(() => reject(new Error('向量检索超时')), 20000);
             });
-            const [genericResults, characterResults] = await Promise.race([searchPromise, timeoutPromise]);
-            if ((!Array.isArray(genericResults) || !genericResults.length) && (!Array.isArray(characterResults) || !characterResults.length)) {
+            const [genericResults, characterResults, worldSettingResults] = await Promise.race([searchPromise, timeoutPromise]);
+            if ((!Array.isArray(genericResults) || !genericResults.length)
+                && (!Array.isArray(characterResults) || !characterResults.length)
+                && (!Array.isArray(worldSettingResults) || !worldSettingResults.length)) {
                 logVectorInfo('检索完成：没有命中内容', {
                     activeBooks: activeBooks.length,
                     threshold: settings.threshold,
@@ -397,16 +418,21 @@
                 .map((item) => compactCharacterProfileChunk(item.text))
                 .filter(Boolean)
                 .join('\n');
+            const worldSettingText = (worldSettingResults || [])
+                .map((item) => compactWorldSettingChunk(item.text))
+                .filter(Boolean)
+                .join('\n');
             logVectorInfo('检索完成', {
-                count: (genericResults || []).length + (characterResults || []).length,
+                count: (genericResults || []).length + (characterResults || []).length + (worldSettingResults || []).length,
                 genericCount: (genericResults || []).length,
                 characterProfileCount: (characterResults || []).length,
-                contentLength: vectorText.length + characterProfileText.length,
-                topScore: Number((genericResults?.[0] || characterResults?.[0])?.score || 0).toFixed(4),
-                topSource: (genericResults?.[0] || characterResults?.[0])?.source || '',
+                worldSettingCount: (worldSettingResults || []).length,
+                contentLength: vectorText.length + characterProfileText.length + worldSettingText.length,
+                topScore: Number((genericResults?.[0] || characterResults?.[0] || worldSettingResults?.[0])?.score || 0).toFixed(4),
+                topSource: (genericResults?.[0] || characterResults?.[0] || worldSettingResults?.[0])?.source || '',
                 rerank: rerankSettings.enabled === true,
             });
-            return { generic: vectorText, characterProfile: characterProfileText };
+            return { generic: vectorText, characterProfile: characterProfileText, worldSetting: worldSettingText };
         } catch (error) {
             logVectorInfo('检索失败，已跳过', String(error?.message || error || ''), 'warn');
             return '';

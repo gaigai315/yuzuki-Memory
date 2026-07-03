@@ -214,6 +214,7 @@
     let floatingVisibilityTimer = null;
     let chatContextRefreshBound = false;
     let characterVectorSyncTimer = null;
+    let worldSettingVectorSyncTimer = null;
     let taskRunnerBusy = false;
     let taskRunnerStopRequested = false;
     let taskRunnerActiveAction = '';
@@ -388,13 +389,17 @@
     }
 
     function cleanColumnName(column) {
-        return String(column || '').trim().replace(/^#/, '').trim();
+        return String(column || '').trim().replace(/^[#*]+/, '').trim();
     }
 
     function normalizeColumnDefinition(column) {
         const value = String(column || '').trim();
         if (!value) return '';
-        return value.startsWith('#') ? `#${value.slice(1).trim()}` : value;
+        const match = value.match(/^([#*]+)\s*(.*)$/);
+        if (!match) return value;
+        const modifiers = Array.from(new Set(match[1].split(''))).join('');
+        const name = match[2].trim();
+        return name ? `${modifiers}${name}` : '';
     }
 
     function getRecords(tableId = getActiveTable()?.id) {
@@ -922,6 +927,15 @@
         if (!table) return [];
         return getRecords(table.id)
             .filter((record) => record?.characterVectorSynced === true)
+            .map((record) => recordToVectorChunk(table, record))
+            .filter(Boolean);
+    }
+
+    function getWorldSettingVectorChunks() {
+        const table = getTables().find((entry) => entry.id === 'world_setting');
+        if (!table) return [];
+        return getRecords(table.id)
+            .filter((record) => record?.worldSettingVectorSynced === true)
             .map((record) => recordToVectorChunk(table, record))
             .filter(Boolean);
     }
@@ -3792,8 +3806,24 @@
         return { ...result, vectorized: false };
     }
 
+    async function syncWorldSettingsToVectorBook(options = {}) {
+        const store = await ensureVectorStoreReady();
+        if (!store) return { success: false, error: '向量书模块尚未加载' };
+        const result = await store.syncWorldSettingsToBook(getWorldSettingVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', `${getCurrentChatVectorBookName()} · 世界设定`);
+        if (!result.success) return result;
+        if (options.vectorize === true && result.count > 0) {
+            const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
+            return { ...result, vectorized: true, vectorizeResult };
+        }
+        return { ...result, vectorized: false };
+    }
+
     function hasCharacterVectorRecords() {
         return getRecords('character_profile').some((record) => record?.characterVectorSynced === true);
+    }
+
+    function hasWorldSettingVectorRecords() {
+        return getRecords('world_setting').some((record) => record?.worldSettingVectorSynced === true);
     }
 
     function scheduleCharacterVectorSync(options = {}) {
@@ -3806,6 +3836,20 @@
                 if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root);
             } catch (error) {
                 console.warn('[yuzuki-Memory] 角色档案向量书同步失败。', error);
+            }
+        }, Number(options.delay) >= 0 ? Number(options.delay) : CHARACTER_VECTOR_SYNC_DELAY);
+    }
+
+    function scheduleWorldSettingVectorSync(options = {}) {
+        window.clearTimeout(worldSettingVectorSyncTimer);
+        if (!hasWorldSettingVectorRecords() && options.force !== true) return;
+        worldSettingVectorSyncTimer = window.setTimeout(async () => {
+            try {
+                await syncWorldSettingsToVectorBook({ vectorize: options.vectorize !== false });
+                const root = document.getElementById(ROOT_ID);
+                if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root);
+            } catch (error) {
+                console.warn('[yuzuki-Memory] 世界设定向量书同步失败。', error);
             }
         }, Number(options.delay) >= 0 ? Number(options.delay) : CHARACTER_VECTOR_SYNC_DELAY);
     }
@@ -10234,6 +10278,8 @@
             '修复填表模式切换保存逻辑：实时填表/批量填表现在会立即写入全局设置，不再需要点“保存整套方案”才生效。',
             '修复自动大总结后支线小总结分段未清理的问题，大总结覆盖范围内的主线和支线小总结都会同步清理。',
             '优化隐藏楼层发送前过滤逻辑：对齐旧记忆插件的隐藏标记方式，按酒馆楼层隐藏状态剔除请求内容，避免隐藏楼层漏发。',
+            '新增表格列名前缀 *：实时填表/批量填表只会在对应单元格为空时自动写入，已有内容不会被 AI 自动覆盖，用户手动修改不受影响。',
+            '新增世界设定向量化：世界设定可像角色档案一样整理向量化，并在 {{MEMORY_TABLE}} / {{MEMORY_TABLE_世界设定}} 中回填召回内容。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -10413,7 +10459,7 @@
 
         const hint = document.createElement('div');
         hint.className = 'yzm-structure-hint';
-        hint.textContent = '列名用逗号分隔；列名前加 # 表示该列更新时追加到原内容，不加 # 表示覆盖更新。';
+        hint.textContent = '列名用逗号分隔；# 表示自动更新时追加，* 表示自动更新只在该单元格为空时写入，用户手动修改不受限制。';
 
         const actions = document.createElement('div');
         actions.className = 'yzm-structure-actions';
@@ -10789,7 +10835,7 @@
             toggleButton.setAttribute('aria-label', toggleButton.title);
         }
         if (vectorizeButton) {
-            vectorizeButton.hidden = table?.id !== 'character_profile';
+            vectorizeButton.hidden = table?.id !== 'character_profile' && table?.id !== 'world_setting';
         }
     }
 
@@ -10838,7 +10884,7 @@
         toggleButton.dataset.yzmOrganizerBatch = 'toggle';
         const vectorizeButton = createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-organizer-action yzm-organizer-vectorize');
         vectorizeButton.dataset.yzmOrganizerBatch = 'vectorize';
-        vectorizeButton.hidden = table.id !== 'character_profile';
+        vectorizeButton.hidden = table.id !== 'character_profile' && table.id !== 'world_setting';
         const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-organizer-action yzm-organizer-danger');
         deleteButton.dataset.yzmOrganizerBatch = 'delete';
         actions.append(toggleButton, vectorizeButton, deleteButton);
@@ -10880,17 +10926,20 @@
             if (action === 'delete') {
                 if (!window.confirm(`确定删除选中的 ${ids.length} 个条目吗？`)) return;
                 getState().records[table.id] = records.filter((record) => !idSet.has(record.id));
-            } else if (action === 'vectorize' && table.id === 'character_profile') {
+            } else if (action === 'vectorize' && (table.id === 'character_profile' || table.id === 'world_setting')) {
                 let removedVectorCount = 0;
+                const isWorldSetting = table.id === 'world_setting';
+                const syncFlag = isWorldSetting ? 'worldSettingVectorSynced' : 'characterVectorSynced';
+                const itemLabel = isWorldSetting ? '世界设定' : '角色档案';
                 records.forEach((record) => {
                     if (idSet.has(record.id)) {
                         record.hidden = true;
-                        record.characterVectorSynced = true;
+                        record[syncFlag] = true;
                         return;
                     }
-                    if (record?.characterVectorSynced === true) {
+                    if (record?.[syncFlag] === true) {
                         record.hidden = false;
-                        record.characterVectorSynced = false;
+                        record[syncFlag] = false;
                         removedVectorCount += 1;
                     }
                 });
@@ -10898,12 +10947,14 @@
                 rerenderOrganizer();
                 vectorizeButton.disabled = true;
                 try {
-                    const result = await syncCharacterProfilesToVectorBook({ vectorize: true });
+                    const result = isWorldSetting
+                        ? await syncWorldSettingsToVectorBook({ vectorize: true })
+                        : await syncCharacterProfilesToVectorBook({ vectorize: true });
                     const added = result.vectorizeResult?.count || 0;
-                    const removedText = removedVectorCount ? `，已恢复 ${removedVectorCount} 个未选中的旧向量化角色` : '';
-                    window.alert(`已用当前选中的 ${ids.length} 个角色档案覆盖当前会话角色向量书，新增向量化 ${added} 条${removedText}。`);
+                    const removedText = removedVectorCount ? `，已恢复 ${removedVectorCount} 个未选中的旧向量化${itemLabel}` : '';
+                    window.alert(`已用当前选中的 ${ids.length} 个${itemLabel}覆盖当前会话${itemLabel}向量书，新增向量化 ${added} 条${removedText}。`);
                 } catch (error) {
-                    window.alert(String(error?.message || error || '角色档案向量化失败'));
+                    window.alert(String(error?.message || error || `${itemLabel}向量化失败`));
                 } finally {
                     vectorizeButton.disabled = false;
                     if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
@@ -10917,11 +10968,15 @@
                     if (table.id === 'character_profile' && nextAction === 'show') {
                         record.characterVectorSynced = false;
                     }
+                    if (table.id === 'world_setting' && nextAction === 'show') {
+                        record.worldSettingVectorSynced = false;
+                    }
                 });
             }
 
             const saved = refreshAfterRecordOrganizerChange(root, table);
             if (saved && table.id === 'character_profile') scheduleCharacterVectorSync({ force: true });
+            if (saved && table.id === 'world_setting') scheduleWorldSettingVectorSync({ force: true });
             rerenderOrganizer();
         };
 
@@ -12921,6 +12976,7 @@
         if (taskRunnerBusy && event?.detail?.source === 'task-runner') {
             refreshActiveWorkspace(root);
             scheduleCharacterVectorSync();
+            scheduleWorldSettingVectorSync();
             return;
         }
         loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
@@ -12928,6 +12984,7 @@
         applyResolvedPromptSchemeToState({ save: false });
         refreshActiveWorkspace(root);
         scheduleCharacterVectorSync();
+        scheduleWorldSettingVectorSync();
     }
 
     function scheduleSessionWorkspaceRefresh(root, sessionId) {

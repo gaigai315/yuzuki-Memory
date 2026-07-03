@@ -10,13 +10,17 @@
     }
 
     function cleanColumnName(column) {
-        return String(column || '').trim().replace(/^#/, '').trim();
+        return String(column || '').trim().replace(/^[#*]+/, '').trim();
     }
 
     function normalizeColumnDefinition(column) {
         const value = String(column || '').trim();
         if (!value) return '';
-        return value.startsWith('#') ? `#${value.slice(1).trim()}` : value;
+        const match = value.match(/^([#*]+)\s*(.*)$/);
+        if (!match) return value;
+        const modifiers = Array.from(new Set(match[1].split(''))).join('');
+        const name = match[2].trim();
+        return name ? `${modifiers}${name}` : '';
     }
 
     function uniqueColumns(columns) {

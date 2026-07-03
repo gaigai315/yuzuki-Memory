@@ -492,11 +492,20 @@
     }
 
     function cleanColumnName(column) {
-        return String(column || '').trim().replace(/^#/, '').trim();
+        return String(column || '').trim().replace(/^[#*]+/, '').trim();
+    }
+
+    function getColumnModifiers(column) {
+        const match = String(column || '').trim().match(/^[#*]+/);
+        return match ? match[0] : '';
     }
 
     function isAppendColumn(column) {
-        return String(column || '').trim().startsWith('#');
+        return getColumnModifiers(column).includes('#');
+    }
+
+    function isFillOnceColumn(column) {
+        return getColumnModifiers(column).includes('*');
     }
 
     function getPrimaryColumn(table) {
@@ -1051,6 +1060,8 @@
                 if (name === primary) return;
                 const nextValue = String(normalizedValues[name] || '').trim();
                 if (!nextValue) return;
+                const currentValue = String(record.values[name] || '').trim();
+                if (isFillOnceColumn(column) && currentValue) return;
                 record.values[name] = isAppendColumn(column)
                     ? [String(record.values[name] || '').trim(), nextValue].filter(Boolean).join('；')
                     : nextValue;

@@ -61,17 +61,26 @@
     }
 
     function cleanColumnName(column) {
-        return String(column || '').trim().replace(/^#/, '').trim();
+        return String(column || '').trim().replace(/^[#*]+/, '').trim();
+    }
+
+    function getColumnModifiers(column) {
+        const match = String(column || '').trim().match(/^[#*]+/);
+        return match ? match[0] : '';
     }
 
     function isAppendColumn(column) {
-        return String(column || '').trim().startsWith('#');
+        return getColumnModifiers(column).includes('#');
+    }
+
+    function isFillOnceColumn(column) {
+        return getColumnModifiers(column).includes('*');
     }
 
     function normalizeName(value) {
         return String(value || '')
             .normalize('NFKC')
-            .replace(/^#/, '')
+            .replace(/^[#*]+/, '')
             .replace(/\s+/g, '')
             .trim()
             .toLowerCase();
@@ -244,7 +253,7 @@
             splitSegments(body).forEach((segment) => {
                 const parsed = parseFieldSegment(segment);
                 if (!parsed || !parsed.field) return;
-                const fieldName = parsed.field.replace(/^#/, '').trim();
+                const fieldName = parsed.field.replace(/^[#*]+/, '').trim();
                 values[fieldName] = parsed.value;
             });
             rows.push({
@@ -291,7 +300,7 @@
             splitSegments(keyMatch[2]).forEach((segment) => {
                 const parsed = parseFieldSegment(segment);
                 if (!parsed || !parsed.field) return;
-                const fieldName = parsed.field.replace(/^#/, '').trim();
+                const fieldName = parsed.field.replace(/^[#*]+/, '').trim();
                 values[fieldName] = parsed.value;
             });
             rows.push({
@@ -477,6 +486,8 @@
 
         validUpdates.forEach(({ column, value }) => {
             const columnName = cleanColumnName(column);
+            const currentValue = String(record.values[columnName] || '').trim();
+            if (isFillOnceColumn(column) && currentValue) return;
             const shouldAppend = isAppendColumn(column);
             record.values[columnName] = shouldAppend
                 ? appendCellValue(record.values[columnName], value)
@@ -736,6 +747,7 @@
         applyRowsToState,
         cleanColumnName,
         isAppendColumn,
+        isFillOnceColumn,
     });
 
     bind();

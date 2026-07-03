@@ -12,6 +12,7 @@
     const DEFAULT_SEPARATOR = '===';
     const BOOK_KIND_SUMMARY = 'summary';
     const BOOK_KIND_CHARACTER_PROFILE = 'character_profile';
+    const BOOK_KIND_WORLD_SETTING = 'world_setting';
     const MAX_VECTOR_CHUNK_CHARS = 4000;
     const VECTOR_CHUNK_OVERLAP_CHARS = 180;
     const MAX_VECTOR_BATCH_CHARS = 16000;
@@ -460,13 +461,27 @@
                 || String(bookId || '').startsWith('yzm_character_book_');
         }
 
+        getWorldSettingBookId(sessionId = 'default') {
+            return `yzm_world_setting_book_${String(sessionId || 'default').replace(/[^\w-]/g, '_')}`;
+        }
+
+        isWorldSettingBook(bookId) {
+            return this.library[bookId]?.kind === BOOK_KIND_WORLD_SETTING
+                || String(bookId || '').startsWith('yzm_world_setting_book_');
+        }
+
+        isManagedTableVectorBook(bookId) {
+            return this.isCharacterProfileBook(bookId) || this.isWorldSettingBook(bookId);
+        }
+
         getActiveBooksByKind(kind = '') {
             const expected = String(kind || '').trim();
             return this.getActiveBooks().filter((bookId) => {
                 const book = this.library[bookId];
                 if (!book) return false;
                 if (expected === BOOK_KIND_CHARACTER_PROFILE) return this.isCharacterProfileBook(bookId);
-                if (!expected) return !this.isCharacterProfileBook(bookId);
+                if (expected === BOOK_KIND_WORLD_SETTING) return this.isWorldSettingBook(bookId);
+                if (!expected) return !this.isManagedTableVectorBook(bookId);
                 return book.kind === expected;
             });
         }
@@ -498,6 +513,46 @@
             this.library[id] = this.normalizeBook({
                 name: normalizedName,
                 kind: BOOK_KIND_CHARACTER_PROFILE,
+                sessionId: String(sessionId || 'default'),
+                chunks: normalizedChunks,
+                vectors,
+                vectorized,
+                createTime: oldBook?.createTime || Date.now(),
+                updateTime: Date.now(),
+            }, normalizedName);
+            this.selectedBookId = id;
+            await this.saveLibrary();
+            this.toggleActiveBook(id, true);
+            return { success: true, bookId: id, count: normalizedChunks.length };
+        }
+
+        async syncWorldSettingsToBook(chunks, sessionId = 'default', bookName = '') {
+            const normalizedChunks = this.normalizeChunks(chunks);
+            const id = this.getWorldSettingBookId(sessionId);
+            const oldBook = this.library[id];
+            const normalizedName = String(bookName || '').trim() || '当前会话世界设定';
+            const oldVectors = new Map();
+            if (oldBook) {
+                oldBook.chunks.forEach((chunk, index) => {
+                    if (oldBook.vectorized[index] && oldBook.vectors[index]) oldVectors.set(chunk, oldBook.vectors[index]);
+                });
+            }
+
+            const vectors = [];
+            const vectorized = [];
+            normalizedChunks.forEach((chunk) => {
+                if (oldVectors.has(chunk)) {
+                    vectors.push(oldVectors.get(chunk));
+                    vectorized.push(true);
+                } else {
+                    vectors.push(null);
+                    vectorized.push(false);
+                }
+            });
+
+            this.library[id] = this.normalizeBook({
+                name: normalizedName,
+                kind: BOOK_KIND_WORLD_SETTING,
                 sessionId: String(sessionId || 'default'),
                 chunks: normalizedChunks,
                 vectors,
