@@ -10307,9 +10307,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '新增小总结后自动隐藏已覆盖的剧情摘要：实时填表和批量填表生成的剧情摘要会记录真实酒馆楼层来源，小总结完成后会自动隐藏覆盖范围内的摘要行，隐藏后不再注入上下文，但仍可在剧情摘要整理中查看和恢复。',
-            '修复大小总结触发连续性：自动大总结会识别已存在的同区间总结并推进指针，高优先级任务跳过或顺延后会继续检查后续到期任务，避免小总结在大总结后长期不触发。',
-            '修复独立 API 的 DeepSeek/OpenAI 协议请求：标准 OpenAI 协议模式不再附带自定义 Header 字段，避免部分服务商报 custom_include_headers 字段类型错误。',
+            '优化隐藏楼层逻辑：删除多余兜底过滤，避免正常楼层被误判为隐藏内容。',
+            '优化向量化世界书兼容：隐藏插件自己的向量库，减少被世界书管理脚本扫描导致卡顿的情况。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
