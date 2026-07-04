@@ -308,9 +308,6 @@
             reverse_proxy: reverseProxy,
             custom_url: apiUrl,
             proxy_password: config.apiKey,
-            custom_include_headers: {
-                'Content-Type': 'application/json',
-            },
             model,
             messages,
             temperature: config.temperature,
@@ -320,7 +317,13 @@
             instruction_mode: 'chat',
         };
 
-        if (authHeader) {
+        if (source === 'custom') {
+            payload.custom_include_headers = {
+                'Content-Type': 'application/json',
+            };
+        }
+
+        if (source === 'custom' && authHeader) {
             payload.custom_include_headers.Authorization = authHeader;
         }
 
@@ -998,15 +1001,17 @@
         if (isGeminiProvider(provider)) source = 'makersuite';
 
         const createStatusPayload = (nextSource, nextUrl) => {
-            const customHeaders = { 'Content-Type': 'application/json' };
-            if (nextSource === 'custom' && authHeader) customHeaders.Authorization = authHeader;
-            return {
+            const payload = {
                 chat_completion_source: nextSource,
                 reverse_proxy: nextUrl,
                 custom_url: nextUrl,
                 proxy_password: config.apiKey,
-                custom_include_headers: customHeaders,
             };
+            if (nextSource === 'custom') {
+                payload.custom_include_headers = { 'Content-Type': 'application/json' };
+                if (authHeader) payload.custom_include_headers.Authorization = authHeader;
+            }
+            return payload;
         };
 
         const requestStatusModels = async (payload) => {
