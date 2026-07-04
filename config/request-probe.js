@@ -159,6 +159,19 @@
         return '';
     }
 
+    function normalizeMessageMatchText(text) {
+        return String(text || '')
+            .replace(/\r\n/g, '\n')
+            .replace(/[ \t]+\n/g, '\n')
+            .trim();
+    }
+
+    function getMessageMatchSignature(message) {
+        const role = getMessageRoleKind(message);
+        const text = normalizeMessageMatchText(getMessageText(message));
+        return role && text ? `${role}\n${text}` : '';
+    }
+
     function isPluginLikeRequestMessage(message) {
         return !!(
             message?.isGaigaiData
@@ -187,18 +200,30 @@
         );
     }
 
-    function getHiddenContextInfo() {
+    function getHiddenContextInfo(hidingResult = {}) {
         const contextItems = getContextChatItems();
+        const freshHiddenIndices = Array.isArray(hidingResult?.indices)
+            ? new Set(hidingResult.indices.map((index) => Number(index)).filter(Number.isInteger))
+            : null;
+        const hiddenSignatureCounts = new Map();
         const dialogue = [];
         contextItems.forEach((message, index) => {
             if (!isContextDialogueMessage(message)) return;
+            const hidden = isHiddenContextMessage(message);
+            if (hidden && freshHiddenIndices?.has(index)) {
+                const signature = getMessageMatchSignature(message);
+                if (signature) hiddenSignatureCounts.set(signature, (hiddenSignatureCounts.get(signature) || 0) + 1);
+            }
             dialogue.push({
                 index,
                 role: getMessageRoleKind(message),
-                hidden: isHiddenContextMessage(message),
+                hidden,
             });
         });
-        return { dialogue };
+        return {
+            dialogue,
+            hiddenSignatures: Array.from(hiddenSignatureCounts, ([signature, count]) => ({ signature, count })),
+        };
     }
 
     function isRequestDialogueMessage(message) {
@@ -207,27 +232,28 @@
         return !!getMessageRoleKind(message);
     }
 
-    function getHiddenRequestIndexesByContext(targetItems, contextDialogue) {
+    function getHiddenRequestIndexesBySignature(targetItems, hiddenSignatures) {
         const hiddenIndexes = new Set();
-        if (!Array.isArray(targetItems) || !targetItems.length || !Array.isArray(contextDialogue) || !contextDialogue.length) {
+        if (!Array.isArray(targetItems) || !targetItems.length || !Array.isArray(hiddenSignatures) || !hiddenSignatures.length) {
             return hiddenIndexes;
         }
-        let contextCursor = contextDialogue.length - 1;
-        for (let requestIndex = targetItems.length - 1; requestIndex >= 0; requestIndex -= 1) {
+        const hiddenCounts = new Map();
+        hiddenSignatures.forEach((entry) => {
+            const signature = String(entry?.signature || '');
+            const count = Math.max(0, Math.round(Number(entry?.count) || 0));
+            if (signature && count > 0) hiddenCounts.set(signature, (hiddenCounts.get(signature) || 0) + count);
+        });
+        if (!hiddenCounts.size) return hiddenIndexes;
+
+        for (let requestIndex = 0; requestIndex < targetItems.length; requestIndex += 1) {
             const item = targetItems[requestIndex];
             if (!isRequestDialogueMessage(item)) continue;
-            const requestRole = getMessageRoleKind(item);
-            let matchedIndex = -1;
-            for (let ctxIndex = contextCursor; ctxIndex >= 0; ctxIndex -= 1) {
-                const ctxEntry = contextDialogue[ctxIndex];
-                if (ctxEntry.role !== requestRole) continue;
-                matchedIndex = ctxIndex;
-                break;
-            }
-            if (matchedIndex < 0) continue;
-            const matched = contextDialogue[matchedIndex];
-            if (matched.hidden) hiddenIndexes.add(requestIndex);
-            contextCursor = matchedIndex - 1;
+            const signature = getMessageMatchSignature(item);
+            const remaining = hiddenCounts.get(signature) || 0;
+            if (remaining <= 0) continue;
+            hiddenIndexes.add(requestIndex);
+            if (remaining === 1) hiddenCounts.delete(signature);
+            else hiddenCounts.set(signature, remaining - 1);
         }
         return hiddenIndexes;
     }
@@ -237,10 +263,11 @@
         if (!targets.length) return body;
         const info = hiddenInfo && typeof hiddenInfo === 'object' ? hiddenInfo : {};
         const contextDialogue = Array.isArray(info.dialogue) ? info.dialogue : [];
-        if (!contextDialogue.some((entry) => entry?.hidden)) return body;
+        const hiddenSignatures = Array.isArray(info.hiddenSignatures) ? info.hiddenSignatures : [];
+        if (!contextDialogue.some((entry) => entry?.hidden) && !hiddenSignatures.length) return body;
         let removed = 0;
         targets.forEach((target) => {
-            const hiddenIndexes = getHiddenRequestIndexesByContext(target.items, contextDialogue);
+            const hiddenIndexes = getHiddenRequestIndexesBySignature(target.items, hiddenSignatures);
             const kept = target.items.filter((item, index) => {
                 const shouldRemove = item?.is_yzm_hidden_floor === true || hiddenIndexes.has(index);
                 if (shouldRemove) removed += 1;
@@ -252,6 +279,8 @@
             console.info('[yuzuki-Memory] hidden context messages removed from final request.', {
                 removed,
                 hiddenContextMessages: contextDialogue.filter((entry) => entry?.hidden).length,
+                matchedFreshHiddenMessages: hiddenSignatures.reduce((sum, entry) => sum + (Number(entry?.count) || 0), 0),
+                mode: 'exact-signature',
             });
         }
         return body;
@@ -600,8 +629,8 @@
         if (phonePermissions) {
             console.info('[yuzuki-Memory] phone request memory permissions detected', phonePermissions);
         }
-        await applyPreRequestHiding();
-        removeHiddenMessagesFromBody(rawBody, getHiddenContextInfo());
+        const hidingResult = await applyPreRequestHiding();
+        removeHiddenMessagesFromBody(rawBody, getHiddenContextInfo(hidingResult));
         const isDryRunLike = !!(rawBody?.dryRun || rawBody?.isDryRun || rawBody?.quiet || rawBody?.bg || rawBody?.no_update);
         if (!isDryRunLike) {
             YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
