@@ -4239,6 +4239,35 @@
         return states;
     }
 
+    function createPlotLineId() {
+        return `plot_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function normalizePlotItemMeta(record, kind = activePlotSummaryKind, count = getPlotSummaryLines(record, kind).length) {
+        if (!record) return [];
+        const key = getPlotSummaryKindKey(kind);
+        const lines = getPlotSummaryLines(record, key);
+        record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+        let metaList = Array.isArray(record.plotItemMeta[key]) ? record.plotItemMeta[key] : [];
+        metaList = Array.from({ length: count }, (_item, index) => {
+            const current = metaList[index] && typeof metaList[index] === 'object' ? metaList[index] : {};
+            return {
+                ...current,
+                id: String(current.id || createPlotLineId()),
+                text: String(current.text || lines[index] || '').trim(),
+            };
+        });
+        record.plotItemMeta[key] = metaList;
+        return metaList;
+    }
+
+    function setPlotItemMeta(record, kind, metaList) {
+        if (!record) return;
+        const key = getPlotSummaryKindKey(kind);
+        record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+        record.plotItemMeta[key] = Array.isArray(metaList) ? metaList : [];
+    }
+
     function setPlotItemHiddenStates(record, kind, states) {
         if (!record) return;
         const key = getPlotSummaryKindKey(kind);
@@ -4263,9 +4292,12 @@
         const lines = getPlotSummaryLines(record, normalizedKind);
         const items = getPlotSummaryItems(lines.join('\n'));
         const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, items.length);
+        const metaList = normalizePlotItemMeta(record, normalizedKind, items.length);
         return items.map((item, index) => ({
             ...item,
             id: `plot:${normalizedKind}:${index}`,
+            lineId: metaList[index]?.id || '',
+            meta: metaList[index] || null,
             kind: normalizedKind,
             raw: lines[index] || item.raw,
             hidden: !!hiddenStates[index],
@@ -10275,12 +10307,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复填表模式切换保存逻辑：实时填表/批量填表现在会立即写入全局设置，不再需要点“保存整套方案”才生效。',
-            '修复自动大总结后支线小总结分段未清理的问题，大总结覆盖范围内的主线和支线小总结都会同步清理。',
-            '优化隐藏楼层发送前过滤逻辑：对齐旧记忆插件的隐藏标记方式，按酒馆楼层隐藏状态剔除请求内容，避免隐藏楼层漏发。',
-            '新增表格列名前缀 *：实时填表/批量填表只会在对应单元格为空时自动写入，已有内容不会被 AI 自动覆盖，用户手动修改不受影响。',
-            '新增世界设定向量化：世界设定可像角色档案一样整理向量化，并在 {{MEMORY_TABLE}} / {{MEMORY_TABLE_世界设定}} 中回填召回内容。',
-            '优化移动端显示：剧情摘要整理列表显示时间段，前栏折叠后右侧剧情摘要和记忆总结正文会放大并增加行距。',
+            '新增小总结后自动隐藏已覆盖的剧情摘要：实时填表和批量填表生成的剧情摘要会记录真实酒馆楼层来源，小总结完成后会自动隐藏覆盖范围内的摘要行，隐藏后不再注入上下文，但仍可在剧情摘要整理中查看和恢复。',
+            '修复大小总结触发连续性：自动大总结会识别已存在的同区间总结并推进指针，高优先级任务跳过或顺延后会继续检查后续到期任务，避免小总结在大总结后长期不触发。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -10684,12 +10712,14 @@
                 const field = getPlotSummaryField(kind);
                 const lines = getPlotSummaryLines(record, kind);
                 const hiddenStates = normalizePlotItemHiddenStates(record, kind, lines.length);
+                const metaList = normalizePlotItemMeta(record, kind, lines.length);
                 const indexes = orderedIds
                     .map((id) => getPlotOrganizerEntryIndex(id))
                     .filter((index) => index > -1 && index < lines.length);
                 record.values = record.values && typeof record.values === 'object' ? record.values : {};
                 record.values[field] = indexes.map((index) => lines[index]).filter(Boolean).join('\n');
                 setPlotItemHiddenStates(record, kind, indexes.map((index) => hiddenStates[index]));
+                setPlotItemMeta(record, kind, indexes.map((index) => metaList[index]).filter(Boolean));
                 activePlotSummaryKind = getPlotSummaryKindKey(kind);
                 return true;
             }
@@ -10792,6 +10822,7 @@
         const field = getPlotSummaryField(kind);
         const lines = getPlotSummaryLines(record, kind);
         const hiddenStates = normalizePlotItemHiddenStates(record, kind, lines.length);
+        const metaList = normalizePlotItemMeta(record, kind, lines.length);
         const selectedIndexes = [...new Set(ids
             .map((id) => getPlotOrganizerEntryIndex(id))
             .filter((index) => index > -1 && index < lines.length))]
@@ -10804,6 +10835,7 @@
             const selectedSet = new Set(selectedIndexes);
             record.values[field] = lines.filter((_, index) => !selectedSet.has(index)).join('\n');
             setPlotItemHiddenStates(record, kind, hiddenStates.filter((_, index) => !selectedSet.has(index)));
+            setPlotItemMeta(record, kind, metaList.filter((_, index) => !selectedSet.has(index)));
         } else {
             const nextAction = action === 'toggle' ? getOrganizerToggleMode(table, ids) : action;
             selectedIndexes.forEach((index) => {
@@ -11445,22 +11477,32 @@
             const contentInput = fields.querySelector(`[data-yzm-record-field="${field}"]`);
             const nextValue = formatPlotSummaryEditorValue(timeInput?.value, contentInput?.value);
             const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, currentLines.length);
+            const metaList = normalizePlotItemMeta(record, normalizedKind, currentLines.length);
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
             if (isAppend) {
                 record.values[field] = [getRecordValue(record, field).trim(), nextValue].filter(Boolean).join('\n');
                 setPlotItemHiddenStates(record, normalizedKind, nextValue ? hiddenStates.concat(false) : hiddenStates);
+                setPlotItemMeta(record, normalizedKind, nextValue
+                    ? metaList.concat({ id: createPlotLineId(), text: nextValue, source: 'manual', createdAt: Date.now() })
+                    : metaList);
             } else if (editIndex > -1) {
                 const nextLines = currentLines.slice();
                 nextLines[editIndex] = nextValue;
                 const nextHiddenStates = hiddenStates.slice();
+                const nextMetaList = metaList.slice();
                 if (!nextValue) nextHiddenStates.splice(editIndex, 1);
+                if (!nextValue) nextMetaList.splice(editIndex, 1);
+                else nextMetaList[editIndex] = { ...(nextMetaList[editIndex] || {}), text: nextValue, editedAt: Date.now() };
                 record.values[field] = nextLines.filter(Boolean).join('\n');
                 setPlotItemHiddenStates(record, normalizedKind, nextHiddenStates);
+                setPlotItemMeta(record, normalizedKind, nextMetaList);
             } else {
                 record.values[field] = nextValue;
                 setPlotItemHiddenStates(record, normalizedKind, nextValue ? [false] : []);
+                setPlotItemMeta(record, normalizedKind, nextValue ? [{ id: createPlotLineId(), text: nextValue, source: 'manual', createdAt: Date.now() }] : []);
             }
             record.values[field] = normalizePlotSummaryStoredText(record.values[field]);
+            normalizePlotItemMeta(record, normalizedKind, getPlotSummaryLines(record, normalizedKind).length);
             setActiveRecordId(table.id, record.id);
             activePlotSummaryKind = normalizedKind;
             if (!persistStateOrReload(root, '当前会话尚未就绪，剧情摘要未保存。', {

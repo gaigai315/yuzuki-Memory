@@ -418,6 +418,60 @@
             .join('\n');
     }
 
+    function createPlotLineId() {
+        return `plot_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function normalizeRangeMeta(range) {
+        const start = Math.max(0, Math.round(Number(range?.start) || 0));
+        const end = Math.max(start, Math.round(Number(range?.end) || 0));
+        return end > start ? { start, end } : null;
+    }
+
+    function normalizePlotLineText(line = '') {
+        return normalizePlotStoredLines([line]).split(/\n+/).map((entry) => entry.trim()).filter(Boolean)[0] || String(line || '').trim();
+    }
+
+    function syncPlotItemMetadata(record, kind, previousLines, nextLines, newLines = [], options = {}) {
+        if (!record) return;
+        const key = kind === 'branch' ? 'branch' : 'main';
+        record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+        record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+
+        const previousMeta = Array.isArray(record.plotItemMeta[key]) ? record.plotItemMeta[key] : [];
+        const previousHidden = Array.isArray(record.hiddenPlotItems[key]) ? record.hiddenPlotItems[key].map(Boolean) : [];
+        const metaByLine = new Map();
+        const hiddenByLine = new Map();
+        previousLines.forEach((line, index) => {
+            const normalized = normalizePlotLineText(line);
+            if (!normalized) return;
+            if (!metaByLine.has(normalized)) metaByLine.set(normalized, []);
+            metaByLine.get(normalized).push(previousMeta[index] || null);
+            if (!hiddenByLine.has(normalized)) hiddenByLine.set(normalized, []);
+            hiddenByLine.get(normalized).push(!!previousHidden[index]);
+        });
+
+        const sourceRange = normalizeRangeMeta(options.range);
+        const newLineSet = new Set(newLines.map(normalizePlotLineText).filter(Boolean));
+        record.plotItemMeta[key] = nextLines.map((line) => {
+            const normalized = normalizePlotLineText(line);
+            const existing = metaByLine.get(normalized)?.shift();
+            if (existing) return existing;
+            if (!newLineSet.has(normalized)) return { id: createPlotLineId(), text: normalized };
+            return {
+                id: createPlotLineId(),
+                text: normalized,
+                source: options.source || 'realtime',
+                sourceRange,
+                createdAt: Date.now(),
+            };
+        });
+        record.hiddenPlotItems[key] = nextLines.map((line) => {
+            const normalized = normalizePlotLineText(line);
+            return hiddenByLine.get(normalized)?.shift() || false;
+        });
+    }
+
     function plotRowToText(row) {
         const values = row?.values || {};
         let title = String(values['摘要名称'] || values['标题'] || '').trim();
@@ -436,12 +490,13 @@
         return [date, body].filter(Boolean).join('\t').trim();
     }
 
-    function applyMemoryRow(state, row) {
+    function applyMemoryRow(state, row, options = {}) {
         const table = findTable(state, row.table);
         if (!table || table.id === FIXED_SUMMARY_TABLE_ID) return false;
 
         if (table.id === PLOT_SUMMARY_TABLE_ID) {
             const field = getPlotKind(row.primaryValue) === 'branch' ? '支线' : '主线';
+            const kind = field === '支线' ? 'branch' : 'main';
             const text = plotRowToText(row);
             if (!text) return false;
             state.records = state.records && typeof state.records === 'object' ? state.records : {};
@@ -452,10 +507,14 @@
                 state.records[table.id].push(record);
             }
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
-            record.values[field] = normalizePlotStoredLines([
+            const previousLines = String(record.values[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+            const nextText = normalizePlotStoredLines([
                 ...String(record.values[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean),
                 text,
             ]);
+            record.values[field] = nextText;
+            const nextLines = nextText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+            syncPlotItemMetadata(record, kind, previousLines, nextLines, [text], options);
             return true;
         }
 
@@ -496,10 +555,10 @@
         return true;
     }
 
-    function applyRowsToState(state, rows = []) {
+    function applyRowsToState(state, rows = [], options = {}) {
         let count = 0;
         (Array.isArray(rows) ? rows : []).forEach((row) => {
-            if (applyMemoryRow(state, row)) count += 1;
+            if (applyMemoryRow(state, row, options)) count += 1;
         });
         return count;
     }
@@ -535,7 +594,11 @@
         let count = 0;
         applying = true;
         try {
-            count = applyRowsToState(state, rows);
+            count = applyRowsToState(state, rows, {
+                source: 'realtime',
+                floor,
+                range: floor >= 0 ? { start: floor, end: floor + 1 } : null,
+            });
             if (count) {
                 const saved = YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, {
                     allowDuringSwitch: true,

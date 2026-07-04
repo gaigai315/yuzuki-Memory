@@ -1071,7 +1071,7 @@
         return record;
     }
 
-    function appendPlotSummary(state, text, kind = 'main') {
+    function appendPlotSummary(state, text, kind = 'main', options = {}) {
         const table = stateTables(state).find((entry) => entry.id === PLOT_SUMMARY_TABLE_ID);
         if (!table || !text) return null;
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
@@ -1082,11 +1082,20 @@
             state.records[table.id].push(record);
         }
         const field = kind === 'branch' ? '支线' : '主线';
+        const key = kind === 'branch' ? 'branch' : 'main';
         record.values = record.values && typeof record.values === 'object' ? record.values : {};
-        record.values[field] = normalizePlotStoredLines([
-            ...String(record.values[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean),
-            String(text || '').trim(),
-        ]);
+        const previousLines = String(record.values[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+        const nextLine = String(text || '').trim();
+        const nextText = normalizePlotStoredLines([...previousLines, nextLine]);
+        record.values[field] = nextText;
+        syncPlotItemMetadata(
+            record,
+            key,
+            previousLines,
+            nextText.split(/\n+/).map((line) => line.trim()).filter(Boolean),
+            [nextLine],
+            options
+        );
         return record;
     }
 
@@ -1176,6 +1185,54 @@
             .sort((a, b) => String(a.date).localeCompare(String(b.date), 'zh-Hans-CN', { numeric: true }) || a.sort - b.sort || a.index - b.index)
             .map((item) => item.raw)
             .join('\n');
+    }
+
+    function createPlotLineId() {
+        return `plot_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function normalizePlotLineText(line = '') {
+        return normalizePlotStoredLines([line]).split(/\n+/).map((entry) => entry.trim()).filter(Boolean)[0] || String(line || '').trim();
+    }
+
+    function syncPlotItemMetadata(record, kind, previousLines, nextLines, newLines = [], options = {}) {
+        if (!record) return;
+        const key = kind === 'branch' ? 'branch' : 'main';
+        record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+        record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+
+        const previousMeta = Array.isArray(record.plotItemMeta[key]) ? record.plotItemMeta[key] : [];
+        const previousHidden = Array.isArray(record.hiddenPlotItems[key]) ? record.hiddenPlotItems[key].map(Boolean) : [];
+        const metaByLine = new Map();
+        const hiddenByLine = new Map();
+        previousLines.forEach((line, index) => {
+            const normalized = normalizePlotLineText(line);
+            if (!normalized) return;
+            if (!metaByLine.has(normalized)) metaByLine.set(normalized, []);
+            metaByLine.get(normalized).push(previousMeta[index] || null);
+            if (!hiddenByLine.has(normalized)) hiddenByLine.set(normalized, []);
+            hiddenByLine.get(normalized).push(!!previousHidden[index]);
+        });
+
+        const sourceRange = getRangeMeta(options.range);
+        const newLineSet = new Set(newLines.map(normalizePlotLineText).filter(Boolean));
+        record.plotItemMeta[key] = nextLines.map((line) => {
+            const normalized = normalizePlotLineText(line);
+            const existing = metaByLine.get(normalized)?.shift();
+            if (existing) return existing;
+            if (!newLineSet.has(normalized)) return { id: createPlotLineId(), text: normalized };
+            return {
+                id: createPlotLineId(),
+                text: normalized,
+                source: options.source || 'trace',
+                sourceRange,
+                createdAt: Date.now(),
+            };
+        });
+        record.hiddenPlotItems[key] = nextLines.map((line) => {
+            const normalized = normalizePlotLineText(line);
+            return hiddenByLine.get(normalized)?.shift() || false;
+        });
     }
 
     function plotValuesToText(values = {}, fallbackTitle = '') {
@@ -1533,9 +1590,51 @@
         }) || null;
     }
 
-    function applyTraceResult(state, resultRows) {
+    function hidePlotSummaryItemsCoveredByRange(state, range, summaryRecordIds = []) {
+        const target = getRangeMeta(range);
+        if (!target) return 0;
+        const records = stateRecords(state, PLOT_SUMMARY_TABLE_ID);
+        if (!records.length) return 0;
+        const coveredBySummaryIds = (Array.isArray(summaryRecordIds) ? summaryRecordIds : [summaryRecordIds])
+            .map((id) => String(id || '').trim())
+            .filter(Boolean);
+        let hiddenCount = 0;
+        records.forEach((record) => {
+            record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+            record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+            ['main', 'branch'].forEach((kind) => {
+                const metaList = Array.isArray(record.plotItemMeta[kind]) ? record.plotItemMeta[kind] : [];
+                if (!metaList.length) return;
+                const field = kind === 'branch' ? '支线' : '主线';
+                const lineCount = String(record?.values?.[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean).length;
+                const hiddenStates = Array.isArray(record.hiddenPlotItems[kind])
+                    ? record.hiddenPlotItems[kind].map(Boolean)
+                    : Array.from({ length: lineCount }, () => false);
+                while (hiddenStates.length < lineCount) hiddenStates.push(false);
+                if (hiddenStates.length > lineCount) hiddenStates.length = lineCount;
+                metaList.slice(0, lineCount).forEach((meta, index) => {
+                    const sourceRange = getRangeMeta(meta?.sourceRange);
+                    if (!sourceRange) return;
+                    const covered = sourceRange.start >= target.start && sourceRange.end <= target.end;
+                    if (!covered || hiddenStates[index]) return;
+                    hiddenStates[index] = true;
+                    meta.hiddenReason = 'covered_by_summary';
+                    meta.coveredBySummaryIds = coveredBySummaryIds;
+                    meta.hiddenAt = Date.now();
+                    hiddenCount += 1;
+                });
+                record.hiddenPlotItems[kind] = hiddenStates;
+            });
+        });
+        return hiddenCount;
+    }
+
+    function applyTraceResult(state, resultRows, options = {}) {
         if (resultRows?.memoryRows && YuzukiMemory.MemoryTagParser?.applyRowsToState) {
-            return YuzukiMemory.MemoryTagParser.applyRowsToState(state, resultRows.memoryRows);
+            return YuzukiMemory.MemoryTagParser.applyRowsToState(state, resultRows.memoryRows, {
+                source: options.source || 'trace',
+                range: options.range,
+            });
         }
         const rows = normalizeTaskRows(resultRows);
         let count = 0;
@@ -1545,7 +1644,15 @@
             if (table.id === PLOT_SUMMARY_TABLE_ID) {
                 const text = plotValuesToText(row.values, row.values?.[getPrimaryColumn(table)] || row.values?.primaryValue || row.table);
                 if (!text) return;
-                appendPlotSummary(state, text, getPlotKind([row.table, row.values?.kind, row.values?.type, row.values?.分类, row.values?.类别, row.values?.[getPrimaryColumn(table)]].filter(Boolean).join(' ')));
+                appendPlotSummary(
+                    state,
+                    text,
+                    getPlotKind([row.table, row.values?.kind, row.values?.type, row.values?.分类, row.values?.类别, row.values?.[getPrimaryColumn(table)]].filter(Boolean).join(' ')),
+                    {
+                        source: options.source || 'trace',
+                        range: options.range,
+                    }
+                );
                 count += 1;
                 return;
             }
@@ -1555,7 +1662,10 @@
     }
 
     function commitTraceResult(state, result) {
-        const count = applyTraceResult(state, result?.parsed);
+        const count = applyTraceResult(state, result?.parsed, {
+            source: result?.meta?.autoTaskType || 'trace',
+            range: result?.range,
+        });
         if (!count) {
             return {
                 ...result,
@@ -2097,6 +2207,13 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const pointers = normalizePointers(state);
         pointers[task.pointerKey] = committed.range?.end || task.end;
         if (task.type === 'history' && pointers.summary < pointers.historySummary) pointers.summary = pointers.historySummary;
+        if (task.type === 'summary') {
+            committed.hiddenPlotSummaryCount = hidePlotSummaryItemsCoveredByRange(
+                state,
+                { start: task.start, end: task.end },
+                (Array.isArray(committed.records) ? committed.records : [committed.record]).map((record) => record?.id).filter(Boolean)
+            );
+        }
         if (settings.hideSummaryFloors) {
             committed.hideResult = await YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
                 force: true,
