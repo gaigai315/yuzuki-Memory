@@ -16,6 +16,10 @@
     const MAX_VECTOR_CHUNK_CHARS = 4000;
     const VECTOR_CHUNK_OVERLAP_CHARS = 180;
     const MAX_VECTOR_BATCH_CHARS = 16000;
+    const HELPER_API_SHIELD_KEY = '__yzmMemoryStorageBookShield';
+    const HELPER_API_SHIELD_SOURCE_KEY = '__yzmMemoryStorageBookShieldSource';
+    const HELPER_API_SHIELD_POLL_MS = 2000;
+    const HELPER_API_SHIELD_MAX_ATTEMPTS = 60;
 
     class VectorStore {
         constructor() {
@@ -23,11 +27,15 @@
             this.selectedBookId = '';
             this.isLoaded = false;
             this.hideObserver = null;
+            this.helperApiShieldTimer = null;
+            this.helperApiShieldAttempts = 0;
             this.vectorCache = new Map();
             this.pendingEmbeddings = new Map();
+            this.installStorageBookApiShield();
             this.ready = this.loadLibrary().finally(() => {
                 this.isLoaded = true;
                 this.hideStorageBookFromUI();
+                this.installStorageBookApiShield();
             });
         }
 
@@ -169,6 +177,69 @@
             }
         }
 
+        isStorageBookName(value) {
+            return STORAGE_BOOK_NAMES.includes(String(value || '').trim());
+        }
+
+        filterStorageBookNames(value) {
+            if (Array.isArray(value)) return value.filter((name) => !this.isStorageBookName(name));
+            if (value instanceof Set) return new Set([...value].filter((name) => !this.isStorageBookName(name)));
+            return value;
+        }
+
+        markShieldedFunction(wrapper, source) {
+            try {
+                Object.defineProperty(wrapper, HELPER_API_SHIELD_KEY, { value: true, configurable: true });
+                Object.defineProperty(wrapper, HELPER_API_SHIELD_SOURCE_KEY, { value: source, configurable: true });
+            } catch (_error) {
+                wrapper[HELPER_API_SHIELD_KEY] = true;
+                wrapper[HELPER_API_SHIELD_SOURCE_KEY] = source;
+            }
+            return wrapper;
+        }
+
+        installFunctionShield(name, createWrapper) {
+            const current = window[name];
+            if (typeof current !== 'function' || current[HELPER_API_SHIELD_KEY]) return false;
+            try {
+                window[name] = this.markShieldedFunction(createWrapper(current), current);
+                return window[name]?.[HELPER_API_SHIELD_KEY] === true;
+            } catch (error) {
+                console.warn(`[yuzuki-Memory] Failed to shield ${name} from storage vector book.`, error);
+                return false;
+            }
+        }
+
+        installStorageBookApiShield() {
+            if (typeof window === 'undefined') return;
+            const installedNames = this.installFunctionShield('getWorldbookNames', (original) => function yzmGetWorldbookNames(...args) {
+                const result = original.apply(this, args);
+                return YuzukiMemory.VectorStore?.filterStorageBookNames?.(result) || result;
+            });
+            const installedBook = this.installFunctionShield('getWorldbook', (original) => function yzmGetWorldbook(name, ...args) {
+                if (YuzukiMemory.VectorStore?.isStorageBookName?.(name)) return [];
+                return original.apply(this, [name, ...args]);
+            });
+
+            if (installedNames || installedBook) {
+                console.info('[yuzuki-Memory] Hidden vector storage book from helper worldbook APIs.', {
+                    names: STORAGE_BOOK_NAMES,
+                    getWorldbookNames: window.getWorldbookNames?.[HELPER_API_SHIELD_KEY] === true,
+                    getWorldbook: window.getWorldbook?.[HELPER_API_SHIELD_KEY] === true,
+                });
+            }
+
+            if (this.helperApiShieldTimer || this.helperApiShieldAttempts >= HELPER_API_SHIELD_MAX_ATTEMPTS) return;
+            this.helperApiShieldTimer = window.setInterval(() => {
+                this.helperApiShieldAttempts += 1;
+                this.installStorageBookApiShield();
+                if (this.helperApiShieldAttempts >= HELPER_API_SHIELD_MAX_ATTEMPTS) {
+                    window.clearInterval(this.helperApiShieldTimer);
+                    this.helperApiShieldTimer = null;
+                }
+            }, HELPER_API_SHIELD_POLL_MS);
+        }
+
         hideStorageBookFromUI() {
             if (!document.getElementById('yzm-hide-vector-library')) {
                 const style = document.createElement('style');
@@ -184,7 +255,7 @@
                 document.head.appendChild(style);
             }
 
-            const matchesStorageBookName = (value) => STORAGE_BOOK_NAMES.includes(String(value || '').trim());
+            const matchesStorageBookName = (value) => this.isStorageBookName(value);
             const hideMatches = () => {
                 document.querySelectorAll('option, li, .world_info_entry, label').forEach((node) => {
                     let shouldHide = false;
