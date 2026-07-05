@@ -142,8 +142,11 @@
         return cloned;
     }
 
-    function cloneInjectionMessage(message) {
+    function cloneInjectionMessage(message, source = null) {
         const cloned = safeDeepClone(message);
+        if (source?.gaigaiPhoneSignal && !cloned.gaigaiPhoneSignal) {
+            cloned.gaigaiPhoneSignal = source.gaigaiPhoneSignal;
+        }
         if (typeof cloned?.content === 'string') {
             cloned.content = YuzukiMemory.VariableInjector?.resolveRuntimeVariables?.(cloned.content) || cloned.content;
         }
@@ -440,7 +443,7 @@
         const after = anchorText.slice(match.index + match[0].length).trim();
         const next = [];
         if (before) next.push(cloneSplitMessage(source, before));
-        next.push(...injectedMessages.map(cloneInjectionMessage).filter(Boolean));
+        next.push(...injectedMessages.map((message) => cloneInjectionMessage(message, source)).filter(Boolean));
         if (after) next.push(cloneSplitMessage(source, after));
         if (!next.length) {
             setPrimaryTextToMessage(source, '');
@@ -888,6 +891,35 @@
         return !!(data.dryRun || data.isDryRun || data.quiet || data.bg || data.no_update);
     }
 
+    function chatContainsVectorAnchor(chat) {
+        if (!Array.isArray(chat)) return false;
+        return chat.some((message) => /\{\{\s*VECTOR_MEMORY\s*\}\}/i.test(getPrimaryTextFromMessage(message)));
+    }
+
+    async function processVectorAnchors(chat) {
+        if (!chatContainsVectorAnchor(chat)) return chat;
+        if (!YuzukiMemory.VariableInjector?.processBody || !YuzukiMemory.RequestProbe?.getVectorInjectionText) return chat;
+        const body = { messages: chat };
+        await YuzukiMemory.VariableInjector.processBody(body, {
+            getVectorText: YuzukiMemory.RequestProbe.getVectorInjectionText,
+            disableMemoryInjection: true,
+            disableMemoryFallbackInjection: true,
+            disableVectorFallbackInjection: true,
+            preserveUnresolvedVectorAnchors: false,
+        });
+        return Array.isArray(body.messages) ? body.messages : chat;
+    }
+
+    function capturePromptReadyProbe(chat, source = 'prompt-ready-injector') {
+        if (!Array.isArray(chat) || !chat.length) return;
+        try {
+            YuzukiMemory.RequestProbe?.ensureFetchProbeInstalled?.();
+            YuzukiMemory.RequestProbe?.captureFromPromptReady?.({ chat }, source);
+        } catch (error) {
+            console.warn('[yuzuki-Memory] API request probe prompt-ready capture failed.', error);
+        }
+    }
+
     async function processPromptReadyChat(input) {
         const container = resolveChatContainer(input);
         if (!Array.isArray(container.chat)) return input;
@@ -897,10 +929,12 @@
             disableFallback: true,
             processExtensionPrompts: true,
         });
-        if (container.type === 'array') return injectedChat;
+        const finalChat = await processVectorAnchors(injectedChat);
+        capturePromptReadyProbe(finalChat, 'chat_completion_prompt_ready');
+        if (container.type === 'array') return finalChat;
         const clonedInput = safeDeepClone(input);
         const clonedContainer = resolveChatContainer(clonedInput);
-        if (clonedContainer.owner) clonedContainer.owner.chat = injectedChat;
+        if (clonedContainer.owner) clonedContainer.owner.chat = finalChat;
         return clonedInput;
     }
 
@@ -923,6 +957,7 @@
                     disableFallback: true,
                     processExtensionPrompts: true,
                 });
+                capturePromptReadyProbe(injected, 'CHAT_COMPLETION_PROMPT_READY');
                 if (fallback.owner) fallback.owner.chat = injected;
             }
             return;
@@ -935,6 +970,7 @@
             disableFallback: true,
             processExtensionPrompts: true,
         });
+        capturePromptReadyProbe(safeEvent.chat, 'CHAT_COMPLETION_PROMPT_READY');
 
         data.chat = safeEvent.chat;
         if (event?.detail && typeof event.detail === 'object') event.detail.chat = safeEvent.chat;

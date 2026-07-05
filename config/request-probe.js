@@ -19,6 +19,7 @@
     let generationEventsBound = false;
     let dryRunGenerationDepth = 0;
     let dryRunCaptureUntil = 0;
+    const FETCH_WRAPPER_FLAG = '__yzmMemoryRequestProbeFetch';
 
     function clone(value) {
         try {
@@ -59,6 +60,16 @@
 
     function isExternalTextGenerationRequest(url, options) {
         return isTextGenerationRequest(url, options) && !isPhoneInternalRequest(options);
+    }
+
+    function getContext() {
+        try {
+            return typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
+                ? SillyTavern.getContext()
+                : null;
+        } catch (_error) {
+            return null;
+        }
     }
 
     function markChatRequestStarted() {
@@ -153,10 +164,10 @@
             || (lastRequestData ? extractPhoneSignalFromNode(lastRequestData.rawBody || lastRequestData) : null);
         if (!signal) return null;
         return {
-            allowSummary: signal.allowSummary === true,
-            allowTable: signal.allowTable === true,
-            allowVector: signal.allowVector === true,
-            allowPrompt: signal.allowPrompt === true,
+            allowSummary: signal.allowSummary !== false,
+            allowTable: signal.allowTable !== false,
+            allowVector: signal.allowVector !== false,
+            allowPrompt: signal.allowPrompt !== false,
         };
     }
 
@@ -175,6 +186,21 @@
             targets.push({ key, items });
         });
         return targets;
+    }
+
+    function resolvePromptReadyChat(input) {
+        if (Array.isArray(input)) return { chat: input, data: null };
+        const data = input?.detail && typeof input.detail === 'object' ? input.detail : input;
+        if (Array.isArray(data?.chat)) return { chat: data.chat, data };
+        if (Array.isArray(data?.messages)) return { chat: data.messages, data };
+        if (Array.isArray(data?.prompt)) return { chat: data.prompt, data };
+        if (Array.isArray(data?.contents)) return { chat: data.contents, data };
+        return { chat: null, data };
+    }
+
+    function isPromptReadyDryRun(input) {
+        const data = input?.detail && typeof input.detail === 'object' ? input.detail : input;
+        return !!(data?.dryRun || data?.dry_run || data?.isDryRun || data?.quiet || data?.bg || data?.no_update);
     }
 
     function getMessageText(message) {
@@ -518,20 +544,37 @@
         return content ? Math.ceil(content.length / 1.5) : 0;
     }
 
+    function isPhoneProbeMessage(item, content = '', role = '') {
+        if (role !== 'system') return false;
+        if (item?.isPhoneMessage === true) return true;
+        if (item?.gaigaiPhoneSignal && typeof item.gaigaiPhoneSignal === 'object') return true;
+        const sourceText = [
+            item?.name,
+            item?.identifier,
+            String(content || '').slice(0, 240),
+        ].filter(Boolean).join('\n');
+        return /小手机|手机插件|微信|音乐状态栏|音乐|HONEY|PHONE/i.test(sourceText);
+    }
+
     function normalizeMessage(message, index) {
         const item = message && typeof message === 'object' ? message : { content: String(message || '') };
         const content = getMessageText(item);
         const fallbackRole = item.is_user === true ? 'user' : (item.is_user === false ? 'assistant' : 'system');
+        const role = String(item.role || fallbackRole).toLowerCase();
+        const isMemory = !!item.isGaigaiData;
+        const isPrompt = !!item.isGaigaiPrompt;
+        const isVector = !!item.isGaigaiVector;
         return {
             index,
-            role: String(item.role || fallbackRole).toLowerCase(),
+            role,
             name: String(item.name || item.identifier || '').trim(),
             content,
             tokens: estimateTokens(content),
             flags: {
-                memory: !!item.isGaigaiData,
-                prompt: !!item.isGaigaiPrompt,
-                vector: !!item.isGaigaiVector,
+                memory: isMemory,
+                prompt: isPrompt,
+                vector: isVector,
+                phone: !isMemory && !isPrompt && !isVector && isPhoneProbeMessage(item, content, role),
             },
             raw: clone(item),
         };
@@ -554,6 +597,7 @@
             totalTokens,
             rawBody: clone(body),
             preview: options.preview === true,
+            promptReady: options.promptReady === true,
         };
         if (options.preview === true) {
             lastPreviewRequestData = requestData;
@@ -567,6 +611,18 @@
         lastRequestData = requestData;
         window.dispatchEvent(new CustomEvent('yzm-memory-request-probe-updated', { detail: lastRequestData }));
         return lastRequestData;
+    }
+
+    function captureFromPromptReady(input, source = 'prompt-ready') {
+        if (isPromptReadyDryRun(input) || isDryRunGenerationActive()) return input;
+        const resolved = resolvePromptReadyChat(input);
+        if (!Array.isArray(resolved.chat) || !resolved.chat.length) return input;
+        const body = {
+            messages: resolved.chat,
+            model: resolved.data?.model || resolved.data?.model_name || resolved.data?.chat_completion_source || '',
+        };
+        captureFromBody(body, `sillytavern://${source}`, { preview: true, promptReady: true });
+        return input;
     }
 
     function bodyContainsYuzukiVector(body) {
@@ -782,11 +838,21 @@
         }
     }
 
-    function installFetchProbe() {
-        if (YuzukiMemory.RequestProbe?.installed || typeof window.fetch !== 'function') return;
+    function isCurrentFetchProbeInstalled() {
+        return typeof window.fetch === 'function' && window.fetch[FETCH_WRAPPER_FLAG] === true;
+    }
+
+    function installFetchProbe(options = {}) {
+        if (typeof window.fetch !== 'function') return;
+        if (isCurrentFetchProbeInstalled()) {
+            YuzukiMemory.RequestProbe.installed = true;
+            return;
+        }
+        if (YuzukiMemory.RequestProbe?.installed && options.force !== true) return;
         bindGenerationEvents();
-        originalFetch = window.fetch;
-        window.fetch = async function (...args) {
+        const baseFetch = window.fetch;
+        originalFetch = baseFetch;
+        const wrappedFetch = async function (...args) {
             const nextArgs = await processFetchArgs(args);
             const input = nextArgs[0];
             const requestInput = isRequestLike(input) ? input : null;
@@ -795,12 +861,21 @@
             const shouldTrack = isExternalTextGenerationRequest(url, options);
             if (shouldTrack) markChatRequestStarted();
             try {
-                return await originalFetch.apply(this, nextArgs);
+                return await baseFetch.apply(this, nextArgs);
             } finally {
                 if (shouldTrack) markChatRequestFinished();
             }
         };
+        Object.defineProperty(wrappedFetch, FETCH_WRAPPER_FLAG, {
+            value: true,
+            configurable: true,
+        });
+        window.fetch = wrappedFetch;
         YuzukiMemory.RequestProbe.installed = true;
+    }
+
+    function ensureFetchProbeInstalled() {
+        installFetchProbe({ force: true });
     }
 
     function installXhrProbe() {
@@ -880,6 +955,9 @@
     YuzukiMemory.RequestProbe = Object.assign(YuzukiMemory.RequestProbe || {}, {
         installed: false,
         captureFromBody,
+        captureFromPromptReady,
+        ensureFetchProbeInstalled,
+        getVectorInjectionText,
         processFetchArgs,
         getLastRequestData,
         getLastPreviewRequestData,

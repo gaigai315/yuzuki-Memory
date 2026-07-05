@@ -4106,6 +4106,11 @@
     color: #b46be2;
 }
 
+#yzm-memory-root .yzm-probe-role-phone,
+#yzm-memory-root .yzm-probe-role-phone i {
+    color: #16a36a;
+}
+
 #yzm-memory-root .yzm-probe-role-vector,
 #yzm-memory-root .yzm-probe-role-vector i {
     color: #d47a28;

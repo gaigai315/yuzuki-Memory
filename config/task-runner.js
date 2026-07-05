@@ -2224,11 +2224,21 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 (Array.isArray(committed.records) ? committed.records : [committed.record]).map((record) => record?.id).filter(Boolean)
             );
         }
+        const savedBeforeFloorHiding = callbacks.saveState?.();
         if (settings.hideSummaryFloors) {
-            committed.hideResult = await YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
-                force: true,
-                summaryPointer: pointers.summary,
-            });
+            if (savedBeforeFloorHiding === false) {
+                committed.hideResult = {
+                    success: false,
+                    skipped: true,
+                    reason: 'state_save_failed',
+                    error: '总结结果尚未落盘，已跳过自动隐藏楼层。',
+                };
+            } else {
+                committed.hideResult = await YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
+                    force: true,
+                    summaryPointer: pointers.summary,
+                });
+            }
         }
         if (task.type === 'history') {
             committed.cleanupCount = cleanupSmallAutoSummaries(

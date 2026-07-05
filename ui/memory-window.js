@@ -8029,6 +8029,7 @@
             return { label: message.name || 'MEMORY', className: 'yzm-probe-role-memory', icon: 'fa-solid fa-table-cells-large' };
         }
         if (message?.flags?.prompt) return { label: message.name || 'PROMPT', className: 'yzm-probe-role-prompt', icon: 'fa-solid fa-thumbtack' };
+        if (message?.flags?.phone) return { label: message.name || 'SYSTEM (小手机)', className: 'yzm-probe-role-phone', icon: 'fa-solid fa-mobile-screen-button' };
         if (role === 'user') return { label: 'USER', className: 'yzm-probe-role-user', icon: 'fa-solid fa-user' };
         if (role === 'assistant' || role === 'model') return { label: 'ASSISTANT', className: 'yzm-probe-role-assistant', icon: 'fa-solid fa-circle-check' };
         if (role === 'system') return { label: message.name || 'SYSTEM', className: 'yzm-probe-role-system', icon: 'fa-solid fa-gear' };
@@ -8058,7 +8059,9 @@
         const title = document.createElement('div');
         title.append(createIconNode('fa-solid fa-list-check', ''), document.createTextNode('API 请求查看器'));
         const desc = document.createElement('span');
-        desc.textContent = '查看最后一次发送给模型的请求内容，每条消息默认折叠。';
+        desc.textContent = data?.preview
+            ? '仅捕获到发送前预览，最终 API 请求体尚未被插件捕获。'
+            : '查看最后一次发送给模型的请求内容，每条消息默认折叠。';
         titleWrap.append(title, desc);
         const refresh = createIconButton('刷新', 'fa-solid fa-rotate', 'yzm-api-button yzm-request-probe-refresh');
         header.append(titleWrap, refresh);
@@ -8068,7 +8071,7 @@
         stats.append(
             createRequestProbeStat('Total Tokens', data?.totalTokens || 0, 'fa-solid fa-coins'),
             createRequestProbeStat('Messages', `${data?.messages?.length || 0} 条`, 'fa-regular fa-message'),
-            createRequestProbeStat('最近捕获于', formatRequestProbeTime(data?.timestamp), 'fa-regular fa-clock')
+            createRequestProbeStat(data?.preview ? '捕获阶段' : '最近捕获于', data?.preview ? '发送前预览' : formatRequestProbeTime(data?.timestamp), 'fa-regular fa-clock')
         );
 
         const wrap = document.createElement('div');
@@ -10312,7 +10315,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复 API 请求查看器：区分真实发送和酒馆助手提示词查看器的预览请求，避免搜索结果被预览刷新误导。',
+            '修复API请求查看器：正文发送时显示酒馆最终组装的上下文内容，不被旧数据覆盖问题。',
+            '修复剧情摘要自动隐藏：边界问题导致隐藏跳过或错误覆盖。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
