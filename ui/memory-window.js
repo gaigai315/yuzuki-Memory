@@ -238,6 +238,7 @@
         segmentQuery: '',
     };
     let vectorSearchTimer = null;
+    let requestProbeSearchQuery = '';
 
     function createDefaultState() {
         return {
@@ -4564,6 +4565,9 @@
         renderApiWorkspaceContent(page);
         bindPanelInteractions(root);
         if (activeApiSectionId === 'llm') restoreActiveLlmApiPreset(root);
+        if (activeApiSectionId === 'requestProbe' && requestProbeSearchQuery) {
+            filterRequestProbeItems(root, requestProbeSearchQuery);
+        }
     }
 
     function renderTraceWorkspace(root) {
@@ -8101,6 +8105,7 @@
         input.type = 'text';
         input.placeholder = '搜索消息内容...';
         input.dataset.yzmRequestProbeSearch = 'true';
+        input.value = requestProbeSearchQuery;
         input.autocomplete = 'off';
         input.setAttribute('autocorrect', 'off');
         input.autocapitalize = 'off';
@@ -10307,8 +10312,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化隐藏楼层逻辑：删除多余兜底过滤，避免正常楼层被误判为隐藏内容。',
-            '优化向量化世界书兼容：隐藏插件自己的向量库，减少被世界书管理脚本扫描导致卡顿的情况。',
+            '修复 API 请求查看器：区分真实发送和酒馆助手提示词查看器的预览请求，避免搜索结果被预览刷新误导。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -12503,6 +12507,7 @@
                 const requestProbeJump = target?.closest?.('[data-yzm-request-probe-jump]');
 
                 if (requestProbeRefresh) {
+                    requestProbeSearchQuery = root.querySelector('[data-yzm-request-probe-search]')?.value || requestProbeSearchQuery;
                     renderApiWorkspace(root);
                     return;
                 }
@@ -12544,6 +12549,7 @@
             apiView.addEventListener('input', (event) => {
                 const target = event.target;
                 if (target?.matches?.('[data-yzm-request-probe-search]')) {
+                    requestProbeSearchQuery = target.value || '';
                     filterRequestProbeItems(root, target.value || '');
                     return;
                 }

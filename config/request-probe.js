@@ -9,9 +9,16 @@
     ];
     const EXCLUDED_GENERATE_TYPES = ['/api/sd/', '/api/tts/', '/api/images/'];
     let lastRequestData = null;
+    let lastPreviewRequestData = null;
     let originalFetch = null;
+    let originalXhrOpen = null;
+    let originalXhrSend = null;
+    let originalXhrSetRequestHeader = null;
     let activeChatRequestCount = 0;
     let lastChatRequestFinishedAt = 0;
+    let generationEventsBound = false;
+    let dryRunGenerationDepth = 0;
+    let dryRunCaptureUntil = 0;
 
     function clone(value) {
         try {
@@ -64,6 +71,44 @@
         lastChatRequestFinishedAt = Date.now();
         window.yzmMemoryChatRequestActiveCount = activeChatRequestCount;
         window.yzmMemoryLastChatRequestFinishedAt = lastChatRequestFinishedAt;
+    }
+
+    function markDryRunGenerationStarted() {
+        dryRunGenerationDepth += 1;
+        dryRunCaptureUntil = Date.now() + 15000;
+    }
+
+    function markDryRunGenerationFinished() {
+        dryRunGenerationDepth = Math.max(0, dryRunGenerationDepth - 1);
+        dryRunCaptureUntil = Date.now() + 1200;
+    }
+
+    function isDryRunGenerationActive() {
+        return dryRunGenerationDepth > 0 || Date.now() < dryRunCaptureUntil;
+    }
+
+    function isDryRunGenerationEvent(args = []) {
+        return args.some((arg) => arg?.dry_run === true || arg?.dryRun === true || arg?.isDryRun === true);
+    }
+
+    function bindGenerationEvents() {
+        if (generationEventsBound) return;
+        const context = getContext();
+        const eventSource = context?.eventSource || window.eventSource;
+        const eventTypes = context?.event_types || window.event_types;
+        if (!eventSource || typeof eventSource.on !== 'function') return;
+        const startedEvent = eventTypes?.GENERATION_STARTED || 'generation_started';
+        const stoppedEvent = eventTypes?.GENERATION_STOPPED || 'generation_stopped';
+        const endedEvent = eventTypes?.GENERATION_ENDED || 'generation_ended';
+        generationEventsBound = true;
+        eventSource.on(startedEvent, (...args) => {
+            if (isDryRunGenerationEvent(args)) markDryRunGenerationStarted();
+        });
+        [stoppedEvent, endedEvent].filter(Boolean).forEach((eventName) => {
+            eventSource.on(eventName, () => {
+                if (dryRunGenerationDepth > 0) markDryRunGenerationFinished();
+            });
+        });
     }
 
     function getRequestArray(body) {
@@ -492,7 +537,7 @@
         };
     }
 
-    function captureFromBody(body, url = '') {
+    function captureFromBody(body, url = '', options = {}) {
         const targets = getRequestArrays(body);
         if (!targets.length) return null;
         const messages = targets.flatMap((target) => clone(target.items).map((item, index) => ({
@@ -500,7 +545,7 @@
             sourceKey: target.key,
         })));
         const totalTokens = messages.reduce((sum, message) => sum + message.tokens, 0);
-        lastRequestData = {
+        const requestData = {
             url,
             key: targets.map((target) => target.key).join(','),
             model: String(body.model || ''),
@@ -508,7 +553,18 @@
             messages,
             totalTokens,
             rawBody: clone(body),
+            preview: options.preview === true,
         };
+        if (options.preview === true) {
+            lastPreviewRequestData = requestData;
+            console.info('[yuzuki-Memory] preview request captured; last real API request is unchanged.', {
+                url,
+                messages: requestData.messages.length,
+                totalTokens,
+            });
+            return requestData;
+        }
+        lastRequestData = requestData;
         window.dispatchEvent(new CustomEvent('yzm-memory-request-probe-updated', { detail: lastRequestData }));
         return lastRequestData;
     }
@@ -624,15 +680,17 @@
 
     async function processJsonBody(url, options, bodyText, requestSource = null) {
         if (!isTextGenerationRequest(url, options) || typeof bodyText !== 'string' || !bodyText.trim()) return null;
+        bindGenerationEvents();
         const rawBody = JSON.parse(bodyText);
         const phonePermissions = getPhoneMemoryPermissions(rawBody);
         if (phonePermissions) {
             console.info('[yuzuki-Memory] phone request memory permissions detected', phonePermissions);
         }
-        const hidingResult = await applyPreRequestHiding();
-        removeHiddenMessagesFromBody(rawBody, getHiddenContextInfo(hidingResult));
         const isDryRunLike = !!(rawBody?.dryRun || rawBody?.isDryRun || rawBody?.quiet || rawBody?.bg || rawBody?.no_update);
-        if (!isDryRunLike) {
+        const isPreviewCapture = isDryRunLike || isDryRunGenerationActive();
+        const hidingResult = isPreviewCapture ? null : await applyPreRequestHiding();
+        removeHiddenMessagesFromBody(rawBody, getHiddenContextInfo(hidingResult));
+        if (!isPreviewCapture) {
             YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
         }
         const hasMemoryDataVariable = bodyContainsMemoryDataVariable(rawBody);
@@ -697,7 +755,7 @@
         } else {
             console.info('[yuzuki-Memory Vector] 最终请求体没有新版向量记忆');
         }
-        captureFromBody(body, url);
+        captureFromBody(body, url, { preview: isPreviewCapture });
         if (requestSource) {
             return [new Request(requestSource, { body: nextBody })];
         }
@@ -726,6 +784,7 @@
 
     function installFetchProbe() {
         if (YuzukiMemory.RequestProbe?.installed || typeof window.fetch !== 'function') return;
+        bindGenerationEvents();
         originalFetch = window.fetch;
         window.fetch = async function (...args) {
             const nextArgs = await processFetchArgs(args);
@@ -744,8 +803,78 @@
         YuzukiMemory.RequestProbe.installed = true;
     }
 
+    function installXhrProbe() {
+        if (YuzukiMemory.RequestProbe?.xhrInstalled || typeof window.XMLHttpRequest !== 'function') return;
+        const proto = window.XMLHttpRequest.prototype;
+        if (!proto?.open || !proto?.send) return;
+        bindGenerationEvents();
+        originalXhrOpen = proto.open;
+        originalXhrSend = proto.send;
+        originalXhrSetRequestHeader = proto.setRequestHeader;
+
+        proto.open = function (method, url, ...rest) {
+            this.__yzmRequestProbe = {
+                method: String(method || 'GET').toUpperCase(),
+                url: url ? String(url) : '',
+                async: rest.length > 0 ? rest[0] !== false : true,
+                headers: {},
+            };
+            return originalXhrOpen.call(this, method, url, ...rest);
+        };
+
+        if (typeof originalXhrSetRequestHeader === 'function') {
+            proto.setRequestHeader = function (name, value) {
+                if (this.__yzmRequestProbe?.headers) {
+                    this.__yzmRequestProbe.headers[String(name || '')] = String(value ?? '');
+                }
+                return originalXhrSetRequestHeader.call(this, name, value);
+            };
+        }
+
+        proto.send = function (body = null) {
+            const meta = this.__yzmRequestProbe || {};
+            const url = meta.url || '';
+            const options = {
+                method: meta.method || 'GET',
+                headers: meta.headers || {},
+                body,
+            };
+            if (meta.async === false || !isTextGenerationRequest(url, options) || typeof body !== 'string' || !body.trim()) {
+                return originalXhrSend.call(this, body);
+            }
+
+            processJsonBody(url, options, body)
+                .then((processed) => {
+                    const nextOptions = processed?.[1];
+                    const nextBody = nextOptions?.body ?? body;
+                    const shouldTrack = isExternalTextGenerationRequest(url, nextOptions || options);
+                    if (shouldTrack) {
+                        markChatRequestStarted();
+                        this.addEventListener('loadend', markChatRequestFinished, { once: true });
+                    }
+                    originalXhrSend.call(this, nextBody);
+                })
+                .catch((error) => {
+                    console.warn('[yuzuki-Memory] Failed to process XHR request body.', error);
+                    const shouldTrack = isExternalTextGenerationRequest(url, options);
+                    if (shouldTrack) {
+                        markChatRequestStarted();
+                        this.addEventListener('loadend', markChatRequestFinished, { once: true });
+                    }
+                    originalXhrSend.call(this, body);
+                });
+            return undefined;
+        };
+
+        YuzukiMemory.RequestProbe.xhrInstalled = true;
+    }
+
     function getLastRequestData() {
         return lastRequestData ? clone(lastRequestData) : null;
+    }
+
+    function getLastPreviewRequestData() {
+        return lastPreviewRequestData ? clone(lastPreviewRequestData) : null;
     }
 
     YuzukiMemory.RequestProbe = Object.assign(YuzukiMemory.RequestProbe || {}, {
@@ -753,6 +882,7 @@
         captureFromBody,
         processFetchArgs,
         getLastRequestData,
+        getLastPreviewRequestData,
         getChatRequestState: () => ({
             activeCount: activeChatRequestCount,
             lastFinishedAt: lastChatRequestFinishedAt,
@@ -760,4 +890,5 @@
     });
 
     installFetchProbe();
+    installXhrProbe();
 })();
