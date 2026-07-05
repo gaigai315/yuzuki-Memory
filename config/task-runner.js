@@ -1258,6 +1258,15 @@
         return end > start ? { start, end } : null;
     }
 
+    function isRangeFullyCoveredByTarget(range, target) {
+        return range && target && range.start >= target.start && range.end <= target.end;
+    }
+
+    function isRangeOverlappingTarget(range, target) {
+        if (!range || !target) return false;
+        return Math.max(range.start, target.start) < Math.min(range.end, target.end);
+    }
+
     function getRangeLabel(range) {
         const normalized = getRangeMeta(range);
         return normalized ? `${normalized.start}-${Math.max(normalized.start, normalized.end - 1)}` : '';
@@ -1615,7 +1624,8 @@
                 metaList.slice(0, lineCount).forEach((meta, index) => {
                     const sourceRange = getRangeMeta(meta?.sourceRange);
                     if (!sourceRange) return;
-                    const covered = sourceRange.start >= target.start && sourceRange.end <= target.end;
+                    const covered = isRangeFullyCoveredByTarget(sourceRange, target)
+                        || isRangeOverlappingTarget(sourceRange, target);
                     if (!covered || hiddenStates[index]) return;
                     hiddenStates[index] = true;
                     meta.hiddenReason = 'covered_by_summary';
