@@ -170,6 +170,21 @@
         return state && typeof state === 'object' ? state : null;
     }
 
+    function getChatMetadataForWrite(context = getContext()) {
+        if (!context) return null;
+        const metadata = context.chatMetadata;
+        if (metadata && typeof metadata === 'object') return metadata;
+        if (window.chat_metadata && typeof window.chat_metadata === 'object') return window.chat_metadata;
+
+        try {
+            context.chatMetadata = {};
+            return context.chatMetadata && typeof context.chatMetadata === 'object' ? context.chatMetadata : null;
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Chat metadata is not assignable in this SillyTavern build.', error);
+            return null;
+        }
+    }
+
     function saveChatMetadataNow(context = getContext()) {
         if (!context) return;
         try {
@@ -208,10 +223,9 @@
     function writeChatMetadataState(state, options = {}) {
         const context = getContext();
         if (!context) return false;
-        context.chatMetadata = context.chatMetadata && typeof context.chatMetadata === 'object'
-            ? context.chatMetadata
-            : {};
-        context.chatMetadata[CHAT_METADATA_KEY] = state;
+        const metadata = getChatMetadataForWrite(context);
+        if (!metadata) return false;
+        metadata[CHAT_METADATA_KEY] = state;
         scheduleChatSave(context, !!options.immediate);
         return true;
     }

@@ -51,6 +51,21 @@
             return null;
         }
 
+        getChatMetadataForWrite(context = this.getContext()) {
+            if (!context) return null;
+            const metadata = context.chatMetadata;
+            if (metadata && typeof metadata === 'object') return metadata;
+            if (window.chat_metadata && typeof window.chat_metadata === 'object') return window.chat_metadata;
+
+            try {
+                context.chatMetadata = {};
+                return context.chatMetadata && typeof context.chatMetadata === 'object' ? context.chatMetadata : null;
+            } catch (error) {
+                console.warn('[yuzuki-Memory] Chat metadata is not assignable in this SillyTavern build.', error);
+                return null;
+            }
+        }
+
         async getCsrfToken() {
             if (typeof window.getRequestHeaders === 'function') {
                 const headers = window.getRequestHeaders();
@@ -305,10 +320,13 @@
         setActiveBooks(bookIds) {
             const context = this.getContext();
             if (!context) return false;
-            context.chatMetadata = context.chatMetadata || {};
-            context.chatMetadata[ACTIVE_BOOKS_KEY] = [...new Set(Array.isArray(bookIds) ? bookIds : [])].filter((id) => this.library[id]);
+            const metadata = this.getChatMetadataForWrite(context);
+            if (!metadata) return false;
+            metadata[ACTIVE_BOOKS_KEY] = [...new Set(Array.isArray(bookIds) ? bookIds : [])].filter((id) => this.library[id]);
 
-            if (typeof context.saveMetadata === 'function') {
+            if (typeof context.saveChat === 'function') {
+                context.saveChat();
+            } else if (typeof context.saveMetadata === 'function') {
                 context.saveMetadata();
             } else if (typeof window.saveMetadataDebounced === 'function') {
                 window.saveMetadataDebounced();
