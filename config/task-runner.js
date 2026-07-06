@@ -2053,7 +2053,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 
     function getAutoSummarySettings() {
         const source = parseJsonStorage(AUTO_SUMMARY_SETTINGS_STORAGE_KEY, {});
-        return {
+        const settings = {
             summaryEnabled: source.summaryEnabled !== false,
             summaryEvery: Math.max(1, Math.round(Number(source.summaryEvery) || 20)),
             historyEnabled: source.historyEnabled !== false,
@@ -2063,8 +2063,13 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             directTrigger: typeof source.directTrigger === 'boolean' ? source.directTrigger : true,
             autoSave: typeof source.autoSave === 'boolean' ? source.autoSave : true,
             autoVectorizeAfterHistory: typeof source.autoVectorizeAfterHistory === 'boolean' ? source.autoVectorizeAfterHistory : false,
+            autoSyncSummaryWorldbook: typeof source.autoSyncSummaryWorldbook === 'boolean' ? source.autoSyncSummaryWorldbook : false,
             hideSummaryFloors: typeof source.hideSummaryFloors === 'boolean' ? source.hideSummaryFloors : false,
         };
+        if (settings.autoVectorizeAfterHistory && settings.autoSyncSummaryWorldbook) {
+            settings.autoSyncSummaryWorldbook = false;
+        }
+        return settings;
     }
 
     function normalizePointers(state) {
@@ -2254,6 +2259,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             } catch (error) {
                 committed.vectorSyncResult = { success: false, error: String(error?.message || error || '总结同步向量化失败') };
                 console.warn('[yuzuki-Memory] Auto summary vector sync failed:', error);
+            }
+        }
+        if (settings.autoSyncSummaryWorldbook === true && typeof callbacks.syncSummaryToWorldbook === 'function') {
+            try {
+                committed.worldbookSyncResult = await callbacks.syncSummaryToWorldbook();
+            } catch (error) {
+                committed.worldbookSyncResult = { success: false, error: String(error?.message || error || '总结同步世界书失败') };
+                console.warn('[yuzuki-Memory] Auto summary worldbook sync failed:', error);
             }
         }
         callbacks.saveState?.();

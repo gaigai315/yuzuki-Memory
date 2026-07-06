@@ -633,6 +633,20 @@
 
 #yzm-memory-root .yzm-overview-row {
     display: flex;
+    position: relative;
+    margin-bottom: 8px;
+    padding-bottom: 8px;
+}
+
+#yzm-memory-root .yzm-overview-row::after {
+    content: "";
+    position: absolute;
+    right: 9px;
+    bottom: 1px;
+    left: 9px;
+    height: 1px;
+    background: var(--yzm-border);
+    opacity: 0.78;
 }
 
 #yzm-memory-root .yzm-nav-item,
@@ -853,6 +867,13 @@
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-overview-row {
     justify-content: center;
+}
+
+#yzm-memory-root .yzm-sidebar-icon-mode .yzm-overview-row::after {
+    right: 50%;
+    left: auto;
+    width: 22px;
+    transform: translateX(50%);
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-overview-item,
@@ -7949,6 +7970,15 @@
         border-bottom: 0;
     }
 
+    #yzm-memory-root .yzm-sidebar-main {
+        flex: 0 0 auto;
+    }
+
+    #yzm-memory-root .yzm-sidebar-actions {
+        margin-top: 8px;
+        padding-top: 2px;
+    }
+
     #yzm-memory-root .yzm-sidebar-toggle {
         display: flex;
         width: 10px;
@@ -9600,7 +9630,8 @@
         gap: 7px;
     }
 
-    #yzm-memory-root .yzm-auto-summary-vector-button {
+    #yzm-memory-root .yzm-auto-summary-vector-button,
+    #yzm-memory-root .yzm-auto-summary-worldbook-button {
         width: 100%;
         min-height: 28px;
         padding: 0 8px;

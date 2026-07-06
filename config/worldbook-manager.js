@@ -7,12 +7,24 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const WORLD_INFO_GET_ENDPOINT = '/api/worldinfo/get';
+    const WORLD_INFO_EDIT_ENDPOINT = '/api/worldinfo/edit';
+    const SUMMARY_WORLDBOOK_PREFIX = 'Yuzuki_Memory_';
     const SETTINGS_KEY = 'worldbookSelection';
     let cachedCsrfToken = '';
     let cachedCsrfTokenAt = 0;
 
     function safeString(value) {
         return String(value || '').trim();
+    }
+
+    function sanitizeWorldbookName(value) {
+        const text = safeString(value)
+            .replace(/\.[^.]+$/, '')
+            .replace(/[\\/:*?"<>|]/g, '_')
+            .replace(/\s+/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_+|_+$/g, '');
+        return text || 'default';
     }
 
     function uniqueStrings(values = []) {
@@ -153,6 +165,78 @@
         return response.json();
     }
 
+    async function postWorldInfoEdit(name, data, options = {}) {
+        const forceRefresh = options.forceRefresh === true;
+        const response = await fetch(WORLD_INFO_EDIT_ENDPOINT, {
+            method: 'POST',
+            headers: await getJsonHeaders(forceRefresh),
+            credentials: 'include',
+            cache: 'no-store',
+            body: JSON.stringify({ name, data }),
+        });
+        const text = await response.text().catch(() => '');
+        if (!response.ok) {
+            if (!forceRefresh && isCsrfError(response.status, text)) {
+                cachedCsrfToken = '';
+                cachedCsrfTokenAt = 0;
+                return postWorldInfoEdit(name, data, { forceRefresh: true });
+            }
+            throw new Error(`HTTP ${response.status}${text ? `: ${text.slice(0, 160)}` : ''}`);
+        }
+        if (!text) return { ok: true };
+        try {
+            return JSON.parse(text);
+        } catch (_error) {
+            return { ok: true, text };
+        }
+    }
+
+    function uploadWorldInfoFile(name, data) {
+        const input = document.querySelector('#world_import_file');
+        if (!input || typeof File === 'undefined' || typeof DataTransfer === 'undefined') {
+            throw new Error('世界书保存失败，且未找到酒馆世界书导入控件。');
+        }
+        const file = new File([JSON.stringify(data)], `${name}.json`, { type: 'application/json' });
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        input.files = transfer.files;
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+        return { ok: true, mode: 'upload' };
+    }
+
+    function normalizeSummaryWorldbookEntries(summaryEntries = []) {
+        const entries = {};
+        (Array.isArray(summaryEntries) ? summaryEntries : [])
+            .map((entry, index) => ({ ...(entry || {}), index }))
+            .filter((entry) => safeString(entry.content || entry.text))
+            .forEach((entry, fallbackIndex) => {
+                const uid = Number.isFinite(Number(entry.uid)) ? Number(entry.uid) : fallbackIndex;
+                const title = safeString(entry.title) || `记忆总结 ${fallbackIndex + 1}`;
+                const remark = safeString(entry.remark);
+                const comment = remark ? `【${remark}】 ${title}` : title;
+                entries[uid] = {
+                    uid,
+                    key: ['总结', 'summary', '前情提要', 'memory', '记忆'],
+                    keysecondary: [],
+                    comment,
+                    content: safeString(entry.content || entry.text),
+                    constant: false,
+                    vectorized: false,
+                    enabled: true,
+                    position: 1,
+                    order: 100,
+                    extensions: {
+                        position: 1,
+                        exclude_recursion: false,
+                        display_index: fallbackIndex,
+                        probability: 100,
+                        useProbability: true,
+                    },
+                };
+            });
+        return entries;
+    }
+
     async function fetchWorldInfoByName(name) {
         const payloads = [{ name }, { world: name }, { file: name }, { filename: name }];
         for (const body of payloads) {
@@ -172,6 +256,45 @@
             this._cacheAt = 0;
             this._worldInfoModulePromise = null;
             this._stContextModulePromise = null;
+        }
+
+        getSummaryWorldbookName(sessionId = '', displayName = '') {
+            const base = sanitizeWorldbookName(sessionId || displayName || 'default');
+            return `${SUMMARY_WORLDBOOK_PREFIX}${base}`;
+        }
+
+        async syncSummaryEntriesToWorldbook(summaryEntries = [], sessionId = '', displayName = '', options = {}) {
+            const entries = normalizeSummaryWorldbookEntries(summaryEntries);
+            const count = Object.keys(entries).length;
+            if (!count) return { success: false, count: 0, error: '当前没有可同步的总结内容。' };
+
+            const name = safeString(options.name) || this.getSummaryWorldbookName(sessionId, displayName);
+            const data = { name, entries };
+            const bookExists = !!(window.world_info && typeof window.world_info === 'object' && window.world_info[name]);
+            let mode = bookExists ? 'update' : 'create';
+            if (bookExists) {
+                await postWorldInfoEdit(name, data);
+            } else {
+                try {
+                    uploadWorldInfoFile(name, data);
+                    mode = 'upload';
+                } catch (uploadError) {
+                    console.warn('[yuzuki-Memory Worldbook] 世界书导入控件不可用，改用 API 创建:', uploadError);
+                    await postWorldInfoEdit(name, data);
+                    mode = 'edit';
+                }
+            }
+
+            if (window.world_info && typeof window.world_info === 'object') {
+                window.world_info[name] = {
+                    ...(window.world_info[name] || {}),
+                    name,
+                    entries,
+                };
+            }
+            this._cache = null;
+            this._cacheAt = 0;
+            return { success: true, count, name, mode };
         }
 
         _getContext() {

@@ -104,8 +104,8 @@
     };
     const CONFIG_SECTIONS = [
         { id: 'plugin', label: '插件配置', icon: 'fa-solid fa-gear' },
-        { id: 'init', label: '基础设置', icon: 'fa-solid fa-wand-magic-sparkles' },
-        { id: 'autoSummary', label: '自动总结', icon: 'fa-solid fa-robot' },
+        { id: 'init', label: '基础设置', icon: 'fa-solid fa-pen' },
+        { id: 'autoSummary', label: '自动总结', icon: 'fa-solid fa-clipboard-list' },
         { id: 'logViewer', label: '日志查看器', icon: 'fa-regular fa-file-lines' },
     ];
     const API_SECTIONS = [
@@ -171,6 +171,7 @@
         directTrigger: true,
         autoSave: true,
         autoVectorizeAfterHistory: false,
+        autoSyncSummaryWorldbook: false,
         hideSummaryFloors: false,
     };
     const FIXED_TABLE_ID = 'memory_summary';
@@ -909,6 +910,34 @@
             const remark = getSummaryValue(record, ['备注']);
             return [title, content, remark].filter(Boolean).join('\n');
         }).filter(Boolean);
+    }
+
+    function getSummaryWorldbookEntries() {
+        const table = getTables().find((entry) => entry.id === 'memory_summary');
+        if (!table) return [];
+        return getRecords(table.id).map((record, index) => {
+            const title = getSummaryValue(record, ['总结标题', '标题']) || `记忆总结 ${index + 1}`;
+            const content = getSummaryValue(record, ['总结内容']);
+            const remark = getSummaryValue(record, ['备注']);
+            const floors = getSummaryValue(record, ['楼层数', '楼层范围', '楼层']);
+            const core = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
+            const unresolved = getSummaryValue(record, ['未解决问题']);
+            const heading = `【${title}${remark ? ` [${remark}]` : ''}】`;
+            const body = [
+                heading,
+                floors ? `楼层：${floors}` : '',
+                core ? `核心角色：${core}` : '',
+                content,
+                unresolved ? `未解决问题：${unresolved}` : '',
+            ].filter(Boolean).join('\n');
+            return {
+                uid: index,
+                id: record?.id || '',
+                title,
+                remark,
+                content: body,
+            };
+        }).filter((entry) => entry.content);
     }
 
     function recordToVectorChunk(table, record) {
@@ -1866,7 +1895,7 @@
 
     function normalizeAutoSummarySettings(rawSettings) {
         const source = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
-        return {
+        const normalized = {
             summaryEnabled: typeof source.summaryEnabled === 'boolean' ? source.summaryEnabled : DEFAULT_AUTO_SUMMARY_SETTINGS.summaryEnabled,
             summaryEvery: Math.round(normalizeNumberSetting(source.summaryEvery, 1, 9999, DEFAULT_AUTO_SUMMARY_SETTINGS.summaryEvery, 0)),
             historyEnabled: typeof source.historyEnabled === 'boolean' ? source.historyEnabled : DEFAULT_AUTO_SUMMARY_SETTINGS.historyEnabled,
@@ -1876,8 +1905,13 @@
             directTrigger: typeof source.directTrigger === 'boolean' ? source.directTrigger : DEFAULT_AUTO_SUMMARY_SETTINGS.directTrigger,
             autoSave: typeof source.autoSave === 'boolean' ? source.autoSave : DEFAULT_AUTO_SUMMARY_SETTINGS.autoSave,
             autoVectorizeAfterHistory: typeof source.autoVectorizeAfterHistory === 'boolean' ? source.autoVectorizeAfterHistory : DEFAULT_AUTO_SUMMARY_SETTINGS.autoVectorizeAfterHistory,
+            autoSyncSummaryWorldbook: typeof source.autoSyncSummaryWorldbook === 'boolean' ? source.autoSyncSummaryWorldbook : DEFAULT_AUTO_SUMMARY_SETTINGS.autoSyncSummaryWorldbook,
             hideSummaryFloors: typeof source.hideSummaryFloors === 'boolean' ? source.hideSummaryFloors : DEFAULT_AUTO_SUMMARY_SETTINGS.hideSummaryFloors,
         };
+        if (normalized.autoVectorizeAfterHistory && normalized.autoSyncSummaryWorldbook) {
+            normalized.autoSyncSummaryWorldbook = false;
+        }
+        return normalized;
     }
 
     function getAutoSummarySettings() {
@@ -1904,8 +1938,14 @@
     function updateAutoSummarySetting(key, value) {
         const current = getAutoSummarySettings();
         if (!(key in current)) return current;
+        const linkedSettings = key === 'autoVectorizeAfterHistory' && value === true
+            ? { autoSyncSummaryWorldbook: false }
+            : key === 'autoSyncSummaryWorldbook' && value === true
+                ? { autoVectorizeAfterHistory: false }
+                : {};
         const nextSettings = saveAutoSummarySettings({
             ...current,
+            ...linkedSettings,
             [key]: value,
         });
         if (key === 'hideSummaryFloors' && value === true) {
@@ -2642,7 +2682,7 @@
         configAction.dataset.yzmAction = 'config';
         const traceAction = createIconButton('追溯', 'fa-solid fa-clock-rotate-left', 'yzm-sidebar-action');
         traceAction.dataset.yzmAction = 'trace';
-        const summaryToolAction = createIconButton('总结', 'fa-solid fa-wand-magic-sparkles', 'yzm-sidebar-action');
+        const summaryToolAction = createIconButton('总结', 'fa-solid fa-clipboard-list', 'yzm-sidebar-action');
         summaryToolAction.dataset.yzmAction = 'summaryTool';
         const apiAction = createIconButton('API', 'fa-solid fa-plug', 'yzm-sidebar-action');
         apiAction.dataset.yzmAction = 'api';
@@ -2710,7 +2750,7 @@
         const summaryToolPrimaryHeader = document.createElement('div');
         summaryToolPrimaryHeader.className = 'yzm-summary-tool-primary-header';
         summaryToolPrimaryHeader.hidden = true;
-        summaryToolPrimaryHeader.append(createIconNode('fa-solid fa-wand-magic-sparkles', ''), document.createTextNode('总结项目'));
+        summaryToolPrimaryHeader.append(createIconNode('fa-solid fa-clipboard-list', ''), document.createTextNode('总结项目'));
 
         const schemePrimaryHeader = document.createElement('div');
         schemePrimaryHeader.className = 'yzm-scheme-primary-header';
@@ -3793,6 +3833,16 @@
             return { ...result, vectorized: true, vectorizeResult, hiddenSummaryCount };
         }
         return { ...result, vectorized: false, hiddenSummaryCount };
+    }
+
+    async function syncSummaryToWorldbook() {
+        const manager = YuzukiMemory.WorldbookManager;
+        if (!manager?.syncSummaryEntriesToWorldbook) return { success: false, error: '世界书同步模块尚未加载' };
+        return manager.syncSummaryEntriesToWorldbook(
+            getSummaryWorldbookEntries(),
+            getStorage()?.getCurrentSessionId?.() || 'default',
+            getCurrentChatVectorBookName()
+        );
     }
 
     async function syncCharacterProfilesToVectorBook(options = {}) {
@@ -5982,6 +6032,14 @@
             const result = mergeTaskResults(results, action);
             markTaskStateUpdated(action, result);
             refreshAfterTask(root, { persist: false });
+            if (action === 'summary' && getAutoSummarySettings().autoSyncSummaryWorldbook === true) {
+                const worldbookResult = await syncSummaryToWorldbook();
+                if (!worldbookResult.success) showTaskToast(worldbookResult.error || '总结同步世界书失败。', 'warning');
+            }
+            if (action === 'summaryOptimize' && getAutoSummarySettings().autoSyncSummaryWorldbook === true) {
+                const worldbookResult = await syncSummaryToWorldbook();
+                if (!worldbookResult.success) showTaskToast(worldbookResult.error || '总结同步世界书失败。', 'warning');
+            }
             if (action === 'summaryOptimize' && getAutoSummarySettings().autoVectorizeAfterHistory === true) {
                 await syncSummaryToVectorBook({ vectorize: true, hideAfterSync: true });
             }
@@ -8672,6 +8730,12 @@
         return isOn;
     }
 
+    function setConfigSwitchState(button, isOn) {
+        if (!button) return;
+        button.classList.toggle('yzm-config-switch-on', !!isOn);
+        button.setAttribute('aria-pressed', String(!!isOn));
+    }
+
     function createConfigNumberInput(value, settingKey = '') {
         const input = document.createElement('input');
         input.className = 'yzm-config-number-input';
@@ -8699,7 +8763,7 @@
         const topGrid = document.createElement('div');
         topGrid.className = 'yzm-auto-summary-top-grid';
         topGrid.append(
-            createAutoSummaryOverviewCard('自动小总结', 'fa-solid fa-robot', '按设定的楼层周期生成小总结，作为阶段性记忆。', 'summaryEnabled', settings.summaryEnabled, 'summaryEvery', settings.summaryEvery),
+            createAutoSummaryOverviewCard('自动小总结', 'fa-solid fa-clipboard-list', '按设定的楼层周期生成小总结，作为阶段性记忆。', 'summaryEnabled', settings.summaryEnabled, 'summaryEvery', settings.summaryEvery),
             createAutoSummaryOverviewCard('自动大总结', 'fa-solid fa-book-open', '按设定的楼层周期整合前面的小总结，并清理已合并的小楼层。', 'historyEnabled', settings.historyEnabled, 'historyEvery', settings.historyEvery)
         );
 
@@ -8822,7 +8886,19 @@
         desc.textContent = '小总结和大总结完成后，都会覆盖同步当前会话的向量化书籍并重新向量化。';
         text.append(label, desc);
         row.append(createAutoSummarySwitch(settings.autoVectorizeAfterHistory, 'autoVectorizeAfterHistory'), text, createIconButton('同步', 'fa-solid fa-rotate', 'yzm-api-button yzm-auto-summary-vector-button'));
-        card.append(title, row);
+
+        const worldbookRow = document.createElement('div');
+        worldbookRow.className = 'yzm-auto-summary-vector-row';
+        const worldbookText = document.createElement('div');
+        worldbookText.className = 'yzm-auto-summary-vector-text';
+        const worldbookLabel = document.createElement('strong');
+        worldbookLabel.textContent = '总结后自动同步到世界书';
+        const worldbookDesc = document.createElement('span');
+        worldbookDesc.textContent = '小总结和大总结完成后，都会覆盖更新当前会话的酒馆世界书。';
+        worldbookText.append(worldbookLabel, worldbookDesc);
+        worldbookRow.append(createAutoSummarySwitch(settings.autoSyncSummaryWorldbook, 'autoSyncSummaryWorldbook'), worldbookText, createIconButton('同步世界书', 'fa-solid fa-rotate', 'yzm-api-button yzm-auto-summary-worldbook-button'));
+
+        card.append(title, row, worldbookRow);
         return card;
     }
 
@@ -8930,6 +9006,26 @@
         } finally {
             if (button) button.disabled = false;
             if (label) label.textContent = previousLabel || '同步';
+        }
+    }
+
+    async function syncAutoSummaryWorldbook(button = null) {
+        const label = button?.querySelector?.('span');
+        const previousLabel = label?.textContent || '';
+        if (button) button.disabled = true;
+        if (label) label.textContent = '同步中...';
+        try {
+            const result = await syncSummaryToWorldbook();
+            if (!result.success) {
+                window.alert(result.error || '世界书同步失败');
+                return;
+            }
+            window.alert(`已同步 ${result.count} 条总结到世界书：${result.name}`);
+        } catch (error) {
+            window.alert(String(error?.message || error || '世界书同步失败'));
+        } finally {
+            if (button) button.disabled = false;
+            if (label) label.textContent = previousLabel || '同步世界书';
         }
     }
 
@@ -9361,7 +9457,7 @@
 
         const titleNode = document.createElement('div');
         titleNode.className = 'yzm-config-card-title';
-        titleNode.append(createIconNode('fa-solid fa-sliders', ''), document.createTextNode('填表模式'));
+        titleNode.append(createIconNode('fa-solid fa-pen', ''), document.createTextNode('填表模式'));
 
         const enableRow = createPluginConfigRow(
             '启用填表',
@@ -10315,8 +10411,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复API请求查看器：正文发送时显示酒馆最终组装的上下文内容，不被旧数据覆盖问题。',
-            '修复剧情摘要自动隐藏：边界问题导致隐藏跳过或错误覆盖。',
+            '新增总结后自动同步世界书：小总结、大总结和总结优化完成后，可覆盖更新当前会话的酒馆世界书。',
+            '同步逻辑对齐旧记忆插件：分批总结结束后统一镜像完整总结表，世界书条目默认100%触发且不启用酒馆向量化。',
+            '向量化联动与世界书同步改为互斥开关，避免同一总结流程重复同步。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -12619,6 +12716,7 @@
                 const autoSummaryReset = target?.closest?.('.yzm-auto-summary-reset');
                 const autoSummaryCheck = target?.closest?.('.yzm-auto-summary-check');
                 const autoSummaryVectorButton = target?.closest?.('.yzm-auto-summary-vector-button');
+                const autoSummaryWorldbookButton = target?.closest?.('.yzm-auto-summary-worldbook-button');
                 const logViewerRefresh = target?.closest?.('.yzm-log-viewer-refresh');
                 const logViewerCopy = target?.closest?.('.yzm-log-viewer-copy');
                 const logViewerClear = target?.closest?.('.yzm-log-viewer-clear');
@@ -12683,6 +12781,11 @@
                     return;
                 }
 
+                if (autoSummaryWorldbookButton) {
+                    void syncAutoSummaryWorldbook(autoSummaryWorldbookButton);
+                    return;
+                }
+
                 if (autoSummarySave) {
                     saveAutoSummarySettingsFromForm(root);
                     return;
@@ -12738,6 +12841,11 @@
                         void refreshTaskWorldbookList(root);
                     } else if (autoSummarySettingKey) {
                         updateAutoSummarySetting(autoSummarySettingKey, isOn);
+                        if (isOn && autoSummarySettingKey === 'autoVectorizeAfterHistory') {
+                            setConfigSwitchState(root.querySelector('[data-yzm-auto-summary-setting="autoSyncSummaryWorldbook"]'), false);
+                        } else if (isOn && autoSummarySettingKey === 'autoSyncSummaryWorldbook') {
+                            setConfigSwitchState(root.querySelector('[data-yzm-auto-summary-setting="autoVectorizeAfterHistory"]'), false);
+                        }
                         const status = configSwitch.closest('.yzm-auto-summary-control-row')?.querySelector('.yzm-auto-summary-status');
                         if (status) status.textContent = isOn ? '已启用' : '未启用';
                         if (autoSummarySettingKey === 'hideSummaryFloors' && isOn) {
@@ -13187,6 +13295,9 @@
             },
             syncSummaryToVectorBook(options = {}) {
                 return syncSummaryToVectorBook({ ...options, hideAfterSync: options.vectorize === true });
+            },
+            syncSummaryToWorldbook() {
+                return syncSummaryToWorldbook();
             },
             onUpdate() {
                 const root = document.getElementById(ROOT_ID);
