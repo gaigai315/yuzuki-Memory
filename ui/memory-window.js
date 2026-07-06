@@ -2678,7 +2678,7 @@
 
         const sidebarActions = document.createElement('div');
         sidebarActions.className = 'yzm-sidebar-actions';
-        const configAction = createIconButton('设置', 'fa-solid fa-gear', 'yzm-sidebar-action');
+        const configAction = createIconButton('设置', 'fa-solid fa-pen', 'yzm-sidebar-action');
         configAction.dataset.yzmAction = 'config';
         const traceAction = createIconButton('追溯', 'fa-solid fa-clock-rotate-left', 'yzm-sidebar-action');
         traceAction.dataset.yzmAction = 'trace';
