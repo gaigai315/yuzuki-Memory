@@ -154,6 +154,31 @@
             });
         }
 
+        getKnownWorldbookNames() {
+            const names = new Set();
+            const add = (value) => {
+                const text = String(value || '').trim().replace(/\.json$/i, '');
+                if (text) names.add(text);
+            };
+            try {
+                if (Array.isArray(window.world_names)) window.world_names.forEach(add);
+                if (Array.isArray(window.worldNames)) window.worldNames.forEach(add);
+                if (window.world_info && typeof window.world_info === 'object') Object.keys(window.world_info).forEach(add);
+                document.querySelectorAll('#world_info option, #world_editor_select option').forEach((option) => {
+                    add(option?.value);
+                    add(option?.textContent);
+                });
+            } catch (error) {
+                console.warn('[yuzuki-Memory] Failed to inspect worldbook names before vector library load.', error);
+            }
+            return names;
+        }
+
+        getExistingStorageBookName() {
+            const names = this.getKnownWorldbookNames();
+            return STORAGE_BOOK_NAMES.find((name) => names.has(name)) || '';
+        }
+
         async loadLibrary(explicitData = null) {
             if (explicitData && typeof explicitData === 'object') {
                 this.library = this.normalizeLibrary(explicitData);
@@ -162,7 +187,13 @@
             }
 
             try {
-                const response = await this.fetchWorldInfo('/api/worldinfo/get', { name: STORAGE_BOOK_NAME });
+                const storageBookName = this.getExistingStorageBookName();
+                if (!storageBookName) {
+                    this.library = {};
+                    this.selectedBookId = '';
+                    return this.library;
+                }
+                const response = await this.fetchWorldInfo('/api/worldinfo/get', { name: storageBookName });
                 if (!response.ok) {
                     this.library = {};
                     return this.library;
