@@ -22,6 +22,8 @@
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
+    const GLOBAL_CUSTOM_TABLES_STORAGE_KEY = 'yzm_memory_global_custom_tables';
+    const GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY = 'yzm_memory_global_deleted_custom_table_ids';
     const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
     const AUTO_SUMMARY_SETTINGS_STORAGE_KEY = 'yzm_memory_global_auto_summary_settings';
     const LAYOUT_DEFAULTS = {
@@ -64,6 +66,7 @@
         { id: 'relationship', label: '关系', className: 'fa-solid fa-people-arrows' },
         { id: 'note', label: '备注', className: 'fa-solid fa-note-sticky' },
         { id: 'memory_book', label: '记忆书本', className: 'fa-solid fa-book-open' },
+        { id: 'chart_bar', label: '图表', className: 'fa-regular fa-chart-bar' },
     ];
     const CHARACTER_MAIN_FIELDS = ['年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理'];
     const CHARACTER_FIELD_ICONS = {
@@ -208,6 +211,8 @@
             columns: ['总结标题', '核心角色', '楼层数', '总结内容', '未解决问题', '备注'],
         },
     ];
+    const DEFAULT_TABLE_IDS = new Set(DEFAULT_TABLES.map((table) => table.id).filter(Boolean));
+    const CUSTOM_TABLE_ICON_IDS = new Set(['chart_bar']);
     let memoryState = null;
     let loadedSessionId = null;
     let extensionRetryTimer = null;
@@ -230,6 +235,7 @@
     let activePromptSchemeSectionId = 'info';
     let activePromptSchemeDraft = null;
     let activePlotSummaryKind = 'main';
+    let plotSummaryRepairSessionId = null;
     const plotSummaryExpandedDays = new Set();
     const plotSummaryCollapsedDays = new Set();
     const vectorUiState = {
@@ -242,15 +248,22 @@
     let requestProbeSearchQuery = '';
 
     function createDefaultState() {
+        const customTables = loadGlobalCustomTables().map((table) => ({
+            ...table,
+            hidden: true,
+        }));
         return {
             defaultRevision: DEFAULT_STATE_REVISION,
-            tables: DEFAULT_TABLES.map((table) => ({
-                id: table.id,
-                name: table.name,
-                icon: table.icon,
-                columns: [...table.columns],
-                hidden: false,
-            })),
+            tables: [
+                ...DEFAULT_TABLES.map((table) => ({
+                    id: table.id,
+                    name: table.name,
+                    icon: table.icon,
+                    columns: [...table.columns],
+                    hidden: false,
+                })),
+                ...customTables,
+            ],
             activeTableId: 'character_profile',
             activeRecordIds: {},
             records: {
@@ -284,6 +297,169 @@
         };
     }
 
+    function normalizeCustomTableDefinition(rawTable, index = 0, options = {}) {
+        const source = rawTable && typeof rawTable === 'object' ? rawTable : {};
+        const id = String(source.id || `custom_${Date.now()}_${index}`).trim();
+        if (!id || DEFAULT_TABLE_IDS.has(id)) return null;
+        const columns = uniqueNormalizedColumns(Array.isArray(source.columns) ? source.columns : ['名称', '内容']);
+        return {
+            id,
+            name: String(source.name || `自定义表${index + 1}`).trim() || `自定义表${index + 1}`,
+            icon: TABLE_ICONS.some((icon) => icon.id === source.icon) ? String(source.icon) : getDefaultCustomTableIconId(),
+            columns: columns.length ? columns : ['名称', '内容'],
+            hidden: options.hidden === true,
+        };
+    }
+
+    function normalizeCustomTables(rawTables = [], options = {}) {
+        const seen = new Set();
+        return (Array.isArray(rawTables) ? rawTables : [])
+            .map((table, index) => normalizeCustomTableDefinition(table, index, options))
+            .filter((table) => {
+                if (!table || seen.has(table.id)) return false;
+                seen.add(table.id);
+                return true;
+            });
+    }
+
+    function loadGlobalCustomTables() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(GLOBAL_CUSTOM_TABLES_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(GLOBAL_CUSTOM_TABLES_STORAGE_KEY) || '[]');
+            const deletedIds = loadDeletedCustomTableIds();
+            return normalizeCustomTables(raw).filter((table) => !deletedIds.has(table.id));
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load global custom tables.', error);
+            return [];
+        }
+    }
+
+    function loadDeletedCustomTableIds() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY) || '[]');
+            return new Set((Array.isArray(raw) ? raw : []).map((id) => String(id || '')).filter(Boolean));
+        } catch (_error) {
+            return new Set();
+        }
+    }
+
+    function saveDeletedCustomTableIds(ids) {
+        const normalized = [...new Set((Array.isArray(ids) ? ids : [...ids]).map((id) => String(id || '')).filter(Boolean))];
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY, JSON.stringify(normalized));
+        }
+        return new Set(normalized);
+    }
+
+    function unmarkDeletedCustomTable(tableId) {
+        const ids = loadDeletedCustomTableIds();
+        ids.delete(String(tableId || ''));
+        saveDeletedCustomTableIds(ids);
+    }
+
+    function markDeletedCustomTable(tableId) {
+        const ids = loadDeletedCustomTableIds();
+        const id = String(tableId || '');
+        if (id) ids.add(id);
+        saveDeletedCustomTableIds(ids);
+    }
+
+    function saveGlobalCustomTables(tables = []) {
+        const normalized = normalizeCustomTables(tables);
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(GLOBAL_CUSTOM_TABLES_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(GLOBAL_CUSTOM_TABLES_STORAGE_KEY, JSON.stringify(normalized));
+        }
+        return normalized;
+    }
+
+    function upsertGlobalCustomTable(table) {
+        const normalized = normalizeCustomTableDefinition(table, loadGlobalCustomTables().length);
+        if (!normalized) return loadGlobalCustomTables();
+        unmarkDeletedCustomTable(normalized.id);
+        const next = loadGlobalCustomTables().filter((entry) => entry.id !== normalized.id);
+        next.push(normalized);
+        return saveGlobalCustomTables(next);
+    }
+
+    function removeGlobalCustomTable(tableId) {
+        const id = String(tableId || '');
+        markDeletedCustomTable(id);
+        return saveGlobalCustomTables(loadGlobalCustomTables().filter((table) => table.id !== id));
+    }
+
+    function syncGlobalCustomTablesIntoState(state, options = {}) {
+        if (!state || !Array.isArray(state.tables)) return false;
+        const deletedIds = loadDeletedCustomTableIds();
+        const globalTables = loadGlobalCustomTables();
+        const globalById = new Map(globalTables.map((table) => [table.id, table]));
+        let changed = false;
+
+        state.tables = state.tables.filter((table) => {
+            const keep = !table || DEFAULT_TABLE_IDS.has(table.id) || !deletedIds.has(table.id);
+            if (!keep) {
+                if (state.records && typeof state.records === 'object') delete state.records[table.id];
+                if (state.activeRecordIds && typeof state.activeRecordIds === 'object') delete state.activeRecordIds[table.id];
+                changed = true;
+            }
+            return keep;
+        }).map((table) => {
+            if (!table || DEFAULT_TABLE_IDS.has(table.id)) return table;
+            const globalTable = globalById.get(table.id);
+            if (!globalTable) return table;
+            const nextTable = {
+                ...table,
+                name: globalTable.name,
+                icon: globalTable.icon,
+                columns: [...globalTable.columns],
+            };
+            if (JSON.stringify(nextTable) !== JSON.stringify(table)) changed = true;
+            return nextTable;
+        });
+
+        const stateIds = new Set(state.tables.map((table) => table.id));
+        globalTables.forEach((table) => {
+            if (stateIds.has(table.id)) return;
+            state.tables.push({
+                ...table,
+                columns: [...table.columns],
+                hidden: options.newTablesHidden !== false,
+            });
+            changed = true;
+        });
+        if (!state.tables.some((table) => table.id === state.activeTableId)) {
+            state.activeTableId = state.tables.find((table) => !table.hidden)?.id || state.tables[0]?.id || '';
+            changed = true;
+        }
+        return changed;
+    }
+
+    function migrateSessionCustomTablesToGlobal(state) {
+        if (!state || !Array.isArray(state.tables)) return false;
+        const deletedIds = loadDeletedCustomTableIds();
+        const sessionCustomTables = state.tables
+            .filter((table) => table && !DEFAULT_TABLE_IDS.has(table.id))
+            .filter((table) => !deletedIds.has(table.id))
+            .map((table, index) => normalizeCustomTableDefinition(table, index))
+            .filter(Boolean);
+        if (!sessionCustomTables.length) return false;
+
+        const existing = loadGlobalCustomTables();
+        const byId = new Map(existing.map((table) => [table.id, table]));
+        let changed = false;
+        sessionCustomTables.forEach((table) => {
+            if (byId.has(table.id)) return;
+            byId.set(table.id, table);
+            changed = true;
+        });
+        if (changed) saveGlobalCustomTables([...byId.values()]);
+        return changed;
+    }
+
     function getStorage() {
         return YuzukiMemory.Storage;
     }
@@ -306,10 +482,26 @@
         return YuzukiMemory.WorldbookManager;
     }
 
+    function prepareLoadedState(state) {
+        const nextState = state || createDefaultState();
+        migrateSessionCustomTablesToGlobal(nextState);
+        syncGlobalCustomTablesIntoState(nextState);
+        return nextState;
+    }
+
+    function repairPlotSummaryHidingForLoadedState(state) {
+        const repairSessionId = loadedSessionId || getStorage()?.getCurrentSessionId?.() || '__default__';
+        if (plotSummaryRepairSessionId === repairSessionId) return;
+        plotSummaryRepairSessionId = repairSessionId;
+        const hiddenCount = YuzukiMemory.TaskRunner?.hidePlotSummaryItemsCoveredByExistingSummaries?.(state) || 0;
+        if (hiddenCount > 0) saveState({ force: true });
+    }
+
     function getState() {
         if (!memoryState) {
             loadedSessionId = getStorage()?.getCurrentSessionId?.() || null;
-            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+            memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
+            repairPlotSummaryHidingForLoadedState(memoryState);
         }
         return memoryState;
     }
@@ -347,8 +539,9 @@
         const state = getState();
         const table = getTables().find((entry) => entry.id === tableId);
         if (!table || isBuiltInTable(tableId) || getTables().length <= 1) return;
-        if (!window.confirm(`确定删除《${table.name}》吗？`)) return;
+        if (!window.confirm(`确定全局删除《${table.name}》吗？其他会话也会移除这张自定义表。`)) return;
 
+        removeGlobalCustomTable(tableId);
         state.tables = getTables().filter((entry) => entry.id !== tableId);
         if (state.records && typeof state.records === 'object') delete state.records[tableId];
         if (state.activeRecordIds && typeof state.activeRecordIds === 'object') delete state.activeRecordIds[tableId];
@@ -359,7 +552,7 @@
         const saved = saveState({ force: true });
         if (!saved) {
             window.alert('当前会话尚未就绪，删除表格未保存。');
-            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+            memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
         }
         closeRecordActionMenu(root);
         setMobileDetailOpen(root, false);
@@ -369,7 +562,7 @@
     function setTableHiddenById(root, tableId, hidden) {
         const state = getState();
         const table = getTables().find((entry) => entry.id === tableId);
-        if (!table || !isBuiltInTable(tableId) || isFixedTable(tableId)) return;
+        if (!table || isFixedTable(tableId)) return;
 
         table.hidden = !!hidden;
         if (table.hidden && state.activeTableId === tableId) {
@@ -379,7 +572,7 @@
         const saved = saveState();
         if (!saved) {
             window.alert('当前会话尚未就绪，表格隐藏状态未保存。');
-            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+            memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
         }
         closeRecordActionMenu(root);
         setMobileDetailOpen(root, false);
@@ -834,6 +1027,14 @@
 
     function getSummaryFieldIcon(column) {
         return SUMMARY_FIELD_ICONS[column] || 'fa-regular fa-note-sticky';
+    }
+
+    function getGenericFieldIcon(column) {
+        return CHARACTER_FIELD_ICONS[column]
+            || ITEM_FIELD_ICONS[column]
+            || WORLD_FIELD_ICONS[column]
+            || SUMMARY_FIELD_ICONS[column]
+            || 'fa-regular fa-note-sticky';
     }
 
     function getRecordValueByCandidates(record, fields) {
@@ -1296,7 +1497,7 @@
 
     function captureCurrentTableVisibility() {
         return Object.fromEntries(getTables()
-            .filter((table) => table && isBuiltInTable(table.id) && !isFixedTable(table.id))
+            .filter((table) => table && !isFixedTable(table.id))
             .map((table) => [table.id, table.hidden !== true]));
     }
 
@@ -2116,7 +2317,7 @@
             storage: getStorage()?.getDebugInfo?.(loadedSessionId, createDefaultState()) || null,
         });
         if (message) window.alert(message);
-        memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+        memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
         if (root) {
             renderWorkspaceList(root);
             renderTableWorkspace(root);
@@ -2137,7 +2338,7 @@
     function resetCurrentChatState(root) {
         if (!window.confirm('确定重置当前会话的所有表格结构和记录吗？')) return;
 
-        memoryState = createDefaultState();
+        memoryState = prepareLoadedState(createDefaultState());
         saveState({ force: true });
         refreshActiveWorkspace(root);
         closeMoreMenu(root);
@@ -2196,10 +2397,10 @@
             const raw = await memoryIo.parseFile(file);
             const nextState = memoryIo.importIntoState(getState(), raw);
             const stats = memoryIo.getStats?.(nextState) || {};
-            memoryState = nextState;
+            memoryState = prepareLoadedState(nextState);
             loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
             if (!saveState({ force: true, immediate: true })) {
-                memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+                memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
                 window.alert('当前会话尚未就绪，导入结果未保存。');
                 return;
             }
@@ -2271,7 +2472,7 @@
         const saved = saveState({ force: true });
         if (!saved) {
             window.alert('当前会话尚未就绪，清表操作未保存。');
-            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+            memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
             return false;
         }
 
@@ -2513,6 +2714,22 @@
         return TABLE_ICONS.find((icon) => icon.id === table.icon) || TABLE_ICONS[0];
     }
 
+    function getCustomTableIconChoices(currentIconId = '') {
+        const current = String(currentIconId || '');
+        const customChoices = TABLE_ICONS.filter((icon) => CUSTOM_TABLE_ICON_IDS.has(icon.id));
+        if (current && !customChoices.some((icon) => icon.id === current)) {
+            const currentMeta = TABLE_ICONS.find((icon) => icon.id === current);
+            if (currentMeta) {
+                return [currentMeta, ...customChoices];
+            }
+        }
+        return customChoices.length ? customChoices : TABLE_ICONS;
+    }
+
+    function getDefaultCustomTableIconId() {
+        return getCustomTableIconChoices()[0]?.id || TABLE_ICONS[0]?.id || 'summary';
+    }
+
     function createIconNode(className, extraClassName) {
         const icon = document.createElement('i');
         icon.className = `${className} ${extraClassName || ''}`.trim();
@@ -2678,9 +2895,9 @@
 
         const sidebarActions = document.createElement('div');
         sidebarActions.className = 'yzm-sidebar-actions';
-        const configAction = createIconButton('设置', 'fa-solid fa-pen', 'yzm-sidebar-action');
+        const configAction = createIconButton('设置', 'fa-solid fa-gear', 'yzm-sidebar-action');
         configAction.dataset.yzmAction = 'config';
-        const traceAction = createIconButton('追溯', 'fa-solid fa-clock-rotate-left', 'yzm-sidebar-action');
+        const traceAction = createIconButton('追溯', 'fa-solid fa-pen', 'yzm-sidebar-action');
         traceAction.dataset.yzmAction = 'trace';
         const summaryToolAction = createIconButton('总结', 'fa-solid fa-clipboard-list', 'yzm-sidebar-action');
         summaryToolAction.dataset.yzmAction = 'summaryTool';
@@ -3037,6 +3254,13 @@
             });
             menu.appendChild(hideButton);
         } else {
+            const hidden = !!table.hidden;
+            const hideButton = createIconButton(hidden ? '当前会话启用' : '当前会话停用', hidden ? 'fa-solid fa-eye' : 'fa-solid fa-eye-slash', 'yzm-record-action-delete yzm-record-action-hide');
+            hideButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setTableHiddenById(root, tableId, !hidden);
+            });
             const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-record-action-delete');
             deleteButton.disabled = getTables().length <= 1;
             deleteButton.addEventListener('click', (event) => {
@@ -3044,7 +3268,7 @@
                 event.stopPropagation();
                 deleteTableById(root, tableId);
             });
-            menu.appendChild(deleteButton);
+            menu.append(hideButton, deleteButton);
         }
 
         shell.appendChild(menu);
@@ -4557,9 +4781,7 @@
             return createMemorySummaryView(table);
         }
 
-        const empty = document.createElement('div');
-        empty.className = 'yzm-empty-table-view';
-        return empty;
+        return createGenericTableView(table);
     }
 
     function createConfigWorkspaceView() {
@@ -5568,20 +5790,20 @@
                 if (activeTaskResultDialogCloser === closeWith) activeTaskResultDialogCloser = null;
                 editableTextarea.blur();
                 overlay.remove();
-                document.removeEventListener('keydown', handleKeydown);
+                document.removeEventListener('keydown', handleKeydown, true);
                 resolve(value);
             };
             activeTaskResultDialogCloser = closeWith;
             const handleKeydown = (event) => {
-                if (event.key === 'Escape') closeWith({ action: 'cancel', cancelled: true });
+                if (event.key !== 'Escape') return;
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation?.();
             };
             close.onclick = () => closeWith({ action: 'cancel', cancelled: true });
             confirm.onclick = () => closeWith({ action: 'confirm', text: editableTextarea.value });
-            overlay.addEventListener('click', (event) => {
-                if (event.target === overlay) closeWith({ action: 'cancel', cancelled: true });
-            });
             dialog.addEventListener('click', (event) => event.stopPropagation());
-            document.addEventListener('keydown', handleKeydown);
+            document.addEventListener('keydown', handleKeydown, true);
         });
     }
 
@@ -5637,23 +5859,25 @@
 
             const closeWith = (value) => {
                 overlay.remove();
-                document.removeEventListener('keydown', handleKeydown);
+                document.removeEventListener('keydown', handleKeydown, true);
                 resolve(value);
             };
             const readPostpone = () => Math.max(1, Math.round(Number(postponeInput.value) || 1));
             const handleKeydown = (event) => {
-                if (event.key === 'Escape') closeWith({ action: 'cancel', postpone: 0 });
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation?.();
+                    return;
+                }
                 if (event.key === 'Enter') closeWith({ action: 'confirm', postpone: 0 });
             };
             close.onclick = () => closeWith({ action: 'cancel', postpone: 0 });
             cancel.onclick = () => closeWith({ action: 'cancel', postpone: 0 });
             postpone.onclick = () => closeWith({ action: 'confirm', postpone: readPostpone() });
             confirm.onclick = () => closeWith({ action: 'confirm', postpone: 0 });
-            overlay.addEventListener('click', (event) => {
-                if (event.target === overlay) closeWith({ action: 'cancel', postpone: 0 });
-            });
             dialog.addEventListener('click', (event) => event.stopPropagation());
-            document.addEventListener('keydown', handleKeydown);
+            document.addEventListener('keydown', handleKeydown, true);
         });
     }
 
@@ -5706,22 +5930,24 @@
                 if (settled) return;
                 settled = true;
                 overlay.remove();
-                document.removeEventListener('keydown', handleKeydown);
+                document.removeEventListener('keydown', handleKeydown, true);
                 resolve(value);
             };
             const handleKeydown = (event) => {
-                if (event.key === 'Escape') closeWith('stop');
+                if (event.key === 'Escape') {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    event.stopImmediatePropagation?.();
+                    return;
+                }
                 if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) closeWith('retry');
             };
             close.onclick = () => closeWith('stop');
             stop.onclick = () => closeWith('stop');
             next.onclick = () => closeWith('continue');
             retry.onclick = () => closeWith('retry');
-            overlay.addEventListener('click', (event) => {
-                if (event.target === overlay) closeWith('stop');
-            });
             dialog.addEventListener('click', (event) => event.stopPropagation());
-            document.addEventListener('keydown', handleKeydown);
+            document.addEventListener('keydown', handleKeydown, true);
             retry.focus();
         });
     }
@@ -9820,6 +10046,67 @@
         return row;
     }
 
+    function createGenericTableView(table) {
+        const record = getActiveRecord(table);
+        const columns = (table?.columns || []).map(cleanColumnName).filter(Boolean);
+        const view = document.createElement('div');
+        view.className = record?.hidden ? 'yzm-generic-table-view yzm-detail-view-hidden' : 'yzm-generic-table-view';
+
+        const card = document.createElement('section');
+        card.className = 'yzm-generic-table-card';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-generic-table-header';
+
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-generic-table-avatar';
+        avatar.setAttribute('role', 'button');
+        avatar.setAttribute('tabindex', '0');
+        avatar.setAttribute('aria-label', `编辑${table?.name || '记录'}`);
+        avatar.appendChild(createIconNode(getTableIconMeta(table).className, ''));
+
+        const title = document.createElement('div');
+        title.className = 'yzm-generic-table-title';
+        title.textContent = record ? getRecordTitle(table, record) : table?.name || '新建表';
+
+        const meta = document.createElement('div');
+        meta.className = 'yzm-generic-table-meta';
+        meta.textContent = record ? table.name : '点击头像或字段新建记录';
+
+        header.append(avatar, title, meta);
+
+        const rows = document.createElement('div');
+        rows.className = 'yzm-generic-table-fields';
+        if (columns.length) {
+            columns.forEach((column) => {
+                rows.appendChild(createGenericTableFieldRow(column, getRecordValue(record, column)));
+            });
+        } else {
+            rows.appendChild(createGenericTableFieldRow('名称', ''));
+            rows.appendChild(createGenericTableFieldRow('内容', ''));
+        }
+
+        card.append(header, rows);
+        view.appendChild(card);
+        return view;
+    }
+
+    function createGenericTableFieldRow(label, text = '') {
+        const row = document.createElement('div');
+        row.className = 'yzm-generic-table-field-row';
+
+        const labelNode = document.createElement('span');
+        labelNode.className = 'yzm-generic-table-field-label';
+        labelNode.append(createIconNode(getGenericFieldIcon(label), ''), document.createTextNode(label));
+
+        const value = document.createElement('span');
+        value.className = text ? 'yzm-generic-table-field-value' : 'yzm-generic-table-field-value yzm-generic-table-field-empty';
+        value.textContent = text || '未设置';
+
+        row.append(labelNode, value);
+        return row;
+    }
+
     function getPlotSummaryItems(text = '') {
         let lastDate = '';
         const entries = String(text || '')
@@ -10411,9 +10698,11 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '新增总结后自动同步世界书：小总结、大总结和总结优化完成后，可覆盖更新当前会话的酒馆世界书。',
-            '同步逻辑对齐旧记忆插件：分批总结结束后统一镜像完整总结表，世界书条目默认100%触发且不启用酒馆向量化。',
-            '向量化联动与世界书同步改为互斥开关，避免同一总结流程重复同步。',
+            '自定义表改为全局表结构：新建表会在所有会话可见，每个会话可单独启用或停用。',
+            '完善自定义表详情页：新增通用表头像、字段展示样式，头像进入整条记录编辑，字段行不再弹出多余编辑框。',
+            '新建表预制图标精简为图表图标，避免和默认表图标重复。',
+            '任务确认弹窗锁定在弹窗内：点击空白处和 Escape 不再中断追溯、总结或批量任务。',
+            '修复自动总结后剧情摘要未隐藏的问题：小总结和大总结都会隐藏已覆盖摘要，并兼容早期缺少范围元数据的旧摘要。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -10582,7 +10871,7 @@
 
         const iconPicker = document.createElement('div');
         iconPicker.className = 'yzm-icon-picker';
-        TABLE_ICONS.forEach((iconMeta) => {
+        getCustomTableIconChoices(table.icon).forEach((iconMeta) => {
             const iconButton = createButton('', table.icon === iconMeta.id ? 'yzm-icon-choice yzm-icon-choice-active' : 'yzm-icon-choice');
             iconButton.dataset.yzmIconId = iconMeta.id;
             iconButton.title = iconMeta.label;
@@ -10632,6 +10921,9 @@
             } else {
                 table.columns = readStructureColumns(columnsInput);
             }
+            if (!isBuiltInTable(table.id)) {
+                upsertGlobalCustomTable(table);
+            }
 
             item.querySelector('[data-yzm-table-name]')?.replaceChildren(createTableIcon(table), document.createTextNode(nextName));
 
@@ -10680,7 +10972,7 @@
         const saved = saveState();
         if (!saved) {
             window.alert('当前会话尚未就绪，整理操作未保存。');
-            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+            memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
         }
         renderWorkspaceList(root);
         renderTableWorkspace(root);
@@ -11204,16 +11496,17 @@
             const table = {
                 id: `custom_${Date.now()}`,
                 name,
-                icon: 'summary',
+                icon: getDefaultCustomTableIconId(),
                 columns: ['名称', '内容'],
                 hidden: false,
             };
+            upsertGlobalCustomTable(table);
             getTables().push(table);
             getState().activeTableId = table.id;
             const saved = saveState();
             if (!saved) {
                 window.alert('当前会话尚未就绪，新增表格未保存。');
-                memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+                memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
                 renderPanelState(root);
                 closeModal();
                 return;
@@ -12959,7 +13252,7 @@
             });
         });
 
-        root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar, .yzm-world-avatar, .yzm-summary-avatar').forEach((avatar) => {
+        root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar, .yzm-world-avatar, .yzm-summary-avatar, .yzm-generic-table-avatar').forEach((avatar) => {
             if (avatar.dataset.yzmBound === 'true') return;
             avatar.dataset.yzmBound = 'true';
             const openEditor = (event) => {
@@ -13126,12 +13419,12 @@
             getStorage()?.saveState?.(memoryState, createDefaultState(), previousSessionId, { allowDuringSwitch: true });
         }
 
-        memoryState = createDefaultState();
+        memoryState = prepareLoadedState(createDefaultState());
         refreshActiveWorkspace(root);
 
         window.setTimeout(() => {
             loadedSessionId = nextSessionId || getStorage()?.getCurrentSessionId?.() || null;
-            memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+            memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
             applyResolvedPromptSchemeToState({ save: false });
             refreshActiveWorkspace(root);
             scheduleSessionWorkspaceRefresh(root, loadedSessionId);
@@ -13152,7 +13445,7 @@
             return;
         }
         loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
-        memoryState = getStorage()?.loadState?.(createDefaultState(), loadedSessionId) || createDefaultState();
+        memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
         applyResolvedPromptSchemeToState({ save: false });
         refreshActiveWorkspace(root);
         scheduleCharacterVectorSync();

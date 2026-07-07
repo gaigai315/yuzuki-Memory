@@ -6,6 +6,8 @@
     const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
+    const GLOBAL_CUSTOM_TABLES_STORAGE_KEY = 'yzm_memory_global_custom_tables';
+    const GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY = 'yzm_memory_global_deleted_custom_table_ids';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
     const CHARACTER_PROFILE_TABLE_ID = 'character_profile';
@@ -78,17 +80,75 @@
             columns: ['总结标题', '核心角色', '楼层数', '总结内容', '未解决问题', '备注'],
         },
     ];
+    const DEFAULT_TABLE_IDS = new Set(DEFAULT_TABLES.map((table) => table.id).filter(Boolean));
+
+    function uniqueColumns(columns = []) {
+        const seen = new Set();
+        return (Array.isArray(columns) ? columns : [])
+            .map((column) => String(column || '').trim())
+            .filter(Boolean)
+            .filter((column) => {
+                const key = cleanColumnName(column).toLowerCase();
+                if (!key || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+    }
+
+    function loadDeletedCustomTableIds() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY) || '[]');
+            return new Set((Array.isArray(raw) ? raw : []).map((id) => String(id || '')).filter(Boolean));
+        } catch (_error) {
+            return new Set();
+        }
+    }
+
+    function loadGlobalCustomTables() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(GLOBAL_CUSTOM_TABLES_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(GLOBAL_CUSTOM_TABLES_STORAGE_KEY) || '[]');
+            const deletedIds = loadDeletedCustomTableIds();
+            const seen = new Set();
+            return (Array.isArray(raw) ? raw : [])
+                .map((table, index) => {
+                    const id = String(table?.id || '').trim();
+                    if (!id || DEFAULT_TABLE_IDS.has(id) || deletedIds.has(id)) return null;
+                    const columns = uniqueColumns(table.columns);
+                    return {
+                        id,
+                        name: String(table.name || `自定义表${index + 1}`).trim() || `自定义表${index + 1}`,
+                        icon: String(table.icon || 'note'),
+                        columns: columns.length ? columns : ['名称', '内容'],
+                        hidden: true,
+                    };
+                })
+                .filter((table) => {
+                    if (!table || seen.has(table.id)) return false;
+                    seen.add(table.id);
+                    return true;
+                });
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load global custom tables.', error);
+            return [];
+        }
+    }
 
     function createDefaultState() {
+        const customTables = loadGlobalCustomTables();
         return {
             defaultRevision: DEFAULT_STATE_REVISION,
-            tables: DEFAULT_TABLES.map((table) => ({
-                id: table.id,
-                name: table.name,
-                icon: table.icon,
-                columns: [...table.columns],
-                hidden: false,
-            })),
+            tables: [
+                ...DEFAULT_TABLES.map((table) => ({
+                    id: table.id,
+                    name: table.name,
+                    icon: table.icon,
+                    columns: [...table.columns],
+                    hidden: false,
+                })),
+                ...customTables,
+            ],
             activeTableId: 'character_profile',
             activeRecordIds: {},
             records: {

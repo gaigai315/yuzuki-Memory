@@ -2,7 +2,7 @@
   "manifest_version": 1,
   "id": "yuzuki_memory",
   "display_name": "柚月の记忆",
-  "version": "0.3.9",
+  "version": "0.4.0",
   "description": "模块化记忆表格插件",
   "author": "Tienchi",
   "homepage": "https://github.com/gaigai315/yuzuki-Memory",

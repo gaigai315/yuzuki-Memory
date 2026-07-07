@@ -9,6 +9,8 @@
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const MEMORY_TAG_PATTERN = /<(Memory|GaigaiMemory|memory|tableEdit|gaigaimemory|tableedit)>([\s\S]*?)<\/\1>/gi;
     const COMMENT_PATTERN = /<!--|-->/g;
+    const GLOBAL_CUSTOM_TABLES_STORAGE_KEY = 'yzm_memory_global_custom_tables';
+    const GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY = 'yzm_memory_global_deleted_custom_table_ids';
     const DEFAULT_STATE_REVISION = 13;
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
@@ -26,17 +28,75 @@
         { id: 'world_setting', name: '世界设定', icon: 'world', columns: ['设定名', '类型', '详细说明', '影响范围'] },
         { id: 'memory_summary', name: '记忆总结', icon: 'memory_book', columns: ['总结标题', '核心角色', '楼层数', '总结内容', '未解决问题', '备注'] },
     ];
+    const DEFAULT_TABLE_IDS = new Set(DEFAULT_TABLES.map((table) => table.id).filter(Boolean));
+
+    function uniqueColumns(columns = []) {
+        const seen = new Set();
+        return (Array.isArray(columns) ? columns : [])
+            .map((column) => String(column || '').trim())
+            .filter(Boolean)
+            .filter((column) => {
+                const key = cleanColumnName(column).toLowerCase();
+                if (!key || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+    }
+
+    function loadDeletedCustomTableIds() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY) || '[]');
+            return new Set((Array.isArray(raw) ? raw : []).map((id) => String(id || '')).filter(Boolean));
+        } catch (_error) {
+            return new Set();
+        }
+    }
+
+    function loadGlobalCustomTables() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(GLOBAL_CUSTOM_TABLES_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(GLOBAL_CUSTOM_TABLES_STORAGE_KEY) || '[]');
+            const deletedIds = loadDeletedCustomTableIds();
+            const seen = new Set();
+            return (Array.isArray(raw) ? raw : [])
+                .map((table, index) => {
+                    const id = String(table?.id || '').trim();
+                    if (!id || DEFAULT_TABLE_IDS.has(id) || deletedIds.has(id)) return null;
+                    const columns = uniqueColumns(table.columns);
+                    return {
+                        id,
+                        name: String(table.name || `自定义表${index + 1}`).trim() || `自定义表${index + 1}`,
+                        icon: String(table.icon || 'note'),
+                        columns: columns.length ? columns : ['名称', '内容'],
+                        hidden: true,
+                    };
+                })
+                .filter((table) => {
+                    if (!table || seen.has(table.id)) return false;
+                    seen.add(table.id);
+                    return true;
+                });
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load global custom tables.', error);
+            return [];
+        }
+    }
 
     function createDefaultState() {
+        const customTables = loadGlobalCustomTables();
         return {
             defaultRevision: DEFAULT_STATE_REVISION,
-            tables: DEFAULT_TABLES.map((table) => ({
-                id: table.id,
-                name: table.name,
-                icon: table.icon,
-                columns: [...table.columns],
-                hidden: false,
-            })),
+            tables: [
+                ...DEFAULT_TABLES.map((table) => ({
+                    id: table.id,
+                    name: table.name,
+                    icon: table.icon,
+                    columns: [...table.columns],
+                    hidden: false,
+                })),
+                ...customTables,
+            ],
             activeTableId: 'character_profile',
             activeRecordIds: {},
             records: {

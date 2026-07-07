@@ -1267,6 +1267,18 @@
         return Math.max(range.start, target.start) < Math.min(range.end, target.end);
     }
 
+    function isPlotItemCoveredBySummaryTarget(meta, target) {
+        const sourceRange = getRangeMeta(meta?.sourceRange);
+        if (sourceRange) {
+            return isRangeFullyCoveredByTarget(sourceRange, target)
+                || isRangeOverlappingTarget(sourceRange, target);
+        }
+        // Older plot-summary items may not have per-line sourceRange metadata.
+        // Treat those legacy entries as pre-summary content so automatic summary
+        // passes can still hide them instead of leaving stale plot details visible.
+        return true;
+    }
+
     function getRangeLabel(range) {
         const normalized = getRangeMeta(range);
         return normalized ? `${normalized.start}-${Math.max(normalized.start, normalized.end - 1)}` : '';
@@ -1612,20 +1624,20 @@
             record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
             record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
             ['main', 'branch'].forEach((kind) => {
-                const metaList = Array.isArray(record.plotItemMeta[kind]) ? record.plotItemMeta[kind] : [];
-                if (!metaList.length) return;
                 const field = kind === 'branch' ? '支线' : '主线';
                 const lineCount = String(record?.values?.[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean).length;
+                if (!lineCount) return;
+                const metaList = Array.isArray(record.plotItemMeta[kind]) ? record.plotItemMeta[kind] : [];
+                while (metaList.length < lineCount) metaList.push({});
+                if (metaList.length > lineCount) metaList.length = lineCount;
+                record.plotItemMeta[kind] = metaList;
                 const hiddenStates = Array.isArray(record.hiddenPlotItems[kind])
                     ? record.hiddenPlotItems[kind].map(Boolean)
                     : Array.from({ length: lineCount }, () => false);
                 while (hiddenStates.length < lineCount) hiddenStates.push(false);
                 if (hiddenStates.length > lineCount) hiddenStates.length = lineCount;
                 metaList.slice(0, lineCount).forEach((meta, index) => {
-                    const sourceRange = getRangeMeta(meta?.sourceRange);
-                    if (!sourceRange) return;
-                    const covered = isRangeFullyCoveredByTarget(sourceRange, target)
-                        || isRangeOverlappingTarget(sourceRange, target);
+                    const covered = isPlotItemCoveredBySummaryTarget(meta, target);
                     if (!covered || hiddenStates[index]) return;
                     hiddenStates[index] = true;
                     meta.hiddenReason = 'covered_by_summary';
@@ -1634,6 +1646,36 @@
                     hiddenCount += 1;
                 });
                 record.hiddenPlotItems[kind] = hiddenStates;
+            });
+        });
+        return hiddenCount;
+    }
+
+    function hidePlotSummaryItemsCoveredByExistingSummaries(state) {
+        const table = stateTables(state).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
+        const records = stateRecords(state, FIXED_SUMMARY_TABLE_ID);
+        if (!table || !records.length) return 0;
+        let hiddenCount = 0;
+        records.forEach((record) => {
+            if (!String(record?.values?.总结内容 || record?.values?.summary || '').trim()) return;
+            const recordId = String(record?.id || '').trim();
+            const ranges = [];
+            const taskRange = getRangeMeta(getSummaryRecordTaskMeta(record)?.range);
+            const floorRange = getSummaryRecordFloorRange(record);
+            if (taskRange) ranges.push(taskRange);
+            else if (floorRange) ranges.push(floorRange);
+            if (Array.isArray(record?.summarySegments)) {
+                record.summarySegments.forEach((segment) => {
+                    const segmentRange = getSummarySegmentRange(segment);
+                    if (segmentRange) ranges.push(segmentRange);
+                });
+            }
+            const seen = new Set();
+            ranges.forEach((range) => {
+                const key = `${range.start}-${range.end}`;
+                if (seen.has(key)) return;
+                seen.add(key);
+                hiddenCount += hidePlotSummaryItemsCoveredByRange(state, range, recordId ? [recordId] : []);
             });
         });
         return hiddenCount;
@@ -2222,7 +2264,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const pointers = normalizePointers(state);
         pointers[task.pointerKey] = committed.range?.end || task.end;
         if (task.type === 'history' && pointers.summary < pointers.historySummary) pointers.summary = pointers.historySummary;
-        if (task.type === 'summary') {
+        if (task.type === 'summary' || task.type === 'history') {
             committed.hiddenPlotSummaryCount = hidePlotSummaryItemsCoveredByRange(
                 state,
                 { start: task.start, end: task.end },
@@ -2492,6 +2534,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         rebuildTaskResultFromText,
         createLlmRequestSnapshot,
         cleanupSmallAutoSummaries,
+        hidePlotSummaryItemsCoveredByExistingSummaries,
         bindAutoSummary,
         cancelPendingAutoTask,
     });

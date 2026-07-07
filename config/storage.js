@@ -410,6 +410,7 @@
         if (!fallbackTable) return rawColumns;
 
         const fallbackColumns = Array.isArray(fallbackTable.columns) ? fallbackTable.columns : [];
+        if (String(table?.id || '').startsWith('custom_') && fallbackColumns.length) return [...fallbackColumns];
         const rawNames = rawColumns.map(cleanColumnName);
         const fallbackNames = fallbackColumns.map(cleanColumnName);
         const matchesDefaultShape = rawNames.length === fallbackNames.length
@@ -433,18 +434,29 @@
                 .filter((table) => table && typeof table === 'object')
                 .map((table, index) => ({
                     id: String(table.id || `table_${index}_${Date.now()}`),
-                    name: String(table.name || `未命名表${index + 1}`),
-                    icon: String(table.icon || 'summary'),
+                    name: String((String(table.id || '').startsWith('custom_') && fallback.tables?.find((entry) => entry.id === table.id)?.name) || table.name || `未命名表${index + 1}`),
+                    icon: String((String(table.id || '').startsWith('custom_') && fallback.tables?.find((entry) => entry.id === table.id)?.icon) || table.icon || 'summary'),
                     columns: normalizeTableColumns(table, fallback),
                     hidden: !!table.hidden,
                 }))
             : fallback.tables;
+        const tableIds = new Set(tables.map((table) => table.id));
+        (Array.isArray(fallback.tables) ? fallback.tables : []).forEach((table) => {
+            if (!table?.id || tableIds.has(table.id)) return;
+            tables.push({
+                id: String(table.id),
+                name: String(table.name || `未命名表${tables.length + 1}`),
+                icon: String(table.icon || 'summary'),
+                columns: Array.isArray(table.columns) ? [...table.columns] : ['名称', '内容'],
+                hidden: !!table.hidden,
+            });
+            tableIds.add(table.id);
+        });
 
         const firstTableId = tables[0]?.id || '';
         const activeTableId = tables.some((table) => table.id === rawState.activeTableId)
             ? rawState.activeTableId
             : (tables.some((table) => table.id === fallback.activeTableId) ? fallback.activeTableId : firstTableId);
-        const tableIds = new Set(tables.map((table) => table.id));
         const activeRecordIds = {};
         Object.entries(rawState.activeRecordIds || {}).forEach(([tableId, recordId]) => {
             if (tableIds.has(tableId)) activeRecordIds[tableId] = recordId;
