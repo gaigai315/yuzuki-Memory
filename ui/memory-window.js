@@ -10698,7 +10698,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复剧情摘要在 swipe 或重 roll 后没有按当前分支回滚的问题：同一楼层切换回复时会先恢复到该楼层前的快照，再写入当前回复的剧情摘要，避免 1/3、2/3、3/3 多个分支内容同时残留。',
+            '修复手动删除或整理剧情摘要后，旧摘要可能被后续自动总结、聊天切换或分支快照恢复带回的问题：条目整理现在会强制保存为手动修改，并同步刷新分支快照。',
+            '保留上一版修复：剧情摘要在 swipe 或重 roll 后会按当前分支回滚，避免同一楼层多个回复分支同时残留。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -10965,10 +10966,12 @@
 
     function refreshAfterRecordOrganizerChange(root, table) {
         setActiveRecordAfterRecordListChange(table);
-        const saved = saveState();
+        const saved = saveState({ force: true, saveOrigin: 'manual' });
         if (!saved) {
             window.alert('当前会话尚未就绪，整理操作未保存。');
             memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
+        } else {
+            dispatchManualStateUpdated({ source: 'organizer', tableId: table?.id || '' });
         }
         renderWorkspaceList(root);
         renderTableWorkspace(root);
