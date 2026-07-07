@@ -2339,7 +2339,9 @@
         if (!window.confirm('确定重置当前会话的所有表格结构和记录吗？')) return;
 
         memoryState = prepareLoadedState(createDefaultState());
-        saveState({ force: true });
+        if (saveState({ force: true })) {
+            dispatchManualStateUpdated({ source: 'reset-state' });
+        }
         refreshActiveWorkspace(root);
         closeMoreMenu(root);
     }
@@ -2478,6 +2480,7 @@
 
         closeRecordActionMenu(root);
         setMobileDetailOpen(root, false);
+        dispatchManualStateUpdated({ source: 'clear-table', mode });
         refreshActiveWorkspace(root);
         return true;
     }

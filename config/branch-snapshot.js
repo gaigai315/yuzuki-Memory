@@ -799,6 +799,9 @@
         const baseKey = target === 0 && snapshots['-1'] ? '-1' : findBaseSnapshotKey(target);
         const restored = baseKey ? restoreSnapshot(baseKey, { force: true }) : false;
         delete snapshots[String(target)];
+        Object.keys(branchSnapshots).forEach((key) => {
+            if (key.startsWith(`${target}:`)) delete branchSnapshots[key];
+        });
         persistSnapshots();
         console.info('[yuzuki-Memory Regenerate] prepared floor rollback', {
             target,
