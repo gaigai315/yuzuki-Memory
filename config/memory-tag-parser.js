@@ -757,6 +757,12 @@
         return false;
     }
 
+    function hasProcessedDifferentBranch(floor, message) {
+        const snapshot = YuzukiMemory.BranchSnapshot?.getProcessedMessageSignature?.(floor);
+        const signature = getMessageProcessSignature(message);
+        return !!snapshot && !!signature && snapshot !== signature;
+    }
+
     function isGenerationBusy() {
         const ctx = getContext();
         return window.is_send_press === true
@@ -795,13 +801,14 @@
             });
             return;
         }
-        if (!consumedSwipeMode && shouldSkipMessage(target, message, options)) return;
+        const processedDifferentBranch = !consumedSwipeMode && options.force !== true && hasProcessedDifferentBranch(target, message);
+        if (!consumedSwipeMode && !processedDifferentBranch && shouldSkipMessage(target, message, options)) return;
         const consumedSwipeRollback = consumedSwipeMode
             || YuzukiMemory.BranchSnapshot?.consumeApplyRollbackFloor?.(target) === true;
-        const shouldRollbackBeforeApply = options.rollbackBeforeApply === true || consumedSwipeRollback;
+        const shouldRollbackBeforeApply = options.rollbackBeforeApply === true || consumedSwipeRollback || processedDifferentBranch;
         if (shouldRollbackBeforeApply && YuzukiMemory.BranchSnapshot?.isRealtimeEnabled?.()) {
             YuzukiMemory.BranchSnapshot?.rollbackBeforeMessage?.(target, {
-                force: consumedSwipeMode || options.force === true || consumedSwipeRollback,
+                force: consumedSwipeMode || options.force === true || consumedSwipeRollback || processedDifferentBranch,
             });
         }
         const text = getMessageText(message);
@@ -813,6 +820,7 @@
             swipesLength: Array.isArray(message?.swipes) ? message.swipes.length : 0,
             swipeId: Number(message?.swipe_id ?? 0),
             swipeMode: consumedSwipeMode,
+            branchChanged: processedDifferentBranch,
             activeRequests: Number(window.yzmMemoryChatRequestActiveCount || 0),
             textPreview: text.slice(0, 180),
         });
