@@ -689,6 +689,37 @@
         return state.settings.manualPointers;
     }
 
+    function getAlignedHistorySummaryPointer(summaryPointer, historyEvery) {
+        const normalizedSummaryPointer = Math.max(0, Math.round(Number(summaryPointer) || 0));
+        const normalizedHistoryEvery = Math.max(1, Math.round(Number(historyEvery) || DEFAULT_AUTO_SUMMARY_SETTINGS.historyEvery));
+        return Math.floor(normalizedSummaryPointer / normalizedHistoryEvery) * normalizedHistoryEvery;
+    }
+
+    function syncHistorySummaryPointerFromSummaryProgress(summaryProgress) {
+        const pointers = getManualPointerSettings();
+        const effectiveSummaryProgress = Math.max(
+            pointers.summary,
+            Math.max(0, Math.round(Number(summaryProgress) || 0))
+        );
+        const alignedPointer = clampPointerToFloorCount(
+            getAlignedHistorySummaryPointer(effectiveSummaryProgress, getAutoSummarySettings().historyEvery),
+            getApproximateChatFloorCount()
+        );
+        if (alignedPointer <= pointers.historySummary) return pointers;
+        return updateManualPointerSetting('historySummary', alignedPointer);
+    }
+
+    function updateManualSummaryPointersFromBatchProgress(result, batch) {
+        const pointers = getManualPointerSettings();
+        const summaryProgress = Math.max(
+            pointers.summary,
+            Math.max(0, Math.round(Number(batch?.end) || 0)),
+            Math.max(0, Math.round(Number(result?.range?.end) || 0))
+        );
+        if (summaryProgress > pointers.summary) updateManualPointerSetting('summary', summaryProgress);
+        return syncHistorySummaryPointerFromSummaryProgress(summaryProgress);
+    }
+
     function clampNumber(value, min, max, fallback) {
         const number = Number(value);
         if (!Number.isFinite(number)) return fallback;
@@ -6293,7 +6324,7 @@
                 }
                 results.push(result);
                 if (action === 'trace') updateManualPointerSetting('trace', result.range?.end ?? batch.end);
-                if (action === 'summary') updateManualPointerSetting('summary', result.range?.end ?? batch.end);
+                if (action === 'summary') updateManualSummaryPointersFromBatchProgress(result, batch);
                 markTaskStateUpdated(action, result);
                 refreshAfterTask(root, { persist: false });
                 if (action === 'summary' && getAutoSummarySettings().autoVectorizeAfterHistory === true) {
