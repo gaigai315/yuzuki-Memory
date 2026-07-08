@@ -593,18 +593,10 @@
     function buildTraceTargetRestrictionText(state, options = {}) {
         const targetTable = getOptionTargetTable(state, options);
         if (!targetTable) return '';
-        const targetLabel = `${targetTable.name}（${targetTable.id}）`;
         const schema = buildDatabaseSchemaText(state, { ...options, tableId: targetTable.id });
         return compactLines([
-            '【目标记忆限制】',
-            `本次下拉框已指定只更新：${targetLabel}。`,
-            `请保持原提示词要求的输出格式，但所有更新条目的表名只能是 "${targetTable.name}" 或 "${targetTable.id}"；严禁输出其他表格。`,
-            '如果使用 <Memory> 格式，<Memory> 内只能出现该目标表的更新行；不要新增其他表名、其他表格区块或 JSON。',
-            '不要为其他记忆表补写、推断或顺带更新内容。',
-            targetTable.id === PLOT_SUMMARY_TABLE_ID
-                ? '目标为剧情摘要时，只输出主线/支线摘要相关内容；不要输出角色档案、物品追踪、世界设定或记忆总结。'
-                : '',
-            '如果本段聊天没有适合写入该目标表的信息，请输出空的 <Memory></Memory>。',
+            '【目标更新限制】',
+            `本次指定只更新：${targetTable.name}`,
             schema ? `目标表结构：\n${schema}` : '',
         ]);
     }
