@@ -9,6 +9,10 @@
     const GLOBAL_MODAL_ROOT_ID = 'yzm-memory-global-modal-root';
     const FLOATING_ROOT_ID = 'yzm-memory-floating-root';
     const FLOATING_BUTTON_ID = 'yzm-memory-floating-button';
+    const TEXT_CONTROL_SELECTOR = [
+        'textarea',
+        'input:not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="submit"]):not([type="reset"])',
+    ].join(',');
     const DISPLAY_NAME = '柚月の记忆';
     const THEME_STORAGE_KEY = 'yzm_memory_theme';
     const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
@@ -2549,8 +2553,7 @@
         modalHost.appendChild(overlay);
 
         const closeModal = () => {
-            if (overlay.contains(document.activeElement)) document.activeElement.blur?.();
-            overlay.remove();
+            removePluginElement(overlay);
         };
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
@@ -2577,6 +2580,67 @@
 
         getState().activeTableId = table.id;
         saveState();
+    }
+
+    function isPluginTextControl(element) {
+        if (!(element instanceof Element)) return false;
+        return element.matches(TEXT_CONTROL_SELECTOR);
+    }
+
+    function preparePluginTextControl(element) {
+        if (!isPluginTextControl(element)) return element;
+        element.setAttribute('autocomplete', 'off');
+        element.setAttribute('autocorrect', 'off');
+        element.setAttribute('autocapitalize', 'off');
+        element.setAttribute('spellcheck', 'false');
+        element.dataset.yzmNoAutocomplete = 'true';
+        if ('autocomplete' in element) element.autocomplete = 'off';
+        if ('autocapitalize' in element) element.autocapitalize = 'off';
+        if ('spellcheck' in element) element.spellcheck = false;
+        return element;
+    }
+
+    function preparePluginTextControls(container) {
+        if (!(container instanceof Element)) return;
+        if (isPluginTextControl(container)) preparePluginTextControl(container);
+        container.querySelectorAll(TEXT_CONTROL_SELECTOR).forEach(preparePluginTextControl);
+    }
+
+    function bindPluginTextControlIsolation(container) {
+        if (!(container instanceof Element) || container.dataset.yzmTextControlIsolationBound === 'true') return;
+        container.dataset.yzmTextControlIsolationBound = 'true';
+        preparePluginTextControls(container);
+        container.addEventListener('focusin', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            preparePluginTextControl(target);
+        }, true);
+        container.addEventListener('pointerdown', (event) => {
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target) return;
+            if (
+                target.closest('.yzm-structure-close, .yzm-shell-close')
+                || target.classList.contains('yzm-structure-modal')
+            ) {
+                blurPluginFocus(container);
+            }
+        }, true);
+    }
+
+    function blurPluginFocus(scope = null) {
+        const active = document.activeElement;
+        if (!active || active === document.body || typeof active.blur !== 'function') return;
+        const root = document.getElementById(ROOT_ID);
+        const globalHost = document.getElementById(GLOBAL_MODAL_ROOT_ID);
+        const insideScope = (scope instanceof Element && scope.contains(active))
+            || root?.contains(active)
+            || globalHost?.contains(active);
+        if (insideScope) active.blur();
+    }
+
+    function removePluginElement(element) {
+        if (!(element instanceof Element)) return;
+        blurPluginFocus(element);
+        element.remove();
     }
 
     function createButton(label, className) {
@@ -3043,6 +3107,7 @@
         input.type = 'search';
         input.placeholder = placeholder;
         input.setAttribute('aria-label', placeholder);
+        preparePluginTextControl(input);
 
         wrapper.append(icon, input);
         return wrapper;
@@ -4024,7 +4089,7 @@
         content.className = 'yzm-vector-preview-content';
         content.textContent = text || '该分段没有内容。';
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         close.addEventListener('click', closeModal);
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -4180,7 +4245,7 @@
         store.selectBook(targetBookId);
         vectorUiState.bookPage = 1;
         vectorUiState.segmentPage = 1;
-        overlay.remove();
+        removePluginElement(overlay);
         refreshVectorAfterAction(root);
     }
 
@@ -4245,7 +4310,7 @@
 
         const closeModal = () => {
             if (document.activeElement === contentInput) contentInput.blur();
-            overlay.remove();
+            removePluginElement(overlay);
         };
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
@@ -5220,7 +5285,7 @@
         actions.append(cancel, confirm);
 
         const closeModal = () => {
-            overlay.remove();
+            removePluginElement(overlay);
             document.removeEventListener('keydown', handleKeydown);
         };
         const confirmSelection = () => {
@@ -5539,6 +5604,7 @@
         textarea.className = 'yzm-trace-textarea';
         textarea.placeholder = placeholder;
         textarea.maxLength = 500;
+        preparePluginTextControl(textarea);
         return textarea;
     }
 
@@ -5743,9 +5809,7 @@
             const preview = document.createElement('textarea');
             preview.className = 'yzm-task-result-preview';
             preview.value = formatTaskPreview(options.result);
-            preview.autocomplete = 'off';
-            preview.spellcheck = false;
-            preview.dataset.yzmNoAutocomplete = 'true';
+            preparePluginTextControl(preview);
 
             let compare = null;
             let editableTextarea = preview;
@@ -5756,15 +5820,11 @@
                 oldBlock.className = 'yzm-task-result-preview yzm-task-result-compare-text';
                 oldBlock.value = formatSummaryOptimizeOldText(options.result) || '（没有旧内容）';
                 oldBlock.readOnly = true;
-                oldBlock.autocomplete = 'off';
-                oldBlock.spellcheck = false;
-                oldBlock.dataset.yzmNoAutocomplete = 'true';
+                preparePluginTextControl(oldBlock);
                 const newBlock = document.createElement('textarea');
                 newBlock.className = 'yzm-task-result-preview yzm-task-result-compare-text';
                 newBlock.value = formatTaskPreview(options.result);
-                newBlock.autocomplete = 'off';
-                newBlock.spellcheck = false;
-                newBlock.dataset.yzmNoAutocomplete = 'true';
+                preparePluginTextControl(newBlock);
                 editableTextarea = newBlock;
                 const oldWrap = document.createElement('div');
                 oldWrap.className = 'yzm-task-result-compare-pane';
@@ -5793,8 +5853,7 @@
                 if (settled) return;
                 settled = true;
                 if (activeTaskResultDialogCloser === closeWith) activeTaskResultDialogCloser = null;
-                editableTextarea.blur();
-                overlay.remove();
+                removePluginElement(overlay);
                 document.removeEventListener('keydown', handleKeydown, true);
                 resolve(value);
             };
@@ -5849,6 +5908,7 @@
             postponeInput.max = '9999';
             postponeInput.step = '1';
             postponeInput.value = '1';
+            preparePluginTextControl(postponeInput);
             postponeRow.append(document.createTextNode('顺延'), postponeInput, document.createTextNode('层后再提醒'));
 
             const actions = document.createElement('div');
@@ -5863,7 +5923,7 @@
             modalHost.appendChild(overlay);
 
             const closeWith = (value) => {
-                overlay.remove();
+                removePluginElement(overlay);
                 document.removeEventListener('keydown', handleKeydown, true);
                 resolve(value);
             };
@@ -5918,6 +5978,7 @@
             preview.className = 'yzm-task-result-preview';
             preview.readOnly = true;
             preview.value = String(options.error || '未知错误');
+            preparePluginTextControl(preview);
 
             const actions = document.createElement('div');
             actions.className = 'yzm-structure-actions yzm-task-result-actions';
@@ -5934,7 +5995,7 @@
             const closeWith = (value) => {
                 if (settled) return;
                 settled = true;
-                overlay.remove();
+                removePluginElement(overlay);
                 document.removeEventListener('keydown', handleKeydown, true);
                 resolve(value);
             };
@@ -6383,7 +6444,7 @@
 
         const closeModal = () => {
             if (overlay.contains(document.activeElement)) document.activeElement.blur?.();
-            overlay.remove();
+            removePluginElement(overlay);
         };
         const applyValue = () => {
             const max = Number.isFinite(Number(options.max)) ? Math.max(0, Math.round(Number(options.max) || 0)) : Infinity;
@@ -6783,7 +6844,7 @@
         modalHost.appendChild(overlay);
         window.setTimeout(() => nameInput.focus(), 0);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         close.onclick = closeModal;
         cancelButton.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
@@ -7157,7 +7218,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -7467,13 +7528,10 @@
         const input = document.createElement('input');
         input.className = 'yzm-api-input';
         input.type = hasSecretToggle ? 'text' : type;
+        preparePluginTextControl(input);
         if (hasSecretToggle) {
             input.classList.add('yzm-api-secret-masked');
             input.inputMode = 'text';
-            input.autocomplete = 'off';
-            input.autocapitalize = 'off';
-            input.spellcheck = false;
-            input.setAttribute('autocorrect', 'off');
         }
         input.placeholder = placeholder;
         if (fieldKey) input.dataset.yzmApiField = fieldKey;
@@ -7912,7 +7970,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         const createPreset = () => {
             const name = String(input.value || '').trim();
             if (!name) {
@@ -8017,7 +8075,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         close.onclick = closeModal;
         confirm.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
@@ -8106,7 +8164,7 @@
         }
 
         const modalHost = root;
-        root.querySelector('.yzm-api-model-modal')?.remove();
+        removePluginElement(root.querySelector('.yzm-api-model-modal'));
 
         const overlay = document.createElement('div');
         overlay.className = 'yzm-structure-modal yzm-api-model-modal';
@@ -8151,7 +8209,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -9613,7 +9671,7 @@
             const closeWith = (value) => {
                 if (settled) return;
                 settled = true;
-                overlay.remove();
+                removePluginElement(overlay);
                 document.removeEventListener('keydown', handleKeydown);
                 resolve(value);
             };
@@ -10656,15 +10714,16 @@
             if (shell?.dataset?.yzmTheme) host.dataset.yzmTheme = shell.dataset.yzmTheme;
             document.body.appendChild(host);
         }
+        bindPluginTextControlIsolation(host);
         return host;
     }
 
     function removeModal(root, selector = '.yzm-structure-modal') {
-        getModalHost(root).querySelector(selector)?.remove();
+        removePluginElement(getModalHost(root).querySelector(selector));
     }
 
     function removeGlobalModal(root, selector = '.yzm-structure-modal') {
-        getGlobalModalHost(root).querySelector(selector)?.remove();
+        removePluginElement(getGlobalModalHost(root).querySelector(selector));
     }
 
     function getCurrentPluginVersion() {
@@ -10723,7 +10782,7 @@
 
         const markSeenAndClose = () => {
             if (markSeen) localStorage.setItem(UPDATE_NOTICE_VERSION_STORAGE_KEY, version);
-            overlay.remove();
+            removePluginElement(overlay);
             document.removeEventListener('keydown', handleKeydown);
         };
         const handleKeydown = (event) => {
@@ -10897,7 +10956,7 @@
         modalHost.appendChild(overlay);
 
         const closeModal = () => {
-            overlay.remove();
+            removePluginElement(overlay);
             document.removeEventListener('keydown', handleKeydown);
         };
 
@@ -11350,7 +11409,7 @@
 
         const closeModal = () => {
             if (document.activeElement === textarea) textarea.blur();
-            overlay.remove();
+            removePluginElement(overlay);
         };
         const rerenderOrganizer = () => {
             renderRecordOrganizerList(list, table);
@@ -11486,7 +11545,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -11560,7 +11619,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         const addSummary = (kind) => {
             const record = createSummaryRecord(table, kind);
             getRecords(table.id).push(record);
@@ -11637,7 +11696,7 @@
         modalHost.appendChild(overlay);
         textarea.focus();
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         textarea.addEventListener('input', updateCounter);
         close.onclick = closeModal;
         cancel.onclick = closeModal;
@@ -11675,6 +11734,7 @@
         input.value = value;
         if (options.placeholder) input.placeholder = options.placeholder;
         input.dataset.yzmRecordField = label;
+        preparePluginTextControl(input);
 
         field.append(text, input);
         return field;
@@ -11794,7 +11854,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -11867,7 +11927,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -11976,7 +12036,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
-        const closeModal = () => overlay.remove();
+        const closeModal = () => removePluginElement(overlay);
         close.onclick = closeModal;
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
@@ -12088,6 +12148,7 @@
     }
 
     function bindPanelInteractions(root) {
+        bindPluginTextControlIsolation(root);
         const shellBody = root.querySelector('.yzm-shell-body');
         const workspace = root.querySelector('.yzm-workspace');
         const sidebarToggle = root.querySelector('.yzm-sidebar-toggle');
@@ -12120,7 +12181,7 @@
 
                 event.preventDefault();
                 event.stopPropagation();
-                closeButton.closest('.yzm-structure-modal')?.remove();
+                removePluginElement(closeButton.closest('.yzm-structure-modal'));
             }, true);
         }
 
@@ -13409,6 +13470,7 @@
         document.body.appendChild(root);
 
         close.addEventListener('click', () => {
+            blurPluginFocus(shell);
             shell.hidden = true;
             updateFloatingIconVisibility();
         });

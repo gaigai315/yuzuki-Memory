@@ -2276,6 +2276,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return window.confirm(`${task?.title || '任务'}已生成结果，是否写入记忆？\n\n${String(result.text || result.preview || '').slice(0, 1000)}`);
     }
 
+    function isTaskResultConfirmationCancelled(confirmation) {
+        return !confirmation
+            || confirmation.cancelled === true
+            || confirmation.action === 'cancel';
+    }
+
     async function runAutoSummaryTask(state, task, settings, callbacks = {}) {
         if (task.type === 'history') {
             const existingRecord = findExistingHistorySummaryRecord(state, { start: task.start, end: task.end });
@@ -2323,7 +2329,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         let committed = result;
         if (!settings.autoSave) {
             const confirmation = await confirmTaskResult(result, task, callbacks);
-            if (!confirmation) return { success: true, skipped: true, result };
+            if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
             committed = confirmation && typeof confirmation === 'object' && 'text' in confirmation
                 ? rebuildTaskResultFromText('summary', result, confirmation.text)
                 : result;
@@ -2413,7 +2419,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         let committed = result;
         if (!autoSave) {
             const confirmation = await confirmTaskResult(result, task, callbacks);
-            if (!confirmation) return { success: true, skipped: true, result };
+            if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
             committed = confirmation && typeof confirmation === 'object' && 'text' in confirmation
                 ? rebuildTaskResultFromText('trace', result, confirmation.text)
                 : result;
