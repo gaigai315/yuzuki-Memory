@@ -215,6 +215,7 @@
             enableFilling: settings?.enableFilling !== false,
             fillMode: settings?.fillMode === 'batch' ? 'batch' : 'realtime',
             traceBatchEnabled: settings?.traceBatchEnabled !== false,
+            autoTraceBatchSize: Math.max(1, Math.round(Number(settings?.autoTraceBatchSize ?? settings?.traceBatchSize) || 40)),
             traceBatchSize: Math.max(1, Math.round(Number(settings?.traceBatchSize) || 40)),
             traceBatchDelay: Math.max(0, Math.round(Number(settings?.traceBatchDelay ?? 2) || 0)),
             traceDirectTrigger: true,
@@ -584,6 +585,30 @@
         return compactLines(lines);
     }
 
+    function getOptionTargetTable(state, options = {}) {
+        const tableId = String(options.tableId || '').trim();
+        return tableId ? findTargetTable(state, tableId) : null;
+    }
+
+    function buildTraceTargetRestrictionText(state, options = {}) {
+        const targetTable = getOptionTargetTable(state, options);
+        if (!targetTable) return '';
+        const targetLabel = `${targetTable.name}（${targetTable.id}）`;
+        const schema = buildDatabaseSchemaText(state, { ...options, tableId: targetTable.id });
+        return compactLines([
+            '【目标记忆限制】',
+            `本次下拉框已指定只更新：${targetLabel}。`,
+            `请保持原提示词要求的输出格式，但所有更新条目的表名只能是 "${targetTable.name}" 或 "${targetTable.id}"；严禁输出其他表格。`,
+            '如果使用 <Memory> 格式，<Memory> 内只能出现该目标表的更新行；不要新增其他表名、其他表格区块或 JSON。',
+            '不要为其他记忆表补写、推断或顺带更新内容。',
+            targetTable.id === PLOT_SUMMARY_TABLE_ID
+                ? '目标为剧情摘要时，只输出主线/支线摘要相关内容；不要输出角色档案、物品追踪、世界设定或记忆总结。'
+                : '',
+            '如果本段聊天没有适合写入该目标表的信息，请输出空的 <Memory></Memory>。',
+            schema ? `目标表结构：\n${schema}` : '',
+        ]);
+    }
+
     function buildBranchSummaryNamesText(state) {
         if (YuzukiMemory.VariableInjector?.buildBranchSummaryNamesText) {
             return YuzukiMemory.VariableInjector.buildBranchSummaryNamesText(state);
@@ -604,6 +629,8 @@
         const names = getRuntimeNames();
         const suppressMemoryTables = options.suppressMemoryTables === true;
         const suppressMemoryData = suppressMemoryTables || options.suppressMemoryData === true;
+        const targetTable = getOptionTargetTable(state, options);
+        const targetTableText = targetTable ? tablesToReferenceText(state, { ...options, tableId: targetTable.id }) : '';
         return String(text || '')
             .replace(/\{\{user\}\}/g, names.user)
             .replace(/\{\{char\}\}/g, names.char)
@@ -611,10 +638,20 @@
             .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS)\}\}/gi, () => suppressMemoryTables ? '' : buildDatabaseSchemaText(state, options))
             .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName) || ''))
             .replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSpecificSummaryText?.(state, summaryKey) || ''))
-            .replace(/\{\{MEMORY_TABLE\}\}/gi, () => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildAllTablesText?.(state) || tablesToReferenceText(state, options)))
+            .replace(/\{\{MEMORY_TABLE\}\}/gi, () => suppressMemoryData ? '' : (targetTableText || YuzukiMemory.VariableInjector?.buildAllTablesText?.(state) || tablesToReferenceText(state, options)))
             .replace(/\{\{MEMORY_SUMMARY\}\}/gi, () => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSummaryText?.(state) || ''))
             .replace(/\{\{MEMORY_PROMPT\}\}/gi, '')
-            .replace(/\{\{MEMORY\}\}/gi, () => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildMemoryText?.(state) || compactLines([YuzukiMemory.VariableInjector?.buildSummaryText?.(state), tablesToReferenceText(state, options)])));
+            .replace(/\{\{MEMORY\}\}/gi, () => {
+                if (suppressMemoryData) return '';
+                if (targetTableText) {
+                    return compactLines([
+                        YuzukiMemory.VariableInjector?.buildSummaryText?.(state),
+                        targetTableText,
+                    ]);
+                }
+                return YuzukiMemory.VariableInjector?.buildMemoryText?.(state)
+                    || compactLines([YuzukiMemory.VariableInjector?.buildSummaryText?.(state), tablesToReferenceText(state, options)]);
+            });
     }
 
     function getActivePromptScheme(state) {
@@ -1006,6 +1043,24 @@
                 return `${index + 1}. ${row.table || '未指定表格'}${values ? ` - ${values}` : ''}`;
             })
             .join('\n');
+    }
+
+    function filterTraceResultByTarget(state, resultRows, options = {}) {
+        const targetTable = getOptionTargetTable(state, options);
+        if (!targetTable) return resultRows;
+        if (resultRows?.memoryRows) {
+            return {
+                ...resultRows,
+                memoryRows: resultRows.memoryRows
+                    .map((row) => row && !String(row.table || '').trim() ? { ...row, table: targetTable.name } : row)
+                    .filter((row) => findTargetTable(state, row?.table)?.id === targetTable.id),
+            };
+        }
+        const records = normalizeTaskRows(resultRows)
+            .map((row) => !row.table ? { ...row, table: targetTable.name } : row)
+            .filter((row) => findTargetTable(state, row.table)?.id === targetTable.id)
+            .map((row) => ({ table: row.table || targetTable.name, values: row.values || {} }));
+        return { records };
     }
 
     function createRecord(table, values = {}) {
@@ -1682,13 +1737,22 @@
     }
 
     function applyTraceResult(state, resultRows, options = {}) {
+        const targetTable = getOptionTargetTable(state, options);
         if (resultRows?.memoryRows && YuzukiMemory.MemoryTagParser?.applyRowsToState) {
-            return YuzukiMemory.MemoryTagParser.applyRowsToState(state, resultRows.memoryRows, {
+            const memoryRows = targetTable
+                ? resultRows.memoryRows
+                    .map((row) => row && !String(row.table || '').trim() ? { ...row, table: targetTable.name } : row)
+                    .filter((row) => findTargetTable(state, row?.table)?.id === targetTable.id)
+                : resultRows.memoryRows;
+            if (targetTable && !memoryRows.length) return 0;
+            return YuzukiMemory.MemoryTagParser.applyRowsToState(state, memoryRows, {
                 source: options.source || 'trace',
                 range: options.range,
             });
         }
-        const rows = normalizeTaskRows(resultRows);
+        const rows = normalizeTaskRows(resultRows)
+            .map((row) => targetTable && !row.table ? { ...row, table: targetTable.name } : row)
+            .filter((row) => !targetTable || findTargetTable(state, row.table)?.id === targetTable.id);
         let count = 0;
         rows.forEach((row) => {
             const table = findTargetTable(state, row.table);
@@ -1717,6 +1781,7 @@
         const count = applyTraceResult(state, result?.parsed, {
             source: result?.meta?.autoTaskType || 'trace',
             range: result?.range,
+            tableId: result?.meta?.tableId || result?.tableId || '',
         });
         if (!count) {
             return {
@@ -1893,6 +1958,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         };
         const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, taskPromptOptions);
         const tracePrompt = resolveTaskPromptVariables(getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options), state, taskPromptOptions);
+        const targetRestriction = buildTraceTargetRestrictionText(state, options);
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
         const messages = withMemoryPrefill([
             { role: 'system', content: historianPrompt },
@@ -1901,6 +1967,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             { role: 'system', content: buildTaskRangeText(range, 'trace') },
             ...range.messages,
             { role: 'system', content: tracePrompt },
+            targetRestriction ? { role: 'system', content: targetRestriction } : null,
             { role: 'user', content: '请立即根据以上待追溯聊天内容和批量追溯填表提示词执行任务。' },
         ].filter(Boolean), '<Memory>');
         return { messages, range };
@@ -1952,8 +2019,19 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
         const response = await generate(built.messages, { ...options, kind: 'trace' });
         if (!response.success) return response;
-        const parsed = parseTraceResponse(response.text);
-        const result = { success: true, kind: 'trace', parsed, preview: getTracePreview(parsed), text: response.text, range: built.range };
+        const parsed = filterTraceResultByTarget(state, parseTraceResponse(response.text), options);
+        const result = {
+            success: true,
+            kind: 'trace',
+            parsed,
+            preview: getTracePreview(parsed),
+            text: response.text,
+            range: built.range,
+            meta: {
+                tableId: String(options.tableId || ''),
+                autoTaskType: options.autoTaskType || '',
+            },
+        };
         return options.previewOnly ? result : commitTraceResult(state, result);
     }
 
@@ -2156,7 +2234,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     function buildAutoTraceTask(pointers, chatLength, settings) {
         if (settings.enableFilling === false || settings.fillMode !== 'batch' || !settings.traceBatchEnabled) return null;
         const lastIndex = Math.max(0, Number(pointers.trace) || 0);
-        const interval = Math.max(1, Number(settings.traceBatchSize) || 40);
+        const interval = Math.max(1, Number(settings.autoTraceBatchSize ?? settings.traceBatchSize) || 40);
         const delay = Math.max(0, Number(settings.traceBatchDelay) || 0);
         const threshold = interval + delay;
         if (chatLength - lastIndex < threshold) return null;

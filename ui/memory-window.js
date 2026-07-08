@@ -157,6 +157,7 @@
         enableFilling: true,
         fillMode: 'realtime',
         traceBatchEnabled: true,
+        autoTraceBatchSize: 40,
         traceBatchSize: 40,
         traceBatchDelay: 2,
         summaryBatchEnabled: true,
@@ -1782,6 +1783,7 @@
             enableFilling: typeof source.enableFilling === 'boolean' ? source.enableFilling : DEFAULT_PLUGIN_SETTINGS.enableFilling,
             fillMode: source.fillMode === 'batch' ? 'batch' : DEFAULT_PLUGIN_SETTINGS.fillMode,
             traceBatchEnabled: typeof source.traceBatchEnabled === 'boolean' ? source.traceBatchEnabled : DEFAULT_PLUGIN_SETTINGS.traceBatchEnabled,
+            autoTraceBatchSize: Math.round(normalizeNumberSetting(source.autoTraceBatchSize ?? source.traceBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.autoTraceBatchSize, 0)),
             traceBatchSize: Math.round(normalizeNumberSetting(source.traceBatchSize, 1, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchSize, 0)),
             traceBatchDelay: Math.round(normalizeNumberSetting(source.traceBatchDelay, 0, 9999, DEFAULT_PLUGIN_SETTINGS.traceBatchDelay, 0)),
             traceDirectTrigger: true,
@@ -8979,7 +8981,7 @@
     }
 
     function normalizePluginNumberSettingValue(settingKey, value) {
-        const min = settingKey === 'traceBatchSize' || settingKey === 'summaryBatchSize' ? 1 : 0;
+        const min = settingKey === 'autoTraceBatchSize' || settingKey === 'traceBatchSize' || settingKey === 'summaryBatchSize' ? 1 : 0;
         const fallback = DEFAULT_PLUGIN_SETTINGS[settingKey] ?? 0;
         return Math.round(normalizeNumberSetting(value, min, 9999, fallback, 0));
     }
@@ -9720,7 +9722,7 @@
                 '每批处理楼层数',
                 '达到该楼层数后触发一次自动批量填表，并在完成后推进填表指针。',
                 'fa-solid fa-list-ol',
-                createTraceUnitInput(createConfigNumberInput(settings.traceBatchSize, 'traceBatchSize'), '层')
+                createTraceUnitInput(createConfigNumberInput(settings.autoTraceBatchSize, 'autoTraceBatchSize'), '层')
             ),
             createPluginConfigRow(
                 '滞后执行楼层',
