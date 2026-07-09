@@ -20,6 +20,10 @@
     let dryRunGenerationDepth = 0;
     let dryRunCaptureUntil = 0;
     const FETCH_WRAPPER_FLAG = '__yzmMemoryRequestProbeFetch';
+    // Some request monitors preserve themselves with a fetch accessor. A request
+    // can then re-enter an older Yuzuki wrapper through that monitor's delegate.
+    const FETCH_PROCESSED_FLAG = Symbol('yzmMemoryRequestProcessed');
+    const processedRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
 
     function clone(value) {
         try {
@@ -823,14 +827,21 @@
         const requestInput = isRequestLike(input) ? input : null;
         const url = requestInput ? requestInput.url : (input ? input.toString() : '');
         const options = args[1] || {};
+        if (options?.[FETCH_PROCESSED_FLAG] === true || (requestInput && processedRequestInputs?.has(requestInput))) {
+            return args;
+        }
         try {
             if (requestInput && !options.body) {
                 const requestOptions = { ...options, method: requestInput.method, headers: options.headers || requestInput.headers };
                 const processed = await processJsonBody(url, requestOptions, await readRequestBody(requestInput), requestInput);
+                if (processed?.[0] && isRequestLike(processed[0])) processedRequestInputs?.add(processed[0]);
                 return processed || args;
             }
             const processed = await processJsonBody(url, options, options.body);
             if (!processed) return args;
+            if (processed[1] && typeof processed[1] === 'object') {
+                Object.defineProperty(processed[1], FETCH_PROCESSED_FLAG, { value: true });
+            }
             return [input, processed[1]];
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to process request body.', error);
