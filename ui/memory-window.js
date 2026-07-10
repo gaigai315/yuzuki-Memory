@@ -224,8 +224,12 @@
     let floatingResizeController = null;
     let floatingVisibilityTimer = null;
     let chatContextRefreshBound = false;
-    let characterVectorSyncTimer = null;
-    let worldSettingVectorSyncTimer = null;
+    let managedVectorSyncTimer = null;
+    let managedVectorSyncRunning = false;
+    const managedVectorSyncPending = {
+        character: null,
+        worldSetting: null,
+    };
     let taskRunnerBusy = false;
     let taskRunnerStopRequested = false;
     let taskRunnerActiveAction = '';
@@ -4202,32 +4206,61 @@
         return getRecords('world_setting').some((record) => record?.worldSettingVectorSynced === true);
     }
 
-    function scheduleCharacterVectorSync(options = {}) {
-        window.clearTimeout(characterVectorSyncTimer);
-        if (!hasCharacterVectorRecords() && options.force !== true) return;
-        characterVectorSyncTimer = window.setTimeout(async () => {
-            try {
-                await syncCharacterProfilesToVectorBook({ vectorize: options.vectorize !== false });
-                const root = document.getElementById(ROOT_ID);
-                if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root);
-            } catch (error) {
-                console.warn('[yuzuki-Memory] 角色档案向量书同步失败。', error);
+    async function flushManagedVectorSync() {
+        if (managedVectorSyncRunning) return;
+        const characterOptions = managedVectorSyncPending.character;
+        const worldSettingOptions = managedVectorSyncPending.worldSetting;
+        if (!characterOptions && !worldSettingOptions) return;
+
+        managedVectorSyncPending.character = null;
+        managedVectorSyncPending.worldSetting = null;
+        managedVectorSyncRunning = true;
+        try {
+            if (characterOptions) {
+                try {
+                    await syncCharacterProfilesToVectorBook({ vectorize: characterOptions.vectorize });
+                } catch (error) {
+                    console.warn('[yuzuki-Memory] 角色档案向量书同步失败。', error);
+                }
             }
-        }, Number(options.delay) >= 0 ? Number(options.delay) : CHARACTER_VECTOR_SYNC_DELAY);
+            if (worldSettingOptions) {
+                try {
+                    await syncWorldSettingsToVectorBook({ vectorize: worldSettingOptions.vectorize });
+                } catch (error) {
+                    console.warn('[yuzuki-Memory] 世界设定向量书同步失败。', error);
+                }
+            }
+            const root = document.getElementById(ROOT_ID);
+            if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root);
+        } finally {
+            managedVectorSyncRunning = false;
+            if (managedVectorSyncPending.character || managedVectorSyncPending.worldSetting) {
+                window.clearTimeout(managedVectorSyncTimer);
+                managedVectorSyncTimer = window.setTimeout(flushManagedVectorSync, 0);
+            }
+        }
+    }
+
+    function queueManagedVectorSync(kind, options = {}) {
+        const previous = managedVectorSyncPending[kind];
+        managedVectorSyncPending[kind] = {
+            vectorize: previous ? previous.vectorize || options.vectorize !== false : options.vectorize !== false,
+        };
+        window.clearTimeout(managedVectorSyncTimer);
+        managedVectorSyncTimer = window.setTimeout(
+            flushManagedVectorSync,
+            Number(options.delay) >= 0 ? Number(options.delay) : CHARACTER_VECTOR_SYNC_DELAY
+        );
+    }
+
+    function scheduleCharacterVectorSync(options = {}) {
+        if (!hasCharacterVectorRecords() && options.force !== true) return;
+        queueManagedVectorSync('character', options);
     }
 
     function scheduleWorldSettingVectorSync(options = {}) {
-        window.clearTimeout(worldSettingVectorSyncTimer);
         if (!hasWorldSettingVectorRecords() && options.force !== true) return;
-        worldSettingVectorSyncTimer = window.setTimeout(async () => {
-            try {
-                await syncWorldSettingsToVectorBook({ vectorize: options.vectorize !== false });
-                const root = document.getElementById(ROOT_ID);
-                if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root);
-            } catch (error) {
-                console.warn('[yuzuki-Memory] 世界设定向量书同步失败。', error);
-            }
-        }, Number(options.delay) >= 0 ? Number(options.delay) : CHARACTER_VECTOR_SYNC_DELAY);
+        queueManagedVectorSync('worldSetting', options);
     }
 
     function getCurrentChatVectorBookName() {
@@ -8439,7 +8472,9 @@
         const desc = document.createElement('span');
         desc.textContent = data?.preview
             ? '仅捕获到发送前预览，最终 API 请求体尚未被插件捕获。'
-            : '查看最后一次发送给模型的请求内容，每条消息默认折叠。';
+            : (data?.downstreamFinal
+                ? '查看所有下游插件处理后交给网络层的最终请求内容。'
+                : '查看最近捕获的模型请求内容，每条消息默认折叠。');
         titleWrap.append(title, desc);
         const refresh = createIconButton('刷新', 'fa-solid fa-rotate', 'yzm-api-button yzm-request-probe-refresh');
         header.append(titleWrap, refresh);
@@ -8449,7 +8484,11 @@
         stats.append(
             createRequestProbeStat('Total Tokens', data?.totalTokens || 0, 'fa-solid fa-coins'),
             createRequestProbeStat('Messages', `${data?.messages?.length || 0} 条`, 'fa-regular fa-message'),
-            createRequestProbeStat(data?.preview ? '捕获阶段' : '最近捕获于', data?.preview ? '发送前预览' : formatRequestProbeTime(data?.timestamp), 'fa-regular fa-clock')
+            createRequestProbeStat(
+                data?.preview || data?.downstreamFinal ? '捕获阶段' : '最近捕获于',
+                data?.preview ? '发送前预览' : (data?.downstreamFinal ? '下游最终请求' : formatRequestProbeTime(data?.timestamp)),
+                'fa-regular fa-clock'
+            )
         );
 
         const wrap = document.createElement('div');

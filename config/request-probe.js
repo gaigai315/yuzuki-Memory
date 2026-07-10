@@ -23,7 +23,11 @@
     // Some request monitors preserve themselves with a fetch accessor. A request
     // can then re-enter an older Yuzuki wrapper through that monitor's delegate.
     const FETCH_PROCESSED_FLAG = Symbol('yzmMemoryRequestProcessed');
+    const FETCH_PREVIEW_FLAG = Symbol('yzmMemoryRequestPreview');
+    const FETCH_FINAL_CAPTURED_FLAG = Symbol('yzmMemoryRequestFinalCaptured');
     const processedRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
+    const previewRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
+    const finalCapturedRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
 
     function clone(value) {
         try {
@@ -602,6 +606,7 @@
             rawBody: clone(body),
             preview: options.preview === true,
             promptReady: options.promptReady === true,
+            downstreamFinal: options.downstreamFinal === true,
         };
         if (options.preview === true) {
             lastPreviewRequestData = requestData;
@@ -817,9 +822,9 @@
         }
         captureFromBody(body, url, { preview: isPreviewCapture });
         if (requestSource) {
-            return [new Request(requestSource, { body: nextBody })];
+            return [new Request(requestSource, { body: nextBody }), null, { preview: isPreviewCapture }];
         }
-        return [null, { ...options, body: nextBody }];
+        return [null, { ...options, body: nextBody }, { preview: isPreviewCapture }];
     }
 
     async function processFetchArgs(args) {
@@ -834,13 +839,17 @@
             if (requestInput && !options.body) {
                 const requestOptions = { ...options, method: requestInput.method, headers: options.headers || requestInput.headers };
                 const processed = await processJsonBody(url, requestOptions, await readRequestBody(requestInput), requestInput);
-                if (processed?.[0] && isRequestLike(processed[0])) processedRequestInputs?.add(processed[0]);
-                return processed || args;
+                if (processed?.[0] && isRequestLike(processed[0])) {
+                    processedRequestInputs?.add(processed[0]);
+                    if (processed?.[2]?.preview === true) previewRequestInputs?.add(processed[0]);
+                }
+                return processed ? [processed[0], processed[1]] : args;
             }
             const processed = await processJsonBody(url, options, options.body);
             if (!processed) return args;
             if (processed[1] && typeof processed[1] === 'object') {
                 Object.defineProperty(processed[1], FETCH_PROCESSED_FLAG, { value: true });
+                Object.defineProperty(processed[1], FETCH_PREVIEW_FLAG, { value: processed?.[2]?.preview === true });
             }
             return [input, processed[1]];
         } catch (error) {
@@ -851,6 +860,38 @@
 
     function isCurrentFetchProbeInstalled() {
         return typeof window.fetch === 'function' && window.fetch[FETCH_WRAPPER_FLAG] === true;
+    }
+
+    async function captureAfterDownstream(args, url) {
+        const input = args[0];
+        const requestInput = isRequestLike(input) ? input : null;
+        const options = args[1] || {};
+        if (requestInput ? finalCapturedRequestInputs?.has(requestInput) : options?.[FETCH_FINAL_CAPTURED_FLAG] === true) {
+            return null;
+        }
+        const bodyText = requestInput ? await readRequestBody(requestInput) : options.body;
+        if (typeof bodyText !== 'string' || !bodyText.trim()) return null;
+        try {
+            const body = JSON.parse(bodyText);
+            if (requestInput) finalCapturedRequestInputs?.add(requestInput);
+            else {
+                try {
+                    Object.defineProperty(options, FETCH_FINAL_CAPTURED_FLAG, { value: true });
+                } catch (_error) {
+                    // A frozen RequestInit can still be captured; it may only be reported twice on wrapper re-entry.
+                }
+            }
+            const preview = requestInput
+                ? previewRequestInputs?.has(requestInput) === true
+                : options?.[FETCH_PREVIEW_FLAG] === true;
+            return captureFromBody(body, url, {
+                preview,
+                downstreamFinal: true,
+            });
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to capture downstream request body.', error);
+            return null;
+        }
     }
 
     function installFetchProbe(options = {}) {
@@ -872,7 +913,12 @@
             const shouldTrack = isExternalTextGenerationRequest(url, options);
             if (shouldTrack) markChatRequestStarted();
             try {
-                return await baseFetch.apply(this, nextArgs);
+                const response = await baseFetch.apply(this, nextArgs);
+                if (shouldTrack) await captureAfterDownstream(nextArgs, url);
+                return response;
+            } catch (error) {
+                if (shouldTrack) await captureAfterDownstream(nextArgs, url);
+                throw error;
             } finally {
                 if (shouldTrack) markChatRequestFinished();
             }

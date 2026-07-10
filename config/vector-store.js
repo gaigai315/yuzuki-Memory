@@ -5,7 +5,12 @@
     const STORAGE_BOOK_NAME = 'Yuzuki_Memory_Vector_Library';
     const LEGACY_STORAGE_BOOK_NAME = 'Memory_Vector_Database';
     const STORAGE_BOOK_NAMES = [STORAGE_BOOK_NAME, LEGACY_STORAGE_BOOK_NAME];
+    const STORAGE_EXTENSION_KEY = 'yuzuki_memory_vector_library';
+    const STORAGE_FORMAT_VERSION = 2;
+    const STORAGE_ENTRY_CONTENT = 'Yuzuki Memory 内部向量数据存储，请勿启用或编辑。';
+    const VECTOR_STORAGE_ENCODING = 'float32-base64';
     const ACTIVE_BOOKS_KEY = 'yzm_memory_active_vector_books';
+    const LEGACY_ACTIVE_BOOKS_KEY = 'gaigai_activeBooks';
     const BACKUP_HEADER = '=== Yuzuki Memory Vector Library ===';
     const LEGACY_BACKUP_HEADER = '=== Gaigai 向量缓存文件 (图书馆版) ===';
     const LEGACY_LIBRARY_MARKER = '>>> 图书馆 <<<';
@@ -16,27 +21,44 @@
     const MAX_VECTOR_CHUNK_CHARS = 4000;
     const VECTOR_CHUNK_OVERLAP_CHARS = 180;
     const MAX_VECTOR_BATCH_CHARS = 16000;
+    const MAX_QUERY_VECTOR_CACHE_ENTRIES = 96;
     const HELPER_API_SHIELD_KEY = '__yzmMemoryStorageBookShield';
     const HELPER_API_SHIELD_SOURCE_KEY = '__yzmMemoryStorageBookShieldSource';
-    const HELPER_API_SHIELD_POLL_MS = 2000;
-    const HELPER_API_SHIELD_MAX_ATTEMPTS = 60;
+    const HELPER_API_SHIELD_POLL_MS = 5000;
 
     class VectorStore {
         constructor() {
             this.library = {};
             this.selectedBookId = '';
+            this.storageBookName = STORAGE_BOOK_NAME;
+            this.storageMigrationPending = false;
             this.isLoaded = false;
             this.hideObserver = null;
             this.helperApiShieldTimer = null;
-            this.helperApiShieldAttempts = 0;
             this.vectorCache = new Map();
+            this.encodedVectorCache = new WeakMap();
             this.pendingEmbeddings = new Map();
+            this.saveRequestedSerial = 0;
+            this.saveCompletedSerial = 0;
+            this.saveLoopRunning = false;
+            this.saveWaiters = [];
             this.installStorageBookApiShield();
-            this.ready = this.loadLibrary().finally(() => {
-                this.isLoaded = true;
-                this.hideStorageBookFromUI();
-                this.installStorageBookApiShield();
-            });
+            this.ready = this.loadLibrary()
+                .then(async (library) => {
+                    if (this.storageMigrationPending) {
+                        const migrated = await this.saveLibrary();
+                        if (migrated) {
+                            this.storageMigrationPending = false;
+                            console.info('[yuzuki-Memory] Vector library storage upgraded to compact worldbook metadata.');
+                        }
+                    }
+                    return library;
+                })
+                .finally(() => {
+                    this.isLoaded = true;
+                    this.hideStorageBookFromUI();
+                    this.installStorageBookApiShield();
+                });
         }
 
         async whenReady() {
@@ -87,17 +109,64 @@
             return `${prefix}_${Date.now()}_${random}`;
         }
 
+        encodeVectorForStorage(vector) {
+            if (!Array.isArray(vector) || !vector.length) return null;
+            const cached = this.encodedVectorCache.get(vector);
+            if (cached) return cached;
+
+            const buffer = new ArrayBuffer(vector.length * Float32Array.BYTES_PER_ELEMENT);
+            const view = new DataView(buffer);
+            vector.forEach((value, index) => {
+                view.setFloat32(index * Float32Array.BYTES_PER_ELEMENT, Number(value) || 0, true);
+            });
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            const batchSize = 0x8000;
+            for (let offset = 0; offset < bytes.length; offset += batchSize) {
+                binary += String.fromCharCode(...bytes.subarray(offset, offset + batchSize));
+            }
+            const encoded = {
+                encoding: VECTOR_STORAGE_ENCODING,
+                dimension: vector.length,
+                data: btoa(binary),
+            };
+            this.encodedVectorCache.set(vector, encoded);
+            return encoded;
+        }
+
+        decodeStoredVector(value) {
+            if (Array.isArray(value)) return value;
+            if (!value || typeof value !== 'object' || value.encoding !== VECTOR_STORAGE_ENCODING || !value.data) return null;
+            try {
+                const binary = atob(String(value.data));
+                const byteLength = binary.length - (binary.length % Float32Array.BYTES_PER_ELEMENT);
+                const bytes = new Uint8Array(byteLength);
+                for (let index = 0; index < byteLength; index += 1) bytes[index] = binary.charCodeAt(index);
+                const view = new DataView(bytes.buffer);
+                const vector = Array.from(
+                    { length: byteLength / Float32Array.BYTES_PER_ELEMENT },
+                    (_unused, index) => view.getFloat32(index * Float32Array.BYTES_PER_ELEMENT, true)
+                );
+                const expectedDimension = Math.max(0, Number.parseInt(value.dimension, 10) || 0);
+                return expectedDimension && vector.length !== expectedDimension ? null : vector;
+            } catch (error) {
+                console.warn('[yuzuki-Memory] Failed to decode stored vector.', error);
+                return null;
+            }
+        }
+
         normalizeBook(book, fallbackName = '未命名书籍') {
             const chunks = Array.isArray(book?.chunks) ? book.chunks.map((chunk) => String(chunk || '').trim()).filter(Boolean) : [];
             const vectors = Array.isArray(book?.vectors) ? book.vectors : [];
             const vectorized = Array.isArray(book?.vectorized) ? book.vectorized : [];
+            const normalizedVectors = chunks.map((_chunk, index) => this.decodeStoredVector(vectors[index]));
             return {
                 name: String(book?.name || fallbackName).trim() || fallbackName,
                 kind: String(book?.kind || '').trim(),
                 sessionId: String(book?.sessionId || '').trim(),
                 chunks,
-                vectors: chunks.map((_chunk, index) => vectors[index] || null),
-                vectorized: chunks.map((_chunk, index) => Boolean(vectorized[index])),
+                vectors: normalizedVectors,
+                vectorized: chunks.map((_chunk, index) => Boolean(vectorized[index] && Array.isArray(normalizedVectors[index]))),
                 createTime: Number(book?.createTime) || Date.now(),
                 updateTime: Number(book?.updateTime) || Date.now(),
             };
@@ -110,18 +179,44 @@
                 .map(([id, book]) => [String(id), this.normalizeBook(book)]));
         }
 
+        encodeLibraryForStorage() {
+            return Object.fromEntries(Object.entries(this.library).map(([id, book]) => [id, {
+                ...book,
+                vectors: Array.isArray(book?.vectors)
+                    ? book.vectors.map((vector) => this.encodeVectorForStorage(vector))
+                    : [],
+            }]));
+        }
+
+        readLibraryFromWorldbook(bookData) {
+            const extensionPayload = bookData?.extensions?.[STORAGE_EXTENSION_KEY]
+                ?? bookData?.[STORAGE_EXTENSION_KEY];
+            if (extensionPayload && typeof extensionPayload === 'object') {
+                const rawLibrary = extensionPayload.library && typeof extensionPayload.library === 'object'
+                    ? extensionPayload.library
+                    : extensionPayload;
+                return { library: rawLibrary, legacy: false };
+            }
+
+            const content = bookData?.entries?.['0']?.content || bookData?.entries?.[0]?.content || '';
+            if (!content) return { library: {}, legacy: false };
+            return { library: JSON.parse(content), legacy: true };
+        }
+
         getWorldPayload() {
+            const storageBookName = this.storageBookName || STORAGE_BOOK_NAME;
             return {
-                name: STORAGE_BOOK_NAME,
+                name: storageBookName,
                 data: {
-                    name: STORAGE_BOOK_NAME,
+                    name: storageBookName,
+                    // Worldbook helper tools fingerprint entry content; keep vectors in namespaced metadata.
                     entries: {
                         0: {
                             uid: 0,
                             key: ['DO_NOT_USE'],
                             keysecondary: [],
                             comment: 'Yuzuki Memory 向量数据库，请勿编辑或启用',
-                            content: JSON.stringify(this.library),
+                            content: STORAGE_ENTRY_CONTENT,
                             constant: false,
                             vectorized: false,
                             enabled: false,
@@ -135,6 +230,13 @@
                                 probability: 0,
                                 useProbability: false,
                             },
+                        },
+                    },
+                    extensions: {
+                        [STORAGE_EXTENSION_KEY]: {
+                            format: STORAGE_EXTENSION_KEY,
+                            version: STORAGE_FORMAT_VERSION,
+                            library: this.encodeLibraryForStorage(),
                         },
                     },
                 },
@@ -187,22 +289,32 @@
             }
 
             try {
-                const storageBookName = this.getExistingStorageBookName();
-                if (!storageBookName) {
+                const detectedBookName = this.getExistingStorageBookName();
+                const candidates = [...new Set([detectedBookName, ...STORAGE_BOOK_NAMES].filter(Boolean))];
+                let loaded = false;
+                for (const storageBookName of candidates) {
+                    try {
+                        const response = await this.fetchWorldInfo('/api/worldinfo/get', { name: storageBookName });
+                        if (!response.ok) continue;
+                        const text = await response.text();
+                        const bookData = text ? JSON.parse(text) : null;
+                        const stored = this.readLibraryFromWorldbook(bookData);
+                        this.storageBookName = storageBookName;
+                        this.library = this.normalizeLibrary(stored.library);
+                        this.storageMigrationPending = stored.legacy;
+                        loaded = true;
+                        break;
+                    } catch (error) {
+                        console.warn(`[yuzuki-Memory] Failed to inspect vector storage book: ${storageBookName}`, error);
+                    }
+                }
+
+                if (!loaded) {
+                    this.storageBookName = STORAGE_BOOK_NAME;
                     this.library = {};
                     this.selectedBookId = '';
                     return this.library;
                 }
-                const response = await this.fetchWorldInfo('/api/worldinfo/get', { name: storageBookName });
-                if (!response.ok) {
-                    this.library = {};
-                    return this.library;
-                }
-
-                const text = await response.text();
-                const bookData = text ? JSON.parse(text) : null;
-                const content = bookData?.entries?.['0']?.content || bookData?.entries?.[0]?.content || '';
-                this.library = this.normalizeLibrary(content ? JSON.parse(content) : {});
             } catch (error) {
                 console.warn('[yuzuki-Memory] Failed to load vector library.', error);
                 this.library = {};
@@ -212,7 +324,7 @@
             return this.library;
         }
 
-        async saveLibrary() {
+        async writeLibrarySnapshot() {
             try {
                 const response = await this.fetchWorldInfo('/api/worldinfo/edit', this.getWorldPayload());
                 if (!response.ok) throw new Error(`worldinfo/edit ${response.status}`);
@@ -221,6 +333,48 @@
                 console.warn('[yuzuki-Memory] Failed to save vector library.', error);
                 return false;
             }
+        }
+
+        resolveSaveWaiters(serial, success) {
+            const pending = [];
+            this.saveWaiters.forEach((waiter) => {
+                if (waiter.serial <= serial) waiter.resolve(success);
+                else pending.push(waiter);
+            });
+            this.saveWaiters = pending;
+        }
+
+        scheduleSaveLoop() {
+            if (this.saveLoopRunning) return;
+            this.saveLoopRunning = true;
+            Promise.resolve().then(async () => {
+                try {
+                    while (this.saveCompletedSerial < this.saveRequestedSerial) {
+                        const targetSerial = this.saveRequestedSerial;
+                        const success = await this.writeLibrarySnapshot();
+                        this.saveCompletedSerial = targetSerial;
+                        this.resolveSaveWaiters(targetSerial, success);
+                    }
+                } finally {
+                    this.saveLoopRunning = false;
+                    if (this.saveCompletedSerial < this.saveRequestedSerial) this.scheduleSaveLoop();
+                }
+            }).catch((error) => {
+                console.warn('[yuzuki-Memory] Vector library save queue failed.', error);
+                const failedSerial = this.saveRequestedSerial;
+                this.saveCompletedSerial = failedSerial;
+                this.resolveSaveWaiters(failedSerial, false);
+                this.saveLoopRunning = false;
+            });
+        }
+
+        saveLibrary() {
+            const serial = ++this.saveRequestedSerial;
+            const result = new Promise((resolve) => {
+                this.saveWaiters.push({ serial, resolve });
+            });
+            this.scheduleSaveLoop();
+            return result;
         }
 
         isStorageBookName(value) {
@@ -275,14 +429,9 @@
                 });
             }
 
-            if (this.helperApiShieldTimer || this.helperApiShieldAttempts >= HELPER_API_SHIELD_MAX_ATTEMPTS) return;
+            if (this.helperApiShieldTimer) return;
             this.helperApiShieldTimer = window.setInterval(() => {
-                this.helperApiShieldAttempts += 1;
                 this.installStorageBookApiShield();
-                if (this.helperApiShieldAttempts >= HELPER_API_SHIELD_MAX_ATTEMPTS) {
-                    window.clearInterval(this.helperApiShieldTimer);
-                    this.helperApiShieldTimer = null;
-                }
             }, HELPER_API_SHIELD_POLL_MS);
         }
 
@@ -344,7 +493,9 @@
 
         getActiveBooks() {
             const metadata = this.getContext()?.chatMetadata;
-            const activeBooks = metadata?.[ACTIVE_BOOKS_KEY] || [];
+            const activeBooks = Array.isArray(metadata?.[ACTIVE_BOOKS_KEY])
+                ? metadata[ACTIVE_BOOKS_KEY]
+                : (metadata?.[LEGACY_ACTIVE_BOOKS_KEY] || []);
             return [...new Set(Array.isArray(activeBooks) ? activeBooks.filter((id) => this.library[id]) : [])];
         }
 
@@ -374,10 +525,12 @@
 
         toggleActiveBook(bookId, isActive) {
             const activeBooks = this.getActiveBooks();
+            const currentlyActive = activeBooks.includes(bookId);
+            if (currentlyActive === Boolean(isActive)) return true;
             const nextBooks = isActive
                 ? [...activeBooks, bookId]
                 : activeBooks.filter((id) => id !== bookId);
-            this.setActiveBooks(nextBooks);
+            return this.setActiveBooks(nextBooks);
         }
 
         getBook(bookId = this.selectedBookId) {
@@ -436,6 +589,7 @@
             const book = this.library[bookId];
             const nextName = String(name || '').trim();
             if (!book || !nextName) return false;
+            if (book.name === nextName) return true;
             book.name = nextName;
             book.updateTime = Date.now();
             await this.saveLibrary();
@@ -491,6 +645,11 @@
             return source.flatMap((chunk) => this.splitLongTextPart(chunk)).filter(Boolean);
         }
 
+        areChunksEqual(left, right) {
+            if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) return false;
+            return left.every((chunk, index) => chunk === right[index]);
+        }
+
         splitText(text, separator = DEFAULT_SEPARATOR) {
             const source = String(text || '');
             const parts = separator === '\\n' || separator === '\n'
@@ -503,6 +662,7 @@
             const book = this.library[bookId];
             if (!book) return false;
             const nextChunks = this.normalizeChunks(chunks);
+            if (this.areChunksEqual(book.chunks, nextChunks)) return true;
             const previousVectors = new Map();
             book.chunks.forEach((chunk, index) => {
                 if (book.vectorized[index] && Array.isArray(book.vectors[index])) {
@@ -537,6 +697,18 @@
             const normalizedName = String(bookName || '').trim() || '当前会话总结';
             const oldName = String(oldBook?.name || '').trim();
             const shouldUseSessionName = !oldName || oldName === '剧情总结归档' || oldName === '当前会话总结';
+            const nextName = shouldUseSessionName ? normalizedName : oldName;
+            const normalizedSessionId = String(sessionId || 'default');
+            const unchanged = oldBook
+                && oldBook.name === nextName
+                && oldBook.kind === BOOK_KIND_SUMMARY
+                && oldBook.sessionId === normalizedSessionId
+                && this.areChunksEqual(oldBook.chunks, normalizedChunks);
+            if (unchanged) {
+                this.selectedBookId = id;
+                this.toggleActiveBook(id, true);
+                return { success: true, bookId: id, count: normalizedChunks.length, unchanged: true };
+            }
             const oldVectors = new Map();
             if (oldBook) {
                 oldBook.chunks.forEach((chunk, index) => {
@@ -557,9 +729,9 @@
             });
 
             this.library[id] = this.normalizeBook({
-                name: shouldUseSessionName ? normalizedName : oldName,
+                name: nextName,
                 kind: BOOK_KIND_SUMMARY,
-                sessionId: String(sessionId || 'default'),
+                sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 vectors,
                 vectorized,
@@ -611,6 +783,17 @@
             const id = this.getCharacterProfileBookId(sessionId);
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话角色档案';
+            const normalizedSessionId = String(sessionId || 'default');
+            const unchanged = oldBook
+                && oldBook.name === normalizedName
+                && oldBook.kind === BOOK_KIND_CHARACTER_PROFILE
+                && oldBook.sessionId === normalizedSessionId
+                && this.areChunksEqual(oldBook.chunks, normalizedChunks);
+            if (unchanged) {
+                this.selectedBookId = id;
+                this.toggleActiveBook(id, true);
+                return { success: true, bookId: id, count: normalizedChunks.length, unchanged: true };
+            }
             const oldVectors = new Map();
             if (oldBook) {
                 oldBook.chunks.forEach((chunk, index) => {
@@ -633,7 +816,7 @@
             this.library[id] = this.normalizeBook({
                 name: normalizedName,
                 kind: BOOK_KIND_CHARACTER_PROFILE,
-                sessionId: String(sessionId || 'default'),
+                sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 vectors,
                 vectorized,
@@ -651,6 +834,17 @@
             const id = this.getWorldSettingBookId(sessionId);
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话世界设定';
+            const normalizedSessionId = String(sessionId || 'default');
+            const unchanged = oldBook
+                && oldBook.name === normalizedName
+                && oldBook.kind === BOOK_KIND_WORLD_SETTING
+                && oldBook.sessionId === normalizedSessionId
+                && this.areChunksEqual(oldBook.chunks, normalizedChunks);
+            if (unchanged) {
+                this.selectedBookId = id;
+                this.toggleActiveBook(id, true);
+                return { success: true, bookId: id, count: normalizedChunks.length, unchanged: true };
+            }
             const oldVectors = new Map();
             if (oldBook) {
                 oldBook.chunks.forEach((chunk, index) => {
@@ -673,7 +867,7 @@
             this.library[id] = this.normalizeBook({
                 name: normalizedName,
                 kind: BOOK_KIND_WORLD_SETTING,
-                sessionId: String(sessionId || 'default'),
+                sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 vectors,
                 vectorized,
@@ -699,14 +893,26 @@
         async getEmbedding(text) {
             const source = String(text || '').trim();
             if (!source) throw new Error('向量化文本为空');
-            const cacheKey = this.hashText(source);
-            if (this.vectorCache.has(cacheKey)) return this.vectorCache.get(cacheKey);
+            const settings = YuzukiMemory.EmbeddingClient?.loadSettings?.() || {};
+            const cacheNamespace = [settings.provider, settings.baseUrl, settings.model].map((value) => String(value || '')).join('|');
+            const cacheKey = `${cacheNamespace}|${this.hashText(source)}`;
+            if (this.vectorCache.has(cacheKey)) {
+                const cached = this.vectorCache.get(cacheKey);
+                this.vectorCache.delete(cacheKey);
+                this.vectorCache.set(cacheKey, cached);
+                return cached;
+            }
             if (this.pendingEmbeddings.has(cacheKey)) return this.pendingEmbeddings.get(cacheKey);
             const request = YuzukiMemory.EmbeddingClient.embed(source);
             this.pendingEmbeddings.set(cacheKey, request);
             try {
                 const vector = await request;
                 this.vectorCache.set(cacheKey, vector);
+                while (this.vectorCache.size > MAX_QUERY_VECTOR_CACHE_ENTRIES) {
+                    const oldestKey = this.vectorCache.keys().next().value;
+                    if (oldestKey === undefined) break;
+                    this.vectorCache.delete(oldestKey);
+                }
                 return vector;
             } finally {
                 this.pendingEmbeddings.delete(cacheKey);
