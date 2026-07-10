@@ -1116,11 +1116,14 @@
     flex-direction: column;
     min-height: 0;
     margin: 0 8px;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     border: 1px solid var(--yzm-border-soft);
     border-radius: 10px;
     background: var(--yzm-row-bg);
     overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
 }
 
 #yzm-memory-root .yzm-vector-book-row {
@@ -1263,18 +1266,6 @@
 #yzm-memory-root .yzm-vector-status-failed {
     color: #e4485d;
     background: rgba(228, 72, 93, 0.14);
-}
-
-#yzm-memory-root .yzm-vector-primary-footer {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex: 0 0 auto;
-    gap: 8px;
-    min-height: 34px;
-    padding: 8px 8px 0;
-    color: var(--yzm-muted);
-    font-size: 11px;
 }
 
 #yzm-memory-root .yzm-vector-pager {
@@ -2320,8 +2311,7 @@
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-primary-controls,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-head,
-#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-status-wrap,
-#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-primary-footer {
+#yzm-memory-root .yzm-primary-icon-mode .yzm-vector-status-wrap {
     display: none;
 }
 
@@ -2334,7 +2324,10 @@
     padding: 10px 8px;
     border: 0;
     background: transparent;
-    overflow: hidden;
+    overflow-x: hidden;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row {
@@ -7868,6 +7861,18 @@
     justify-content: flex-end;
 }
 
+#yzm-memory-root .yzm-plot-editor-actions {
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+#yzm-memory-root .yzm-plot-summary-delete {
+    flex: 0 1 auto;
+    min-width: 0;
+}
+
 #yzm-memory-root .yzm-summary-add-choices {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -8294,17 +8299,16 @@
 
     #yzm-memory-root .yzm-vector-book-table {
         margin: 0 5px;
+        overflow-x: hidden;
+        overflow-y: auto;
+        -webkit-overflow-scrolling: touch;
+        touch-action: pan-y;
     }
 
     #yzm-memory-root .yzm-vector-book-row {
         grid-template-columns: 16px minmax(0, 1fr) 44px;
         min-height: 34px;
         padding: 0 6px;
-    }
-
-    #yzm-memory-root .yzm-vector-primary-footer {
-        align-items: flex-start;
-        flex-direction: column;
     }
 
     #yzm-memory-root .yzm-vector-workspace-view {

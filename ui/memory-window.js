@@ -143,7 +143,6 @@
             { id: 'batch', label: '批量填表' },
         ],
     };
-    const VECTOR_BOOK_PAGE_SIZE = 10;
     const VECTOR_SEGMENT_PAGE_SIZE = 10;
     const CHARACTER_VECTOR_SYNC_DELAY = 1200;
     const DEFAULT_VECTOR_SEARCH_SETTINGS = {
@@ -248,7 +247,6 @@
     const plotSummaryExpandedDays = new Set();
     const plotSummaryCollapsedDays = new Set();
     const vectorUiState = {
-        bookPage: 1,
         segmentPage: 1,
         bookQuery: '',
         segmentQuery: '',
@@ -3299,7 +3297,6 @@
             event.preventDefault();
             event.stopPropagation();
             store.toggleActiveBook(bookId, !isBoundToCurrentChat);
-            vectorUiState.bookPage = 1;
             closeRecordActionMenu(root);
             renderVectorWorkspace(root, { selectFirstVisible: true });
         });
@@ -3727,8 +3724,6 @@
         const allBooks = store?.listBooks?.() || [];
         const query = vectorUiState.bookQuery.trim().toLowerCase();
         const filteredBooks = query ? allBooks.filter((book) => book.name.toLowerCase().includes(query)) : allBooks;
-        const page = paginateItems(filteredBooks, vectorUiState.bookPage, VECTOR_BOOK_PAGE_SIZE);
-        vectorUiState.bookPage = page.currentPage;
 
         const header = document.createElement('div');
         header.className = 'yzm-vector-primary-header';
@@ -3744,16 +3739,11 @@
         const table = document.createElement('div');
         table.className = 'yzm-vector-book-table';
         table.append(createVectorBookHeader());
-        if (page.items.length) {
-            table.append(...page.items.map(createVectorBookRow));
+        if (filteredBooks.length) {
+            table.append(...filteredBooks.map(createVectorBookRow));
         } else {
             table.appendChild(createVectorEmptyState(allBooks.length ? '没有匹配的书籍' : '暂无向量化书籍'));
         }
-
-        const footer = document.createElement('div');
-        footer.className = 'yzm-vector-primary-footer';
-        footer.append(document.createTextNode(`共 ${filteredBooks.length} 本书`));
-        if (page.totalPages > 1) footer.appendChild(createVectorPager('book', page.currentPage, page.totalPages));
 
         const bookFile = document.createElement('input');
         bookFile.type = 'file';
@@ -3767,7 +3757,7 @@
         backupFile.hidden = true;
         backupFile.dataset.yzmVectorFile = 'backup';
 
-        view.append(header, controls, table, footer, bookFile, backupFile);
+        view.append(header, controls, table, bookFile, backupFile);
         return view;
     }
 
@@ -4179,7 +4169,7 @@
         if (!store) return { success: false, error: '向量书模块尚未加载' };
         const result = await store.syncCharacterProfilesToBook(getCharacterVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', `${getCurrentChatVectorBookName()} · 角色档案`);
         if (!result.success) return result;
-        if (options.vectorize === true && result.count > 0) {
+        if (options.vectorize === true) {
             const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
             return { ...result, vectorized: true, vectorizeResult };
         }
@@ -4191,7 +4181,7 @@
         if (!store) return { success: false, error: '向量书模块尚未加载' };
         const result = await store.syncWorldSettingsToBook(getWorldSettingVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', `${getCurrentChatVectorBookName()} · 世界设定`);
         if (!result.success) return result;
-        if (options.vectorize === true && result.count > 0) {
+        if (options.vectorize === true) {
             const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
             return { ...result, vectorized: true, vectorizeResult };
         }
@@ -4307,7 +4297,6 @@
         }
         await store.setBookChunks(targetBookId, chunks);
         store.selectBook(targetBookId);
-        vectorUiState.bookPage = 1;
         vectorUiState.segmentPage = 1;
         removePluginElement(overlay);
         refreshVectorAfterAction(root);
@@ -4429,7 +4418,6 @@
                 window.alert(result.error || '同步失败');
                 return;
             }
-            vectorUiState.bookPage = 1;
             vectorUiState.segmentPage = 1;
             refreshVectorAfterAction(root);
             return;
@@ -4458,7 +4446,6 @@
         if (action === 'clear-all') {
             if (!window.confirm('确定要清空全部向量化书籍吗？')) return;
             await store.clearAllBooks();
-            vectorUiState.bookPage = 1;
             vectorUiState.segmentPage = 1;
             refreshVectorAfterAction(root);
         }
@@ -4482,7 +4469,6 @@
             } else {
                 await store.importLibrary(file);
             }
-            vectorUiState.bookPage = 1;
             vectorUiState.segmentPage = 1;
             refreshVectorAfterAction(root);
         } catch (error) {
@@ -10832,8 +10818,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复手动删除或整理剧情摘要后，旧摘要可能被后续自动总结、聊天切换或分支快照恢复带回的问题：条目整理现在会强制保存为手动修改，并同步刷新分支快照。',
-            '保留上一版修复：剧情摘要在 swipe 或重 roll 后会按当前分支回滚，避免同一楼层多个回复分支同时残留。',
+            '向量化存储已全面优化：旧版保存在世界书中的向量会在更新后自动迁移到 SillyTavern 官方 vectors 目录，世界书仅保留轻量书籍目录；角色档案、世界设定及普通向量书的新增、修改和删除会同步更新，并降低长时间使用时的浏览器内存压力。现有向量书无需导出、清空或重新导入，迁移失败时插件也会保留旧数据，避免向量丢失。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11988,8 +11973,13 @@
         );
 
         const actions = document.createElement('div');
-        actions.className = 'yzm-record-actions';
+        actions.className = 'yzm-record-actions yzm-plot-editor-actions';
         const save = createButton('保存', 'yzm-add-table-confirm yzm-record-save');
+        const canDeleteCurrent = !isAppend && editIndex > -1 && editIndex < currentLines.length;
+        const deleteCurrent = canDeleteCurrent
+            ? createIconButton(`删除当前${label}`, 'fa-regular fa-trash-can', 'yzm-api-button yzm-api-button-danger yzm-plot-summary-delete')
+            : null;
+        if (deleteCurrent) actions.appendChild(deleteCurrent);
         actions.appendChild(save);
 
         header.append(title, close);
@@ -12003,6 +11993,38 @@
             if (event.target === overlay) closeModal();
         });
         dialog.addEventListener('click', (event) => event.stopPropagation());
+
+        const persistEditorChanges = (failureMessage) => {
+            record.values[field] = normalizePlotSummaryStoredText(record.values[field]);
+            normalizePlotItemMeta(record, normalizedKind, getPlotSummaryLines(record, normalizedKind).length);
+            setActiveRecordId(table.id, record.id);
+            activePlotSummaryKind = normalizedKind;
+            if (!persistStateOrReload(root, failureMessage, {
+                tableId: table.id,
+                recordId: record.id,
+                values: record.values,
+            })) return false;
+            renderWorkspaceList(root);
+            renderTableWorkspace(root);
+            bindPanelInteractions(root);
+            closeModal();
+            return true;
+        };
+
+        deleteCurrent?.addEventListener('click', () => {
+            if (!window.confirm(`确定删除当前${label}吗？`)) return;
+            const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, currentLines.length);
+            const metaList = normalizePlotItemMeta(record, normalizedKind, currentLines.length);
+            const nextLines = currentLines.slice();
+            nextLines.splice(editIndex, 1);
+            hiddenStates.splice(editIndex, 1);
+            metaList.splice(editIndex, 1);
+            record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            record.values[field] = nextLines.join('\n');
+            setPlotItemHiddenStates(record, normalizedKind, hiddenStates);
+            setPlotItemMeta(record, normalizedKind, metaList);
+            persistEditorChanges('当前会话尚未就绪，剧情摘要未删除。');
+        });
 
         save.addEventListener('click', () => {
             const timeInput = fields.querySelector('[data-yzm-record-field="时间"]');
@@ -12033,19 +12055,7 @@
                 setPlotItemHiddenStates(record, normalizedKind, nextValue ? [false] : []);
                 setPlotItemMeta(record, normalizedKind, nextValue ? [{ id: createPlotLineId(), text: nextValue, source: 'manual', createdAt: Date.now() }] : []);
             }
-            record.values[field] = normalizePlotSummaryStoredText(record.values[field]);
-            normalizePlotItemMeta(record, normalizedKind, getPlotSummaryLines(record, normalizedKind).length);
-            setActiveRecordId(table.id, record.id);
-            activePlotSummaryKind = normalizedKind;
-            if (!persistStateOrReload(root, '当前会话尚未就绪，剧情摘要未保存。', {
-                tableId: table.id,
-                recordId: record.id,
-                values: record.values,
-            })) return;
-            renderWorkspaceList(root);
-            renderTableWorkspace(root);
-            bindPanelInteractions(root);
-            closeModal();
+            persistEditorChanges('当前会话尚未就绪，剧情摘要未保存。');
         });
 
         fields.querySelector('.yzm-record-input')?.focus();
@@ -12621,7 +12631,6 @@
                     event.preventDefault();
                     event.stopPropagation();
                     const delta = Number(pager.dataset.yzmVectorPageDelta) || 0;
-                    if (pager.dataset.yzmVectorPage === 'book') vectorUiState.bookPage += delta;
                     if (pager.dataset.yzmVectorPage === 'segment') vectorUiState.segmentPage += delta;
                     renderVectorWorkspace(root);
                 }
@@ -12666,7 +12675,6 @@
                 const target = event.target;
                 if (target?.closest?.('.yzm-vector-book-search')) {
                     vectorUiState.bookQuery = target.value || '';
-                    vectorUiState.bookPage = 1;
                     window.clearTimeout(vectorSearchTimer);
                     vectorSearchTimer = window.setTimeout(() => renderVectorWorkspace(root), 120);
                     return;
