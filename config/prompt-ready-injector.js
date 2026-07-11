@@ -385,6 +385,55 @@
         return removed;
     }
 
+    function sanitizeMemoryFromChat(chat) {
+        if (!Array.isArray(chat)) return chat;
+        removeExistingMemoryInjections(chat);
+        chat.forEach((message) => {
+            const text = getPrimaryTextFromMessage(message);
+            if (MEMORY_VAR_PATTERN.test(text)) setPrimaryTextToMessage(message, stripMemoryVars(text));
+            MEMORY_VAR_PATTERN.lastIndex = 0;
+        });
+        return chat;
+    }
+
+    function getMemoryInjectionDecision(chat) {
+        const probe = YuzukiMemory.RequestProbe;
+        if (!probe?.classifyMemoryInjectionRequest) return { allowed: false, reason: 'probe-unavailable', phonePermissions: null };
+        return probe.classifyMemoryInjectionRequest({ messages: chat });
+    }
+
+    function applyPhoneMemoryPermissions(chat, permissions) {
+        if (!Array.isArray(chat) || !permissions) return chat;
+        const summaryMarker = /【(?:前情提要|剧情摘要)/;
+        const tableMarker = /【(?:当前世界状态参考|记忆只读数据库)/;
+        for (let index = chat.length - 1; index >= 0; index -= 1) {
+            const message = chat[index];
+            const type = String(message?.yzmMemoryInjectionType || '').toLowerCase();
+            const text = getPrimaryTextFromMessage(message);
+            const isVector = message?.isGaigaiVector === true || message?.isYuzukiVector === true || type === 'vector';
+            const isPrompt = message?.isGaigaiPrompt === true || type === 'prompt';
+            const isSummary = type === 'summary' || summaryMarker.test(text);
+            const isTable = type === 'table' || tableMarker.test(text);
+            const isUnclassifiedData = message?.isGaigaiData === true && !isSummary && !isTable;
+            const remove = (isVector && !permissions.allowVector)
+                || (isPrompt && !permissions.allowPrompt)
+                || (isSummary && !permissions.allowSummary)
+                || (isTable && !permissions.allowTable)
+                || (isUnclassifiedData && (!permissions.allowSummary || !permissions.allowTable));
+            if (remove) chat.splice(index, 1);
+        }
+        chat.forEach((message) => {
+            let text = getPrimaryTextFromMessage(message);
+            if (!permissions.allowSummary) text = text.replace(/\{\{\s*MEMORY_SUMMARY(?:\s*_[^{}]+)?\s*\}\}/gi, '');
+            if (!permissions.allowTable) text = text.replace(/\{\{\s*MEMORY_TABLE(?:\s*_[^{}]+)?\s*\}\}/gi, '');
+            if (!permissions.allowPrompt) text = text.replace(/\{\{\s*MEMORY_PROMPT\s*\}\}/gi, '');
+            if (!permissions.allowVector) text = text.replace(/\{\{\s*VECTOR_MEMORY\s*\}\}/gi, '');
+            if (!permissions.allowSummary || !permissions.allowTable) text = text.replace(/\{\{\s*MEMORY\s*\}\}/gi, '');
+            setPrimaryTextToMessage(message, text);
+        });
+        return chat;
+    }
+
     function makePromptMessage(state) {
         const injector = YuzukiMemory.VariableInjector;
         const text = injector?.buildMemoryPromptText?.(state);
@@ -626,12 +675,7 @@
         if (!injector || !storage) return chat;
 
         if (window.isSummarizing || options.disableMemoryInjection === true) {
-            chat.forEach((message) => {
-                const text = getPrimaryTextFromMessage(message);
-                if (MEMORY_VAR_PATTERN.test(text)) setPrimaryTextToMessage(message, stripMemoryVars(text));
-                MEMORY_VAR_PATTERN.lastIndex = 0;
-            });
-            return chat;
+            return sanitizeMemoryFromChat(chat);
         }
 
         const settings = getSettings();
@@ -924,12 +968,18 @@
         const container = resolveChatContainer(input);
         if (!Array.isArray(container.chat)) return input;
         if (isDryRunLike(input)) return input;
+        const decision = getMemoryInjectionDecision(container.chat);
+        if (!decision.allowed) {
+            sanitizeMemoryFromChat(container.chat);
+            return input;
+        }
         YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
         const injectedChat = processLegacyMemoryAnchors(safeDeepClone(container.chat), {
             disableFallback: true,
             processExtensionPrompts: true,
         });
         const finalChat = await processVectorAnchors(injectedChat);
+        applyPhoneMemoryPermissions(finalChat, decision.phonePermissions);
         capturePromptReadyProbe(finalChat, 'chat_completion_prompt_ready');
         if (container.type === 'array') return finalChat;
         const clonedInput = safeDeepClone(input);
@@ -952,14 +1002,28 @@
         if (!data || !Array.isArray(data.chat)) {
             const fallback = resolveChatContainer(event);
             if (Array.isArray(fallback.chat)) {
+                const decision = getMemoryInjectionDecision(fallback.chat);
+                if (!decision.allowed) {
+                    sanitizeMemoryFromChat(fallback.chat);
+                    return;
+                }
                 YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
                 const injected = processLegacyMemoryAnchors(safeDeepClone(fallback.chat), {
                     disableFallback: true,
                     processExtensionPrompts: true,
                 });
+                applyPhoneMemoryPermissions(injected, decision.phonePermissions);
                 capturePromptReadyProbe(injected, 'CHAT_COMPLETION_PROMPT_READY');
                 if (fallback.owner) fallback.owner.chat = injected;
             }
+            return;
+        }
+
+        const decision = getMemoryInjectionDecision(data.chat);
+        if (!decision.allowed) {
+            sanitizeMemoryFromChat(data.chat);
+            if (event?.detail && typeof event.detail === 'object') event.detail.chat = data.chat;
+            if (event && typeof event === 'object') event.chat = data.chat;
             return;
         }
 
@@ -970,6 +1034,7 @@
             disableFallback: true,
             processExtensionPrompts: true,
         });
+        applyPhoneMemoryPermissions(safeEvent.chat, decision.phonePermissions);
         capturePromptReadyProbe(safeEvent.chat, 'CHAT_COMPLETION_PROMPT_READY');
 
         data.chat = safeEvent.chat;
@@ -986,6 +1051,8 @@
             processPromptReadyChatSync: processLegacyMemoryAnchors,
             processTimedPromptInjection,
             processLegacyMemoryAnchors,
+            sanitizeMemoryFromChat,
+            applyPhoneMemoryPermissions,
             installPromptReadyInjectors,
         });
 
@@ -1022,6 +1089,8 @@
         processPromptReadyChatSync: processLegacyMemoryAnchors,
         processTimedPromptInjection,
         processLegacyMemoryAnchors,
+        sanitizeMemoryFromChat,
+        applyPhoneMemoryPermissions,
         installPromptReadyInjectors,
     });
 

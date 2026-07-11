@@ -8471,8 +8471,8 @@
             createRequestProbeStat('Total Tokens', data?.totalTokens || 0, 'fa-solid fa-coins'),
             createRequestProbeStat('Messages', `${data?.messages?.length || 0} 条`, 'fa-regular fa-message'),
             createRequestProbeStat(
-                data?.preview || data?.downstreamFinal ? '捕获阶段' : '最近捕获于',
-                data?.preview ? '发送前预览' : (data?.downstreamFinal ? '下游最终请求' : formatRequestProbeTime(data?.timestamp)),
+                data?.preview ? '捕获阶段' : '最近捕获于',
+                data?.preview ? '发送前预览' : formatRequestProbeTime(data?.timestamp),
                 'fa-regular fa-clock'
             )
         );
@@ -10818,7 +10818,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '向量化存储已全面优化：旧版保存在世界书中的向量会在更新后自动迁移到 SillyTavern 官方 vectors 目录，世界书仅保留轻量书籍目录；角色档案、世界设定及普通向量书的新增、修改和删除会同步更新，并降低长时间使用时的浏览器内存压力。现有向量书无需导出、清空或重新导入，迁移失败时插件也会保留旧数据，避免向量丢失。',
+            '【优化】优化API请求查看器显示',
+            '【优化】避免MVU等后台请求重复注入记忆内容',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

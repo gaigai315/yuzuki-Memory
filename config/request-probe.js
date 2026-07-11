@@ -19,6 +19,13 @@
     let generationEventsBound = false;
     let dryRunGenerationDepth = 0;
     let dryRunCaptureUntil = 0;
+    let foregroundGenerationActive = false;
+    let generationActivitySequence = 0;
+    let foregroundGenerationSequence = 0;
+    const jsGenerationStartedAt = new Map();
+    let tokenizerModulePromise = null;
+    let requestCaptureSequence = 0;
+    let previewCaptureSequence = 0;
     const FETCH_WRAPPER_FLAG = '__yzmMemoryRequestProbeFetch';
     // Some request monitors preserve themselves with a fetch accessor. A request
     // can then re-enter an older Yuzuki wrapper through that monitor's delegate.
@@ -110,6 +117,32 @@
         return args.some((arg) => arg?.dry_run === true || arg?.dryRun === true || arg?.isDryRun === true);
     }
 
+    function markJsGenerationStarted(generationId) {
+        const id = String(generationId || `anonymous-${Date.now()}`);
+        jsGenerationStartedAt.set(id, {
+            sequence: ++generationActivitySequence,
+            startedAt: Date.now(),
+        });
+    }
+
+    function markJsGenerationFinished(_result, generationId) {
+        if (generationId !== undefined && generationId !== null) {
+            jsGenerationStartedAt.delete(String(generationId));
+            return;
+        }
+        jsGenerationStartedAt.clear();
+    }
+
+    function hasNewerJsGeneration() {
+        const cutoff = Date.now() - 120000;
+        let latestSequence = 0;
+        jsGenerationStartedAt.forEach((entry, id) => {
+            if (entry.startedAt < cutoff) jsGenerationStartedAt.delete(id);
+            else latestSequence = Math.max(latestSequence, entry.sequence);
+        });
+        return latestSequence >= foregroundGenerationSequence && latestSequence > 0;
+    }
+
     function bindGenerationEvents() {
         if (generationEventsBound) return;
         const context = getContext();
@@ -121,13 +154,22 @@
         const endedEvent = eventTypes?.GENERATION_ENDED || 'generation_ended';
         generationEventsBound = true;
         eventSource.on(startedEvent, (...args) => {
-            if (isDryRunGenerationEvent(args)) markDryRunGenerationStarted();
+            if (isDryRunGenerationEvent(args)) {
+                markDryRunGenerationStarted();
+                return;
+            }
+            const generationType = String(args[0] || '').toLowerCase();
+            foregroundGenerationActive = generationType !== 'quiet';
+            if (foregroundGenerationActive) foregroundGenerationSequence = ++generationActivitySequence;
         });
         [stoppedEvent, endedEvent].filter(Boolean).forEach((eventName) => {
             eventSource.on(eventName, () => {
                 if (dryRunGenerationDepth > 0) markDryRunGenerationFinished();
+                foregroundGenerationActive = false;
             });
         });
+        eventSource.on('js_generation_started', markJsGenerationStarted);
+        eventSource.on('js_generation_ended', markJsGenerationFinished);
     }
 
     function getRequestArray(body) {
@@ -552,6 +594,53 @@
         return content ? Math.ceil(content.length / 1.5) : 0;
     }
 
+    function classifyMemoryInjectionRequest(body) {
+        const phonePermissions = getPhoneMemoryPermissions(body);
+        if (phonePermissions) return { allowed: true, reason: 'phone', phonePermissions };
+        if (window.isSummarizing) return { allowed: false, reason: 'memory-task', phonePermissions: null };
+        if (body?.dryRun || body?.dry_run || body?.isDryRun || body?.quiet || body?.bg || body?.no_update) {
+            return { allowed: false, reason: 'background-flags', phonePermissions: null };
+        }
+        if (hasNewerJsGeneration()) return { allowed: false, reason: 'js-generation', phonePermissions: null };
+        if (foregroundGenerationActive) return { allowed: true, reason: 'tavern-foreground', phonePermissions: null };
+        return { allowed: false, reason: 'unclassified-background', phonePermissions: null };
+    }
+
+    function sanitizeMemoryFromBody(body) {
+        getRequestArrays(body).forEach((target) => {
+            YuzukiMemory.PromptReadyInjector?.sanitizeMemoryFromChat?.(target.items);
+        });
+        const pattern = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}/gi;
+        const walk = (node) => {
+            if (!node || typeof node !== 'object') return;
+            Object.keys(node).forEach((key) => {
+                if (typeof node[key] === 'string') node[key] = node[key].replace(pattern, '');
+                else walk(node[key]);
+            });
+        };
+        walk(body);
+        return body;
+    }
+
+    async function countMessageTokens(item, role, content) {
+        try {
+            tokenizerModulePromise ||= import('/scripts/tokenizers.js');
+            const tokenizerModule = await tokenizerModulePromise;
+            if (typeof tokenizerModule?.countTokensOpenAIAsync !== 'function') {
+                throw new Error('SillyTavern countTokensOpenAIAsync is unavailable');
+            }
+            const message = { role, content };
+            const name = String(item?.name || '').trim();
+            if (name) message.name = name;
+            const count = Number(await tokenizerModule.countTokensOpenAIAsync(message));
+            if (!Number.isFinite(count) || count < 0) throw new Error(`Invalid token count: ${count}`);
+            return Math.round(count);
+        } catch (error) {
+            console.warn('[yuzuki-Memory] SillyTavern tokenizer failed; using character estimate.', error);
+            return estimateTokens(content);
+        }
+    }
+
     function isPhoneProbeMessage(item, content = '', role = '') {
         if (role !== 'system') return false;
         if (item?.isPhoneMessage === true) return true;
@@ -564,7 +653,7 @@
         return /小手机|手机插件|微信|音乐状态栏|音乐|HONEY|PHONE/i.test(sourceText);
     }
 
-    function normalizeMessage(message, index) {
+    async function normalizeMessage(message, index) {
         const item = message && typeof message === 'object' ? message : { content: String(message || '') };
         const content = getMessageText(item);
         const fallbackRole = item.is_user === true ? 'user' : (item.is_user === false ? 'assistant' : 'system');
@@ -577,7 +666,7 @@
             role,
             name: String(item.name || item.identifier || '').trim(),
             content,
-            tokens: estimateTokens(content),
+            tokens: await countMessageTokens(item, role, content),
             flags: {
                 memory: isMemory,
                 prompt: isPrompt,
@@ -588,13 +677,17 @@
         };
     }
 
-    function captureFromBody(body, url = '', options = {}) {
+    async function captureFromBody(body, url = '', options = {}) {
         const targets = getRequestArrays(body);
         if (!targets.length) return null;
-        const messages = targets.flatMap((target) => clone(target.items).map((item, index) => ({
-            ...normalizeMessage(item, index),
+        const preview = options.preview === true;
+        const captureSequence = preview ? ++previewCaptureSequence : ++requestCaptureSequence;
+        const pendingMessages = targets.flatMap((target) => clone(target.items).map(async (item, index) => ({
+            ...await normalizeMessage(item, index),
             sourceKey: target.key,
         })));
+        const messages = await Promise.all(pendingMessages);
+        if (preview ? captureSequence !== previewCaptureSequence : captureSequence !== requestCaptureSequence) return null;
         const totalTokens = messages.reduce((sum, message) => sum + message.tokens, 0);
         const requestData = {
             url,
@@ -604,11 +697,11 @@
             messages,
             totalTokens,
             rawBody: clone(body),
-            preview: options.preview === true,
+            preview,
             promptReady: options.promptReady === true,
             downstreamFinal: options.downstreamFinal === true,
         };
-        if (options.preview === true) {
+        if (preview) {
             lastPreviewRequestData = requestData;
             console.info('[yuzuki-Memory] preview request captured; last real API request is unchanged.', {
                 url,
@@ -630,7 +723,7 @@
             messages: resolved.chat,
             model: resolved.data?.model || resolved.data?.model_name || resolved.data?.chat_completion_source || '',
         };
-        captureFromBody(body, `sillytavern://${source}`, { preview: true, promptReady: true });
+        void captureFromBody(body, `sillytavern://${source}`, { preview: true, promptReady: true });
         return input;
     }
 
@@ -743,16 +836,23 @@
         }
     }
 
-    async function processJsonBody(url, options, bodyText, requestSource = null) {
+    async function processJsonBody(url, options, bodyText, requestSource = null, processingOptions = {}) {
         if (!isTextGenerationRequest(url, options) || typeof bodyText !== 'string' || !bodyText.trim()) return null;
         bindGenerationEvents();
         const rawBody = JSON.parse(bodyText);
-        const phonePermissions = getPhoneMemoryPermissions(rawBody);
+        const injectionDecision = classifyMemoryInjectionRequest(rawBody);
+        const { phonePermissions } = injectionDecision;
         if (phonePermissions) {
             console.info('[yuzuki-Memory] phone request memory permissions detected', phonePermissions);
         }
         const isDryRunLike = !!(rawBody?.dryRun || rawBody?.isDryRun || rawBody?.quiet || rawBody?.bg || rawBody?.no_update);
-        const isPreviewCapture = isDryRunLike || isDryRunGenerationActive();
+        const isPreviewCapture = !injectionDecision.allowed || isDryRunLike || isDryRunGenerationActive();
+        if (!injectionDecision.allowed) {
+            sanitizeMemoryFromBody(rawBody);
+            console.info('[yuzuki-Memory] memory injection skipped for background request.', {
+                reason: injectionDecision.reason,
+            });
+        }
         const hidingResult = isPreviewCapture ? null : await applyPreRequestHiding();
         removeHiddenMessagesFromBody(rawBody, getHiddenContextInfo(hidingResult));
         if (!isPreviewCapture) {
@@ -775,6 +875,8 @@
         logVariableLocations(rawBody);
         const shouldDeferMemoryAnchorsToVariableInjector = hasVectorVariable && YuzukiMemory.EmbeddingClient?.loadSettings?.()?.enabled === true;
         if (
+            injectionDecision.allowed
+            &&
             typeof YuzukiMemory.PromptReadyInjector?.processPromptReadyChatSync === 'function'
             && (hasAnyMemoryVariable || !hasMemoryInjectionMarkers)
             && !shouldDeferMemoryAnchorsToVariableInjector
@@ -790,14 +892,19 @@
         } else if (hasMemoryInjectionMarkers) {
             console.info('[yuzuki-Memory] final request already contains memory injections; skip prompt-ready fallback to preserve anchor order.');
         }
-        if (typeof YuzukiMemory.PromptReadyInjector?.processTimedPromptInjection === 'function') {
+        if (injectionDecision.allowed && typeof YuzukiMemory.PromptReadyInjector?.processTimedPromptInjection === 'function') {
             getRequestArrays(rawBody).forEach((target) => {
                 YuzukiMemory.PromptReadyInjector.processTimedPromptInjection(target.items, {
                     commitTimedPromptState: true,
                 });
             });
         }
-        const body = YuzukiMemory.VariableInjector?.processBody
+        if (phonePermissions) {
+            getRequestArrays(rawBody).forEach((target) => {
+                YuzukiMemory.PromptReadyInjector?.applyPhoneMemoryPermissions?.(target.items, phonePermissions);
+            });
+        }
+        const body = injectionDecision.allowed && YuzukiMemory.VariableInjector?.processBody
             ? await YuzukiMemory.VariableInjector.processBody(rawBody, {
                 getVectorText: getVectorInjectionText,
                 disableVectorInjection: phonePermissions ? !phonePermissions.allowVector : false,
@@ -820,7 +927,9 @@
         } else {
             console.info('[yuzuki-Memory Vector] 最终请求体没有新版向量记忆');
         }
-        captureFromBody(body, url, { preview: isPreviewCapture });
+        if (processingOptions.captureBeforeDownstream !== false) {
+            void captureFromBody(body, url, { preview: isPreviewCapture });
+        }
         if (requestSource) {
             return [new Request(requestSource, { body: nextBody }), null, { preview: isPreviewCapture }];
         }
@@ -838,14 +947,22 @@
         try {
             if (requestInput && !options.body) {
                 const requestOptions = { ...options, method: requestInput.method, headers: options.headers || requestInput.headers };
-                const processed = await processJsonBody(url, requestOptions, await readRequestBody(requestInput), requestInput);
+                const processed = await processJsonBody(
+                    url,
+                    requestOptions,
+                    await readRequestBody(requestInput),
+                    requestInput,
+                    { captureBeforeDownstream: false }
+                );
                 if (processed?.[0] && isRequestLike(processed[0])) {
                     processedRequestInputs?.add(processed[0]);
                     if (processed?.[2]?.preview === true) previewRequestInputs?.add(processed[0]);
                 }
                 return processed ? [processed[0], processed[1]] : args;
             }
-            const processed = await processJsonBody(url, options, options.body);
+            const processed = await processJsonBody(url, options, options.body, null, {
+                captureBeforeDownstream: false,
+            });
             if (!processed) return args;
             if (processed[1] && typeof processed[1] === 'object') {
                 Object.defineProperty(processed[1], FETCH_PROCESSED_FLAG, { value: true });
@@ -884,10 +1001,11 @@
             const preview = requestInput
                 ? previewRequestInputs?.has(requestInput) === true
                 : options?.[FETCH_PREVIEW_FLAG] === true;
-            return captureFromBody(body, url, {
+            void captureFromBody(body, url, {
                 preview,
                 downstreamFinal: true,
             });
+            return null;
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to capture downstream request body.', error);
             return null;
@@ -1015,6 +1133,8 @@
         captureFromPromptReady,
         ensureFetchProbeInstalled,
         getVectorInjectionText,
+        classifyMemoryInjectionRequest,
+        shouldInjectMemory: (body) => classifyMemoryInjectionRequest(body).allowed,
         processFetchArgs,
         getLastRequestData,
         getLastPreviewRequestData,
