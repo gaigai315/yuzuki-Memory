@@ -600,6 +600,49 @@
         return captureMessageSnapshot(chat.length - 1, { state, sessionId });
     }
 
+    function clearSessionPendingState(sessionId) {
+        const prefix = `${sessionId || 'default'}:`;
+        [pendingRequestRollbackFloors, pendingApplyRollbackFloors, pendingSwipeModeFloors].forEach((entries) => {
+            for (const key of entries.keys()) {
+                if (key.startsWith(prefix)) entries.delete(key);
+            }
+        });
+        Object.keys(processedMessageSignatures).forEach((key) => {
+            if (key.startsWith(prefix)) delete processedMessageSignatures[key];
+        });
+    }
+
+    function resetSnapshotHistory(state = loadState(), options = {}) {
+        const sessionId = ensureSessionLoaded(options.sessionId || getSessionId());
+        if (!sessionId) return false;
+
+        snapshots = {};
+        branchSnapshots = {};
+        clearSessionPendingState(sessionId);
+
+        const chat = getChat();
+        const floor = chat.length ? chat.length - 1 : -1;
+        if (floor < 0) {
+            snapshots['-1'] = createSnapshot(state, -1, options);
+        } else {
+            const message = chat[floor];
+            const snapshot = {
+                ...createSnapshot(state, floor, options),
+                signature: getMessageSignature(message),
+            };
+            snapshots[String(floor)] = snapshot;
+            const branchKey = getBranchSnapshotKey(floor, message);
+            if (branchKey) branchSnapshots[branchKey] = clone(snapshot);
+        }
+        persistSnapshots(sessionId);
+        console.info('[yuzuki-Memory] Branch snapshot history reset after destructive memory edit.', {
+            sessionId,
+            floor,
+            reason: String(options.reason || ''),
+        });
+        return true;
+    }
+
     function reapplyCurrentMessage(floor) {
         window.setTimeout(() => {
             if (!isRealtimeEnabled()) return;
@@ -862,6 +905,7 @@
         captureBaseSnapshotBeforeMessage,
         captureMessageSnapshot,
         captureCurrentStateSnapshot,
+        resetSnapshotHistory,
         markManualEdit,
         markRequestRollbackFloor,
         markApplyRollbackFloor,

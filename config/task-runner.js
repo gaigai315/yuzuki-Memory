@@ -747,15 +747,48 @@
             if (mode === 'custom') {
                 const preset = snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset();
                 if (!preset) return { success: false, error: '未选择可用的 LLM API 预设。' };
-                return YuzukiMemory.LlmClient.generateWithCustom(preset, messages, { stream: preset.stream !== false, ...taskOptions });
+                const result = await YuzukiMemory.LlmClient.generateWithCustom(preset, messages, { stream: preset.stream !== false, ...taskOptions });
+                return normalizeGenerationResult(result);
             }
             const shouldStream = options.stream !== undefined
                 ? options.stream !== false
                 : !['trace', 'traceOptimize'].includes(String(options.kind || ''));
-            return YuzukiMemory.LlmClient.generateWithTavern(messages, { ...taskOptions, stream: shouldStream });
+            const result = await YuzukiMemory.LlmClient.generateWithTavern(messages, { ...taskOptions, stream: shouldStream });
+            return normalizeGenerationResult(result);
         } finally {
             window.isSummarizing = previousSummarizing;
         }
+    }
+
+    function detectUpstreamErrorResponse(text = '') {
+        const raw = String(text || '').trim();
+        if (!raw) return null;
+        const payloads = parseJsonBlocks(raw);
+        const payload = payloads.find((entry) => entry && typeof entry === 'object' && !Array.isArray(entry) && entry.error);
+        if (!payload) return null;
+
+        const error = payload.error;
+        const detail = error && typeof error === 'object' ? error : { message: String(error || '') };
+        const code = Number(detail.code ?? detail.status ?? payload.code ?? payload.status);
+        const type = String(detail.type ?? payload.type ?? '').trim();
+        const message = String(detail.message ?? detail.error ?? error ?? '').trim();
+        const looksLikeApiError = (Number.isFinite(code) && code >= 400)
+            || /(?:server|api|upstream|gateway|rate|auth|timeout|error)/i.test(type)
+            || /(?:上游|空响应|服务器|网关|限流|超时|upstream|empty response|server_error|gateway|rate limit|timeout)/i.test(message);
+        if (!looksLikeApiError) return null;
+        return { raw, code: Number.isFinite(code) ? code : '', type, message };
+    }
+
+    function normalizeGenerationResult(result) {
+        if (!result?.success) return result;
+        const upstreamError = detectUpstreamErrorResponse(result.text);
+        if (!upstreamError) return result;
+        return {
+            ...result,
+            success: false,
+            error: `API 上游返回错误：\n${upstreamError.raw}`,
+            upstreamError,
+        };
     }
 
     function parseJsonBlock(text = '') {
@@ -1783,7 +1816,8 @@
                 error: '批量填表没有解析到有效更新，已跳过写入，避免清空或覆盖现有表格。',
             };
         }
-        return { ...result, success: true, count };
+        const hiddenPlotSummaryCount = hidePlotSummaryItemsCoveredByExistingSummaries(state);
+        return { ...result, success: true, count, hiddenPlotSummaryCount };
     }
 
     function commitSummaryResult(state, result) {

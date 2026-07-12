@@ -2517,6 +2517,11 @@
             return false;
         }
 
+        YuzukiMemory.BranchSnapshot?.resetSnapshotHistory?.(getState(), {
+            sessionId: loadedSessionId,
+            reason: `clear-table:${mode}`,
+        });
+
         closeRecordActionMenu(root);
         setMobileDetailOpen(root, false);
         dispatchManualStateUpdated({ source: 'clear-table', mode });
@@ -10818,8 +10823,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】优化API请求查看器显示',
-            '【优化】避免MVU等后台请求重复注入记忆内容',
+            '【修复】修复清空剧情摘要后，重新 Roll 或 Swipe 会恢复旧内容的问题',
+            '【优化】API 返回错误时直接显示上游原始响应，方便排查 502 等问题',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
