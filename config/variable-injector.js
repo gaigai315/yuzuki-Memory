@@ -429,7 +429,7 @@
                 const date = getPlotDateFromTimeText(time);
                 const timeForInjection = date && date === lastDate ? stripPlotDateFromTimeText(time) : time;
                 if (date) lastDate = date;
-                return `${timeForInjection}\t${content}`;
+                return `${timeForInjection} ${content}`;
             })
             .filter(Boolean);
     }
