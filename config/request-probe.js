@@ -789,6 +789,44 @@
         }));
     }
 
+    function isPhoneMemoryPlacementMessage(item) {
+        const injectionType = String(item?.yzmMemoryInjectionType || '').trim().toLowerCase();
+        return item?.isGaigaiData === true
+            || item?.isYuzukiVector === true
+            || item?.isGaigaiVector === true
+            || injectionType === 'summary'
+            || injectionType === 'table';
+    }
+
+    function isPhoneCharacterProfileMessage(item) {
+        const name = String(item?.name || item?.identifier || '').trim();
+        const content = getMessageText(item);
+        return /^SYSTEM\s*\(\s*角色卡\s*\)$/i.test(name)
+            || content.includes('【角色信息】');
+    }
+
+    function repositionPhoneMemoryMessages(body, phonePermissions = null) {
+        if (!phonePermissions) return 0;
+
+        let movedCount = 0;
+        getRequestArrays(body).forEach((target) => {
+            const items = target.items;
+            if (!Array.isArray(items) || items.length === 0) return;
+
+            const memoryMessages = items.filter(isPhoneMemoryPlacementMessage);
+            if (memoryMessages.length === 0) return;
+
+            const remainingMessages = items.filter((item) => !isPhoneMemoryPlacementMessage(item));
+            const characterProfileIndex = remainingMessages.findIndex(isPhoneCharacterProfileMessage);
+            if (characterProfileIndex < 0) return;
+
+            remainingMessages.splice(characterProfileIndex, 0, ...memoryMessages);
+            items.splice(0, items.length, ...remainingMessages);
+            movedCount += memoryMessages.length;
+        });
+        return movedCount;
+    }
+
     function logVariableLocations(body) {
         const pattern = /\{\{\s*(?:MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}/gi;
         const hits = [];
@@ -919,6 +957,12 @@
                 preserveUnresolvedVectorAnchors: true,
             })
             : rawBody;
+        const repositionedPhoneMemoryCount = repositionPhoneMemoryMessages(body, phonePermissions);
+        if (repositionedPhoneMemoryCount > 0) {
+            console.info('[yuzuki-Memory] 已将小手机记忆上下文移动到角色信息之前。', {
+                messages: repositionedPhoneMemoryCount,
+            });
+        }
         const nextBody = JSON.stringify(body);
         if (bodyContainsYuzukiVector(body)) {
             console.info('[yuzuki-Memory Vector] 最终请求体已包含新版向量记忆');
@@ -1134,6 +1178,7 @@
         ensureFetchProbeInstalled,
         getVectorInjectionText,
         classifyMemoryInjectionRequest,
+        repositionPhoneMemoryMessages,
         shouldInjectMemory: (body) => classifyMemoryInjectionRequest(body).allowed,
         processFetchArgs,
         getLastRequestData,
