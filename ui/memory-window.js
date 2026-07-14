@@ -8461,7 +8461,9 @@
         const title = document.createElement('div');
         title.append(createIconNode('fa-solid fa-list-check', ''), document.createTextNode('API 请求查看器'));
         const desc = document.createElement('span');
-        desc.textContent = data?.preview
+        desc.textContent = data?.preparedTask
+            ? '插件任务发送前构造的请求快照，不代表酒馆后端已接收或上游已成功返回。'
+            : data?.preview
             ? '仅捕获到发送前预览，最终 API 请求体尚未被插件捕获。'
             : (data?.downstreamFinal
                 ? '查看所有下游插件处理后交给网络层的最终请求内容。'
@@ -8476,8 +8478,8 @@
             createRequestProbeStat('Total Tokens', data?.totalTokens || 0, 'fa-solid fa-coins'),
             createRequestProbeStat('Messages', `${data?.messages?.length || 0} 条`, 'fa-regular fa-message'),
             createRequestProbeStat(
-                data?.preview ? '捕获阶段' : '最近捕获于',
-                data?.preview ? '发送前预览' : formatRequestProbeTime(data?.timestamp),
+                data?.preparedTask || data?.preview ? '捕获阶段' : '最近捕获于',
+                data?.preparedTask ? '任务发送前快照' : (data?.preview ? '发送前预览' : formatRequestProbeTime(data?.timestamp)),
                 'fa-regular fa-clock'
             )
         );

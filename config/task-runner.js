@@ -728,7 +728,7 @@
             yzmMemoryTask: buildTaskRequestMeta(options),
             yzmMemoryInternalApi: true,
         };
-        YuzukiMemory.RequestProbe.captureFromBody(body, 'yuzuki-memory://task');
+        YuzukiMemory.RequestProbe.captureFromBody(body, 'yuzuki-memory://task', { preparedTask: true });
     }
 
     async function generate(messages, options = {}) {
@@ -2485,8 +2485,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 return;
             }
             if (isManualTaskBusy()) {
-                autoTaskArmed = false;
-                autoTaskBaselineChatLength = chatLength;
+                scheduleAutoSummary(callbacks, 2000);
                 return;
             }
             if (isPluginTaskBusy() || isGenerationBusy() || isChatRequestBusy()) {
@@ -2606,6 +2605,33 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         scheduleAutoSummary(callbacks);
     }
 
+    function recoverPendingAutoTask(callbacks = {}, options = {}) {
+        const currentSessionId = getCurrentSessionId();
+        const chatLength = getChatLength();
+        if (!currentSessionId || !isLatestAssistantMessage()) return false;
+        if (currentSessionId !== autoTaskSessionId) refreshAutoTaskBaseline();
+        if (autoTaskArmed || autoSummaryRunning) return false;
+        if (!options.force && chatLength <= autoTaskBaselineChatLength) return false;
+
+        const state = callbacks.getState?.();
+        if (!state) return false;
+        const task = buildPendingAutoTask(
+            normalizePointers(state),
+            chatLength,
+            getAutoSummarySettings(),
+            getPluginSettings()
+        );
+        if (!task) {
+            autoTaskBaselineChatLength = chatLength;
+            return false;
+        }
+
+        autoTaskArmed = true;
+        autoTaskBaselineChatLength = Math.min(autoTaskBaselineChatLength, Math.max(0, chatLength - 1));
+        scheduleAutoSummary(callbacks);
+        return true;
+    }
+
     function bindAutoSummary(callbacks = {}) {
         if (autoSummaryBound) return;
         autoSummaryBound = true;
@@ -2625,9 +2651,15 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             if (eventTypes.GENERATION_ENDED) eventSource.on?.(eventTypes.GENERATION_ENDED, onGenerationEnded);
             if (eventTypes.CHARACTER_MESSAGE_RENDERED) eventSource.on?.(eventTypes.CHARACTER_MESSAGE_RENDERED, onCharacterRendered);
         }
+        window.setTimeout(() => recoverPendingAutoTask(callbacks, { force: true }), 1200);
         autoTaskSessionPollTimer = window.setInterval(() => {
             const currentSessionId = getCurrentSessionId();
-            if (currentSessionId && currentSessionId !== autoTaskSessionId) refreshAutoTaskBaseline();
+            if (currentSessionId && currentSessionId !== autoTaskSessionId) {
+                refreshAutoTaskBaseline();
+                window.setTimeout(() => recoverPendingAutoTask(callbacks, { force: true }), 800);
+                return;
+            }
+            recoverPendingAutoTask(callbacks);
         }, 1500);
     }
 

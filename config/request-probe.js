@@ -700,6 +700,7 @@
             preview,
             promptReady: options.promptReady === true,
             downstreamFinal: options.downstreamFinal === true,
+            preparedTask: options.preparedTask === true,
         };
         if (preview) {
             lastPreviewRequestData = requestData;
