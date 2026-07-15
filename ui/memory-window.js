@@ -10825,8 +10825,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复清空剧情摘要后，重新 Roll 或 Swipe 会恢复旧内容的问题',
-            '【优化】API 返回错误时直接显示上游原始响应，方便排查 502 等问题',
+            '【优化】兼容 GLM/OpenCode 将有效正文返回在 reasoning_content 的响应格式',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

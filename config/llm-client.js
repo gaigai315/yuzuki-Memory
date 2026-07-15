@@ -410,7 +410,11 @@
         if (['SAFETY', 'RECITATION', 'safety'].includes(finishReason)) {
             return { content: '', reasoning: '', finishReason, error: `内容被安全策略拦截 (${finishReason})` };
         }
-        const reasoning = chunk.choices?.[0]?.delta?.reasoning_content || '';
+        const reasoning = chunk.choices?.[0]?.delta?.reasoning_content
+            || chunk.choices?.[0]?.message?.reasoning_content
+            || chunk.data?.choices?.[0]?.delta?.reasoning_content
+            || chunk.data?.choices?.[0]?.message?.reasoning_content
+            || '';
         const geminiPartsText = Array.isArray(chunk.candidates?.[0]?.content?.parts)
             ? chunk.candidates[0].content.parts.map((part) => String(part?.text || '')).join('')
             : '';
@@ -437,6 +441,7 @@
                         success: true,
                         text: parsedStream.truncated ? appendTokenTruncationMarker(parsedStream.text, 'SSE 文本响应') : parsedStream.text,
                         truncated: parsedStream.truncated,
+                        reasoningFallback: parsedStream.reasoningFallback,
                     };
                 }
             }
@@ -464,7 +469,7 @@
         const geminiPartsText = Array.isArray(data?.candidates?.[0]?.content?.parts)
             ? data.candidates[0].content.parts.map((part) => String(part?.text || '')).join('')
             : '';
-        const content = stripThinking(
+        const primaryContent = stripThinking(
             normalizedArrayContent
             || data?.choices?.[0]?.message?.content
             || data?.choices?.[0]?.text
@@ -478,11 +483,20 @@
             || data?.response
             || ''
         );
+        const reasoningContent = stripThinking(
+            data?.choices?.[0]?.message?.reasoning_content
+            || data?.choices?.[0]?.delta?.reasoning_content
+            || data?.data?.choices?.[0]?.message?.reasoning_content
+            || data?.data?.choices?.[0]?.delta?.reasoning_content
+            || ''
+        );
+        const content = primaryContent || reasoningContent;
         if (!content) throw new Error('API 返回内容为空');
         return {
             success: true,
             text: finishReason === 'length' ? appendTokenTruncationMarker(content, '非流式响应') : content,
             truncated: finishReason === 'length',
+            reasoningFallback: !primaryContent && !!reasoningContent,
         };
     }
 
@@ -508,9 +522,12 @@
                 if (fallback.content) fullText += fallback.content;
             }
         });
+        const primaryText = stripThinking(fullText);
+        const reasoningText = stripThinking(fullReasoning);
         return {
-            text: stripThinking(fullText || fullReasoning),
+            text: primaryText || reasoningText,
             truncated,
+            reasoningFallback: !primaryText && !!reasoningText,
         };
     }
 
@@ -595,11 +612,12 @@
         } finally {
             reader.releaseLock();
         }
-        let text = stripThinking(fullText);
-        if (!text && fullReasoning.trim()) throw new Error('API 只返回了 reasoning_content，未返回正文内容');
+        const primaryText = stripThinking(fullText);
+        const reasoningText = stripThinking(fullReasoning);
+        let text = primaryText || reasoningText;
         if (truncated && text) text = appendTokenTruncationMarker(text, '流式响应');
         if (!text) throw new Error('流式传输返回为空');
-        return { success: true, text, truncated };
+        return { success: true, text, truncated, reasoningFallback: !primaryText && !!reasoningText };
     }
 
     async function generateWithTavern(messages, options = {}) {
