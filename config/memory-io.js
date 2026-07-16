@@ -3,7 +3,7 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const FORMAT = 'yuzuki-memory-table-backup';
-    const VERSION = 1;
+    const VERSION = 2;
 
     function clone(value) {
         return JSON.parse(JSON.stringify(value ?? null));
@@ -66,17 +66,63 @@
         }));
     }
 
-    function normalizeRecord(record, tableId, columns, rowIndex = 0) {
+    function getStorage() {
+        return YuzukiMemory.Storage;
+    }
+
+    function isFloorScopedTable(tableId) {
+        return tableId === 'memory_summary' || tableId === 'plot_summary';
+    }
+
+    function normalizeFloorScope(scope, fallback = null) {
+        return getStorage()?.normalizeFloorScope?.(scope, fallback) || scope || fallback || null;
+    }
+
+    function getCurrentFloorScope(state = {}) {
+        return normalizeFloorScope(
+            state?.currentFloorScope,
+            getStorage()?.getCurrentFloorScope?.(state?.sessionId)
+        );
+    }
+
+    function formatImportScopeTime(value) {
+        const date = new Date(value || Date.now());
+        if (Number.isNaN(date.getTime())) return '历史导入';
+        const pad = (part) => String(part).padStart(2, '0');
+        return `导入于${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    function getImportFloorScope(raw = {}, currentState = {}) {
+        const explicit = normalizeFloorScope(raw?.sourceScope || raw?.floorScope);
+        if (explicit) return explicit;
+        const exportedAt = String(raw?.exportedAt || raw?.t || '').trim();
+        const seed = exportedAt || `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        return getStorage()?.createFloorScope?.(`import:${seed}`, {
+            label: formatImportScopeTime(exportedAt),
+            kind: 'import',
+        }) || {
+            id: `import:${seed}`,
+            label: formatImportScopeTime(exportedAt),
+            kind: 'import',
+        };
+    }
+
+    function normalizeRecord(record, tableId, columns, rowIndex = 0, floorScope = null) {
         const sourceValues = record?.values && typeof record.values === 'object' ? record.values : record;
-        return {
+        const normalized = {
+            ...(record && typeof record === 'object' ? clone(record) : {}),
             id: String(record?.id || createRecordId(tableId, rowIndex)),
             hidden: !!record?.hidden,
             values: normalizeRecordValues(sourceValues, columns),
         };
+        return isFloorScopedTable(tableId)
+            ? (getStorage()?.ensureRecordFloorScope?.(normalized, floorScope) || normalized)
+            : normalized;
     }
 
-    function normalizeDirectBackup(raw) {
+    function normalizeDirectBackup(raw, currentState = {}) {
         const tables = Array.isArray(raw?.tables) ? raw.tables : [];
+        const importFloorScope = getImportFloorScope(raw, currentState);
         const usedIds = new Set();
         const normalizedTables = tables.map((table, index) => {
             const id = uniqueId(table?.id || table?.name || `table_${index + 1}`, usedIds);
@@ -95,7 +141,7 @@
             const rawRecords = Array.isArray(raw?.records?.[originalId])
                 ? raw.records[originalId]
                 : (Array.isArray(raw?.records?.[table.id]) ? raw.records[table.id] : []);
-            records[table.id] = rawRecords.map((record, rowIndex) => normalizeRecord(record, table.id, table.columns, rowIndex));
+            records[table.id] = rawRecords.map((record, rowIndex) => normalizeRecord(record, table.id, table.columns, rowIndex, importFloorScope));
         });
         const activeRecordIds = {};
         Object.entries(raw?.activeRecordIds || {}).forEach(([tableId, recordId]) => {
@@ -107,6 +153,7 @@
             records,
             activeTableId: idMap.get(String(raw?.activeTableId || '')) || normalizedTables[0]?.id || '',
             activeRecordIds,
+            sourceScope: importFloorScope,
         };
     }
 
@@ -126,7 +173,7 @@
         };
     }
 
-    function legacyRowsToRecords(rows, columns, tableId, summarizedRows = []) {
+    function legacyRowsToRecords(rows, columns, tableId, summarizedRows = [], floorScope = null) {
         return (Array.isArray(rows) ? rows : []).map((row, rowIndex) => {
             const values = {};
             if (Array.isArray(row)) {
@@ -136,16 +183,20 @@
             } else if (row && typeof row === 'object') {
                 Object.assign(values, normalizeRecordValues(row.values || row, columns));
             }
-            return {
+            const record = {
                 id: createRecordId(tableId, rowIndex),
                 hidden: summarizedRows.includes(rowIndex),
                 values,
             };
+            return isFloorScopedTable(tableId)
+                ? (getStorage()?.ensureRecordFloorScope?.(record, floorScope) || record)
+                : record;
         });
     }
 
     function normalizeLegacyBackup(raw, currentState = {}) {
         const sheets = Array.isArray(raw?.s) ? raw.s : (Array.isArray(raw) ? raw : []);
+        const importFloorScope = getImportFloorScope(raw, currentState);
         const currentTables = Array.isArray(currentState.tables) ? currentState.tables : [];
         const usedIds = new Set();
         const tables = sheets
@@ -155,13 +206,14 @@
         tables.forEach((table, index) => {
             const rows = sheets[index]?.r || sheets[index]?.records || [];
             const summarizedRows = Array.isArray(raw?.summarized?.[index]) ? raw.summarized[index] : [];
-            records[table.id] = legacyRowsToRecords(rows, table.columns, table.id, summarizedRows);
+            records[table.id] = legacyRowsToRecords(rows, table.columns, table.id, summarizedRows, importFloorScope);
         });
         return {
             tables,
             records,
             activeTableId: tables.find((table) => table.id !== 'memory_summary')?.id || tables[0]?.id || '',
             activeRecordIds: {},
+            sourceScope: importFloorScope,
         };
     }
 
@@ -245,7 +297,7 @@
 
     function normalizeImport(raw, currentState = {}) {
         if (raw?.format === FORMAT || (Array.isArray(raw?.tables) && raw?.records && typeof raw.records === 'object')) {
-            return normalizeDirectBackup(raw);
+            return normalizeDirectBackup(raw, currentState);
         }
         if (Array.isArray(raw?.s) || Array.isArray(raw)) {
             return normalizeLegacyBackup(raw, currentState);
@@ -257,10 +309,12 @@
         const tables = Array.isArray(state?.tables) ? state.tables : [];
         const records = state?.records && typeof state.records === 'object' ? state.records : {};
         const activeRecordIds = state?.activeRecordIds && typeof state.activeRecordIds === 'object' ? state.activeRecordIds : {};
+        const sourceScope = getCurrentFloorScope(state);
         return {
             format: FORMAT,
             version: VERSION,
             exportedAt: new Date().toISOString(),
+            sourceScope,
             tables: tables.map((table) => ({
                 id: String(table?.id || ''),
                 name: String(table?.name || ''),
@@ -270,7 +324,12 @@
             })),
             records: Object.fromEntries(tables.map((table) => [
                 table.id,
-                clone(Array.isArray(records[table.id]) ? records[table.id] : []),
+                (Array.isArray(records[table.id]) ? records[table.id] : []).map((record) => {
+                    const exportedRecord = clone(record);
+                    return isFloorScopedTable(table.id)
+                        ? (getStorage()?.ensureRecordFloorScope?.(exportedRecord, sourceScope) || exportedRecord)
+                        : exportedRecord;
+                }),
             ])),
             activeTableId: String(state?.activeTableId || ''),
             activeRecordIds: Object.fromEntries(Object.entries(activeRecordIds)

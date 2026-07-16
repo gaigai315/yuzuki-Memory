@@ -560,12 +560,46 @@
         return names.length ? names.join('、') : '（当前暂无已有支线核心角色）';
     }
 
+    function getSummaryRecordFloorScope(record, fallback = null) {
+        return YuzukiMemory.Storage?.getRecordFloorScope?.(record, fallback)
+            || record?.floorScope
+            || record?.meta?.yzmMemoryTask?.floorScope
+            || fallback
+            || null;
+    }
+
+    function formatSummaryFloorReference(floor, floorScope) {
+        const scopeLabel = YuzukiMemory.Storage?.formatFloorScopeLabel?.(floorScope) || '';
+        const floorText = String(floor || '').trim();
+        if (!scopeLabel && !floorText) return '';
+        return [scopeLabel, floorText ? `${floorText}楼` : ''].filter(Boolean).join(' · ');
+    }
+
+    function buildScopedSummaryContent(record, summaryContent, floorText) {
+        const recordScope = getSummaryRecordFloorScope(record);
+        const segments = Array.isArray(record?.summarySegments) ? record.summarySegments : [];
+        const segmentText = segments
+            .map((segment) => {
+                const content = String(segment?.summary || '').trim();
+                if (!content) return '';
+                const reference = formatSummaryFloorReference(segment?.floor, segment?.floorScope || recordScope);
+                return compactLines([reference ? `【${segment?.floor ? '来源楼层' : '来源'}：${reference}】` : '', content]);
+            })
+            .filter(Boolean)
+            .join('\n\n');
+        if (segmentText) return segmentText;
+        if (!String(summaryContent || '').trim()) return '';
+        const reference = formatSummaryFloorReference(floorText, recordScope);
+        return compactLines([reference ? `【${floorText ? '来源楼层' : '来源'}：${reference}】` : '', summaryContent]);
+    }
+
     function summaryRecordToText(table, record) {
         if (!table || !record || !isRecordVisible(record)) return '';
         const primary = getPrimaryColumn(table);
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const title = getSummaryFieldValue(values, primary);
         const summaryContent = getSummaryFieldValue(values, '总结内容');
+        const floorText = getSummaryFieldValue(values, '楼层数');
         const extraBody = (Array.isArray(table.columns) ? table.columns : [])
             .map(cleanColumnName)
             .filter((column) => column !== primary && !['核心角色', '楼层数', '总结内容'].includes(column))
@@ -576,7 +610,7 @@
             })
             .filter(Boolean)
             .join('\n');
-        const body = compactLines([summaryContent, extraBody]);
+        const body = compactLines([buildScopedSummaryContent(record, summaryContent, floorText), extraBody]);
         if (!title && !body) return '';
         return body;
     }

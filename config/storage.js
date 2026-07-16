@@ -5,6 +5,7 @@
     const STORAGE_PREFIX = 'yzm_memory_chat_state:';
     const CHAT_METADATA_KEY = 'yuzukiMemory';
     const VERSION = 1;
+    const FLOOR_SCOPE_VERSION = 1;
     const SESSION_POLL_MS = 800;
     const CHAT_SAVE_DEBOUNCE_MS = 500;
     let activeSessionId = null;
@@ -80,6 +81,109 @@
 
     function getCurrentSessionId() {
         return getCurrentSessionAliases()[0] || null;
+    }
+
+    function cleanFloorScopeLabel(value) {
+        return String(value || '')
+            .replace(/\.(?:jsonl?|txt)$/i, '')
+            .trim()
+            .slice(0, 120);
+    }
+
+    function getSessionFloorScopeLabel(sessionId = getCurrentSessionId()) {
+        const parts = getCurrentSessionParts();
+        const aliases = getSessionAliases(parts);
+        if (parts?.chatId && aliases.includes(String(sessionId || ''))) {
+            return cleanFloorScopeLabel(parts.chatId) || '当前会话';
+        }
+        return cleanFloorScopeLabel(extractSessionChatId(sessionId)) || '记忆会话';
+    }
+
+    function createFloorScope(id, options = {}) {
+        const scopeId = String(id || '').trim();
+        if (!scopeId) return null;
+        return {
+            id: scopeId,
+            label: cleanFloorScopeLabel(options.label) || getSessionFloorScopeLabel(scopeId),
+            kind: String(options.kind || 'session').trim() || 'session',
+        };
+    }
+
+    function normalizeFloorScope(scope, fallback = null) {
+        const source = scope && typeof scope === 'object'
+            ? scope
+            : (scope ? { id: scope } : {});
+        const fallbackSource = fallback && typeof fallback === 'object'
+            ? fallback
+            : (fallback ? { id: fallback } : {});
+        const id = String(source.id || source.scopeId || fallbackSource.id || fallbackSource.scopeId || '').trim();
+        if (!id) return null;
+        return createFloorScope(id, {
+            label: source.label || source.scopeLabel || fallbackSource.label || fallbackSource.scopeLabel,
+            kind: source.kind || fallbackSource.kind || 'session',
+        });
+    }
+
+    function getCurrentFloorScope(sessionId = getCurrentSessionId()) {
+        const id = String(sessionId || '').trim();
+        return id ? createFloorScope(id, { label: getSessionFloorScopeLabel(id), kind: 'session' }) : null;
+    }
+
+    function createLegacyFloorScope(sessionId = getCurrentSessionId(), options = {}) {
+        const ownerId = String(sessionId || 'unknown').trim() || 'unknown';
+        const suffix = String(options.suffix || 'pre-scope').trim() || 'pre-scope';
+        return createFloorScope(`legacy:${ownerId}:${suffix}`, {
+            label: options.label || '升级前记忆',
+            kind: options.kind || 'legacy',
+        });
+    }
+
+    function isSameFloorScope(left, right) {
+        const leftScope = normalizeFloorScope(left);
+        const rightScope = normalizeFloorScope(right);
+        return !!leftScope && !!rightScope && leftScope.id === rightScope.id;
+    }
+
+    function formatFloorScopeLabel(scope, currentScope = getCurrentFloorScope()) {
+        const normalized = normalizeFloorScope(scope);
+        if (!normalized) return '';
+        if (isSameFloorScope(normalized, currentScope)) return '本篇';
+        const label = cleanFloorScopeLabel(normalized.label);
+        return label && label !== '前篇' ? `前篇·${label}` : '前篇';
+    }
+
+    function getRecordFloorScope(record, fallback = null) {
+        return normalizeFloorScope(
+            record?.floorScope
+            || record?.meta?.yzmMemoryTask?.floorScope,
+            fallback
+        );
+    }
+
+    function ensureRecordFloorScope(record, fallback = null) {
+        if (!record || typeof record !== 'object') return record;
+        const recordScope = getRecordFloorScope(record, fallback);
+        if (recordScope) record.floorScope = recordScope;
+        const task = record?.meta?.yzmMemoryTask;
+        if (task && typeof task === 'object' && (task.range || task.floorScope)) {
+            task.floorScope = normalizeFloorScope(task.floorScope, recordScope);
+        }
+        if (Array.isArray(record.summarySegments)) {
+            record.summarySegments = record.summarySegments.map((segment) => ({
+                ...segment,
+                floorScope: normalizeFloorScope(segment?.floorScope, recordScope),
+            }));
+        }
+        if (record.plotItemMeta && typeof record.plotItemMeta === 'object') {
+            ['main', 'branch'].forEach((kind) => {
+                if (!Array.isArray(record.plotItemMeta[kind])) return;
+                record.plotItemMeta[kind] = record.plotItemMeta[kind].map((meta) => ({
+                    ...(meta && typeof meta === 'object' ? meta : {}),
+                    floorScope: normalizeFloorScope(meta?.floorScope, recordScope),
+                }));
+            });
+        }
+        return record;
     }
 
     function getStorageKey(sessionId = getCurrentSessionId()) {
@@ -475,7 +579,14 @@
 
     function normalizeState(rawState, fallbackState) {
         const fallback = clone(fallbackState);
-        if (!rawState || typeof rawState !== 'object') return fallback;
+        if (!rawState || typeof rawState !== 'object') {
+            const currentFloorScope = getCurrentFloorScope(fallback?.sessionId || getCurrentSessionId());
+            return {
+                ...fallback,
+                floorScopeVersion: FLOOR_SCOPE_VERSION,
+                currentFloorScope,
+            };
+        }
 
         const defaultRevision = Number(fallback.defaultRevision || 1);
 
@@ -529,8 +640,19 @@
                 : [];
         });
 
+        const stateSessionId = rawState.sessionId || fallback.sessionId || getCurrentSessionId() || '';
+        const currentFloorScope = getCurrentFloorScope(stateSessionId);
+        const fallbackRecordScope = Number(rawState.floorScopeVersion || 0) >= FLOOR_SCOPE_VERSION
+            ? currentFloorScope
+            : createLegacyFloorScope(stateSessionId);
+        ['memory_summary', 'plot_summary'].forEach((tableId) => {
+            (records[tableId] || []).forEach((record) => ensureRecordFloorScope(record, fallbackRecordScope));
+        });
+
         return {
             version: VERSION,
+            floorScopeVersion: FLOOR_SCOPE_VERSION,
+            currentFloorScope,
             defaultRevision,
             sessionId: rawState.sessionId || fallback.sessionId || '',
             sessionAliases: Array.isArray(rawState.sessionAliases) ? rawState.sessionAliases : [],
@@ -694,6 +816,14 @@
 
     YuzukiMemory.Storage = Object.assign(YuzukiMemory.Storage || {}, {
         getCurrentSessionId,
+        getCurrentFloorScope,
+        createFloorScope,
+        createLegacyFloorScope,
+        normalizeFloorScope,
+        isSameFloorScope,
+        formatFloorScopeLabel,
+        getRecordFloorScope,
+        ensureRecordFloorScope,
         loadState,
         saveState,
         bindSessionChange,

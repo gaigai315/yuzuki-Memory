@@ -471,6 +471,24 @@
         return YuzukiMemory.Storage;
     }
 
+    function getCurrentFloorScope() {
+        return getStorage()?.getCurrentFloorScope?.(loadedSessionId || getStorage()?.getCurrentSessionId?.()) || null;
+    }
+
+    function getRecordFloorScope(record, fallback = null) {
+        return getStorage()?.getRecordFloorScope?.(record, fallback)
+            || record?.floorScope
+            || record?.meta?.yzmMemoryTask?.floorScope
+            || fallback
+            || null;
+    }
+
+    function formatScopedFloorText(floor, floorScope) {
+        const scopeLabel = getStorage()?.formatFloorScopeLabel?.(floorScope, getCurrentFloorScope()) || '';
+        const floorText = String(floor || '').trim();
+        return [scopeLabel, floorText].filter(Boolean).join(' · ');
+    }
+
     function getContext() {
         try {
             return typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
@@ -1140,12 +1158,31 @@
         };
     }
 
+    function getScopedSummaryContent(record) {
+        const recordFloorScope = getRecordFloorScope(record);
+        const segments = getSummarySegments(record);
+        if (segments.length) {
+            return segments.map((segment) => {
+                if (!String(segment.summary || '').trim()) return '';
+                const floorReference = formatScopedFloorText(segment.floor, segment.floorScope || recordFloorScope);
+                const sourceLabel = segment.floor ? `【来源楼层：${floorReference}楼】` : `【来源：${floorReference}】`;
+                return [floorReference ? sourceLabel : '', segment.summary].filter(Boolean).join('\n');
+            }).filter(Boolean).join('\n\n');
+        }
+        const content = getSummaryValue(record, ['总结内容']);
+        if (!content) return '';
+        const floor = getSummaryValue(record, ['楼层数', '楼层范围', '楼层']);
+        const floorReference = formatScopedFloorText(floor, recordFloorScope);
+        const sourceLabel = floor ? `【来源楼层：${floorReference}楼】` : `【来源：${floorReference}】`;
+        return [floorReference ? sourceLabel : '', content].filter(Boolean).join('\n');
+    }
+
     function getSummaryVectorChunks() {
         const table = getTables().find((entry) => entry.id === 'memory_summary');
         if (!table) return [];
         return getRecords(table.id).map((record) => {
             const title = getSummaryValue(record, ['总结标题', '标题']);
-            const content = getSummaryValue(record, ['总结内容']);
+            const content = getScopedSummaryContent(record);
             const remark = getSummaryValue(record, ['备注']);
             return [title, content, remark].filter(Boolean).join('\n');
         }).filter(Boolean);
@@ -1156,15 +1193,13 @@
         if (!table) return [];
         return getRecords(table.id).map((record, index) => {
             const title = getSummaryValue(record, ['总结标题', '标题']) || `记忆总结 ${index + 1}`;
-            const content = getSummaryValue(record, ['总结内容']);
+            const content = getScopedSummaryContent(record);
             const remark = getSummaryValue(record, ['备注']);
-            const floors = getSummaryValue(record, ['楼层数', '楼层范围', '楼层']);
             const core = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
             const unresolved = getSummaryValue(record, ['未解决问题']);
             const heading = `【${title}${remark ? ` [${remark}]` : ''}】`;
             const body = [
                 heading,
-                floors ? `楼层：${floors}` : '',
                 core ? `核心角色：${core}` : '',
                 content,
                 unresolved ? `未解决问题：${unresolved}` : '',
@@ -2207,6 +2242,7 @@
         return {
             id: `record_${Date.now()}_${Math.random().toString(16).slice(2)}`,
             hidden: false,
+            ...(['memory_summary', 'plot_summary'].includes(table?.id) ? { floorScope: getCurrentFloorScope() } : {}),
             values: Object.fromEntries((table?.columns || []).map((column) => [cleanColumnName(column), ''])),
         };
     }
@@ -3006,7 +3042,7 @@
         configAction.dataset.yzmAction = 'config';
         const traceAction = createIconButton('追溯', 'fa-solid fa-pen', 'yzm-sidebar-action');
         traceAction.dataset.yzmAction = 'trace';
-        const summaryToolAction = createIconButton('总结', 'fa-solid fa-clipboard-list', 'yzm-sidebar-action');
+        const summaryToolAction = createIconButton('总结', 'fa-solid fa-window-restore', 'yzm-sidebar-action');
         summaryToolAction.dataset.yzmAction = 'summaryTool';
         const apiAction = createIconButton('API', 'fa-solid fa-plug', 'yzm-sidebar-action');
         apiAction.dataset.yzmAction = 'api';
@@ -4580,6 +4616,7 @@
 
         const contentCount = getSummarySegments(record).length || getSummaryTimelineItems(getSummaryValue(record, ['总结内容'])).length;
         const floorText = getSummaryFloorText(record);
+        const scopedFloorText = formatScopedFloorText(floorText, getRecordFloorScope(record));
         const coreCharacter = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
         const meta = document.createElement('div');
         meta.className = 'yzm-primary-character-meta';
@@ -4587,7 +4624,7 @@
             coreCharacter ? `核心 ${coreCharacter}` : '',
             `${contentCount} 段内容`,
         ] : [
-            floorText ? `楼层 ${floorText}` : '',
+            scopedFloorText ? `楼层 ${scopedFloorText}` : '',
             coreCharacter ? `核心 ${coreCharacter}` : '',
             `${contentCount} 条内容`,
         ]).filter(Boolean).join(' · ');
@@ -4733,6 +4770,7 @@
     }
 
     function getSummarySegments(record) {
+        const recordFloorScope = getRecordFloorScope(record);
         if (Array.isArray(record?.summarySegments) && record.summarySegments.length) {
             return record.summarySegments
                 .map((segment) => ({
@@ -4741,6 +4779,7 @@
                     unresolved: String(segment?.unresolved || '').trim(),
                     remark: String(segment?.remark || '').trim(),
                     range: segment?.range && typeof segment.range === 'object' ? segment.range : null,
+                    floorScope: segment?.floorScope || recordFloorScope,
                     summaryType: segment?.summaryType || '',
                     createdAt: segment?.createdAt || 0,
                 }))
@@ -4753,6 +4792,7 @@
         return Array.from({ length: count }, (_entry, index) => ({
             floor: floors[index] || '',
             summary: summaries[index] || '',
+            floorScope: recordFloorScope,
         })).filter((segment) => segment.floor || segment.summary);
     }
 
@@ -4782,6 +4822,7 @@
             unresolved: String(segment?.unresolved || '').trim(),
             remark: String(segment?.remark || '').trim(),
             range,
+            floorScope: segment?.floorScope || getCurrentFloorScope(),
             summaryType: segment?.summaryType || 'manual',
             createdAt: Number(segment?.createdAt || 0) || Date.now(),
             _mergeIndex: index,
@@ -4823,13 +4864,22 @@
 
         target.values = target.values && typeof target.values === 'object' ? target.values : {};
         target.values.核心角色 = character;
-        const mergedSegments = [
+        const mergeSourceSegments = [
             ...getSummarySegments(target),
             ...getSummarySegments(record),
-        ]
+        ];
+        const scopeOrder = new Map();
+        mergeSourceSegments.forEach((segment) => {
+            const scopeId = String(segment?.floorScope?.id || '');
+            if (!scopeOrder.has(scopeId)) scopeOrder.set(scopeId, scopeOrder.size);
+        });
+        const mergedSegments = mergeSourceSegments
             .map((segment, index) => normalizeSummarySegmentForMerge(segment, index))
             .filter((segment) => segment.floor || segment.summary)
             .sort((a, b) => {
+                const aScopeOrder = scopeOrder.get(String(a.floorScope?.id || '')) || 0;
+                const bScopeOrder = scopeOrder.get(String(b.floorScope?.id || '')) || 0;
+                if (aScopeOrder !== bScopeOrder) return aScopeOrder - bScopeOrder;
                 const aStart = Number.isFinite(Number(a.range?.start)) ? Number(a.range.start) : Number.MAX_SAFE_INTEGER;
                 const bStart = Number.isFinite(Number(b.range?.start)) ? Number(b.range.start) : Number.MAX_SAFE_INTEGER;
                 if (aStart !== bStart) return aStart - bStart;
@@ -5396,12 +5446,13 @@
         title.textContent = `${index + 1}. ${getSummaryPrimaryTitle(table, record)}`;
         const meta = document.createElement('span');
         const floorText = getSummaryFloorText(record);
+        const scopedFloorText = formatScopedFloorText(floorText, getRecordFloorScope(record));
         const core = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
         meta.textContent = [
             getSummaryKind(record) === 'branch' ? '支线' : '主线',
             record.hidden ? '已隐藏' : '',
             record.vectorSynced === true ? '已同步向量化' : '',
-            floorText ? `楼层 ${floorText}` : '',
+            scopedFloorText ? `楼层 ${scopedFloorText}` : '',
             core ? `核心 ${core}` : '',
         ].filter(Boolean).join(' · ');
         const time = getSummaryValue(record, ['时间', '日期', '更新时间']);
@@ -6304,7 +6355,7 @@
                 let result = null;
                 while (!taskRunnerStopRequested) {
                     taskRunnerProgressLabel = batches.length > 1 ? `第 ${index + 1}/${batches.length} 批执行中` : '执行中';
-                    setTaskButtonRunning(button, true, taskRunnerProgressLabel);
+                    syncVisibleTaskButtons(root);
                     result = await runTaskBatchWithRetry(action, {
                         ...options,
                         ...batch,
@@ -10637,14 +10688,15 @@
         const summaryKind = /支线/.test(name.textContent) ? '支线' : '主线';
         const coreCharacter = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
         const floorText = getSummaryFloorText(record);
+        const scopedFloorText = formatScopedFloorText(floorText, getRecordFloorScope(record));
         const summarySegments = getSummarySegments(record);
-        if (coreCharacter || (summaryKind !== '支线' && floorText)) {
+        if (coreCharacter || (summaryKind !== '支线' && scopedFloorText)) {
             const metaRow = document.createElement('div');
             metaRow.className = 'yzm-summary-meta-row';
-            if (summaryKind !== '支线' && floorText) {
+            if (summaryKind !== '支线' && scopedFloorText) {
                 const floor = document.createElement('span');
                 floor.className = 'yzm-summary-meta-chip';
-                floor.append(createIconNode('fa-solid fa-layer-group', ''), document.createTextNode(`楼层数：${floorText}`));
+                floor.append(createIconNode('fa-solid fa-layer-group', ''), document.createTextNode(`楼层数：${scopedFloorText}`));
                 metaRow.appendChild(floor);
             }
             if (coreCharacter) {
@@ -10663,7 +10715,7 @@
         contentTitle.className = 'yzm-summary-card-title';
         contentTitle.append(createIconNode(getSummaryFieldIcon('总结内容'), ''), document.createTextNode(`${summaryKind}内容`));
 
-        if (summaryKind === '支线' && summarySegments.length > 1) {
+        if (summaryKind === '支线' && summarySegments.length > 0) {
             const segmentList = document.createElement('div');
             segmentList.className = 'yzm-summary-segment-list';
             summarySegments.forEach((segment) => segmentList.appendChild(createSummarySegmentBlock(segment)));
@@ -10697,9 +10749,10 @@
 
         const header = document.createElement('div');
         header.className = 'yzm-summary-segment-header';
+        const scopedFloorText = formatScopedFloorText(segment.floor, segment.floorScope);
         header.append(
             createIconNode('fa-solid fa-layer-group', ''),
-            document.createTextNode(segment.floor ? `楼层数：${segment.floor}` : '楼层数：未填写')
+            document.createTextNode(scopedFloorText ? `楼层数：${scopedFloorText}` : '楼层数：未填写')
         );
 
         const list = document.createElement('div');
@@ -10825,8 +10878,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】兼容 GLM/OpenCode 将有效正文返回在 reasoning_content 的响应格式',
-            '【修复】创建聊天分支时继承当前记忆表格，并补强新会话的记忆迁移与父会话回源',
+            '【优化】跨会话导入总结增加“前篇 / 本篇”楼层来源，备份升级为 v2，避免新旧会话同号楼层互相覆盖或误清理',
+            '【修复】分批总结完成一批并结束倒计时后，下一批执行状态会立即刷新到当前按钮',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11807,11 +11860,18 @@
         const block = document.createElement('section');
         block.className = 'yzm-summary-segment-editor';
         block.dataset.yzmSummarySegment = 'true';
+        const floorScope = getStorage()?.normalizeFloorScope?.(segment?.floorScope, getCurrentFloorScope())
+            || segment?.floorScope
+            || getCurrentFloorScope();
+        if (floorScope?.id) block.dataset.yzmFloorScopeId = floorScope.id;
+        if (floorScope?.label) block.dataset.yzmFloorScopeLabel = floorScope.label;
+        if (floorScope?.kind) block.dataset.yzmFloorScopeKind = floorScope.kind;
 
         const header = document.createElement('div');
         header.className = 'yzm-summary-segment-editor-header';
         const title = document.createElement('strong');
-        title.textContent = `总结片段 ${index + 1}`;
+        const scopeLabel = getStorage()?.formatFloorScopeLabel?.(floorScope, getCurrentFloorScope()) || '';
+        title.textContent = `总结片段 ${index + 1}${scopeLabel ? ` · ${scopeLabel}` : ''}`;
         const remove = createIconButton('删除', 'fa-solid fa-trash', 'yzm-summary-segment-remove');
         remove.type = 'button';
         header.append(title, remove);
@@ -11862,7 +11922,13 @@
     function refreshSummarySegmentEditorTitles(fields) {
         fields.querySelectorAll('.yzm-summary-segment-editor').forEach((block, index) => {
             const title = block.querySelector('.yzm-summary-segment-editor-header strong');
-            if (title) title.textContent = `总结片段 ${index + 1}`;
+            const floorScope = getStorage()?.normalizeFloorScope?.({
+                id: block.dataset.yzmFloorScopeId,
+                label: block.dataset.yzmFloorScopeLabel,
+                kind: block.dataset.yzmFloorScopeKind,
+            }, getCurrentFloorScope());
+            const scopeLabel = getStorage()?.formatFloorScopeLabel?.(floorScope, getCurrentFloorScope()) || '';
+            if (title) title.textContent = `总结片段 ${index + 1}${scopeLabel ? ` · ${scopeLabel}` : ''}`;
         });
     }
 
@@ -12045,7 +12111,7 @@
                 record.values[field] = [getRecordValue(record, field).trim(), nextValue].filter(Boolean).join('\n');
                 setPlotItemHiddenStates(record, normalizedKind, nextValue ? hiddenStates.concat(false) : hiddenStates);
                 setPlotItemMeta(record, normalizedKind, nextValue
-                    ? metaList.concat({ id: createPlotLineId(), text: nextValue, source: 'manual', createdAt: Date.now() })
+                    ? metaList.concat({ id: createPlotLineId(), text: nextValue, source: 'manual', floorScope: getCurrentFloorScope(), createdAt: Date.now() })
                     : metaList);
             } else if (editIndex > -1) {
                 const nextLines = currentLines.slice();
@@ -12061,7 +12127,7 @@
             } else {
                 record.values[field] = nextValue;
                 setPlotItemHiddenStates(record, normalizedKind, nextValue ? [false] : []);
-                setPlotItemMeta(record, normalizedKind, nextValue ? [{ id: createPlotLineId(), text: nextValue, source: 'manual', createdAt: Date.now() }] : []);
+                setPlotItemMeta(record, normalizedKind, nextValue ? [{ id: createPlotLineId(), text: nextValue, source: 'manual', floorScope: getCurrentFloorScope(), createdAt: Date.now() }] : []);
             }
             persistEditorChanges('当前会话尚未就绪，剧情摘要未保存。');
         });
@@ -12150,6 +12216,10 @@
                         const summaryInput = block.querySelector('[data-yzm-summary-segment-summary]');
                         if (floorInput) floorInput.value = '';
                         if (summaryInput) summaryInput.value = '';
+                        const currentFloorScope = getCurrentFloorScope();
+                        block.dataset.yzmFloorScopeId = currentFloorScope?.id || '';
+                        block.dataset.yzmFloorScopeLabel = currentFloorScope?.label || '';
+                        block.dataset.yzmFloorScopeKind = currentFloorScope?.kind || 'session';
                     }
                     refreshSummarySegmentEditorTitles(fields);
                 }
@@ -12178,12 +12248,18 @@
                     const floor = block.querySelector('[data-yzm-summary-segment-floor]')?.value?.trim() || '';
                     const summary = block.querySelector('[data-yzm-summary-segment-summary]')?.value?.trim() || '';
                     if (!floor && !summary) return;
+                    const floorScope = getStorage()?.normalizeFloorScope?.({
+                        id: block.dataset.yzmFloorScopeId,
+                        label: block.dataset.yzmFloorScopeLabel,
+                        kind: block.dataset.yzmFloorScopeKind,
+                    }, getCurrentFloorScope()) || getCurrentFloorScope();
                     floors.push(floor);
                     summaries.push(summary);
                     segments.push({
                         floor,
                         summary,
                         range: parseSummaryFloorRange(floor),
+                        floorScope,
                         summaryType: 'manual',
                         createdAt: Date.now(),
                     });

@@ -316,6 +316,29 @@
         return characterId ? `char:${characterId}:${chatId}` : `chat:${chatId}`;
     }
 
+    function normalizeFloorScope(scope, fallback = null) {
+        return YuzukiMemory.Storage?.normalizeFloorScope?.(scope, fallback) || scope || fallback || null;
+    }
+
+    function getCurrentFloorScope(state = null) {
+        return normalizeFloorScope(
+            state?.currentFloorScope,
+            YuzukiMemory.Storage?.getCurrentFloorScope?.(state?.sessionId || getCurrentSessionId())
+        );
+    }
+
+    function getRecordFloorScope(record, fallback = null) {
+        return YuzukiMemory.Storage?.getRecordFloorScope?.(record, fallback)
+            || normalizeFloorScope(record?.floorScope || record?.meta?.yzmMemoryTask?.floorScope, fallback);
+    }
+
+    function isSameFloorScope(left, right) {
+        if (YuzukiMemory.Storage?.isSameFloorScope) return YuzukiMemory.Storage.isSameFloorScope(left, right);
+        const leftScope = normalizeFloorScope(left);
+        const rightScope = normalizeFloorScope(right);
+        return !!leftScope && !!rightScope && leftScope.id === rightScope.id;
+    }
+
     function getChatLength() {
         const chat = getContext()?.chat;
         return Array.isArray(chat) ? chat.length : 0;
@@ -710,6 +733,7 @@
     function buildTaskRequestMeta(options = {}) {
         return {
             kind: String(options.kind || options.autoTaskType || 'manual'),
+            floorScope: normalizeFloorScope(options.floorScope, getCurrentFloorScope()),
             range: {
                 start: Math.max(0, Math.round(Number(options.start) || 0)),
                 end: Math.max(0, Math.round(Number(options.end) || 0)),
@@ -1092,6 +1116,7 @@
         return {
             id: `record_${Date.now()}_${Math.random().toString(16).slice(2)}`,
             hidden: false,
+            ...([FIXED_SUMMARY_TABLE_ID, PLOT_SUMMARY_TABLE_ID].includes(table?.id) ? { floorScope: getCurrentFloorScope() } : {}),
             values: Object.fromEntries((table?.columns || []).map((column) => {
                 const name = cleanColumnName(column);
                 return [name, String(values[name] ?? values[column] ?? '')];
@@ -1295,6 +1320,7 @@
         });
 
         const sourceRange = getRangeMeta(options.range);
+        const floorScope = normalizeFloorScope(options.floorScope, getCurrentFloorScope());
         const newLineSet = new Set(newLines.map(normalizePlotLineText).filter(Boolean));
         record.plotItemMeta[key] = nextLines.map((line) => {
             const normalized = normalizePlotLineText(line);
@@ -1306,6 +1332,7 @@
                 text: normalized,
                 source: options.source || 'trace',
                 sourceRange,
+                floorScope,
                 createdAt: Date.now(),
             };
         });
@@ -1332,23 +1359,29 @@
         return [date, body].filter(Boolean).join('\t').trim();
     }
 
-    function getRangeMeta(range) {
+    function getRangeMeta(range, fallbackFloorScope = null) {
         const start = Math.max(0, Math.round(Number(range?.start) || 0));
         const end = Math.max(start, Math.round(Number(range?.end) || 0));
-        return end > start ? { start, end } : null;
+        if (end <= start) return null;
+        const floorScope = normalizeFloorScope(range?.floorScope, fallbackFloorScope);
+        return floorScope ? { start, end, floorScope } : { start, end };
     }
 
     function isRangeFullyCoveredByTarget(range, target) {
-        return range && target && range.start >= target.start && range.end <= target.end;
+        return range
+            && target
+            && isSameFloorScope(range.floorScope, target.floorScope)
+            && range.start >= target.start
+            && range.end <= target.end;
     }
 
     function isRangeOverlappingTarget(range, target) {
-        if (!range || !target) return false;
+        if (!range || !target || !isSameFloorScope(range.floorScope, target.floorScope)) return false;
         return Math.max(range.start, target.start) < Math.min(range.end, target.end);
     }
 
-    function isPlotItemCoveredBySummaryTarget(meta, target) {
-        const sourceRange = getRangeMeta(meta?.sourceRange);
+    function isPlotItemCoveredBySummaryTarget(meta, target, fallbackFloorScope = null) {
+        const sourceRange = getRangeMeta(meta?.sourceRange, meta?.floorScope || fallbackFloorScope);
         if (sourceRange) {
             return isRangeFullyCoveredByTarget(sourceRange, target)
                 || isRangeOverlappingTarget(sourceRange, target);
@@ -1413,19 +1446,39 @@
         record.values = record.values && typeof record.values === 'object' ? record.values : {};
         const nextFloor = String(values.楼层数 || '').trim();
         const nextSummary = String(values.总结内容 || '').trim();
-        record.summarySegments = Array.isArray(record.summarySegments) ? record.summarySegments : [];
-        const range = getRangeMeta(meta.range);
+        const recordScope = getRecordFloorScope(record, getCurrentFloorScope());
+        if (!Array.isArray(record.summarySegments) || !record.summarySegments.length) {
+            const previousFloors = splitMultilineValue(record.values.楼层数);
+            const previousSummaryText = String(record.values.总结内容 || '').trim();
+            const previousSummaries = previousFloors.length <= 1
+                ? [previousSummaryText].filter(Boolean)
+                : splitMultilineValue(previousSummaryText);
+            const previousCount = Math.max(previousFloors.length, previousSummaries.length);
+            record.summarySegments = Array.from({ length: previousCount }, (_entry, index) => ({
+                floor: previousFloors[index] || '',
+                summary: previousSummaries[index] || '',
+                range: getRangeMetaFromFloorText(previousFloors[index], recordScope),
+                floorScope: recordScope,
+                summaryType: 'legacy',
+            })).filter((segment) => segment.floor || segment.summary);
+        }
+        const floorScope = normalizeFloorScope(meta.floorScope, getCurrentFloorScope());
+        const range = getRangeMeta(meta.range, floorScope);
         const segment = {
             floor: nextFloor,
             summary: nextSummary,
             unresolved: String(values.未解决问题 || '').trim(),
             remark: String(values.备注 || '').trim(),
             range,
+            floorScope,
             summaryType: meta.autoTaskType || 'manual',
             createdAt: Date.now(),
         };
         if (nextFloor) {
-            const duplicateIndex = record.summarySegments.findIndex((entry) => String(entry?.floor || '').trim() === nextFloor);
+            const duplicateIndex = record.summarySegments.findIndex((entry) => (
+                String(entry?.floor || '').trim() === nextFloor
+                && isSameFloorScope(entry?.floorScope || recordScope, floorScope)
+            ));
             if (duplicateIndex > -1) {
                 record.summarySegments[duplicateIndex] = { ...record.summarySegments[duplicateIndex], ...segment };
             } else {
@@ -1464,18 +1517,24 @@
         if (!match) return null;
         const start = Math.max(0, Math.round(Number(match[1]) || 0));
         const end = Math.max(start, Math.round(Number(match[2]) || 0));
-        return end > start ? { start, end } : null;
+        return end > start ? { start, end, floorScope: getRecordFloorScope(record) } : null;
+    }
+
+    function getRangeMetaFromFloorText(value, floorScope = null) {
+        const match = String(value || '').match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
+        if (!match) return null;
+        return getRangeMeta({ start: Number(match[1]), end: Number(match[2]) }, floorScope);
     }
 
     function getSummarySegmentRange(segment) {
-        const range = getRangeMeta(segment?.range);
+        const range = getRangeMeta(segment?.range, segment?.floorScope);
         if (range) return range;
         const rawRange = String(segment?.floor || segment?.楼层数 || segment?.rangeLabel || '').trim();
         const match = rawRange.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
         if (!match) return null;
         const start = Math.max(0, Math.round(Number(match[1]) || 0));
         const end = Math.max(start, Math.round(Number(match[2]) || 0));
-        return end > start ? { start, end } : null;
+        return end > start ? { start, end, floorScope: normalizeFloorScope(segment?.floorScope) } : null;
     }
 
     function isSmallSummaryRecord(record, table, task) {
@@ -1484,16 +1543,18 @@
     }
 
     function isSummaryCoveredByRange(record, table, targetRange) {
-        const recordRange = getRangeMeta(getSummaryRecordTaskMeta(record)?.range) || getSummaryRecordFloorRange(record);
-        return isSmallSummaryRecord(record, table, getSummaryRecordTaskMeta(record))
+        const task = getSummaryRecordTaskMeta(record);
+        const recordRange = getRangeMeta(task?.range, task?.floorScope || getRecordFloorScope(record)) || getSummaryRecordFloorRange(record);
+        return isSmallSummaryRecord(record, table, task)
             && recordRange
+            && isSameFloorScope(recordRange.floorScope, targetRange.floorScope)
             && recordRange.start >= targetRange.start
             && recordRange.end <= targetRange.end;
     }
 
     function getTitleRecordsForSummary(records = [], table = null, meta = {}) {
         if (meta.autoTaskType !== 'history') return records;
-        const targetRange = getRangeMeta(meta.range);
+        const targetRange = getRangeMeta(meta.range, meta.floorScope || getCurrentFloorScope());
         if (!targetRange) return records;
         return (Array.isArray(records) ? records : []).filter((record) => !isSummaryCoveredByRange(record, table, targetRange));
     }
@@ -1509,6 +1570,8 @@
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
         state.records[table.id] = Array.isArray(state.records[table.id]) ? state.records[table.id] : [];
         const records = state.records[table.id];
+        const floorScope = normalizeFloorScope(meta.floorScope, getCurrentFloorScope(state));
+        meta = { ...meta, floorScope };
         const title = getSummaryRecordTitle(payload, records, table, meta);
         const rangeLabel = getRangeLabel(meta.range);
         const floorValue = getRangeFloorValue(meta.range);
@@ -1533,6 +1596,7 @@
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
             record.values[primary] = shouldGroupBranch ? (record.values[primary] || title) : title;
             if (isAutoSummaryRecord && !shouldGroupBranch) {
+                record.floorScope = floorScope;
                 record.values.核心角色 = values.核心角色;
                 record.values.楼层数 = values.楼层数;
                 record.values.总结内容 = values.总结内容;
@@ -1544,6 +1608,7 @@
             }
         } else {
             record = createRecord(table, values);
+            record.floorScope = floorScope;
             if (shouldGroupBranch) {
                 record.values.楼层数 = '';
                 record.values.总结内容 = '';
@@ -1560,7 +1625,8 @@
                 yzmMemoryTask: {
                     kind: 'summary',
                     summaryType: meta.autoTaskType || 'manual',
-                    range: getRangeMeta(meta.range),
+                    range: getRangeMeta(meta.range, floorScope),
+                    floorScope,
                     createdAt: Date.now(),
                 },
             };
@@ -1635,7 +1701,7 @@
         const table = stateTables(state).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
         const records = stateRecords(state, FIXED_SUMMARY_TABLE_ID);
         if (!table || !records.length) return 0;
-        const target = getRangeMeta(range);
+        const target = getRangeMeta(range, getCurrentFloorScope(state));
         if (!target) return 0;
         const keepIds = new Set((Array.isArray(keepRecordIds) ? keepRecordIds : [keepRecordIds]).filter(Boolean).map(String));
         let cleanupCount = 0;
@@ -1646,6 +1712,7 @@
                 record.summarySegments = record.summarySegments.filter((segment) => {
                     const segmentRange = getSummarySegmentRange(segment);
                     const isCovered = segmentRange
+                        && isSameFloorScope(segmentRange.floorScope, target.floorScope)
                         && segmentRange.start >= target.start
                         && segmentRange.end <= target.end
                         && segment.summaryType !== 'history'
@@ -1662,9 +1729,11 @@
             }
             if (shouldKeepRecord) return true;
             const task = getSummaryRecordTaskMeta(record);
-            const recordRange = getRangeMeta(task?.range) || getSummaryRecordFloorRange(record);
+            const recordRange = getRangeMeta(task?.range, task?.floorScope || getRecordFloorScope(record)) || getSummaryRecordFloorRange(record);
             if (!isSmallSummaryRecord(record, table, task) || !recordRange) return true;
-            const covered = recordRange.start >= target.start && recordRange.end <= target.end;
+            const covered = isSameFloorScope(recordRange.floorScope, target.floorScope)
+                && recordRange.start >= target.start
+                && recordRange.end <= target.end;
             if (covered) cleanupCount += 1;
             return !covered;
         });
@@ -1675,24 +1744,24 @@
     function isSameSummaryRange(candidateRange, targetRange) {
         const candidate = getRangeMeta(candidateRange);
         const target = getRangeMeta(targetRange);
-        if (!candidate || !target || candidate.start !== target.start) return false;
+        if (!candidate || !target || !isSameFloorScope(candidate.floorScope, target.floorScope) || candidate.start !== target.start) return false;
         return candidate.end === target.end || candidate.end === target.end - 1;
     }
 
     function findExistingHistorySummaryRecord(state, range) {
-        const target = getRangeMeta(range);
+        const target = getRangeMeta(range, getCurrentFloorScope(state));
         if (!target) return null;
         return stateRecords(state, FIXED_SUMMARY_TABLE_ID).find((record) => {
             if (!String(record?.values?.总结内容 || record?.values?.summary || '').trim()) return false;
             const task = getSummaryRecordTaskMeta(record);
-            const taskRange = getRangeMeta(task?.range);
+            const taskRange = getRangeMeta(task?.range, task?.floorScope || getRecordFloorScope(record));
             if (taskRange) return isSameSummaryRange(taskRange, target);
             return isSameSummaryRange(getSummaryRecordFloorRange(record), target);
         }) || null;
     }
 
     function hidePlotSummaryItemsCoveredByRange(state, range, summaryRecordIds = []) {
-        const target = getRangeMeta(range);
+        const target = getRangeMeta(range, getCurrentFloorScope(state));
         if (!target) return 0;
         const records = stateRecords(state, PLOT_SUMMARY_TABLE_ID);
         if (!records.length) return 0;
@@ -1701,6 +1770,7 @@
             .filter(Boolean);
         let hiddenCount = 0;
         records.forEach((record) => {
+            const recordFloorScope = getRecordFloorScope(record);
             record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
             record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
             ['main', 'branch'].forEach((kind) => {
@@ -1717,7 +1787,7 @@
                 while (hiddenStates.length < lineCount) hiddenStates.push(false);
                 if (hiddenStates.length > lineCount) hiddenStates.length = lineCount;
                 metaList.slice(0, lineCount).forEach((meta, index) => {
-                    const covered = isPlotItemCoveredBySummaryTarget(meta, target);
+                    const covered = isPlotItemCoveredBySummaryTarget(meta, target, recordFloorScope);
                     if (!covered || hiddenStates[index]) return;
                     hiddenStates[index] = true;
                     meta.hiddenReason = 'covered_by_summary';
@@ -1740,7 +1810,8 @@
             if (!String(record?.values?.总结内容 || record?.values?.summary || '').trim()) return;
             const recordId = String(record?.id || '').trim();
             const ranges = [];
-            const taskRange = getRangeMeta(getSummaryRecordTaskMeta(record)?.range);
+            const task = getSummaryRecordTaskMeta(record);
+            const taskRange = getRangeMeta(task?.range, task?.floorScope || getRecordFloorScope(record));
             const floorRange = getSummaryRecordFloorRange(record);
             if (taskRange) ranges.push(taskRange);
             else if (floorRange) ranges.push(floorRange);
@@ -1752,7 +1823,7 @@
             }
             const seen = new Set();
             ranges.forEach((range) => {
-                const key = `${range.start}-${range.end}`;
+                const key = `${range.floorScope?.id || ''}:${range.start}-${range.end}`;
                 if (seen.has(key)) return;
                 seen.add(key);
                 hiddenCount += hidePlotSummaryItemsCoveredByRange(state, range, recordId ? [recordId] : []);
@@ -1773,6 +1844,7 @@
             return YuzukiMemory.MemoryTagParser.applyRowsToState(state, memoryRows, {
                 source: options.source || 'trace',
                 range: options.range,
+                floorScope: options.floorScope || getCurrentFloorScope(state),
             });
         }
         const rows = normalizeTaskRows(resultRows)
@@ -1792,6 +1864,7 @@
                     {
                         source: options.source || 'trace',
                         range: options.range,
+                        floorScope: options.floorScope || getCurrentFloorScope(state),
                     }
                 );
                 count += 1;
@@ -1806,6 +1879,7 @@
         const count = applyTraceResult(state, result?.parsed, {
             source: result?.meta?.autoTaskType || 'trace',
             range: result?.range,
+            floorScope: result?.meta?.floorScope || getCurrentFloorScope(state),
             tableId: result?.meta?.tableId || result?.tableId || '',
         });
         if (!count) {
@@ -2056,6 +2130,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             meta: {
                 tableId: String(options.tableId || ''),
                 autoTaskType: options.autoTaskType || '',
+                floorScope: normalizeFloorScope(options.floorScope, getCurrentFloorScope(state)),
             },
         };
         return options.previewOnly ? result : commitTraceResult(state, result);
@@ -2079,6 +2154,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             meta: {
                 autoTaskType: options.autoTaskType || '',
                 range: { start: built.range.start, end: built.range.end },
+                floorScope: normalizeFloorScope(options.floorScope, getCurrentFloorScope(state)),
             },
         };
         return options.previewOnly ? result : commitSummaryResult(state, result);
@@ -2629,7 +2705,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         autoTaskArmed = true;
         autoTaskBaselineChatLength = Math.min(autoTaskBaselineChatLength, Math.max(0, chatLength - 1));
         scheduleAutoSummary(callbacks);
-        return true;
+        return isSameFloorScope(meta?.floorScope || fallbackFloorScope, target?.floorScope);
     }
 
     function bindAutoSummary(callbacks = {}) {

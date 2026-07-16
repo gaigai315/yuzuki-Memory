@@ -512,6 +512,10 @@
         });
 
         const sourceRange = normalizeRangeMeta(options.range);
+        const floorScope = YuzukiMemory.Storage?.normalizeFloorScope?.(
+            options.floorScope,
+            YuzukiMemory.Storage?.getCurrentFloorScope?.()
+        ) || options.floorScope || null;
         const newLineSet = new Set(newLines.map(normalizePlotLineText).filter(Boolean));
         record.plotItemMeta[key] = nextLines.map((line) => {
             const normalized = normalizePlotLineText(line);
@@ -523,6 +527,7 @@
                 text: normalized,
                 source: options.source || 'realtime',
                 sourceRange,
+                floorScope,
                 createdAt: Date.now(),
             };
         });
