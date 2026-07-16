@@ -10826,6 +10826,7 @@
         const list = document.createElement('ul');
         [
             '【优化】兼容 GLM/OpenCode 将有效正文返回在 reasoning_content 的响应格式',
+            '【修复】创建聊天分支时继承当前记忆表格，并补强新会话的记忆迁移与父会话回源',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

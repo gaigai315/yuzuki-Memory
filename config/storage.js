@@ -54,8 +54,7 @@
         };
     }
 
-    function getCurrentSessionAliases() {
-        const parts = getCurrentSessionParts();
+    function getSessionAliases(parts) {
         if (!parts) return [];
 
         if (parts.groupId) {
@@ -73,6 +72,10 @@
         ]);
         aliases.push(`chat:${parts.chatId}`, parts.chatId);
         return uniqueValues(aliases);
+    }
+
+    function getCurrentSessionAliases() {
+        return getSessionAliases(getCurrentSessionParts());
     }
 
     function getCurrentSessionId() {
@@ -319,6 +322,53 @@
         return true;
     }
 
+    function getBranchParentSessionAliases(sessionId) {
+        if (!sessionId || sessionId !== getCurrentSessionId()) return [];
+        const context = getContext();
+        const parts = getCurrentSessionParts(context);
+        const parentChatId = String(context?.chatMetadata?.main_chat || '').trim();
+        if (!parts || !parentChatId || parentChatId === parts.chatId) return [];
+        return getSessionAliases({ ...parts, chatId: parentChatId });
+    }
+
+    function loadBranchParentState(sessionId) {
+        const parentAliases = getBranchParentSessionAliases(sessionId);
+        if (!parentAliases.length) return null;
+
+        const parentAliasSet = new Set(parentAliases);
+        const candidates = parentAliases
+            .map((parentSessionId) => {
+                try {
+                    const key = getStorageKey(parentSessionId);
+                    const raw = key ? localStorage.getItem(key) : '';
+                    if (!raw) return null;
+                    const parsed = JSON.parse(raw);
+                    const stateIds = uniqueValues([
+                        parsed?.sessionId,
+                        parsed?.id,
+                        ...(Array.isArray(parsed?.sessionAliases) ? parsed.sessionAliases : []),
+                    ]);
+                    return !stateIds.length || stateIds.some((id) => parentAliasSet.has(id)) ? parsed : null;
+                } catch (error) {
+                    console.warn('[yuzuki-Memory] Failed to read branch parent cache.', {
+                        parentSessionId,
+                        error,
+                    });
+                    return null;
+                }
+            })
+            .filter(Boolean);
+
+        const inherited = pickBestState(candidates);
+        if (inherited) {
+            console.info('[yuzuki-Memory] Inheriting memory state from branch parent.', {
+                from: inherited.sessionId || parentAliases[0],
+                to: sessionId,
+            });
+        }
+        return inherited;
+    }
+
     function stampSession(state, sessionId) {
         if (!state || typeof state !== 'object') return state;
         return Object.assign({}, state, {
@@ -513,15 +563,33 @@
 
             const metadataState = sessionId === getCurrentSessionId() ? readChatMetadataState() : null;
             const compatibleMetadata = isMigratableChatMetadataState(metadataState, sessionId) ? metadataState : null;
-            const sourceState = compatibleMetadata || pickBestState(localStates);
+            const branchParentState = compatibleMetadata ? null : loadBranchParentState(sessionId);
+            const sourceState = compatibleMetadata || branchParentState || pickBestState(localStates);
             const normalized = normalizeState(sourceState ? stampSession(sourceState, sessionId) : null, fallbackState);
             const metadataNeedsMigration = compatibleMetadata
                 && !isCompatibleStateSession(compatibleMetadata, sessionId)
                 && sessionId === getCurrentSessionId();
             if (metadataNeedsMigration) {
-                saveState(normalized, fallbackState, sessionId, { force: true, saveOrigin: 'migration', immediate: true });
+                saveState(normalized, fallbackState, sessionId, {
+                    force: true,
+                    saveOrigin: 'migration',
+                    immediate: true,
+                    allowDuringSwitch: true,
+                });
+            } else if (branchParentState) {
+                saveState(normalized, fallbackState, sessionId, {
+                    force: true,
+                    saveOrigin: 'branch-inheritance',
+                    immediate: true,
+                    allowDuringSwitch: true,
+                });
             } else if (!compatibleMetadata && sourceState && sessionId === getCurrentSessionId()) {
-                saveState(normalized, fallbackState, sessionId, { force: true, saveOrigin: 'migration', immediate: true });
+                saveState(normalized, fallbackState, sessionId, {
+                    force: true,
+                    saveOrigin: 'migration',
+                    immediate: true,
+                    allowDuringSwitch: true,
+                });
             } else if (sourceState && sourceState.sessionId && sourceState.sessionId !== sessionId) {
                 saveState(normalized, fallbackState, sessionId, { force: true, saveOrigin: 'migration' });
             }
