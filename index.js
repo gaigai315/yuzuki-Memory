@@ -7,7 +7,7 @@
     'use strict';
 
     const NAMESPACE = 'YuzukiMemory';
-    const VERSION = '0.4.10';
+    const VERSION = '0.5.0';
     const baseUrl = new URL('./', import.meta.url).href;
 
     const MODULES = [
