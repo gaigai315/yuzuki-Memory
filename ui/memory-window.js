@@ -489,6 +489,28 @@
         return [scopeLabel, floorText].filter(Boolean).join(' · ');
     }
 
+    function getScopedFloorDisplayParts(floor, floorScope) {
+        const source = getStorage()?.formatFloorScopeLabel?.(floorScope, getCurrentFloorScope()) || '';
+        const floorText = String(floor || '').trim();
+        return {
+            source,
+            floor: floorText,
+            full: [source, floorText].filter(Boolean).join(' · '),
+        };
+    }
+
+    function appendScopedFloorDisplay(container, floor, floorScope) {
+        const parts = getScopedFloorDisplayParts(floor, floorScope);
+        const source = document.createElement('span');
+        source.className = 'yzm-summary-floor-source';
+        source.textContent = `楼层数：${parts.source || '本篇'}`;
+        const floorNumber = document.createElement('span');
+        floorNumber.className = 'yzm-summary-floor-number';
+        floorNumber.textContent = `· ${parts.floor || '未填写'}`;
+        container.title = `楼层数：${parts.full || '未填写'}`;
+        container.append(source, floorNumber);
+    }
+
     function getContext() {
         try {
             return typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
@@ -10696,7 +10718,8 @@
             if (summaryKind !== '支线' && scopedFloorText) {
                 const floor = document.createElement('span');
                 floor.className = 'yzm-summary-meta-chip';
-                floor.append(createIconNode('fa-solid fa-layer-group', ''), document.createTextNode(`楼层数：${scopedFloorText}`));
+                floor.appendChild(createIconNode('fa-solid fa-layer-group', ''));
+                appendScopedFloorDisplay(floor, floorText, getRecordFloorScope(record));
                 metaRow.appendChild(floor);
             }
             if (coreCharacter) {
@@ -10749,11 +10772,8 @@
 
         const header = document.createElement('div');
         header.className = 'yzm-summary-segment-header';
-        const scopedFloorText = formatScopedFloorText(segment.floor, segment.floorScope);
-        header.append(
-            createIconNode('fa-solid fa-layer-group', ''),
-            document.createTextNode(scopedFloorText ? `楼层数：${scopedFloorText}` : '楼层数：未填写')
-        );
+        header.appendChild(createIconNode('fa-solid fa-layer-group', ''));
+        appendScopedFloorDisplay(header, segment.floor, segment.floorScope);
 
         const list = document.createElement('div');
         list.className = 'yzm-summary-timeline-list';

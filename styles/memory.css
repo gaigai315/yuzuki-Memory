@@ -6874,6 +6874,8 @@
     align-items: center;
     gap: 6px;
     max-width: 100%;
+    min-width: 0;
+    overflow: hidden;
     min-height: 24px;
     padding: 0 8px;
     color: var(--yzm-muted);
@@ -6883,10 +6885,24 @@
     box-sizing: border-box;
     font-size: 12px;
     line-height: 1.2;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-summary-floor-source {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-summary-floor-number {
+    flex: 0 0 auto;
+    white-space: nowrap;
 }
 
 #yzm-memory-root .yzm-summary-core-character i,
 #yzm-memory-root .yzm-summary-meta-chip i {
+    flex: 0 0 auto;
     color: var(--yzm-icon);
     font-size: 12px;
 }
@@ -6950,6 +6966,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    min-width: 0;
+    overflow: hidden;
     min-height: 32px;
     padding: 0 10px;
     color: var(--yzm-muted);
@@ -6961,6 +6979,7 @@
 }
 
 #yzm-memory-root .yzm-summary-segment-header i {
+    flex: 0 0 auto;
     color: var(--yzm-icon);
 }
 
