@@ -374,7 +374,14 @@
     function refreshAutoTaskBaseline() {
         autoTaskSessionId = getCurrentSessionId();
         autoTaskBaselineChatLength = getChatLength();
+        autoTaskLastGenerationAt = 0;
         autoTaskArmed = false;
+    }
+
+    function isAutoTaskStateReady(callbacks = {}) {
+        if (YuzukiMemory.Storage?.isSessionSwitching?.() === true) return false;
+        if (typeof callbacks.isStateReady === 'function') return callbacks.isStateReady() === true;
+        return true;
     }
 
     function cancelPendingAutoTask() {
@@ -2557,6 +2564,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         window.clearTimeout(autoSummaryTimer);
         autoSummaryTimer = window.setTimeout(async () => {
             if (!autoTaskArmed) return;
+            if (!isAutoTaskStateReady(callbacks)) {
+                scheduleAutoSummary(callbacks, 500);
+                return;
+            }
             const currentSessionId = getCurrentSessionId();
             const chatLength = getChatLength();
             if (!currentSessionId || currentSessionId !== autoTaskSessionId) {
@@ -2665,55 +2676,18 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     function armAutoTaskAfterGeneration(callbacks = {}) {
+        if (!isAutoTaskStateReady(callbacks)) return;
         const currentSessionId = getCurrentSessionId();
         const chatLength = getChatLength();
         if (!currentSessionId) return;
         if (currentSessionId !== autoTaskSessionId) {
-            autoTaskSessionId = currentSessionId;
-            autoTaskBaselineChatLength = Math.max(0, chatLength - 1);
+            refreshAutoTaskBaseline();
+            return;
         }
         if (!isLatestAssistantMessage()) return;
-        if (chatLength <= autoTaskBaselineChatLength) {
-            const state = callbacks.getState?.();
-            if (!state) return;
-            const task = buildPendingAutoTask(
-                normalizePointers(state),
-                chatLength,
-                getAutoSummarySettings(),
-                getPluginSettings()
-            );
-            if (!task) return;
-            autoTaskBaselineChatLength = Math.max(0, chatLength - 1);
-        }
+        if (chatLength <= autoTaskBaselineChatLength) return;
         autoTaskArmed = true;
         scheduleAutoSummary(callbacks);
-    }
-
-    function recoverPendingAutoTask(callbacks = {}, options = {}) {
-        const currentSessionId = getCurrentSessionId();
-        const chatLength = getChatLength();
-        if (!currentSessionId || !isLatestAssistantMessage()) return false;
-        if (currentSessionId !== autoTaskSessionId) refreshAutoTaskBaseline();
-        if (autoTaskArmed || autoSummaryRunning) return false;
-        if (!options.force && chatLength <= autoTaskBaselineChatLength) return false;
-
-        const state = callbacks.getState?.();
-        if (!state) return false;
-        const task = buildPendingAutoTask(
-            normalizePointers(state),
-            chatLength,
-            getAutoSummarySettings(),
-            getPluginSettings()
-        );
-        if (!task) {
-            autoTaskBaselineChatLength = chatLength;
-            return false;
-        }
-
-        autoTaskArmed = true;
-        autoTaskBaselineChatLength = Math.min(autoTaskBaselineChatLength, Math.max(0, chatLength - 1));
-        scheduleAutoSummary(callbacks);
-        return isSameFloorScope(meta?.floorScope || fallbackFloorScope, target?.floorScope);
     }
 
     function bindAutoSummary(callbacks = {}) {
@@ -2735,15 +2709,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             if (eventTypes.GENERATION_ENDED) eventSource.on?.(eventTypes.GENERATION_ENDED, onGenerationEnded);
             if (eventTypes.CHARACTER_MESSAGE_RENDERED) eventSource.on?.(eventTypes.CHARACTER_MESSAGE_RENDERED, onCharacterRendered);
         }
-        window.setTimeout(() => recoverPendingAutoTask(callbacks, { force: true }), 1200);
+        window.addEventListener('yzm-memory-session-ready', () => {
+            refreshAutoTaskBaseline();
+        });
         autoTaskSessionPollTimer = window.setInterval(() => {
             const currentSessionId = getCurrentSessionId();
             if (currentSessionId && currentSessionId !== autoTaskSessionId) {
                 refreshAutoTaskBaseline();
-                window.setTimeout(() => recoverPendingAutoTask(callbacks, { force: true }), 800);
-                return;
             }
-            recoverPendingAutoTask(callbacks);
         }, 1500);
     }
 

@@ -219,6 +219,8 @@
     const CUSTOM_TABLE_ICON_IDS = new Set(['chart_bar']);
     let memoryState = null;
     let loadedSessionId = null;
+    let sessionStateReady = false;
+    let sessionLoadRevision = 0;
     let extensionRetryTimer = null;
     let floatingResizeController = null;
     let floatingVisibilityTimer = null;
@@ -548,9 +550,18 @@
         if (!memoryState) {
             loadedSessionId = getStorage()?.getCurrentSessionId?.() || null;
             memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
+            sessionStateReady = Boolean(loadedSessionId && !getStorage()?.isSessionSwitching?.());
             repairPlotSummaryHidingForLoadedState(memoryState);
         }
         return memoryState;
+    }
+
+    function isSessionStateReady() {
+        const currentSessionId = getStorage()?.getCurrentSessionId?.() || null;
+        return sessionStateReady
+            && !getStorage()?.isSessionSwitching?.()
+            && Boolean(loadedSessionId)
+            && loadedSessionId === currentSessionId;
     }
 
     function getTables() {
@@ -10913,8 +10924,7 @@
         [
             '【优化】优化与“世界书缓存优化器”酒馆脚本的兼容性，避免请求探针重复包装与高开销 Token 统计导致生成卡顿',
             '【优化】剧情节点状态仅用于界面显示，自动清理摘要正文中的状态说明；实时填表只回传主线/支线最后一条可见节点，避免旧节点被重复改写追加',
-            '【优化】跨会话导入总结增加“前篇 / 本篇”楼层来源，备份升级为 v2，避免新旧会话同号楼层互相覆盖或误清理',
-            '【修复】分批总结完成一批并结束倒计时后，下一批执行状态会立即刷新到当前按钮',
+            '【修复】进入或切换会话时不再误触发批量填表与自动总结；保留原有进度指针，等待下一次正式 AI 回复后再检查补跑',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -13678,6 +13688,8 @@
 
     function reloadStateForCurrentSession(nextSessionId, previousSessionId) {
         const root = ensureRoot();
+        const loadRevision = ++sessionLoadRevision;
+        sessionStateReady = false;
         if (memoryState && previousSessionId) {
             getStorage()?.saveState?.(memoryState, createDefaultState(), previousSessionId, { allowDuringSwitch: true });
         }
@@ -13686,21 +13698,32 @@
         refreshActiveWorkspace(root);
 
         window.setTimeout(() => {
-            loadedSessionId = nextSessionId || getStorage()?.getCurrentSessionId?.() || null;
+            if (loadRevision !== sessionLoadRevision) return;
+            const currentSessionId = getStorage()?.getCurrentSessionId?.() || null;
+            if (nextSessionId && currentSessionId && nextSessionId !== currentSessionId) return;
+            loadedSessionId = currentSessionId || nextSessionId || null;
             memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
             applyResolvedPromptSchemeToState({ save: false });
             refreshActiveWorkspace(root);
             scheduleSessionWorkspaceRefresh(root, loadedSessionId);
             getStorage()?.endSessionSwitch?.();
+            sessionStateReady = Boolean(loadedSessionId);
+            if (sessionStateReady) {
+                window.dispatchEvent(new CustomEvent('yzm-memory-session-ready', {
+                    detail: { sessionId: loadedSessionId },
+                }));
+            }
         }, 220);
 
         window.setTimeout(() => {
+            if (loadRevision !== sessionLoadRevision) return;
             getStorage()?.endSessionSwitch?.();
         }, 1200);
     }
 
     function reloadStateFromStorage(event = null) {
         const root = ensureRoot();
+        if (getStorage()?.isSessionSwitching?.()) return;
         if (taskRunnerBusy && event?.detail?.source === 'task-runner') {
             refreshActiveWorkspace(root);
             scheduleCharacterVectorSync();
@@ -13709,6 +13732,7 @@
         }
         loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
         memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
+        sessionStateReady = Boolean(loadedSessionId);
         applyResolvedPromptSchemeToState({ save: false });
         refreshActiveWorkspace(root);
         scheduleCharacterVectorSync();
@@ -13835,6 +13859,7 @@
         YuzukiMemory.TaskRunner?.bindAutoSummary?.({
             getState,
             saveState,
+            isStateReady: isSessionStateReady,
             confirmAutoTask(task) {
                 const root = document.getElementById(ROOT_ID);
                 if (!root) return Promise.resolve({ action: 'cancel', postpone: 0 });
