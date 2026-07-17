@@ -35,6 +35,27 @@
     const FETCH_PROCESSED_FLAG = Symbol.for('yzmMemoryRequestProcessed');
     const FETCH_PREVIEW_FLAG = Symbol.for('yzmMemoryRequestPreview');
     const FETCH_FINAL_CAPTURED_FLAG = Symbol.for('yzmMemoryRequestFinalCaptured');
+    const TRANSPORT_MESSAGE_METADATA_KEYS = new Set([
+        'isGaigaiData',
+        'isGaigaiPrompt',
+        'isGaigaiVector',
+        'isYuzukiVector',
+        'isYuzukiTimedPrompt',
+        'yzmMemoryInjectionType',
+        'yzmMemoryTableId',
+        'yzmMemorySummaryId',
+        'yzmMemoryInternal',
+        'gaigaiPhoneSignal',
+        'isPhoneMessage',
+        'isMusicMessage',
+        'isVirtualPhoneApiCall',
+        '_yzmDelete',
+    ]);
+    const TRANSPORT_BODY_METADATA_KEYS = new Set([
+        'gaigaiPhoneSignal',
+        'isPhoneMessage',
+        'isVirtualPhoneApiCall',
+    ]);
     const processedRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
     const previewRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
     const finalCapturedRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
@@ -243,6 +264,36 @@
             targets.push({ key, items });
         });
         return targets;
+    }
+
+    function stripTransportMessageMetadata(body) {
+        let removed = 0;
+        if (body && typeof body === 'object' && !Array.isArray(body)) {
+            TRANSPORT_BODY_METADATA_KEYS.forEach((key) => {
+                if (!Object.prototype.hasOwnProperty.call(body, key)) return;
+                delete body[key];
+                removed += 1;
+            });
+        }
+        getRequestArrays(body).forEach((target) => {
+            target.items.forEach((message) => {
+                if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+                const isPhonePluginMessage = message.isPhoneMessage === true
+                    || message.isMusicMessage === true
+                    || message.isVirtualPhoneApiCall === true
+                    || !!message.gaigaiPhoneSignal;
+                TRANSPORT_MESSAGE_METADATA_KEYS.forEach((key) => {
+                    if (!Object.prototype.hasOwnProperty.call(message, key)) return;
+                    delete message[key];
+                    removed += 1;
+                });
+                if (isPhonePluginMessage && Object.prototype.hasOwnProperty.call(message, 'identifier')) {
+                    delete message.identifier;
+                    removed += 1;
+                }
+            });
+        });
+        return removed;
     }
 
     function resolvePromptReadyChat(input) {
@@ -647,9 +698,21 @@
         const fallbackRole = item.is_user === true ? 'user' : (item.is_user === false ? 'assistant' : 'system');
         const role = String(item.role || fallbackRole).toLowerCase();
         const name = String(item.name || item.identifier || '').trim();
-        const isMemory = !!item.isGaigaiData;
-        const isPrompt = !!item.isGaigaiPrompt;
-        const isVector = !!item.isGaigaiVector;
+        const injectionType = String(item.yzmMemoryInjectionType || '').trim().toLowerCase();
+        const isMemory = !!item.isGaigaiData
+            || injectionType === 'summary'
+            || injectionType === 'table'
+            || content.includes('【前情提要 -')
+            || content.includes('【当前世界状态参考 -')
+            || content.includes('【记忆只读数据库 -')
+            || content.includes('【剧情摘要】');
+        const isPrompt = !!item.isGaigaiPrompt
+            || injectionType === 'prompt'
+            || name.includes('提示词');
+        const isVector = !!item.isGaigaiVector
+            || !!item.isYuzukiVector
+            || injectionType === 'vector'
+            || content.includes('【系统检索到的历史记忆片段】');
         const isPhone = !isMemory && !isPrompt && !isVector && isPhoneProbeMessage(item, content, role);
         const tokens = estimateTokens(content);
         return {
@@ -966,16 +1029,23 @@
                 messages: repositionedPhoneMemoryCount,
             });
         }
+        const hasYuzukiVector = bodyContainsYuzukiVector(body);
+        if (processingOptions.captureBeforeDownstream !== false) {
+            void captureFromBody(body, url, { preview: isPreviewCapture });
+        }
+        const removedTransportMetadata = stripTransportMessageMetadata(body);
+        if (removedTransportMetadata > 0) {
+            console.info('[yuzuki-Memory] 已清理最终请求中的插件内部消息标记。', {
+                fields: removedTransportMetadata,
+            });
+        }
         const nextBody = JSON.stringify(body);
-        if (bodyContainsYuzukiVector(body)) {
+        if (hasYuzukiVector) {
             console.info('[yuzuki-Memory Vector] 最终请求体已包含新版向量记忆');
         } else if (nextBody.includes('{{VECTOR_MEMORY}}')) {
             console.warn('[yuzuki-Memory Vector] 最终请求体仍包含 {{VECTOR_MEMORY}}，说明变量没有被替换');
         } else {
             console.info('[yuzuki-Memory Vector] 最终请求体没有新版向量记忆');
-        }
-        if (processingOptions.captureBeforeDownstream !== false) {
-            void captureFromBody(body, url, { preview: isPreviewCapture });
         }
         if (requestSource) {
             return [new Request(requestSource, { body: nextBody }), null, { preview: isPreviewCapture }];
@@ -1272,6 +1342,7 @@
         getVectorInjectionText,
         classifyMemoryInjectionRequest,
         repositionPhoneMemoryMessages,
+        stripTransportMessageMetadata,
         shouldInjectMemory: (body) => classifyMemoryInjectionRequest(body).allowed,
         processFetchArgs,
         getLastRequestData,
