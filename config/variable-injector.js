@@ -24,6 +24,7 @@
     const VECTOR_MARKER = '【系统检索到的历史记忆片段】';
     const MEMORY_DATA_MARKERS = [
         '【前情提要 -',
+        '【前情提要】',
         '【当前世界状态参考 -',
         '【剧情摘要】',
         '【角色档案】',
@@ -710,7 +711,7 @@
         return (Array.isArray(entries) ? entries : []).flatMap((entry) => getSummaryEntryParts(entry));
     }
 
-    function buildSummaryMessage(groupEntries = []) {
+    function buildSummaryMessage(groupEntries = [], sequence = null) {
         const entries = Array.isArray(groupEntries) ? groupEntries.filter(Boolean) : [];
         if (!entries.length) return null;
         const first = entries[0];
@@ -724,7 +725,7 @@
         return {
             role: 'system',
             content: compactLines(['【前情提要】', blocks.join('\n\n')]),
-            name: entries.length === 1 ? `SYSTEM(总结${first.number})` : 'SYSTEM(总结)',
+            name: `SYSTEM(总结${sequence ?? first.number})`,
             isGaigaiData: true,
             yzmMemoryInjectionType: 'summary',
             yzmMemorySummaryId: entries.map((entry) => entry.record?.id || '').filter(Boolean).join(','),
@@ -744,10 +745,10 @@
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key).push(entry);
         });
-        return [...groups.values()].map((groupEntries) => ({
+        return [...groups.values()].map((groupEntries, index) => ({
             entry: groupEntries[0],
             entries: groupEntries,
-            message: buildSummaryMessage(groupEntries),
+            message: buildSummaryMessage(groupEntries, index + 1),
         })).filter((item) => item.message);
     }
 
@@ -1175,7 +1176,7 @@
             if (!groups.has(key)) groups.set(key, []);
             groups.get(key).push(entry);
         });
-        return [...groups.values()].map((groupEntries) => buildSummaryMessage(groupEntries)).filter(Boolean);
+        return [...groups.values()].map((groupEntries, index) => buildSummaryMessage(groupEntries, index + 1)).filter(Boolean);
     }
 
     function reserveSpecificAnchorMessages(items, tableEntries, summaryEntries) {

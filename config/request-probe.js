@@ -703,6 +703,7 @@
             || injectionType === 'summary'
             || injectionType === 'table'
             || content.includes('【前情提要 -')
+            || content.includes('【前情提要】')
             || content.includes('【当前世界状态参考 -')
             || content.includes('【记忆只读数据库 -')
             || content.includes('【剧情摘要】');
