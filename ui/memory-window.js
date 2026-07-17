@@ -8548,7 +8548,11 @@
         const stats = document.createElement('div');
         stats.className = 'yzm-request-probe-stats';
         stats.append(
-            createRequestProbeStat('Total Tokens', data?.totalTokens || 0, 'fa-solid fa-coins'),
+            createRequestProbeStat(
+                'Total Tokens',
+                data?.tokensEstimated ? `≈${data?.totalTokens || 0}` : (data?.totalTokens || 0),
+                'fa-solid fa-coins'
+            ),
             createRequestProbeStat('Messages', `${data?.messages?.length || 0} 条`, 'fa-regular fa-message'),
             createRequestProbeStat(
                 data?.preparedTask || data?.preview ? '捕获阶段' : '最近捕获于',
@@ -8632,7 +8636,7 @@
         left.append(indexNode, role, preview);
         const tokens = document.createElement('span');
         tokens.className = 'yzm-request-probe-token';
-        tokens.textContent = `${message?.tokens || 0} TK`;
+        tokens.textContent = `${message?.tokensEstimated ? '≈' : ''}${message?.tokens || 0} TK`;
         summary.append(left, tokens);
 
         const content = document.createElement('pre');
@@ -10898,6 +10902,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
+            '【优化】优化与“世界书缓存优化器”酒馆脚本的兼容性，避免请求探针重复包装与高开销 Token 统计导致生成卡顿',
+            '【优化】支线摘要仅记录已有明确结果的事件，不再写入进行中的事件或状态说明',
             '【优化】跨会话导入总结增加“前篇 / 本篇”楼层来源，备份升级为 v2，避免新旧会话同号楼层互相覆盖或误清理',
             '【修复】分批总结完成一批并结束倒计时后，下一批执行状态会立即刷新到当前按钮',
         ].forEach((text) => {

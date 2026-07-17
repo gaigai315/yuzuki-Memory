@@ -23,15 +23,18 @@
     let generationActivitySequence = 0;
     let foregroundGenerationSequence = 0;
     const jsGenerationStartedAt = new Map();
-    let tokenizerModulePromise = null;
     let requestCaptureSequence = 0;
     let previewCaptureSequence = 0;
     const FETCH_WRAPPER_FLAG = '__yzmMemoryRequestProbeFetch';
+    const FETCH_REGISTRATION_KEY = '__yzmMemoryRequestProbeFetchRegistration';
+    const FETCH_INSTANCE_ID = Symbol('yzmMemoryRequestProbeInstance');
     // Some request monitors preserve themselves with a fetch accessor. A request
     // can then re-enter an older Yuzuki wrapper through that monitor's delegate.
-    const FETCH_PROCESSED_FLAG = Symbol('yzmMemoryRequestProcessed');
-    const FETCH_PREVIEW_FLAG = Symbol('yzmMemoryRequestPreview');
-    const FETCH_FINAL_CAPTURED_FLAG = Symbol('yzmMemoryRequestFinalCaptured');
+    // Global symbols let wrappers from an older plugin instance recognize work
+    // already completed by the current instance.
+    const FETCH_PROCESSED_FLAG = Symbol.for('yzmMemoryRequestProcessed');
+    const FETCH_PREVIEW_FLAG = Symbol.for('yzmMemoryRequestPreview');
+    const FETCH_FINAL_CAPTURED_FLAG = Symbol.for('yzmMemoryRequestFinalCaptured');
     const processedRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
     const previewRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
     const finalCapturedRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
@@ -205,20 +208,24 @@
         return null;
     }
 
-    function getPhoneMemoryPermissions(body) {
-        const requestSignal = getRequestArrays(body)
-            .map((target) => extractPhoneSignalFromMessages(target.items))
-            .find(Boolean);
-        const signal = requestSignal
-            || extractPhoneSignalFromNode(body)
-            || (lastRequestData ? extractPhoneSignalFromNode(lastRequestData.rawBody || lastRequestData) : null);
-        if (!signal) return null;
+    function normalizePhoneMemoryPermissions(signal) {
+        if (!signal || typeof signal !== 'object') return null;
         return {
             allowSummary: signal.allowSummary !== false,
             allowTable: signal.allowTable !== false,
             allowVector: signal.allowVector !== false,
             allowPrompt: signal.allowPrompt !== false,
         };
+    }
+
+    function getPhoneMemoryPermissions(body) {
+        const requestSignal = getRequestArrays(body)
+            .map((target) => extractPhoneSignalFromMessages(target.items))
+            .find(Boolean);
+        const signal = requestSignal
+            || extractPhoneSignalFromNode(body)
+            || lastRequestData?.phonePermissions;
+        return normalizePhoneMemoryPermissions(signal);
     }
 
     function getRequestArrays(body) {
@@ -622,25 +629,6 @@
         return body;
     }
 
-    async function countMessageTokens(item, role, content) {
-        try {
-            tokenizerModulePromise ||= import('/scripts/tokenizers.js');
-            const tokenizerModule = await tokenizerModulePromise;
-            if (typeof tokenizerModule?.countTokensOpenAIAsync !== 'function') {
-                throw new Error('SillyTavern countTokensOpenAIAsync is unavailable');
-            }
-            const message = { role, content };
-            const name = String(item?.name || '').trim();
-            if (name) message.name = name;
-            const count = Number(await tokenizerModule.countTokensOpenAIAsync(message));
-            if (!Number.isFinite(count) || count < 0) throw new Error(`Invalid token count: ${count}`);
-            return Math.round(count);
-        } catch (error) {
-            console.warn('[yuzuki-Memory] SillyTavern tokenizer failed; using character estimate.', error);
-            return estimateTokens(content);
-        }
-    }
-
     function isPhoneProbeMessage(item, content = '', role = '') {
         if (role !== 'system') return false;
         if (item?.isPhoneMessage === true) return true;
@@ -653,27 +641,30 @@
         return /小手机|手机插件|微信|音乐状态栏|音乐|HONEY|PHONE/i.test(sourceText);
     }
 
-    async function normalizeMessage(message, index) {
+    function normalizeMessage(message, index) {
         const item = message && typeof message === 'object' ? message : { content: String(message || '') };
         const content = getMessageText(item);
         const fallbackRole = item.is_user === true ? 'user' : (item.is_user === false ? 'assistant' : 'system');
         const role = String(item.role || fallbackRole).toLowerCase();
+        const name = String(item.name || item.identifier || '').trim();
         const isMemory = !!item.isGaigaiData;
         const isPrompt = !!item.isGaigaiPrompt;
         const isVector = !!item.isGaigaiVector;
+        const isPhone = !isMemory && !isPrompt && !isVector && isPhoneProbeMessage(item, content, role);
+        const tokens = estimateTokens(content);
         return {
             index,
             role,
-            name: String(item.name || item.identifier || '').trim(),
+            name,
             content,
-            tokens: await countMessageTokens(item, role, content),
+            tokens,
+            tokensEstimated: true,
             flags: {
                 memory: isMemory,
                 prompt: isPrompt,
                 vector: isVector,
-                phone: !isMemory && !isPrompt && !isVector && isPhoneProbeMessage(item, content, role),
+                phone: isPhone,
             },
-            raw: clone(item),
         };
     }
 
@@ -681,22 +672,32 @@
         const targets = getRequestArrays(body);
         if (!targets.length) return null;
         const preview = options.preview === true;
-        const captureSequence = preview ? ++previewCaptureSequence : ++requestCaptureSequence;
-        const pendingMessages = targets.flatMap((target) => clone(target.items).map(async (item, index) => ({
-            ...await normalizeMessage(item, index),
+        const key = targets.map((target) => target.key).join(',');
+        const model = String(body.model || '');
+        const phonePermissions = getPhoneMemoryPermissions(body);
+        let captureSequence = 0;
+        if (preview) {
+            captureSequence = ++previewCaptureSequence;
+        } else {
+            captureSequence = ++requestCaptureSequence;
+            // A real request supersedes previews still waiting for token counts.
+            previewCaptureSequence += 1;
+        }
+        const messages = targets.flatMap((target) => target.items.map((item, index) => ({
+            ...normalizeMessage(item, index),
             sourceKey: target.key,
         })));
-        const messages = await Promise.all(pendingMessages);
         if (preview ? captureSequence !== previewCaptureSequence : captureSequence !== requestCaptureSequence) return null;
         const totalTokens = messages.reduce((sum, message) => sum + message.tokens, 0);
         const requestData = {
             url,
-            key: targets.map((target) => target.key).join(','),
-            model: String(body.model || ''),
+            key,
+            model,
             timestamp: Date.now(),
             messages,
             totalTokens,
-            rawBody: clone(body),
+            tokensEstimated: true,
+            phonePermissions,
             preview,
             promptReady: options.promptReady === true,
             downstreamFinal: options.downstreamFinal === true,
@@ -711,6 +712,7 @@
             });
             return requestData;
         }
+        lastPreviewRequestData = null;
         lastRequestData = requestData;
         window.dispatchEvent(new CustomEvent('yzm-memory-request-probe-updated', { detail: lastRequestData }));
         return lastRequestData;
@@ -986,7 +988,11 @@
         const requestInput = isRequestLike(input) ? input : null;
         const url = requestInput ? requestInput.url : (input ? input.toString() : '');
         const options = args[1] || {};
-        if (options?.[FETCH_PROCESSED_FLAG] === true || (requestInput && processedRequestInputs?.has(requestInput))) {
+        if (
+            options?.[FETCH_PROCESSED_FLAG] === true
+            || requestInput?.[FETCH_PROCESSED_FLAG] === true
+            || (requestInput && processedRequestInputs?.has(requestInput))
+        ) {
             return args;
         }
         try {
@@ -1001,7 +1007,11 @@
                 );
                 if (processed?.[0] && isRequestLike(processed[0])) {
                     processedRequestInputs?.add(processed[0]);
-                    if (processed?.[2]?.preview === true) previewRequestInputs?.add(processed[0]);
+                    markRequestFlag(processed[0], FETCH_PROCESSED_FLAG);
+                    if (processed?.[2]?.preview === true) {
+                        previewRequestInputs?.add(processed[0]);
+                        markRequestFlag(processed[0], FETCH_PREVIEW_FLAG);
+                    }
                 }
                 return processed ? [processed[0], processed[1]] : args;
             }
@@ -1024,19 +1034,76 @@
         return typeof window.fetch === 'function' && window.fetch[FETCH_WRAPPER_FLAG] === true;
     }
 
+    function getCurrentFetchAccessor() {
+        try {
+            const descriptor = Object.getOwnPropertyDescriptor(window, 'fetch');
+            if (!descriptor || typeof descriptor.get !== 'function' || typeof descriptor.set !== 'function') return null;
+            return descriptor;
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    function isRegisteredWithCurrentFetchAccessor() {
+        const accessor = getCurrentFetchAccessor();
+        const registration = window[FETCH_REGISTRATION_KEY];
+        return !!(
+            accessor
+            && registration?.wrapper?.[FETCH_WRAPPER_FLAG] === true
+            && registration.instanceId === FETCH_INSTANCE_ID
+            && registration.accessorGet === accessor.get
+            && registration.accessorSet === accessor.set
+        );
+    }
+
+    function adoptWorldbookFetchAccessorRegistration() {
+        const accessor = getCurrentFetchAccessor();
+        const registration = window[FETCH_REGISTRATION_KEY];
+        const worldbookPatch = window.__wbmCacheInspectorPatchState;
+        if (
+            !accessor
+            || worldbookPatch?.fetchAccessorInstalled !== true
+            || registration?.wrapper?.[FETCH_WRAPPER_FLAG] !== true
+            || registration.instanceId !== FETCH_INSTANCE_ID
+        ) {
+            return false;
+        }
+        // The cache monitor captures the current fetch before installing its
+        // accessor, so our existing wrapper is already in its delegate chain.
+        // Updating metadata avoids inserting a second Yuzuki wrapper.
+        registration.accessorGet = accessor.get;
+        registration.accessorSet = accessor.set;
+        return true;
+    }
+
+    function markRequestFlag(request, flag) {
+        if (!request || typeof request !== 'object') return;
+        try {
+            Object.defineProperty(request, flag, { value: true, configurable: true });
+        } catch (_error) {
+            // WeakSet tracking remains available for non-extensible Request objects.
+        }
+    }
+
     async function captureAfterDownstream(args, url) {
         const input = args[0];
         const requestInput = isRequestLike(input) ? input : null;
         const options = args[1] || {};
-        if (requestInput ? finalCapturedRequestInputs?.has(requestInput) : options?.[FETCH_FINAL_CAPTURED_FLAG] === true) {
+        if (
+            requestInput
+                ? requestInput[FETCH_FINAL_CAPTURED_FLAG] === true || finalCapturedRequestInputs?.has(requestInput)
+                : options?.[FETCH_FINAL_CAPTURED_FLAG] === true
+        ) {
             return null;
         }
         const bodyText = requestInput ? await readRequestBody(requestInput) : options.body;
         if (typeof bodyText !== 'string' || !bodyText.trim()) return null;
         try {
             const body = JSON.parse(bodyText);
-            if (requestInput) finalCapturedRequestInputs?.add(requestInput);
-            else {
+            if (requestInput) {
+                finalCapturedRequestInputs?.add(requestInput);
+                markRequestFlag(requestInput, FETCH_FINAL_CAPTURED_FLAG);
+            } else {
                 try {
                     Object.defineProperty(options, FETCH_FINAL_CAPTURED_FLAG, { value: true });
                 } catch (_error) {
@@ -1044,7 +1111,7 @@
                 }
             }
             const preview = requestInput
-                ? previewRequestInputs?.has(requestInput) === true
+                ? requestInput[FETCH_PREVIEW_FLAG] === true || previewRequestInputs?.has(requestInput) === true
                 : options?.[FETCH_PREVIEW_FLAG] === true;
             void captureFromBody(body, url, {
                 preview,
@@ -1059,13 +1126,18 @@
 
     function installFetchProbe(options = {}) {
         if (typeof window.fetch !== 'function') return;
-        if (isCurrentFetchProbeInstalled()) {
+        if (
+            isCurrentFetchProbeInstalled()
+            || isRegisteredWithCurrentFetchAccessor()
+            || adoptWorldbookFetchAccessorRegistration()
+        ) {
             YuzukiMemory.RequestProbe.installed = true;
             return;
         }
         if (YuzukiMemory.RequestProbe?.installed && options.force !== true) return;
         bindGenerationEvents();
         const baseFetch = window.fetch;
+        const accessor = getCurrentFetchAccessor();
         originalFetch = baseFetch;
         const wrappedFetch = async function (...args) {
             const nextArgs = await processFetchArgs(args);
@@ -1091,6 +1163,12 @@
             configurable: true,
         });
         window.fetch = wrappedFetch;
+        window[FETCH_REGISTRATION_KEY] = {
+            wrapper: wrappedFetch,
+            instanceId: FETCH_INSTANCE_ID,
+            accessorGet: accessor?.get || null,
+            accessorSet: accessor?.set || null,
+        };
         YuzukiMemory.RequestProbe.installed = true;
     }
 
@@ -1164,12 +1242,26 @@
         YuzukiMemory.RequestProbe.xhrInstalled = true;
     }
 
+    function copyRequestDataForRead(data) {
+        if (!data) return null;
+        return {
+            ...data,
+            messages: Array.isArray(data.messages)
+                ? data.messages.map((message) => ({
+                    ...message,
+                    flags: message?.flags ? { ...message.flags } : {},
+                }))
+                : [],
+            phonePermissions: data.phonePermissions ? { ...data.phonePermissions } : null,
+        };
+    }
+
     function getLastRequestData() {
-        return lastRequestData ? clone(lastRequestData) : null;
+        return copyRequestDataForRead(lastRequestData);
     }
 
     function getLastPreviewRequestData() {
-        return lastPreviewRequestData ? clone(lastPreviewRequestData) : null;
+        return copyRequestDataForRead(lastPreviewRequestData);
     }
 
     YuzukiMemory.RequestProbe = Object.assign(YuzukiMemory.RequestProbe || {}, {
