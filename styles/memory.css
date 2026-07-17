@@ -1405,7 +1405,7 @@
 
 #yzm-memory-root .yzm-vector-detail-metrics {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 12px;
     margin-top: 14px;
 }
@@ -1542,7 +1542,7 @@
 
 #yzm-memory-root .yzm-vector-complete-stats {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
     margin-top: 12px;
     padding-top: 10px;
@@ -8381,10 +8381,6 @@
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 5px 8px;
         margin-top: 7px;
-    }
-
-    #yzm-memory-root .yzm-vector-metric-updated {
-        display: none;
     }
 
     #yzm-memory-root .yzm-vector-metric span {

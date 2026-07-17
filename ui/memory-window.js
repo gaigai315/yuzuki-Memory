@@ -3978,10 +3978,8 @@
         const metrics = document.createElement('div');
         metrics.className = 'yzm-vector-detail-metrics';
         metrics.append(
-            createVectorMetric('分段数', stats.total.toLocaleString()),
             createVectorMetric('向量维度', stats.dimension ? `${stats.dimension} 维` : '未生成'),
-            createVectorMetric('向量化进度', `${stats.progress}%`, true, stats.progress),
-            createVectorMetric('最后更新', formatVectorDate(book.updateTime), false, 0, 'yzm-vector-metric-updated')
+            createVectorMetric('向量化进度', `${stats.progress}%`, true, stats.progress)
         );
         info.append(title, metrics);
 
@@ -3990,9 +3988,9 @@
         return hero;
     }
 
-    function createVectorMetric(label, value, withBar = false, progress = 0, extraClassName = '') {
+    function createVectorMetric(label, value, withBar = false, progress = 0) {
         const metric = document.createElement('div');
-        metric.className = extraClassName ? `yzm-vector-metric ${extraClassName}` : 'yzm-vector-metric';
+        metric.className = 'yzm-vector-metric';
         const labelNode = document.createElement('span');
         labelNode.textContent = label;
         const valueNode = document.createElement('strong');
@@ -4060,7 +4058,6 @@
             ['总分段', bookStats.total.toLocaleString()],
             ['已向量化', bookStats.done.toLocaleString()],
             ['待处理', Math.max(bookStats.total - bookStats.done, 0).toLocaleString()],
-            ['进度', `${bookStats.progress}%`],
             ['更新时间', formatVectorDate(book.updateTime)],
         ].forEach(([label, value]) => statsGrid.appendChild(createVectorStat(label, value)));
         card.append(status, desc, statsGrid);
@@ -10922,7 +10919,10 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】发送请求前清理记忆插件与小手机使用的内部标记字段，避免部分兼容接口因非标准字段报错；记忆、向量及小手机内容仍会正常注入',
+            '【优化】向量化书籍详情页移除重复的分段数、最后更新和进度指标，减少重复信息。',
+            '【修复】来源楼层的前篇/本篇信息仅保留在记忆数据层，不再注入酒馆剧情正文。',
+            '【优化】总结注入按楼层范围合并，同一范围的主线和支线共用一个 system，不同范围分别注入。',
+            '【修复】大总结完成后可靠清理对应的小总结，修复重复检测误判和跨作用域分段未清理的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

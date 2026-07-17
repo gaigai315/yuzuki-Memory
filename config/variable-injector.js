@@ -571,46 +571,23 @@
         return names.length ? names.join('、') : '（当前暂无已有支线核心角色）';
     }
 
-    function getSummaryRecordFloorScope(record, fallback = null) {
-        return YuzukiMemory.Storage?.getRecordFloorScope?.(record, fallback)
-            || record?.floorScope
-            || record?.meta?.yzmMemoryTask?.floorScope
-            || fallback
-            || null;
-    }
-
-    function formatSummaryFloorReference(floor, floorScope) {
-        const scopeLabel = YuzukiMemory.Storage?.formatFloorScopeLabel?.(floorScope) || '';
-        const floorText = String(floor || '').trim();
-        if (!scopeLabel && !floorText) return '';
-        return [scopeLabel, floorText ? `${floorText}楼` : ''].filter(Boolean).join(' · ');
-    }
-
-    function buildScopedSummaryContent(record, summaryContent, floorText) {
-        const recordScope = getSummaryRecordFloorScope(record);
+    function buildSummaryInjectionContent(record, summaryContent) {
         const segments = Array.isArray(record?.summarySegments) ? record.summarySegments : [];
         const segmentText = segments
-            .map((segment) => {
-                const content = String(segment?.summary || '').trim();
-                if (!content) return '';
-                const reference = formatSummaryFloorReference(segment?.floor, segment?.floorScope || recordScope);
-                return compactLines([reference ? `【${segment?.floor ? '来源楼层' : '来源'}：${reference}】` : '', content]);
-            })
+            .map((segment) => String(segment?.summary || '').trim())
             .filter(Boolean)
             .join('\n\n');
         if (segmentText) return segmentText;
-        if (!String(summaryContent || '').trim()) return '';
-        const reference = formatSummaryFloorReference(floorText, recordScope);
-        return compactLines([reference ? `【${floorText ? '来源楼层' : '来源'}：${reference}】` : '', summaryContent]);
+        return String(summaryContent || '').trim();
     }
 
-    function summaryRecordToText(table, record) {
+    function summaryRecordToText(table, record, summarySegments = null) {
         if (!table || !record || !isRecordVisible(record)) return '';
+        const scopedRecord = Array.isArray(summarySegments) ? { ...record, summarySegments } : record;
         const primary = getPrimaryColumn(table);
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const title = getSummaryFieldValue(values, primary);
         const summaryContent = getSummaryFieldValue(values, '总结内容');
-        const floorText = getSummaryFieldValue(values, '楼层数');
         const extraBody = (Array.isArray(table.columns) ? table.columns : [])
             .map(cleanColumnName)
             .filter((column) => column !== primary && !['核心角色', '楼层数', '总结内容'].includes(column))
@@ -621,7 +598,7 @@
             })
             .filter(Boolean)
             .join('\n');
-        const body = compactLines([buildScopedSummaryContent(record, summaryContent, floorText), extraBody]);
+        const body = compactLines([buildSummaryInjectionContent(scopedRecord, summaryContent), extraBody]);
         if (!title && !body) return '';
         return body;
     }
@@ -678,23 +655,100 @@
     }
 
     function buildSummaryMessages(state = getCurrentState()) {
-        return buildSummaryMessageEntries(state).map((entry) => entry.message);
+        return buildSummaryMessageEntries(state, { groupByFloor: true }).map((entry) => entry.message);
     }
 
-    function buildSummaryMessageEntries(state = getCurrentState()) {
-        const entries = getSummaryEntries(state);
-        if (!entries.length) return [];
-        return entries.map((entry) => ({
-            entry,
-            message: {
+    function getSummaryEntryFloorGroupKey(entry) {
+        if (entry?.floorGroupKey) return entry.floorGroupKey;
+        const record = entry?.record || {};
+        const values = record.values && typeof record.values === 'object' ? record.values : {};
+        const segments = Array.isArray(record.summarySegments) ? record.summarySegments : [];
+        const rawFloors = segments.map((segment) => String(segment?.floor || '').trim()).filter(Boolean);
+        const floorText = rawFloors.length ? rawFloors.join('\n') : getSummaryFieldValue(values, '楼层数');
+        const ranges = floorText
+            .split(/\n+/)
+            .map((value) => value.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/))
+            .filter(Boolean)
+            .map((match) => `${Math.max(0, Number(match[1]) || 0)}-${Math.max(0, Number(match[2]) || 0)}`);
+        const uniqueRanges = [...new Set(ranges)];
+        const scope = segments[0]?.floorScope
+            || record.floorScope
+            || record.meta?.yzmMemoryTask?.floorScope
+            || null;
+        const scopeKey = String(scope?.id || scope?.label || scope?.kind || '').trim();
+        if (uniqueRanges.length === 1) return `range:${scopeKey}:${uniqueRanges[0]}`;
+        return `record:${String(record.id || entry?.number || 'unknown')}`;
+    }
+
+    function getSummaryEntryParts(entry) {
+        const segments = Array.isArray(entry?.record?.summarySegments)
+            ? entry.record.summarySegments.filter((segment) => String(segment?.summary || '').trim())
+            : [];
+        if (segments.length <= 1) return [entry];
+        const groups = new Map();
+        segments.forEach((segment) => {
+            const rawFloor = String(segment?.floor || '').trim();
+            const match = rawFloor.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
+            const range = match
+                ? `${Math.max(0, Number(match[1]) || 0)}-${Math.max(0, Number(match[2]) || 0)}`
+                : `segment:${groups.size}`;
+            const scope = segment?.floorScope || entry.record?.floorScope || entry.record?.meta?.yzmMemoryTask?.floorScope || null;
+            const key = `range:${String(scope?.id || scope?.label || scope?.kind || '').trim()}:${range}`;
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(segment);
+        });
+        return [...groups.entries()].map(([floorGroupKey, groupSegments], index) => ({
+            ...entry,
+            number: groups.size > 1 ? `${entry.number}.${index + 1}` : entry.number,
+            record: { ...entry.record, summarySegments: groupSegments },
+            text: summaryRecordToText(entry.table, entry.record, groupSegments),
+            floorGroupKey,
+        })).filter((part) => part.text);
+    }
+
+    function expandSummaryEntries(entries = []) {
+        return (Array.isArray(entries) ? entries : []).flatMap((entry) => getSummaryEntryParts(entry));
+    }
+
+    function buildSummaryMessage(groupEntries = []) {
+        const entries = Array.isArray(groupEntries) ? groupEntries.filter(Boolean) : [];
+        if (!entries.length) return null;
+        const first = entries[0];
+        const blocks = entries
+            .map((entry) => compactLines([
+                entry.title ? `【${entry.title}】` : `【总结 ${entry.number}】`,
+                entry.text,
+            ]))
+            .filter(Boolean);
+        if (!blocks.length) return null;
+        return {
             role: 'system',
-            content: `【前情提要 - ${entry.title || `总结 ${entry.number}`}】\n${entry.text}`,
-            name: `SYSTEM(总结${entry.number})`,
+            content: compactLines(['【前情提要】', blocks.join('\n\n')]),
+            name: entries.length === 1 ? `SYSTEM(总结${first.number})` : 'SYSTEM(总结)',
             isGaigaiData: true,
             yzmMemoryInjectionType: 'summary',
-            yzmMemorySummaryId: entry.record?.id || '',
-            },
-        }));
+            yzmMemorySummaryId: entries.map((entry) => entry.record?.id || '').filter(Boolean).join(','),
+        };
+    }
+
+    function buildSummaryMessageEntries(state = getCurrentState(), options = {}) {
+        const entries = getSummaryEntries(state);
+        if (!entries.length) return [];
+        if (options.groupByFloor !== true) {
+            return entries.map((entry) => ({ entry, message: buildSummaryMessage([entry]) })).filter((item) => item.message);
+        }
+        const expandedEntries = expandSummaryEntries(entries);
+        const groups = new Map();
+        expandedEntries.forEach((entry) => {
+            const key = getSummaryEntryFloorGroupKey(entry);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(entry);
+        });
+        return [...groups.values()].map((groupEntries) => ({
+            entry: groupEntries[0],
+            entries: groupEntries,
+            message: buildSummaryMessage(groupEntries),
+        })).filter((item) => item.message);
     }
 
     function resolvePromptTemplateVariables(text, state = getCurrentState()) {
@@ -1113,7 +1167,15 @@
     }
 
     function takeAllSummaryMessages(summaryEntries) {
-        return summaryEntries.splice(0).map((entry) => entry.message).filter(Boolean);
+        const entries = expandSummaryEntries(summaryEntries.splice(0).map((item) => item.entry));
+        if (!entries.length) return [];
+        const groups = new Map();
+        entries.forEach((entry) => {
+            const key = getSummaryEntryFloorGroupKey(entry);
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(entry);
+        });
+        return [...groups.values()].map((groupEntries) => buildSummaryMessage(groupEntries)).filter(Boolean);
     }
 
     function reserveSpecificAnchorMessages(items, tableEntries, summaryEntries) {

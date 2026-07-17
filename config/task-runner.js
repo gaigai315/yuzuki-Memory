@@ -1541,15 +1541,16 @@
         return getRangeMeta({ start: Number(match[1]), end: Number(match[2]) }, floorScope);
     }
 
-    function getSummarySegmentRange(segment) {
-        const range = getRangeMeta(segment?.range, segment?.floorScope);
+    function getSummarySegmentRange(segment, fallbackFloorScope = null) {
+        const segmentScope = normalizeFloorScope(segment?.floorScope, fallbackFloorScope);
+        const range = getRangeMeta(segment?.range, segmentScope);
         if (range) return range;
         const rawRange = String(segment?.floor || segment?.楼层数 || segment?.rangeLabel || '').trim();
         const match = rawRange.match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
         if (!match) return null;
         const start = Math.max(0, Math.round(Number(match[1]) || 0));
         const end = Math.max(start, Math.round(Number(match[2]) || 0));
-        return end > start ? { start, end, floorScope: normalizeFloorScope(segment?.floorScope) } : null;
+        return end > start ? { start, end, floorScope: segmentScope } : null;
     }
 
     function isSmallSummaryRecord(record, table, task) {
@@ -1724,14 +1725,16 @@
             const shouldKeepRecord = keepIds.has(String(record?.id || ''));
             if (Array.isArray(record?.summarySegments) && record.summarySegments.length) {
                 const before = record.summarySegments.length;
+                const recordScope = getRecordFloorScope(record, target.floorScope);
                 record.summarySegments = record.summarySegments.filter((segment) => {
-                    const segmentRange = getSummarySegmentRange(segment);
+                    const segmentRange = getSummarySegmentRange(segment, recordScope);
+                    const protectedHistorySegment = shouldKeepRecord
+                        && (segment.summaryType === 'history' || segment.summaryType === 'optimize');
                     const isCovered = segmentRange
                         && isSameFloorScope(segmentRange.floorScope, target.floorScope)
                         && segmentRange.start >= target.start
                         && segmentRange.end <= target.end
-                        && segment.summaryType !== 'history'
-                        && segment.summaryType !== 'optimize';
+                        && !protectedHistorySegment;
                     return !isCovered;
                 });
                 cleanupCount += before - record.summarySegments.length;
@@ -1763,16 +1766,17 @@
         return candidate.end === target.end || candidate.end === target.end - 1;
     }
 
-    function findExistingHistorySummaryRecord(state, range) {
+    function findExistingHistorySummaryRecords(state, range) {
         const target = getRangeMeta(range, getCurrentFloorScope(state));
-        if (!target) return null;
-        return stateRecords(state, FIXED_SUMMARY_TABLE_ID).find((record) => {
+        if (!target) return [];
+        return stateRecords(state, FIXED_SUMMARY_TABLE_ID).filter((record) => {
             if (!String(record?.values?.总结内容 || record?.values?.summary || '').trim()) return false;
             const task = getSummaryRecordTaskMeta(record);
+            if (task?.summaryType !== 'history') return false;
             const taskRange = getRangeMeta(task?.range, task?.floorScope || getRecordFloorScope(record));
             if (taskRange) return isSameSummaryRange(taskRange, target);
             return isSameSummaryRange(getSummaryRecordFloorRange(record), target);
-        }) || null;
+        });
     }
 
     function hidePlotSummaryItemsCoveredByRange(state, range, summaryRecordIds = []) {
@@ -2409,8 +2413,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 
     async function runAutoSummaryTask(state, task, settings, callbacks = {}) {
         if (task.type === 'history') {
-            const existingRecord = findExistingHistorySummaryRecord(state, { start: task.start, end: task.end });
+            const existingRecords = findExistingHistorySummaryRecords(state, { start: task.start, end: task.end });
+            const existingRecord = existingRecords[0] || null;
             if (existingRecord) {
+                const cleanupCount = cleanupSmallAutoSummaries(
+                    state,
+                    { start: task.start, end: task.end, floorScope: existingRecord.floorScope || task.floorScope },
+                    existingRecords.map((record) => record.id).filter(Boolean)
+                );
                 const pointers = normalizePointers(state);
                 pointers.historySummary = Math.max(pointers.historySummary, task.end);
                 if (pointers.summary < pointers.historySummary) pointers.summary = pointers.historySummary;
@@ -2419,6 +2429,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                     success: true,
                     skipped: true,
                     duplicate: true,
+                    cleanupCount,
                     range: { start: task.start, end: task.end },
                     record: existingRecord,
                 });
@@ -2427,6 +2438,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                     success: true,
                     skipped: true,
                     duplicate: true,
+                    cleanupCount,
                     range: { start: task.start, end: task.end },
                     record: existingRecord,
                 };
@@ -2491,7 +2503,11 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         if (task.type === 'history') {
             committed.cleanupCount = cleanupSmallAutoSummaries(
                 state,
-                { start: task.start, end: task.end },
+                {
+                    start: committed.range?.start ?? task.start,
+                    end: committed.range?.end ?? task.end,
+                    floorScope: committed.meta?.floorScope || task.floorScope,
+                },
                 (Array.isArray(committed.records) ? committed.records : [committed.record]).map((record) => record?.id).filter(Boolean)
             );
             callbacks.saveState?.();
