@@ -419,6 +419,13 @@
         return Number(match[1]) * 60 + Number(match[2]);
     }
 
+    function stripPlotDisplayStatus(content = '') {
+        return String(content || '')
+            .replace(/[\s。；;，,:：]+(?:状态\s*[:：]?\s*|事件\s*)(?:进行中|已完成|已失败)[\s。；;，,:：]*$/g, '')
+            .replace(/^(?:(?:状态\s*[:：]?\s*|事件\s*)?)(?:进行中|已完成|已失败)[\s。；;，,:：]*$/, '')
+            .trim();
+    }
+
     function movePlotDatePrefixFromContent(time = '', content = '') {
         const normalizedTime = String(time || '').trim();
         let normalizedContent = String(content || '').trim();
@@ -452,15 +459,16 @@
                     (tabIndex > -1 ? text.slice(0, tabIndex) : '').replace(/：/g, ':').trim(),
                     (tabIndex > -1 ? text.slice(tabIndex + 1) : text).trim()
                 );
-                if (!fixed.time || !fixed.content) return null;
+                const content = stripPlotDisplayStatus(fixed.content);
+                if (!fixed.time || !content) return null;
                 const date = getPlotDateFromTimeText(fixed.time) || lastDate;
                 if (date) lastDate = date;
                 const fullTime = getPlotDateFromTimeText(fixed.time) ? fixed.time : (date ? `${date},${fixed.time}` : fixed.time);
                 return {
-                    raw: `${fullTime}\t${fixed.content}`,
+                    raw: `${fullTime}\t${content}`,
                     date: getPlotDateFromTimeText(fullTime) || '',
                     sort: getPlotClockSortValue(fullTime),
-                    content: fixed.content,
+                    content,
                     index,
                 };
             })

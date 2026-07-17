@@ -10320,6 +10320,7 @@
             .map((line, index) => {
                 const parsed = parsePlotSummaryLine(line);
                 const fixed = movePlotDatePrefixFromContent(parsed.time, parsed.content);
+                const content = stripPlotDisplayStatus(fixed.content);
                 const explicitDate = getPlotDateFromTimeText(fixed.time);
                 if (explicitDate) lastDate = explicitDate;
                 const inheritedTime = fixed.time && !explicitDate && lastDate ? `${lastDate},${fixed.time}` : fixed.time;
@@ -10331,9 +10332,10 @@
                     startTime: getPlotClockText(inheritedTime, 'start'),
                     endTime: getPlotClockText(inheritedTime, 'end'),
                     sortTime: getPlotSortTime(inheritedTime),
-                    text: fixed.content,
+                    text: content,
                 };
-            });
+            })
+            .filter((item) => item.text);
         const sorted = entries.sort((a, b) => String(a.date).localeCompare(String(b.date), 'zh-Hans-CN', { numeric: true }) || a.sortTime - b.sortTime || a.index - b.index);
         return sorted.map((item, index, items) => ({
             ...item,
@@ -10416,6 +10418,13 @@
         if (dateMatch) return dateMatch[0].replace(/\s+/g, '');
         const beforeComma = normalized.split(/[，,]/)[0]?.trim() || '';
         return /(?:年|月|日)/.test(beforeComma) ? beforeComma : '';
+    }
+
+    function stripPlotDisplayStatus(content = '') {
+        return String(content || '')
+            .replace(/[\s。；;，,:：]+(?:状态\s*[:：]?\s*|事件\s*)(?:进行中|已完成|已失败)[\s。；;，,:：]*$/g, '')
+            .replace(/^(?:(?:状态\s*[:：]?\s*|事件\s*)?)(?:进行中|已完成|已失败)[\s。；;，,:：]*$/, '')
+            .trim();
     }
 
     function movePlotDatePrefixFromContent(time = '', content = '') {
@@ -10903,7 +10912,7 @@
         const list = document.createElement('ul');
         [
             '【优化】优化与“世界书缓存优化器”酒馆脚本的兼容性，避免请求探针重复包装与高开销 Token 统计导致生成卡顿',
-            '【优化】支线摘要仅记录已有明确结果的事件，不再写入进行中的事件或状态说明',
+            '【优化】剧情节点状态仅用于界面显示，自动清理摘要正文中的状态说明；实时填表只回传主线/支线最后一条可见节点，避免旧节点被重复改写追加',
             '【优化】跨会话导入总结增加“前篇 / 本篇”楼层来源，备份升级为 v2，避免新旧会话同号楼层互相覆盖或误清理',
             '【修复】分批总结完成一批并结束倒计时后，下一批执行状态会立即刷新到当前按钮',
         ].forEach((text) => {

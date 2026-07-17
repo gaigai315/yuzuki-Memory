@@ -415,6 +415,13 @@
             .trim();
     }
 
+    function stripPlotDisplayStatus(content = '') {
+        return String(content || '')
+            .replace(/[\s。；;，,:：]+(?:状态\s*[:：]?\s*|事件\s*)(?:进行中|已完成|已失败)[\s。；;，,:：]*$/g, '')
+            .replace(/^(?:(?:状态\s*[:：]?\s*|事件\s*)?)(?:进行中|已完成|已失败)[\s。；;，,:：]*$/, '')
+            .trim();
+    }
+
     function compactPlotSummaryInjectionLines(lines = []) {
         let lastDate = '';
         return (Array.isArray(lines) ? lines : [])
@@ -424,8 +431,9 @@
                 const tabIndex = text.indexOf('\t');
                 if (tabIndex < 0) return text;
                 const time = text.slice(0, tabIndex).trim();
-                const content = text.slice(tabIndex + 1).trim();
-                if (!time || !content) return text;
+                const content = stripPlotDisplayStatus(text.slice(tabIndex + 1));
+                if (!time) return text;
+                if (!content) return '';
                 const date = getPlotDateFromTimeText(time);
                 const timeForInjection = date && date === lastDate ? stripPlotDateFromTimeText(time) : time;
                 if (date) lastDate = date;
@@ -446,7 +454,10 @@
         const visibleLines = !states
             ? (record?.hiddenKinds?.[kind] ? [] : lines)
             : lines.filter((_line, index) => !states[index]);
-        return compactPlotSummaryInjectionLines(visibleLines).join('\n');
+        // Older plot nodes remain available in the timeline UI, but only the
+        // latest visible node is needed to continue the live extraction.
+        const latestVisibleLine = visibleLines[visibleLines.length - 1];
+        return compactPlotSummaryInjectionLines(latestVisibleLine ? [latestVisibleLine] : []).join('\n');
     }
 
     function recordToText(table, record) {
