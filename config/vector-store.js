@@ -1146,8 +1146,14 @@
             book.vectorHashes = vectorHashes;
             if (!Array.isArray(book.vectors)) book.vectors = book.chunks.map(() => null);
 
-            let dimension = Math.max(0, Number.parseInt(book.vectorDimension, 10) || 0);
-            let scope = this.getVectorScope(dimension, settings);
+            const storedDimension = Math.max(0, Number.parseInt(book.vectorDimension, 10) || 0);
+            const storedScopeForCurrentSettings = this.getVectorScope(storedDimension, settings);
+            const hasIndexedChunks = Array.isArray(book.vectorized) && book.vectorized.some(Boolean);
+            const canReuseStoredDimension = hasIndexedChunks
+                && previousScope
+                && previousScope === storedScopeForCurrentSettings;
+            let dimension = canReuseStoredDimension ? storedDimension : 0;
+            let scope = canReuseStoredDimension ? storedScopeForCurrentSettings : '';
             let savedHashes = new Set();
             let backendInitialized = false;
 
@@ -1193,6 +1199,7 @@
 
             let success = 0;
             let errors = 0;
+            let firstError = '';
             let batchSize = VECTOR_BACKEND_BATCH_SIZE;
             let nextCheckpoint = 50;
             for (let cursor = 0; cursor < pending.length;) {
@@ -1216,9 +1223,11 @@
                     const backendItems = [];
                     batch.forEach((item, offset) => {
                         const vector = vectors[offset];
-                        if (!this.isRuntimeVector(vector) || vector.length !== dimension) {
-                            errors += 1;
-                            return;
+                        if (!this.isRuntimeVector(vector)) {
+                            throw new Error(`Embedding API 未返回有效向量（批次第 ${offset + 1} 条）`);
+                        }
+                        if (vector.length !== dimension) {
+                            throw new Error(`Embedding 向量维度不一致：当前索引 ${dimension} 维，API 返回 ${vector.length} 维`);
                         }
                         if (!savedHashes.has(item.hash)) backendItems.push({ ...item, vector });
                     });
@@ -1246,13 +1255,14 @@
                         continue;
                     }
                     errors += batch.length;
+                    if (!firstError) firstError = message || '向量化批次失败';
                     console.warn('[yuzuki-Memory] Vectorize batch failed.', error);
                 }
             }
             book.updateTime = Date.now();
             await this.saveLibrary();
 
-            if (previousScope && previousScope !== scope) {
+            if (success > 0 && previousScope && previousScope !== scope) {
                 try {
                     const previousScopeHashes = await this.listBackendHashes(bookId, previousScope);
                     await this.deleteBackendHashes(bookId, previousScope, previousScopeHashes);
@@ -1260,7 +1270,10 @@
                     console.warn('[yuzuki-Memory] Failed to clean the previous vector model scope.', error);
                 }
             }
-            return { success: true, count: success, errors };
+            if (errors > 0 && success === 0) {
+                throw new Error(firstError || `向量化失败：${errors} 条分段均未建立索引`);
+            }
+            return { success: true, count: success, errors, error: firstError };
         }
 
         searchEntityBoost(query, text) {

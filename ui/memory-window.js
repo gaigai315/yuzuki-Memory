@@ -4506,7 +4506,8 @@
                 }, { force });
                 refreshVectorAfterAction(root);
                 const actionText = force ? '重新向量化完成' : '向量化完成';
-                window.alert(result.errors ? `${actionText}：成功 ${result.count} 条，失败 ${result.errors} 条。` : `${actionText}：完成 ${result.count} 条。`);
+                const errorDetail = result.error ? `\n原因：${result.error}` : '';
+                window.alert(result.errors ? `${actionText}：成功 ${result.count} 条，失败 ${result.errors} 条。${errorDetail}` : `${actionText}：完成 ${result.count} 条。`);
             } catch (error) {
                 window.alert(String(error?.message || error || '向量化失败'));
                 refreshVectorAfterAction(root);
@@ -7539,7 +7540,7 @@
                 createApiGrid([
                     createApiField('服务商', createApiSelect(searchSettings.provider, getEmbeddingProviderOptions(), 'embeddingProvider')),
                     createApiField('Base URL', createApiBoundInput(meta.placeholderUrl || '输入 Base URL', searchSettings.baseUrl, 'text', false, 'embeddingBaseUrl')),
-                    createApiField('API Key', createApiBoundInput('sk-...', searchSettings.apiKey, 'password', true, 'embeddingApiKey')),
+                    createApiField('API Key', createApiBoundInput(searchSettings.provider === 'gemini' ? '输入 Gemini API Key' : '输入 API Key', searchSettings.apiKey, 'password', true, 'embeddingApiKey')),
                     createApiField('模型名称', createApiInlineControl(createApiBoundInput(meta.placeholderModel || '输入模型名称', searchSettings.model, 'text', false, 'embeddingModel'), fetchModelButton)),
                 ]),
                 createApiConnectionFooter(createApiInlineWarning('是否注入向量召回由「插件配置 - 注入向量记忆」统一控制。'), createApiActions([
@@ -7970,8 +7971,10 @@
         const provider = getApiFieldValue(root, 'embeddingProvider');
         const meta = YuzukiMemory.EmbeddingClient?.getProviderMeta?.(provider);
         const baseUrlInput = getApiFieldInput(root, 'embeddingBaseUrl');
+        const apiKeyInput = getApiFieldInput(root, 'embeddingApiKey');
         const modelInput = getApiFieldInput(root, 'embeddingModel');
         if (baseUrlInput) baseUrlInput.placeholder = meta?.placeholderUrl || '输入 Base URL';
+        if (apiKeyInput) apiKeyInput.placeholder = provider === 'gemini' ? '输入 Gemini API Key' : '输入 API Key';
         if (modelInput) modelInput.placeholder = meta?.placeholderModel || '输入模型名称';
     }
 
@@ -7981,9 +7984,13 @@
         const meta = YuzukiMemory.EmbeddingClient?.getProviderMeta?.(provider);
         if (!provider || !meta) return;
         const baseUrlInput = getApiFieldInput(root, 'embeddingBaseUrl');
+        const apiKeyInput = getApiFieldInput(root, 'embeddingApiKey');
         const modelInput = getApiFieldInput(root, 'embeddingModel');
         if (baseUrlInput && (options.force || !String(baseUrlInput.value || '').trim())) {
             baseUrlInput.value = meta.defaultUrl || '';
+        }
+        if (apiKeyInput && options.clearApiKey === true) {
+            apiKeyInput.value = '';
         }
         if (modelInput && (options.force || !String(modelInput.value || '').trim())) {
             modelInput.value = meta.defaultModel || '';
@@ -8356,6 +8363,7 @@
             const item = target?.closest?.('[data-yzm-model-id]');
             if (!item) return;
             setApiFieldValue(root, targetField, item.dataset.yzmModelId || '');
+            if (targetField === 'embeddingModel') saveEmbeddingSettingsFromForm(root, false);
             closeModal();
         });
     }
@@ -10919,8 +10927,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】兼容 OpenCode Go 等严格校验接口：发送前清理记忆插件与小手机的内部控制字段，同时保留记忆表格、总结、向量和小手机的实际注入内容，修复 Extra inputs are not permitted 报错。',
-            '【优化】统一表格记录与功能子页的选中反馈，使用高亮蓝色虚线边框和同色图标，提升当前选中项的辨识度。',
+            '【修复】修复向量化 API 切换不同供应商的错误问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -13229,7 +13236,9 @@
                     return;
                 }
                 if (target?.matches?.('[data-yzm-api-field="embeddingProvider"]')) {
-                    syncEmbeddingProviderDefaults(root, { force: true });
+                    const settings = YuzukiMemory.EmbeddingClient?.activateProvider?.(target.value);
+                    if (settings) applyEmbeddingApiForm(root, settings);
+                    else syncEmbeddingProviderDefaults(root, { force: true, clearApiKey: true });
                     return;
                 }
                 if (!target?.matches?.('[data-yzm-llm-preset-select]')) return;

@@ -84,23 +84,87 @@
         };
     }
 
-    function loadSettings() {
+    function readStoredSettings() {
         try {
-            const raw = YuzukiMemory.GlobalSettings?.get?.(SETTINGS_KEY, {})
+            return YuzukiMemory.GlobalSettings?.get?.(SETTINGS_KEY, {})
                 ?? JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
-            return normalizeSettings(raw);
         } catch (_error) {
-            return normalizeSettings();
+            return {};
         }
     }
 
-    function saveSettings(nextSettings = {}) {
-        const normalized = normalizeSettings({ ...loadSettings(), ...nextSettings });
+    function persistStoredSettings(settings) {
         if (YuzukiMemory.GlobalSettings?.set) {
-            YuzukiMemory.GlobalSettings.set(SETTINGS_KEY, normalized);
+            YuzukiMemory.GlobalSettings.set(SETTINGS_KEY, settings);
         } else {
-            localStorage.setItem(SETTINGS_KEY, JSON.stringify(normalized));
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
         }
+    }
+
+    function pickProviderSettings(settings = {}) {
+        return {
+            baseUrl: String(settings.baseUrl || '').trim(),
+            apiKey: String(settings.apiKey || '').trim(),
+            model: String(settings.model || '').trim(),
+        };
+    }
+
+    function getStoredProviderSettings(raw = {}) {
+        const stored = raw.providerSettings && typeof raw.providerSettings === 'object' ? raw.providerSettings : {};
+        const profiles = {};
+        Object.entries(stored).forEach(([provider, settings]) => {
+            if (!PROVIDERS[provider] || !settings || typeof settings !== 'object') return;
+            profiles[provider] = pickProviderSettings(normalizeSettings({ ...settings, provider }));
+        });
+
+        const legacyProvider = PROVIDERS[raw.provider] ? raw.provider : DEFAULT_SETTINGS.provider;
+        const hasLegacySettings = ['baseUrl', 'apiUrl', 'apiKey', 'model']
+            .some((key) => Object.prototype.hasOwnProperty.call(raw, key));
+        if (hasLegacySettings && !profiles[legacyProvider]) {
+            profiles[legacyProvider] = pickProviderSettings(normalizeSettings({ ...raw, provider: legacyProvider }));
+        }
+        return profiles;
+    }
+
+    function resolveStoredSettings(raw = {}, requestedProvider = '') {
+        const provider = PROVIDERS[requestedProvider]
+            ? requestedProvider
+            : (PROVIDERS[raw.provider] ? raw.provider : DEFAULT_SETTINGS.provider);
+        const profiles = getStoredProviderSettings(raw);
+        const profile = profiles[provider] || {};
+        return normalizeSettings({
+            enabled: raw.enabled,
+            provider,
+            ...profile,
+            threshold: raw.threshold,
+            recallLimit: raw.recallLimit,
+            contextDepth: raw.contextDepth,
+        });
+    }
+
+    function loadSettings(provider = '') {
+        return resolveStoredSettings(readStoredSettings(), provider);
+    }
+
+    function saveSettings(nextSettings = {}) {
+        const raw = readStoredSettings();
+        const provider = PROVIDERS[nextSettings.provider]
+            ? nextSettings.provider
+            : (PROVIDERS[raw.provider] ? raw.provider : DEFAULT_SETTINGS.provider);
+        const normalized = normalizeSettings({ ...resolveStoredSettings(raw, provider), ...nextSettings, provider });
+        const providerSettings = getStoredProviderSettings(raw);
+        providerSettings[provider] = pickProviderSettings(normalized);
+        persistStoredSettings({ ...normalized, providerSettings });
+        return normalized;
+    }
+
+    function activateProvider(provider) {
+        const raw = readStoredSettings();
+        const normalized = resolveStoredSettings(raw, provider);
+        persistStoredSettings({
+            ...normalized,
+            providerSettings: getStoredProviderSettings(raw),
+        });
         return normalized;
     }
 
@@ -112,6 +176,20 @@
 
     function normalizeBaseUrl(baseUrl = '') {
         return String(baseUrl || '').trim().replace(/0\.0\.0\.0/g, '127.0.0.1').replace(/\/+$/, '');
+    }
+
+    function validateSettings(settings, options = {}) {
+        if (!settings.baseUrl) return '请填写向量化 API 地址。';
+        if (options.requireModel !== false && !settings.model) return '请填写向量化模型。';
+        if (settings.provider !== 'gemini') return '';
+        if (!settings.apiKey) return '请填写 Google Gemini API Key。';
+        return '';
+    }
+
+    function createGeminiHeaders(settings) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (settings.apiKey) headers['x-goog-api-key'] = settings.apiKey;
+        return headers;
     }
 
     function resolveOpenAiEmbeddingUrl(settings) {
@@ -140,19 +218,11 @@
     function resolveGeminiEmbedUrl(settings) {
         const base = resolveGeminiBase(settings);
         const model = String(settings.model || getProviderMeta('gemini').defaultModel).replace(/^models\//, '');
-        let url = `${base}/models/${encodeURIComponent(model)}:embedContent`;
-        if (settings.apiKey && !url.includes('key=') && !url.includes('goog_api_key=')) {
-            url += `?key=${encodeURIComponent(settings.apiKey)}`;
-        }
-        return url;
+        return `${base}/models/${encodeURIComponent(model)}:embedContent`;
     }
 
     function resolveGeminiModelsUrl(settings) {
-        let url = `${resolveGeminiBase(settings)}/models`;
-        if (settings.apiKey && !url.includes('key=') && !url.includes('goog_api_key=')) {
-            url += `?key=${encodeURIComponent(settings.apiKey)}`;
-        }
-        return url;
+        return `${resolveGeminiBase(settings)}/models`;
     }
 
     function parseVectorResponse(data, isBatch) {
@@ -185,15 +255,15 @@
         const items = isBatch ? input : [input];
         const cleanItems = items.map((item) => String(item || '').trim());
         if (!cleanItems.every(Boolean)) throw new Error('Embedding 文本不能为空');
-        if (!settings.baseUrl) throw new Error('未配置向量化 API 地址');
-        if (!settings.model) throw new Error('未配置向量化模型');
+        const validationError = validateSettings(settings);
+        if (validationError) throw new Error(validationError);
 
         if (settings.provider === 'gemini') {
             const vectors = [];
             for (const text of cleanItems) {
                 const response = await fetch(resolveGeminiEmbedUrl(settings), {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: createGeminiHeaders(settings),
                     body: JSON.stringify({ content: { parts: [{ text }] } }),
                 });
                 vectors.push(parseVectorResponse(await readJsonResponse(response), false));
@@ -237,8 +307,9 @@
 
     async function fetchModels(rawSettings = null) {
         const settings = normalizeSettings(rawSettings || loadSettings());
-        if (!settings.baseUrl) return { success: false, error: '请填写向量化 API 地址。' };
-        const headers = { 'Content-Type': 'application/json' };
+        const validationError = validateSettings(settings, { requireModel: false });
+        if (validationError) return { success: false, error: validationError };
+        const headers = settings.provider === 'gemini' ? createGeminiHeaders(settings) : { 'Content-Type': 'application/json' };
         const bearer = authHeader(settings.apiKey);
         if (bearer && settings.provider !== 'gemini') headers.Authorization = bearer;
         const url = settings.provider === 'gemini' ? resolveGeminiModelsUrl(settings) : resolveOpenAiModelsUrl(settings);
@@ -266,7 +337,9 @@
         getProviderOptions,
         loadSettings,
         saveSettings,
+        activateProvider,
         normalizeSettings,
+        validateSettings,
         embed,
         fetchModels,
         testConnection,
