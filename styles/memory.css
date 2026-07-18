@@ -34,6 +34,7 @@
     --yzm-active-bg: linear-gradient(135deg, #7489e6, #536ccf);
     --yzm-active-text: #ffffff;
     --yzm-active-shadow: 0 8px 18px rgba(83, 106, 198, 0.26);
+    --yzm-selected-color: #5b87f3;
     --yzm-overlay-bg: rgba(0, 0, 0, 0.18);
     --yzm-shadow: 0 22px 60px rgba(78, 98, 160, 0.28);
     --yzm-desktop-sidebar-width: 180px;
@@ -67,6 +68,7 @@
     --yzm-active-bg: linear-gradient(135deg, #7b7fff, #4f5ee8);
     --yzm-active-text: #ffffff;
     --yzm-active-shadow: 0 10px 24px rgba(69, 82, 210, 0.34);
+    --yzm-selected-color: #82a8ff;
     --yzm-overlay-bg: rgba(2, 6, 18, 0.42);
     --yzm-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
 }
@@ -904,23 +906,23 @@
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar-action-active {
     color: transparent;
     background: var(--yzm-row-bg);
-    border: 1px dashed rgba(101, 121, 218, 0.68);
+    border: 1px dashed var(--yzm-selected-color);
     box-shadow: none;
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-sidebar-action-active i {
-    color: var(--yzm-icon);
+    color: var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-nav-table-active .yzm-nav-table-name {
     color: transparent;
     background: var(--yzm-row-bg);
-    border: 1px dashed rgba(101, 121, 218, 0.68);
+    border: 1px dashed var(--yzm-selected-color);
     box-shadow: none;
 }
 
 #yzm-memory-root .yzm-sidebar-icon-mode .yzm-nav-table-active .yzm-nav-icon {
-    color: var(--yzm-icon);
+    color: var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-workspace {
@@ -1167,7 +1169,7 @@
 #yzm-memory-root .yzm-vector-book-row-active {
     background: var(--yzm-row-bg);
     color: var(--yzm-title);
-    border: 1px dashed rgba(101, 121, 218, 0.68);
+    border: 1px dashed var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-vector-book-row-bound {
@@ -2283,7 +2285,7 @@
 #yzm-memory-root .yzm-primary-icon-mode .yzm-trace-nav-item-active i,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-summary-tool-nav-item-active i,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-scheme-nav-item-active i {
-    color: var(--yzm-icon);
+    color: var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-config-nav-item-active,
@@ -2292,7 +2294,7 @@
 #yzm-memory-root .yzm-primary-icon-mode .yzm-summary-tool-nav-item-active,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-scheme-nav-item-active {
     background: var(--yzm-row-bg);
-    border: 1px dashed rgba(101, 121, 218, 0.68);
+    border: 1px dashed var(--yzm-selected-color);
     border-radius: 999px;
     box-shadow: none;
 }
@@ -2405,14 +2407,14 @@
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-active .yzm-primary-world-avatar,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-active .yzm-primary-plot-summary-avatar,
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-item-active .yzm-primary-memory-summary-avatar {
-    color: var(--yzm-icon);
+    color: var(--yzm-selected-color);
     background: var(--yzm-input-bg);
-    border: 1px dashed rgba(101, 121, 218, 0.68);
+    border: 1px dashed var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row-active {
     background: var(--yzm-row-bg);
-    border: 1px dashed rgba(101, 121, 218, 0.68);
+    border: 1px dashed var(--yzm-selected-color);
     border-radius: 999px;
     box-shadow: none;
 }
@@ -2422,7 +2424,7 @@
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row-active .yzm-vector-book-icon {
-    color: var(--yzm-icon);
+    color: var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-vector-book-row-bound .yzm-vector-book-icon {
@@ -2468,12 +2470,12 @@
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-plot-primary-item.yzm-primary-item-active .yzm-plot-primary-icon {
-    color: var(--yzm-icon);
+    color: var(--yzm-selected-color);
     text-shadow: none;
 }
 
 #yzm-memory-root .yzm-primary-icon-mode .yzm-primary-summary-item-active::before {
-    color: var(--yzm-icon);
+    color: var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-current-table-title {
@@ -2660,7 +2662,7 @@
 #yzm-memory-root .yzm-scheme-nav-item-active {
     color: var(--yzm-title);
     background: var(--yzm-row-bg);
-    border-color: rgba(101, 121, 218, 0.68);
+    border-color: var(--yzm-selected-color);
     border-style: dashed;
     box-shadow: none;
 }
@@ -2670,7 +2672,7 @@
 #yzm-memory-root .yzm-trace-nav-item-active i,
 #yzm-memory-root .yzm-summary-tool-nav-item-active i,
 #yzm-memory-root .yzm-scheme-nav-item-active i {
-    color: var(--yzm-icon);
+    color: var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-sidebar-action-active {

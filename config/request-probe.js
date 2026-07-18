@@ -49,6 +49,7 @@
         'isPhoneMessage',
         'isMusicMessage',
         'isVirtualPhoneApiCall',
+        'character_profile',
         '_yzmDelete',
     ]);
     const TRANSPORT_BODY_METADATA_KEYS = new Set([
@@ -56,6 +57,12 @@
         'isPhoneMessage',
         'isVirtualPhoneApiCall',
     ]);
+    const TRANSPORT_METADATA_KEY_PREFIXES = [
+        'yzm',
+        'isGaigai',
+        'isYuzuki',
+        '_yzm',
+    ];
     const processedRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
     const previewRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
     const finalCapturedRequestInputs = typeof WeakSet === 'function' ? new WeakSet() : null;
@@ -266,11 +273,16 @@
         return targets;
     }
 
+    function isTransportMetadataKey(key, exactKeys) {
+        return exactKeys.has(key)
+            || TRANSPORT_METADATA_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
+    }
+
     function stripTransportMessageMetadata(body) {
         let removed = 0;
         if (body && typeof body === 'object' && !Array.isArray(body)) {
-            TRANSPORT_BODY_METADATA_KEYS.forEach((key) => {
-                if (!Object.prototype.hasOwnProperty.call(body, key)) return;
+            Object.keys(body).forEach((key) => {
+                if (!isTransportMetadataKey(key, TRANSPORT_BODY_METADATA_KEYS)) return;
                 delete body[key];
                 removed += 1;
             });
@@ -282,8 +294,8 @@
                     || message.isMusicMessage === true
                     || message.isVirtualPhoneApiCall === true
                     || !!message.gaigaiPhoneSignal;
-                TRANSPORT_MESSAGE_METADATA_KEYS.forEach((key) => {
-                    if (!Object.prototype.hasOwnProperty.call(message, key)) return;
+                Object.keys(message).forEach((key) => {
+                    if (!isTransportMetadataKey(key, TRANSPORT_MESSAGE_METADATA_KEYS)) return;
                     delete message[key];
                     removed += 1;
                 });
@@ -294,6 +306,23 @@
             });
         });
         return removed;
+    }
+
+    function sanitizeTransportBodyText(bodyText) {
+        if (typeof bodyText !== 'string' || !bodyText.trim()) {
+            return { bodyText, removed: 0, parsed: false };
+        }
+        try {
+            const body = JSON.parse(bodyText);
+            const removed = stripTransportMessageMetadata(body);
+            return {
+                bodyText: removed > 0 ? JSON.stringify(body) : bodyText,
+                removed,
+                parsed: true,
+            };
+        } catch (error) {
+            return { bodyText, removed: 0, parsed: false, error };
+        }
     }
 
     function resolvePromptReadyChat(input) {
@@ -931,6 +960,43 @@
         }
     }
 
+    async function sanitizeTransportFetchArgs(args, options = {}) {
+        const input = args[0];
+        const requestInput = isRequestLike(input) ? input : null;
+        const requestOptions = args[1] || {};
+        const bodyText = requestInput ? await readRequestBody(requestInput) : requestOptions.body;
+        const sanitized = sanitizeTransportBodyText(bodyText);
+        if (!sanitized.parsed || sanitized.removed <= 0) {
+            return { args, ...sanitized, changed: false };
+        }
+
+        try {
+            if (requestInput) {
+                const nextRequest = new Request(requestInput, { body: sanitized.bodyText });
+                if (options.markProcessed === true) {
+                    processedRequestInputs?.add(nextRequest);
+                    markRequestFlag(nextRequest, FETCH_PROCESSED_FLAG);
+                }
+                if (requestInput[FETCH_PREVIEW_FLAG] === true || previewRequestInputs?.has(requestInput)) {
+                    previewRequestInputs?.add(nextRequest);
+                    markRequestFlag(nextRequest, FETCH_PREVIEW_FLAG);
+                }
+                return { args: [nextRequest, null], ...sanitized, changed: true };
+            }
+
+            const nextOptions = { ...requestOptions, body: sanitized.bodyText };
+            if (options.markProcessed === true) {
+                Object.defineProperty(nextOptions, FETCH_PROCESSED_FLAG, { value: true });
+            }
+            if (requestOptions[FETCH_PREVIEW_FLAG] === true) {
+                Object.defineProperty(nextOptions, FETCH_PREVIEW_FLAG, { value: true });
+            }
+            return { args: [input, nextOptions], ...sanitized, changed: true };
+        } catch (error) {
+            return { args, ...sanitized, changed: false, error };
+        }
+    }
+
     async function applyPreRequestHiding() {
         if (!YuzukiMemory.FloorHider?.applyConfiguredHiding) return null;
         try {
@@ -1059,14 +1125,21 @@
         const requestInput = isRequestLike(input) ? input : null;
         const url = requestInput ? requestInput.url : (input ? input.toString() : '');
         const options = args[1] || {};
-        if (
+        const alreadyProcessed = (
             options?.[FETCH_PROCESSED_FLAG] === true
             || requestInput?.[FETCH_PROCESSED_FLAG] === true
             || (requestInput && processedRequestInputs?.has(requestInput))
-        ) {
-            return args;
-        }
+        );
         try {
+            if (alreadyProcessed) {
+                const sanitized = await sanitizeTransportFetchArgs(args, { markProcessed: true });
+                if (sanitized.changed) {
+                    console.info('[yuzuki-Memory] 已在重复请求包装中补充清理插件内部消息标记。', {
+                        fields: sanitized.removed,
+                    });
+                }
+                return sanitized.args;
+            }
             if (requestInput && !options.body) {
                 const requestOptions = { ...options, method: requestInput.method, headers: options.headers || requestInput.headers };
                 const processed = await processJsonBody(
@@ -1097,6 +1170,13 @@
             return [input, processed[1]];
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to process request body.', error);
+            const sanitized = await sanitizeTransportFetchArgs(args, { markProcessed: true });
+            if (sanitized.changed) {
+                console.warn('[yuzuki-Memory] 注入处理异常，发送前仍已清理插件内部消息标记。', {
+                    fields: sanitized.removed,
+                });
+                return sanitized.args;
+            }
             return args;
         }
     }
@@ -1300,12 +1380,19 @@
                 })
                 .catch((error) => {
                     console.warn('[yuzuki-Memory] Failed to process XHR request body.', error);
+                    const sanitized = sanitizeTransportBodyText(body);
+                    const fallbackBody = sanitized.removed > 0 ? sanitized.bodyText : body;
+                    if (sanitized.removed > 0) {
+                        console.warn('[yuzuki-Memory] XHR 注入处理异常，发送前仍已清理插件内部消息标记。', {
+                            fields: sanitized.removed,
+                        });
+                    }
                     const shouldTrack = isExternalTextGenerationRequest(url, options);
                     if (shouldTrack) {
                         markChatRequestStarted();
                         this.addEventListener('loadend', markChatRequestFinished, { once: true });
                     }
-                    originalXhrSend.call(this, body);
+                    originalXhrSend.call(this, fallbackBody);
                 });
             return undefined;
         };
@@ -1344,6 +1431,7 @@
         classifyMemoryInjectionRequest,
         repositionPhoneMemoryMessages,
         stripTransportMessageMetadata,
+        sanitizeTransportBodyText,
         shouldInjectMemory: (body) => classifyMemoryInjectionRequest(body).allowed,
         processFetchArgs,
         getLastRequestData,
