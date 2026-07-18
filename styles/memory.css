@@ -2132,9 +2132,9 @@
 
 #yzm-memory-root .yzm-primary-item-active .yzm-primary-plot-summary-avatar,
 #yzm-memory-root .yzm-primary-item-active .yzm-primary-memory-summary-avatar {
-    color: var(--yzm-icon);
+    color: var(--yzm-selected-color);
     background: var(--yzm-input-bg);
-    border-color: var(--yzm-border);
+    border-color: var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-plot-primary-icon {
