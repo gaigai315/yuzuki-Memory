@@ -7,12 +7,15 @@
     const STORAGE_BOOK_NAMES = [STORAGE_BOOK_NAME, LEGACY_STORAGE_BOOK_NAME];
     const STORAGE_EXTENSION_KEY = 'yuzuki_memory_vector_library';
     const STORAGE_FORMAT_VERSION = 3;
-    const STORAGE_ENTRY_CONTENT = 'Yuzuki Memory 内部向量目录，实际索引由 SillyTavern 向量存储管理，请勿启用或编辑。';
+    const STORAGE_ENTRY_CONTENT = 'Yuzuki Memory 内部向量目录，实际索引由外部向量存储管理，请勿启用或编辑。';
     const VECTOR_STORAGE_ENCODING = 'float32-base64';
     const VECTOR_BACKEND_SOURCE = 'webllm';
     const VECTOR_COLLECTION_PREFIX = 'yuzuki-memory';
     const VECTOR_BACKEND_MODEL_PREFIX = 'yzm';
     const VECTOR_BACKEND_BATCH_SIZE = 10;
+    const LOCAL_VECTOR_DB_NAME = 'yuzuki_memory';
+    const LOCAL_VECTOR_STORE_NAME = 'vector_index';
+    const LOCAL_VECTOR_SEARCH_YIELD_INTERVAL = 64;
     const ACTIVE_BOOKS_KEY = 'yzm_memory_active_vector_books';
     const LEGACY_ACTIVE_BOOKS_KEY = 'gaigai_activeBooks';
     const BACKUP_HEADER = '=== Yuzuki Memory Vector Library ===';
@@ -42,6 +45,8 @@
             this.encodedVectorCache = new WeakMap();
             this.pendingEmbeddings = new Map();
             this.vectorizeQueues = new Map();
+            this.vectorBackendState = 'unknown';
+            this.localVectorStore = null;
             this.saveRequestedSerial = 0;
             this.saveCompletedSerial = 0;
             this.saveLoopRunning = false;
@@ -49,12 +54,14 @@
             this.installStorageBookApiShield();
             this.ready = this.loadLibrary()
                 .then(async (library) => {
-                    const migration = await this.migrateEmbeddedVectorsToBackend();
+                    const migration = await this.migrateEmbeddedVectorsToExternalStore();
                     if ((this.storageMigrationPending || migration.changed) && !migration.failed) {
                         const migrated = await this.saveLibrary();
                         if (migrated) {
                             this.storageMigrationPending = false;
-                            console.info('[yuzuki-Memory] Vector data moved to SillyTavern vector storage.', migration);
+                            if (migration.changed) {
+                                console.info('[yuzuki-Memory] Embedded vector data moved out of the hidden worldbook.', migration);
+                            }
                         }
                     }
                     return library;
@@ -390,9 +397,199 @@
             });
             if (!response.ok) {
                 const detail = await response.text().catch(() => '');
-                throw new Error(`${path} ${response.status}${detail ? `: ${detail}` : ''}`);
+                const error = new Error(`${path} ${response.status}${detail ? `: ${detail}` : ''}`);
+                error.status = response.status;
+                try {
+                    const parsed = detail ? JSON.parse(detail) : null;
+                    error.vectorCause = String(parsed?.cause || '');
+                } catch (_error) {
+                    error.vectorCause = '';
+                }
+                throw error;
             }
+            this.vectorBackendState = 'available';
             return expectJson ? response.json() : true;
+        }
+
+        isVectorBackendUnavailableError(error) {
+            const status = Number(error?.status || 0);
+            const cause = String(error?.vectorCause || '');
+            const message = String(error?.message || error || '');
+            return [404, 405, 501].includes(status)
+                || cause === 'vector_endpoint_unavailable'
+                || /vector_endpoint_unavailable|vector storage backend is not implemented/i.test(message);
+        }
+
+        markVectorBackendUnavailable(error) {
+            if (!this.isVectorBackendUnavailableError(error)) return false;
+            if (this.vectorBackendState !== 'unavailable') {
+                console.info('[yuzuki-Memory] 酒馆未提供向量存储接口，改用 IndexedDB 向量索引。');
+            }
+            this.vectorBackendState = 'unavailable';
+            return true;
+        }
+
+        getLocalVectorStore(required = true) {
+            if (this.localVectorStore) return this.localVectorStore;
+            const localforage = window.localforage;
+            if (!localforage || typeof localforage.createInstance !== 'function') {
+                if (!required) return null;
+                throw new Error('当前酒馆未提供可用的 IndexedDB 存储，无法保存本地向量索引');
+            }
+            this.localVectorStore = localforage.createInstance({
+                name: LOCAL_VECTOR_DB_NAME,
+                storeName: LOCAL_VECTOR_STORE_NAME,
+                description: 'Yuzuki Memory local vector index',
+                driver: localforage.INDEXEDDB,
+            });
+            return this.localVectorStore;
+        }
+
+        getLocalVectorPrefix(bookId, scope = '') {
+            const collectionId = this.getVectorCollectionId(bookId);
+            return scope ? `${collectionId}|${scope}|` : `${collectionId}|`;
+        }
+
+        getLocalVectorKey(bookId, scope, hash) {
+            return `${this.getLocalVectorPrefix(bookId, scope)}${Number(hash)}`;
+        }
+
+        async listLocalVectorHashes(bookId, scope) {
+            const store = this.getLocalVectorStore();
+            const prefix = this.getLocalVectorPrefix(bookId, scope);
+            const keys = await store.keys();
+            return keys
+                .filter((key) => String(key).startsWith(prefix))
+                .map((key) => Number(String(key).slice(prefix.length)))
+                .filter(Number.isFinite);
+        }
+
+        async insertLocalVectors(bookId, scope, items) {
+            const store = this.getLocalVectorStore();
+            const normalizedItems = (Array.isArray(items) ? items : []).map((item) => ({
+                hash: Number(item?.hash),
+                index: Math.max(0, Number.parseInt(item?.index, 10) || 0),
+                text: String(item?.text ?? item?.chunk ?? '').trim(),
+                vector: item?.vector,
+            }));
+            if (normalizedItems.some((item) => !Number.isFinite(item.hash) || !item.text || !this.isRuntimeVector(item.vector))) {
+                throw new Error('本地向量写入缺少文本或有效向量');
+            }
+            await Promise.all(normalizedItems.map((item) => store.setItem(
+                this.getLocalVectorKey(bookId, scope, item.hash),
+                {
+                    hash: item.hash,
+                    index: item.index,
+                    text: item.text,
+                    vector: Float32Array.from(item.vector),
+                }
+            )));
+            return true;
+        }
+
+        async deleteLocalVectorHashes(bookId, scope, hashes) {
+            const store = this.getLocalVectorStore();
+            const normalizedHashes = [...new Set((Array.isArray(hashes) ? hashes : [])
+                .map(Number)
+                .filter(Number.isFinite))];
+            await Promise.all(normalizedHashes.map((hash) => store.removeItem(this.getLocalVectorKey(bookId, scope, hash))));
+            return true;
+        }
+
+        async purgeLocalBook(bookId, scope = '') {
+            const store = this.getLocalVectorStore(false);
+            if (!store) return false;
+            const prefix = this.getLocalVectorPrefix(bookId, scope);
+            const keys = await store.keys();
+            const matchedKeys = keys.filter((key) => String(key).startsWith(prefix));
+            await Promise.all(matchedKeys.map((key) => store.removeItem(key)));
+            return matchedKeys.length > 0;
+        }
+
+        cosineSimilarity(left, right) {
+            if (!this.isRuntimeVector(left) || !this.isRuntimeVector(right) || left.length !== right.length) return -1;
+            let dot = 0;
+            let leftNorm = 0;
+            let rightNorm = 0;
+            for (let index = 0; index < left.length; index += 1) {
+                const leftValue = Number(left[index]) || 0;
+                const rightValue = Number(right[index]) || 0;
+                dot += leftValue * rightValue;
+                leftNorm += leftValue * leftValue;
+                rightNorm += rightValue * rightValue;
+            }
+            if (!leftNorm || !rightNorm) return -1;
+            return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
+        }
+
+        async queryLocalBooks(bookIds, scope, queryText, queryVector, topK, threshold) {
+            const store = this.getLocalVectorStore();
+            const prefixBooks = new Map(bookIds.map((bookId) => [this.getLocalVectorPrefix(bookId, scope), bookId]));
+            const keys = (await store.keys()).filter((key) => {
+                const value = String(key);
+                return [...prefixBooks.keys()].some((prefix) => value.startsWith(prefix));
+            });
+            const bestByText = new Map();
+
+            for (let cursor = 0; cursor < keys.length; cursor += LOCAL_VECTOR_SEARCH_YIELD_INTERVAL) {
+                const batchKeys = keys.slice(cursor, cursor + LOCAL_VECTOR_SEARCH_YIELD_INTERVAL);
+                const records = await Promise.all(batchKeys.map((key) => store.getItem(key)));
+                records.forEach((record, offset) => {
+                    if (!record || typeof record !== 'object') return;
+                    const vector = this.decodeStoredVector(record.vector);
+                    const vectorScore = this.cosineSimilarity(queryVector, vector);
+                    if (vectorScore < threshold) return;
+                    const key = String(batchKeys[offset]);
+                    const prefix = [...prefixBooks.keys()].find((item) => key.startsWith(item));
+                    const bookId = prefixBooks.get(prefix);
+                    const book = this.library[bookId];
+                    if (!book) return;
+                    const hash = Number(record.hash);
+                    let index = Number.parseInt(record.index, 10);
+                    if (!Number.isFinite(index) || index < 0 || Number(book.vectorHashes?.[index]) !== hash) {
+                        index = book.vectorHashes?.findIndex((item) => Number(item) === hash) ?? -1;
+                    }
+                    const text = String(record.text || book.chunks?.[index] || '').trim();
+                    if (!text) return;
+                    const candidate = {
+                        text,
+                        score: vectorScore + this.searchEntityBoost(queryText, text),
+                        source: `${book.name} #${Math.max(0, index) + 1}`,
+                    };
+                    const previous = bestByText.get(text);
+                    if (!previous || candidate.score > previous.score) bestByText.set(text, candidate);
+                });
+                if (cursor + LOCAL_VECTOR_SEARCH_YIELD_INTERVAL < keys.length) await this.yieldToMainThread();
+            }
+
+            return [...bestByText.values()].sort((left, right) => right.score - left.score).slice(0, topK);
+        }
+
+        async migrateEmbeddedBookToLocalStore(bookId, book, embedded, dimension, scope, vectorHashes) {
+            const itemsByHash = new Map();
+            embedded.forEach((item) => {
+                if (item.dimension !== dimension) return;
+                const hash = vectorHashes[item.index];
+                if (itemsByHash.has(hash)) return;
+                const vector = this.decodeStoredVector(item.vector);
+                if (!this.isRuntimeVector(vector)) {
+                    throw new Error(`Unable to decode embedded vectors for ${book.name || bookId}`);
+                }
+                itemsByHash.set(hash, {
+                    hash,
+                    index: item.index,
+                    text: book.chunks[item.index],
+                    vector,
+                });
+            });
+            await this.insertLocalVectors(bookId, scope, [...itemsByHash.values()]);
+            const savedHashes = new Set((await this.listLocalVectorHashes(bookId, scope)).map(Number));
+            book.vectorHashes = vectorHashes;
+            book.vectorScope = scope;
+            book.vectorDimension = dimension;
+            book.vectorized = book.chunks.map((_chunk, index) => savedHashes.has(vectorHashes[index]));
+            book.vectors = book.chunks.map(() => null);
+            book.updateTime = Date.now();
         }
 
         listBackendHashes(bookId, scope) {
@@ -441,10 +638,16 @@
             });
         }
 
-        purgeBackendBook(bookId) {
-            return this.fetchVectorApi('/api/vector/purge', {
-                collectionId: this.getVectorCollectionId(bookId),
-            });
+        async purgeBackendBook(bookId) {
+            if (this.vectorBackendState === 'unavailable') return false;
+            try {
+                return await this.fetchVectorApi('/api/vector/purge', {
+                    collectionId: this.getVectorCollectionId(bookId),
+                });
+            } catch (error) {
+                if (this.markVectorBackendUnavailable(error)) return false;
+                throw error;
+            }
         }
 
         queryBackendBooks(bookIds, scope, queryText, queryVector, topK, threshold) {
@@ -531,7 +734,7 @@
             return this.library;
         }
 
-        async migrateEmbeddedVectorsToBackend(bookIds = null) {
+        async migrateEmbeddedVectorsToExternalStore(bookIds = null) {
             const targetIds = Array.isArray(bookIds) ? bookIds : Object.keys(this.library);
             let changed = false;
             let migratedBooks = 0;
@@ -552,6 +755,18 @@
                     .sort((left, right) => right[1] - left[1])[0]?.[0] || 0;
                 const scope = this.getVectorScope(dimension);
                 const vectorHashes = this.computeBookVectorHashes(book.chunks);
+
+                if (this.vectorBackendState === 'unavailable') {
+                    try {
+                        await this.migrateEmbeddedBookToLocalStore(bookId, book, embedded, dimension, scope, vectorHashes);
+                        changed = true;
+                        migratedBooks += 1;
+                        continue;
+                    } catch (error) {
+                        console.warn(`[yuzuki-Memory] Failed to migrate embedded vectors to IndexedDB for ${book.name || bookId}.`, error);
+                        return { changed, migratedBooks, failed: true, storage: 'indexeddb' };
+                    }
+                }
 
                 try {
                     const savedHashes = new Set((await this.listBackendHashes(bookId, scope)).map(Number));
@@ -596,12 +811,28 @@
                     changed = true;
                     migratedBooks += 1;
                 } catch (error) {
+                    if (this.markVectorBackendUnavailable(error)) {
+                        try {
+                            await this.migrateEmbeddedBookToLocalStore(bookId, book, embedded, dimension, scope, vectorHashes);
+                            changed = true;
+                            migratedBooks += 1;
+                            continue;
+                        } catch (localError) {
+                            console.warn(`[yuzuki-Memory] Failed to migrate embedded vectors to IndexedDB for ${book.name || bookId}.`, localError);
+                            return { changed, migratedBooks, failed: true, storage: 'indexeddb' };
+                        }
+                    }
                     console.warn(`[yuzuki-Memory] Failed to migrate vectors for ${book.name || bookId}; embedded data was preserved.`, error);
                     return { changed, migratedBooks, failed: true };
                 }
             }
 
-            return { changed, migratedBooks, failed: false };
+            return {
+                changed,
+                migratedBooks,
+                failed: false,
+                storage: this.vectorBackendState === 'unavailable' ? 'indexeddb' : 'backend',
+            };
         }
 
         async writeLibrarySnapshot() {
@@ -1156,13 +1387,43 @@
             let scope = canReuseStoredDimension ? storedScopeForCurrentSettings : '';
             let savedHashes = new Set();
             let backendInitialized = false;
+            let storageMode = this.vectorBackendState === 'unavailable' ? 'local' : 'backend';
+
+            const initializeLocalStorage = async () => {
+                storageMode = 'local';
+                savedHashes = new Set((await this.listLocalVectorHashes(bookId, scope)).map(Number));
+                if (force) {
+                    await this.deleteLocalVectorHashes(bookId, scope, [...savedHashes]);
+                    savedHashes.clear();
+                }
+                const staleHashes = [...savedHashes].filter((hash) => !expectedHashes.has(hash));
+                if (staleHashes.length) {
+                    await this.deleteLocalVectorHashes(bookId, scope, staleHashes);
+                    staleHashes.forEach((hash) => savedHashes.delete(hash));
+                }
+                book.vectorScope = scope;
+                book.vectorDimension = dimension;
+                book.vectorized = book.chunks.map((_chunk, index) => savedHashes.has(vectorHashes[index]));
+                book.vectors = book.chunks.map(() => null);
+                backendInitialized = true;
+            };
 
             const initializeBackend = async (nextDimension) => {
                 if (backendInitialized) return;
                 dimension = Math.max(0, Number.parseInt(nextDimension, 10) || 0);
                 scope = this.getVectorScope(dimension, settings);
                 if (!scope) throw new Error('Embedding 向量维度为空');
-                savedHashes = new Set((await this.listBackendHashes(bookId, scope)).map(Number));
+                if (this.vectorBackendState === 'unavailable') {
+                    await initializeLocalStorage();
+                    return;
+                }
+                try {
+                    savedHashes = new Set((await this.listBackendHashes(bookId, scope)).map(Number));
+                } catch (error) {
+                    if (!this.markVectorBackendUnavailable(error)) throw error;
+                    await initializeLocalStorage();
+                    return;
+                }
                 if (force && savedHashes.size) {
                     await this.deleteBackendHashes(bookId, scope, [...savedHashes]);
                     savedHashes.clear();
@@ -1194,7 +1455,7 @@
             if (!pending.length) {
                 book.updateTime = Date.now();
                 await this.saveLibrary();
-                return { success: true, count: 0, errors: 0 };
+                return { success: true, count: 0, errors: 0, storage: storageMode };
             }
 
             let success = 0;
@@ -1220,7 +1481,7 @@
                     const firstVector = vectors.find((vector) => this.isRuntimeVector(vector));
                     if (!backendInitialized) await initializeBackend(firstVector?.length || 0);
 
-                    const backendItems = [];
+                    const newItems = [];
                     batch.forEach((item, offset) => {
                         const vector = vectors[offset];
                         if (!this.isRuntimeVector(vector)) {
@@ -1229,17 +1490,20 @@
                         if (vector.length !== dimension) {
                             throw new Error(`Embedding 向量维度不一致：当前索引 ${dimension} 维，API 返回 ${vector.length} 维`);
                         }
-                        if (!savedHashes.has(item.hash)) backendItems.push({ ...item, vector });
+                        if (!savedHashes.has(item.hash)) newItems.push({ ...item, vector });
                     });
-                    if (backendItems.length) {
-                        await this.insertBackendVectors(bookId, scope, backendItems);
-                        backendItems.forEach((item) => savedHashes.add(item.hash));
-                        success += backendItems.length;
+                    if (newItems.length) {
+                        if (storageMode === 'backend') {
+                            await this.insertBackendVectors(bookId, scope, newItems);
+                            newItems.forEach((item) => savedHashes.add(item.hash));
+                        } else {
+                            await this.insertLocalVectors(bookId, scope, newItems);
+                            newItems.forEach((item) => savedHashes.add(item.hash));
+                        }
+                        success += newItems.length;
                     }
                     book.vectorized = book.chunks.map((_chunk, index) => savedHashes.has(vectorHashes[index]));
-                    book.vectorized.forEach((isSaved, index) => {
-                        if (isSaved) book.vectors[index] = null;
-                    });
+                    book.vectors = book.chunks.map(() => null);
                     if (success >= nextCheckpoint) {
                         book.updateTime = Date.now();
                         await this.saveLibrary();
@@ -1262,7 +1526,7 @@
             book.updateTime = Date.now();
             await this.saveLibrary();
 
-            if (success > 0 && previousScope && previousScope !== scope) {
+            if (storageMode === 'backend' && success > 0 && previousScope && previousScope !== scope) {
                 try {
                     const previousScopeHashes = await this.listBackendHashes(bookId, previousScope);
                     await this.deleteBackendHashes(bookId, previousScope, previousScopeHashes);
@@ -1270,10 +1534,24 @@
                     console.warn('[yuzuki-Memory] Failed to clean the previous vector model scope.', error);
                 }
             }
+            if (storageMode === 'local' && success > 0 && previousScope && previousScope !== scope) {
+                try {
+                    await this.purgeLocalBook(bookId, previousScope);
+                } catch (error) {
+                    console.warn('[yuzuki-Memory] Failed to clean the previous IndexedDB vector scope.', error);
+                }
+            }
+            if (storageMode === 'backend' && errors === 0) {
+                try {
+                    await this.purgeLocalBook(bookId);
+                } catch (error) {
+                    console.warn('[yuzuki-Memory] Failed to clean the obsolete IndexedDB vector collection.', error);
+                }
+            }
             if (errors > 0 && success === 0) {
                 throw new Error(firstError || `向量化失败：${errors} 条分段均未建立索引`);
             }
-            return { success: true, count: success, errors, error: firstError };
+            return { success: true, count: success, errors, error: firstError, storage: storageMode };
         }
 
         searchEntityBoost(query, text) {
@@ -1368,46 +1646,81 @@
                     emptyBooks,
                 });
             }
-            let backendResults;
-            try {
-                backendResults = await this.queryBackendBooks(
-                    matchedBookIds,
-                    queryScope,
-                    sourceQuery,
-                    queryVector,
-                    recallCount,
-                    initialThreshold
-                );
-            } catch (error) {
-                console.warn('[yuzuki-Memory Vector] 酒馆向量目录检索失败', error);
-                return [];
-            }
+            let storageMode = this.vectorBackendState === 'unavailable' ? 'local' : 'backend';
+            let results = [];
+            if (storageMode === 'local') {
+                try {
+                    results = await this.queryLocalBooks(
+                        matchedBookIds,
+                        queryScope,
+                        sourceQuery,
+                        queryVector,
+                        recallCount,
+                        initialThreshold
+                    );
+                } catch (error) {
+                    console.warn('[yuzuki-Memory Vector] IndexedDB 向量目录检索失败', error);
+                    return [];
+                }
+            } else {
+                let backendResults;
+                try {
+                    backendResults = await this.queryBackendBooks(
+                        matchedBookIds,
+                        queryScope,
+                        sourceQuery,
+                        queryVector,
+                        recallCount,
+                        initialThreshold
+                    );
+                } catch (error) {
+                    if (!this.markVectorBackendUnavailable(error)) {
+                        console.warn('[yuzuki-Memory Vector] 酒馆向量目录检索失败', error);
+                        return [];
+                    }
+                    storageMode = 'local';
+                    try {
+                        results = await this.queryLocalBooks(
+                            matchedBookIds,
+                            queryScope,
+                            sourceQuery,
+                            queryVector,
+                            recallCount,
+                            initialThreshold
+                        );
+                    } catch (localError) {
+                        console.warn('[yuzuki-Memory Vector] IndexedDB 向量目录检索失败', localError);
+                        return [];
+                    }
+                }
 
-            const collectionBooks = new Map(matchedBookIds.map((bookId) => [this.getVectorCollectionId(bookId), bookId]));
-            const seen = new Set();
-            const results = [];
-            let rank = 0;
-            Object.entries(backendResults || {}).forEach(([collectionId, result]) => {
-                const bookId = collectionBooks.get(collectionId);
-                const book = this.library[bookId];
-                if (!book || !Array.isArray(result?.metadata)) return;
-                result.metadata.forEach((metadata) => {
-                    const hash = Number(metadata?.hash);
-                    let index = book.vectorHashes?.findIndex((item) => Number(item) === hash) ?? -1;
-                    const metadataText = String(metadata?.text || '').trim();
-                    if (index < 0 && metadataText) index = book.chunks.indexOf(metadataText);
-                    const chunk = metadataText || String(book.chunks?.[index] || '').trim();
-                    if (!chunk || seen.has(chunk)) return;
-                    seen.add(chunk);
-                    const serverRankScore = Math.max(initialThreshold, 1 - (rank * 0.0001));
-                    rank += 1;
-                    results.push({
-                        text: chunk,
-                        score: serverRankScore + this.searchEntityBoost(sourceQuery, chunk),
-                        source: `${book.name} #${Math.max(0, index) + 1}`,
+                if (storageMode === 'backend') {
+                    const collectionBooks = new Map(matchedBookIds.map((bookId) => [this.getVectorCollectionId(bookId), bookId]));
+                    const seen = new Set();
+                    let rank = 0;
+                    Object.entries(backendResults || {}).forEach(([collectionId, result]) => {
+                        const bookId = collectionBooks.get(collectionId);
+                        const book = this.library[bookId];
+                        if (!book || !Array.isArray(result?.metadata)) return;
+                        result.metadata.forEach((metadata) => {
+                            const hash = Number(metadata?.hash);
+                            let index = book.vectorHashes?.findIndex((item) => Number(item) === hash) ?? -1;
+                            const metadataText = String(metadata?.text || '').trim();
+                            if (index < 0 && metadataText) index = book.chunks.indexOf(metadataText);
+                            const chunk = metadataText || String(book.chunks?.[index] || '').trim();
+                            if (!chunk || seen.has(chunk)) return;
+                            seen.add(chunk);
+                            const serverRankScore = Math.max(initialThreshold, 1 - (rank * 0.0001));
+                            rank += 1;
+                            results.push({
+                                text: chunk,
+                                score: serverRankScore + this.searchEntityBoost(sourceQuery, chunk),
+                                source: `${book.name} #${Math.max(0, index) + 1}`,
+                            });
+                        });
                     });
-                });
-            });
+                }
+            }
             const candidates = results
                 .sort((a, b) => b.score - a.score)
                 .slice(0, recallCount);
@@ -1418,6 +1731,7 @@
                 candidates: candidates.length,
                 rawMatches: results.length,
                 initialThreshold,
+                storage: storageMode,
                 rerank: rerankSettings.enabled === true,
             });
 
@@ -1471,6 +1785,7 @@
         async deleteBook(bookId) {
             if (!this.library[bookId]) return false;
             await this.purgeBackendBook(bookId);
+            await this.purgeLocalBook(bookId);
             delete this.library[bookId];
             this.setActiveBooks(this.getActiveBooks().filter((id) => id !== bookId));
             if (this.selectedBookId === bookId) this.selectedBookId = Object.keys(this.library)[0] || '';
@@ -1481,6 +1796,7 @@
         async clearAllBooks() {
             for (const bookId of Object.keys(this.library)) {
                 await this.purgeBackendBook(bookId);
+                await this.purgeLocalBook(bookId);
                 await this.yieldToMainThread();
             }
             this.library = {};
@@ -1518,7 +1834,7 @@
                     version: 2,
                     exportedAt: Date.now(),
                     storage: STORAGE_BOOK_NAME,
-                    vectorStorage: 'sillytavern',
+                    vectorStorage: 'external-index',
                     library: data,
                 }, null, 2),
             ].join('\n');
@@ -1552,6 +1868,7 @@
             for (const bookId of bookIds) {
                 try {
                     await this.purgeBackendBook(bookId);
+                    await this.purgeLocalBook(bookId);
                 } catch (error) {
                     console.warn(`[yuzuki-Memory] Failed to clean imported vector collection ${bookId}.`, error);
                 }
@@ -1571,10 +1888,10 @@
             Object.assign(this.library, nextLibrary);
             const importedIds = Object.keys(nextLibrary);
             this.selectedBookId = importedIds[0] || this.selectedBookId;
-            const migration = await this.migrateEmbeddedVectorsToBackend(importedIds);
+            const migration = await this.migrateEmbeddedVectorsToExternalStore(importedIds);
             if (migration.failed) {
                 await this.rollbackImportedBooks(importedIds);
-                throw new Error('导入向量迁移到酒馆向量目录失败，导入内容已回滚');
+                throw new Error('导入向量迁移到外部向量索引失败，导入内容已回滚');
             }
             await this.saveLibrary();
             return { success: true, bookCount: Object.keys(nextLibrary).length };
@@ -1739,10 +2056,10 @@
             Object.assign(this.library, nextLibrary);
             const importedIds = Object.keys(nextLibrary);
             this.selectedBookId = importedIds[0] || this.selectedBookId;
-            const migration = await this.migrateEmbeddedVectorsToBackend(importedIds);
+            const migration = await this.migrateEmbeddedVectorsToExternalStore(importedIds);
             if (migration.failed) {
                 await this.rollbackImportedBooks(importedIds);
-                throw new Error('旧版向量迁移到酒馆向量目录失败，导入内容已回滚');
+                throw new Error('旧版向量迁移到外部向量索引失败，导入内容已回滚');
             }
             await this.saveLibrary();
             return { success: true, bookCount: Object.keys(nextLibrary).length, legacy: true };
