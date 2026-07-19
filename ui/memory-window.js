@@ -10928,6 +10928,7 @@
         const list = document.createElement('ul');
         [
             '【修复】修复向量化 API 切换不同供应商的错误问题。',
+            '【兼容】兼容 TauriTavern（TT 酒馆）移动端原生后端暂未实现向量存储接口的问题；向量化与召回会自动使用独立本地索引，真实向量不会写入世界书。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
