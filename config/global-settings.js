@@ -1,7 +1,7 @@
 // ============================================================================
 // yuzuki-Memory global settings.
-// Stores global plugin config in SillyTavern extension_settings, with
-// localStorage kept as migration source and fallback.
+// Stores global plugin config in localStorage so browser windows share the
+// latest value immediately, and mirrors it to SillyTavern extension_settings.
 // ============================================================================
 (function () {
     'use strict';
@@ -28,9 +28,10 @@
         if (create && !window.extension_settings[NAMESPACE]) window.extension_settings[NAMESPACE] = {};
         const windowStore = window.extension_settings[NAMESPACE] || null;
         if (contextStore && windowStore && contextStore !== windowStore) {
-            Object.assign(contextStore, windowStore, contextStore);
-            window.extension_settings[NAMESPACE] = contextStore;
-            return contextStore;
+            const mergedStore = Object.assign({}, windowStore, contextStore);
+            context.extensionSettings[NAMESPACE] = mergedStore;
+            window.extension_settings[NAMESPACE] = mergedStore;
+            return mergedStore;
         }
         if (contextStore) {
             window.extension_settings[NAMESPACE] = contextStore;
@@ -76,16 +77,36 @@
         }
     }
 
+    function valuesMatch(left, right) {
+        try {
+            return JSON.stringify(left) === JSON.stringify(right);
+        } catch (_error) {
+            return left === right;
+        }
+    }
+
     function get(key, fallback = null, options = {}) {
+        const localValue = parseLocalStorage(key, undefined);
         const store = getExtensionSettings(false);
-        if (store && Object.prototype.hasOwnProperty.call(store, key)) {
-            return clone(store[key]);
+        const hasStoredValue = !!store && Object.prototype.hasOwnProperty.call(store, key);
+
+        if (localValue !== undefined) {
+            if (options.migrate !== false && (!hasStoredValue || !valuesMatch(store[key], localValue))) {
+                set(key, localValue);
+            }
+            return clone(localValue);
         }
 
-        const localValue = parseLocalStorage(key, undefined);
-        if (localValue !== undefined) {
-            if (options.migrate !== false) set(key, localValue);
-            return clone(localValue);
+        if (hasStoredValue) {
+            const storedValue = clone(store[key]);
+            if (options.localFallback !== false) {
+                try {
+                    localStorage.setItem(key, JSON.stringify(storedValue));
+                } catch (error) {
+                    console.warn('[yuzuki-Memory] Failed to cache global setting locally.', key, error);
+                }
+            }
+            return storedValue;
         }
 
         return clone(fallback);

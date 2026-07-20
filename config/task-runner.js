@@ -295,15 +295,21 @@
             : null;
     }
 
-    function getCurrentCharacterPromptKey() {
+    function getCurrentCharacterPromptKeys() {
         const ctx = getContext() || {};
-        if (ctx.groupId) return `group:${ctx.groupId}`;
+        if (ctx.groupId) return [`group:${ctx.groupId}`];
         const character = Array.isArray(ctx.characters) ? ctx.characters[ctx.characterId] : null;
         const characterId = ctx.characterId;
-        const raw = characterId !== undefined && characterId !== null && String(characterId) !== ''
-            ? characterId
-            : (character?.avatar || character?.name || ctx.name2 || ctx.characterName || '');
-        return raw !== '' ? `char:${raw}` : '';
+        return [...new Set([
+            character?.avatar,
+            character?.name,
+            ctx.name2,
+            ctx.characterName,
+            characterId,
+        ]
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean)
+            .map((value) => `char:${value}`))];
     }
 
     function getCurrentSessionId() {
@@ -700,14 +706,13 @@
             };
         });
         const bindings = parseJsonStorage(PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY, {});
-        const characterKey = getCurrentCharacterPromptKey();
-        const characterId = characterKey && bindings && typeof bindings === 'object'
-            ? String(bindings[characterKey] || '')
+        const characterId = bindings && typeof bindings === 'object'
+            ? String(getCurrentCharacterPromptKeys().map((key) => bindings[key]).find(Boolean) || '')
             : '';
         const globalId = String(YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY, '')
             ?? localStorage.getItem(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY)
             ?? '');
-        const activeId = characterId || globalId || String(state?.promptPresetId || '');
+        const activeId = characterId || globalId;
         return normalized.find((scheme) => scheme.id === activeId)
             || normalized[0]
             || { prompts: YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.({ prompts: {} }) || {} };

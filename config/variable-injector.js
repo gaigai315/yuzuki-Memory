@@ -201,15 +201,21 @@
         };
     }
 
-    function getCurrentCharacterPromptKey() {
+    function getCurrentCharacterPromptKeys() {
         const context = getContext() || {};
-        if (context.groupId) return `group:${context.groupId}`;
+        if (context.groupId) return [`group:${context.groupId}`];
         const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
         const characterId = context.characterId;
-        const raw = characterId !== undefined && characterId !== null && String(characterId) !== ''
-            ? characterId
-            : (character?.avatar || character?.name || context.name2 || context.characterName || '');
-        return raw !== '' ? `char:${raw}` : '';
+        return [...new Set([
+            character?.avatar,
+            character?.name,
+            context.name2,
+            context.characterName,
+            characterId,
+        ]
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean)
+            .map((value) => `char:${value}`))];
     }
 
     function resolveRuntimeVariables(text) {
@@ -324,14 +330,13 @@
         const schemes = getPromptSchemes();
         if (!schemes.length) return null;
         const bindings = getPromptSchemeBindings();
-        const characterKey = getCurrentCharacterPromptKey();
-        const characterId = characterKey && bindings && typeof bindings === 'object'
-            ? String(bindings[characterKey] || '')
+        const characterId = bindings && typeof bindings === 'object'
+            ? String(getCurrentCharacterPromptKeys().map((key) => bindings[key]).find(Boolean) || '')
             : '';
         const globalId = String(YuzukiMemory.GlobalSettings?.get?.(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY, '')
             ?? localStorage.getItem(PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY)
             ?? '');
-        const activeId = characterId || globalId || String(state?.promptPresetId || '');
+        const activeId = characterId || globalId;
         return schemes.find((scheme) => scheme.id === activeId) || schemes[0] || null;
     }
 

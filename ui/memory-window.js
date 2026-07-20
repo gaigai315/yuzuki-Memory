@@ -1641,15 +1641,26 @@
         return normalized;
     }
 
-    function getCurrentCharacterPromptKey() {
+    function getCurrentCharacterPromptKeys() {
         const context = getContext() || {};
-        if (context.groupId) return `group:${context.groupId}`;
+        if (context.groupId) return [`group:${context.groupId}`];
         const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
         const characterId = context.characterId;
-        const raw = characterId !== undefined && characterId !== null && String(characterId) !== ''
-            ? characterId
-            : (character?.avatar || character?.name || context.name2 || context.characterName || '');
-        return raw !== '' ? `char:${raw}` : '';
+        const values = [
+            character?.avatar,
+            character?.name,
+            context.name2,
+            context.characterName,
+            characterId,
+        ];
+        return [...new Set(values
+            .map((value) => String(value ?? '').trim())
+            .filter(Boolean)
+            .map((value) => `char:${value}`))];
+    }
+
+    function getCurrentCharacterPromptKey() {
+        return getCurrentCharacterPromptKeys()[0] || '';
     }
 
     function getCurrentCharacterPromptLabel() {
@@ -1706,29 +1717,34 @@
     }
 
     function getCharacterPromptSchemeId() {
-        const key = getCurrentCharacterPromptKey();
-        if (!key) return '';
-        const schemeId = String(getPromptSchemeBindings()[key] || '');
-        return findPromptSchemeById(schemeId) ? schemeId : '';
+        const keys = getCurrentCharacterPromptKeys();
+        if (!keys.length) return '';
+        const bindings = getPromptSchemeBindings();
+        const matchedKey = keys.find((key) => findPromptSchemeById(String(bindings[key] || '')));
+        if (!matchedKey) return '';
+        const schemeId = String(bindings[matchedKey] || '');
+        const primaryKey = keys[0];
+        if (matchedKey !== primaryKey) {
+            const migrated = { ...bindings, [primaryKey]: schemeId };
+            keys.slice(1).forEach((key) => delete migrated[key]);
+            savePromptSchemeBindings(migrated);
+        }
+        return schemeId;
     }
 
     function isCharacterPromptSchemeAutoloadEnabled() {
         return !!getCharacterPromptSchemeId();
     }
 
-    function getFallbackPromptSchemeId(options = {}) {
+    function getFallbackPromptSchemeId() {
         const schemes = getPromptSchemes();
         const globalId = getGlobalPromptSchemeId();
         if (schemes.some((scheme) => scheme.id === globalId)) return globalId;
-        if (options.includeState !== false) {
-            const stateId = String(getState().promptPresetId || '');
-            if (schemes.some((scheme) => scheme.id === stateId)) return stateId;
-        }
         return schemes[0]?.id || '';
     }
 
     function getUnboundPromptSchemeId() {
-        return getFallbackPromptSchemeId({ includeState: false });
+        return getFallbackPromptSchemeId();
     }
 
     function getResolvedPromptSchemeId() {
@@ -1736,8 +1752,14 @@
     }
 
     function ensureGlobalPromptSchemeIdFromState() {
-        if (getCharacterPromptSchemeId() || getGlobalPromptSchemeId()) return;
-        const fallbackId = getFallbackPromptSchemeId();
+        if (getCharacterPromptSchemeId()) return;
+        const schemes = getPromptSchemes();
+        const globalId = getGlobalPromptSchemeId();
+        if (schemes.some((scheme) => scheme.id === globalId)) return;
+        const legacyStateId = String(getState().promptPresetId || '');
+        const fallbackId = schemes.some((scheme) => scheme.id === legacyStateId)
+            ? legacyStateId
+            : (schemes[0]?.id || '');
         if (fallbackId) saveGlobalPromptSchemeId(fallbackId);
     }
 
@@ -1752,10 +1774,10 @@
     }
 
     function unbindPromptSchemeFromCurrentCharacter() {
-        const key = getCurrentCharacterPromptKey();
-        if (!key) return false;
+        const keys = getCurrentCharacterPromptKeys();
+        if (!keys.length) return false;
         const bindings = getPromptSchemeBindings();
-        delete bindings[key];
+        keys.forEach((key) => delete bindings[key]);
         savePromptSchemeBindings(bindings);
         return true;
     }
@@ -10927,8 +10949,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复向量化 API 切换不同供应商的错误问题。',
-            '【兼容】兼容 TauriTavern（TT 酒馆）移动端原生后端暂未实现向量存储接口的问题；向量化与召回会自动使用独立本地索引，真实向量不会写入世界书。',
+            '【优化】隐藏楼层设置、当前记忆方案与角色专用自动加载改为全局共享；新开聊天或浏览器窗口后无需重复设置。',
+            '【优化】修正默认提示词的物品命名规则；物品名称只保留稳定名称，完好、破损、沾血等状态或描述写入对应字段，避免同一物品产生重复记录。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
