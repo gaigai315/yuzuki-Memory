@@ -62,6 +62,7 @@
     let autoTaskBaselineChatLength = 0;
     let autoTaskLastGenerationAt = 0;
     let autoTaskSessionPollTimer = null;
+    let autoTaskCallbacks = {};
     const CHAT_REQUEST_COOLDOWN_MS = 1500;
     const AUTO_TASK_BACKFILL_RETRY_MS = 15000;
     const AUTO_TASK_BACKFILL_NEXT_MS = 2500;
@@ -2333,6 +2334,42 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return pointers;
     }
 
+    function clampPointersToChatLength(chatLength = getChatLength(), reason = 'chat_length') {
+        const state = autoTaskCallbacks.getState?.();
+        if (!state) return false;
+
+        const limit = Math.max(0, Math.round(Number(chatLength) || 0));
+        const pointers = normalizePointers(state);
+        const previous = {
+            trace: pointers.trace,
+            summary: pointers.summary,
+            historySummary: pointers.historySummary,
+        };
+
+        pointers.trace = Math.min(pointers.trace, limit);
+        pointers.summary = Math.min(pointers.summary, limit);
+        pointers.historySummary = Math.min(pointers.historySummary, limit);
+
+        const changed = pointers.trace !== previous.trace
+            || pointers.summary !== previous.summary
+            || pointers.historySummary !== previous.historySummary;
+        if (!changed) return false;
+
+        const saved = autoTaskCallbacks.saveState?.({ immediate: true, saveOrigin: 'pointer-clamp' });
+        console.info('[yuzuki-Memory] 聊天楼层减少，已回退任务指针。', {
+            reason,
+            chatLength: limit,
+            previous,
+            current: {
+                trace: pointers.trace,
+                summary: pointers.summary,
+                historySummary: pointers.historySummary,
+            },
+            saved,
+        });
+        return saved !== false;
+    }
+
     function buildAutoTask(type, pointers, chatLength, settings) {
         const isHistory = type === 'history';
         const enabled = isHistory ? settings.historyEnabled : settings.summaryEnabled;
@@ -2712,9 +2749,11 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     function bindAutoSummary(callbacks = {}) {
+        autoTaskCallbacks = callbacks;
         if (autoSummaryBound) return;
         autoSummaryBound = true;
         refreshAutoTaskBaseline();
+        clampPointersToChatLength(getChatLength(), 'bind');
         const ctx = getContext();
         const eventSource = ctx?.eventSource;
         const eventTypes = ctx?.event_types;
@@ -2727,11 +2766,17 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 if (Date.now() - autoTaskLastGenerationAt > 10000) return;
                 armAutoTaskAfterGeneration(callbacks);
             };
+            const onMessageDeleted = (chatLength) => {
+                clampPointersToChatLength(chatLength, 'message_deleted');
+                refreshAutoTaskBaseline();
+            };
             if (eventTypes.GENERATION_ENDED) eventSource.on?.(eventTypes.GENERATION_ENDED, onGenerationEnded);
             if (eventTypes.CHARACTER_MESSAGE_RENDERED) eventSource.on?.(eventTypes.CHARACTER_MESSAGE_RENDERED, onCharacterRendered);
+            if (eventTypes.MESSAGE_DELETED) eventSource.on?.(eventTypes.MESSAGE_DELETED, onMessageDeleted);
         }
         window.addEventListener('yzm-memory-session-ready', () => {
             refreshAutoTaskBaseline();
+            clampPointersToChatLength(getChatLength(), 'session_ready');
         });
         autoTaskSessionPollTimer = window.setInterval(() => {
             const currentSessionId = getCurrentSessionId();

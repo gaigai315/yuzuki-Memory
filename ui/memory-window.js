@@ -5160,7 +5160,7 @@
         const chatFloorCount = getApproximateChatFloorCount();
         const lastFloorNumber = getLastChatFloorNumber(chatFloorCount);
         const pointers = getManualPointerSettings();
-        const tracePointer = clampPointerToFloorCount(pointers.trace, chatFloorCount);
+        const tracePointer = clampPointerToFloorCount(pointers.trace, lastFloorNumber);
         const panel = document.createElement('section');
         panel.className = 'yzm-trace-panel';
 
@@ -5231,8 +5231,8 @@
         const chatFloorCount = getApproximateChatFloorCount();
         const lastFloorNumber = getLastChatFloorNumber(chatFloorCount);
         const pointers = getManualPointerSettings();
-        const summaryPointer = clampPointerToFloorCount(pointers.summary, chatFloorCount);
-        const historySummaryPointer = clampPointerToFloorCount(pointers.historySummary, chatFloorCount);
+        const summaryPointer = clampPointerToFloorCount(pointers.summary, lastFloorNumber);
+        const historySummaryPointer = clampPointerToFloorCount(pointers.historySummary, lastFloorNumber);
         const panel = document.createElement('section');
         panel.className = 'yzm-trace-panel yzm-summary-tool-panel';
 
@@ -6515,12 +6515,13 @@
     function openTracePointerDialog(root) {
         const pointers = getManualPointerSettings();
         const totalFloors = getApproximateChatFloorCount();
+        const lastFloorNumber = getLastChatFloorNumber(totalFloors);
         openPointerFloorDialog(root, {
             modalClassName: 'yzm-trace-pointer-modal',
             title: '修正追溯指针',
             ariaLabel: '修正追溯指针',
-            value: clampPointerToFloorCount(pointers.trace, totalFloors),
-            max: totalFloors,
+            value: clampPointerToFloorCount(pointers.trace, lastFloorNumber),
+            max: lastFloorNumber,
             onApply(value) {
                 updateManualPointerSetting('trace', value);
                 renderTraceWorkspace(root);
@@ -6531,12 +6532,13 @@
     function openSummaryPointerDialog(root) {
         const pointers = getManualPointerSettings();
         const totalFloors = getApproximateChatFloorCount();
+        const lastFloorNumber = getLastChatFloorNumber(totalFloors);
         openPointerFloorDialog(root, {
             modalClassName: 'yzm-summary-pointer-modal',
             title: '修正小总结指针',
             ariaLabel: '修正小总结指针',
-            value: clampPointerToFloorCount(pointers.summary, totalFloors),
-            max: totalFloors,
+            value: clampPointerToFloorCount(pointers.summary, lastFloorNumber),
+            max: lastFloorNumber,
             onApply(value) {
                 updateManualPointerSetting('summary', value);
                 renderSummaryToolWorkspace(root);
@@ -6547,12 +6549,13 @@
     function openHistorySummaryPointerDialog(root) {
         const pointers = getManualPointerSettings();
         const totalFloors = getApproximateChatFloorCount();
+        const lastFloorNumber = getLastChatFloorNumber(totalFloors);
         openPointerFloorDialog(root, {
             modalClassName: 'yzm-history-summary-pointer-modal',
             title: '修正大总结指针',
             ariaLabel: '修正大总结指针',
-            value: clampPointerToFloorCount(pointers.historySummary, totalFloors),
-            max: totalFloors,
+            value: clampPointerToFloorCount(pointers.historySummary, lastFloorNumber),
+            max: lastFloorNumber,
             onApply(value) {
                 updateManualPointerSetting('historySummary', value);
                 renderSummaryToolWorkspace(root);
@@ -13782,15 +13785,28 @@
         const context = getContext();
         const eventSource = context?.eventSource || window.eventSource;
         const eventTypes = context?.event_types || window.event_types;
-        if (!eventSource || !eventTypes?.CHAT_CHANGED || typeof eventSource.on !== 'function') return;
+        if (!eventSource || !eventTypes || typeof eventSource.on !== 'function') return;
+        if (!eventTypes.CHAT_CHANGED && !eventTypes.MESSAGE_DELETED) return;
 
         chatContextRefreshBound = true;
-        eventSource.on(eventTypes.CHAT_CHANGED, () => {
-            const root = document.getElementById(ROOT_ID);
-            if (!root) return;
-            window.setTimeout(() => reloadStateFromStorage(), 80);
-            window.setTimeout(() => reloadStateFromStorage(), 420);
-        });
+        if (eventTypes.CHAT_CHANGED) {
+            eventSource.on(eventTypes.CHAT_CHANGED, () => {
+                const root = document.getElementById(ROOT_ID);
+                if (!root) return;
+                window.setTimeout(() => reloadStateFromStorage(), 80);
+                window.setTimeout(() => reloadStateFromStorage(), 420);
+            });
+        }
+        if (eventTypes.MESSAGE_DELETED) {
+            eventSource.on(eventTypes.MESSAGE_DELETED, () => {
+                window.setTimeout(() => {
+                    const root = document.getElementById(ROOT_ID);
+                    if (!root) return;
+                    if (activeWorkspaceView === 'trace') renderTraceWorkspace(root);
+                    if (activeWorkspaceView === 'summaryTool') renderSummaryToolWorkspace(root);
+                }, 0);
+            });
+        }
     }
 
     function toggleShell(forceOpen = false) {
