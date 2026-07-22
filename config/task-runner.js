@@ -62,107 +62,9 @@
     let autoTaskBaselineChatLength = 0;
     let autoTaskSessionPollTimer = null;
     let autoTaskCallbacks = {};
-    let foregroundGenerationActive = false;
-    let foregroundGenerationSequence = 0;
-    let completedGenerationSequence = 0;
     let autoTaskMessageSignature = '';
     let autoTaskMessageStableSince = 0;
-    const CHAT_REQUEST_COOLDOWN_MS = 1500;
-    const CHAT_IDLE_STABLE_MS = 1200;
-    const CHAT_IDLE_POLL_MS = 250;
-    const CHAT_IDLE_WAIT_TIMEOUT_MS = 300000;
     const AUTO_TASK_MESSAGE_STABLE_MS = 1200;
-    const AUTO_TASK_BACKFILL_RETRY_MS = 15000;
-    const AUTO_TASK_BACKFILL_NEXT_MS = 2500;
-    const AUTO_TASK_SKIPPED_NEXT_MS = 800;
-    const USER_INPUT_RETRY_MS = 3000;
-
-    function isGenerationBusy() {
-        const ctx = getContext();
-        const requestState = YuzukiMemory.RequestProbe?.getChatRequestState?.() || {};
-        return foregroundGenerationActive
-            || requestState.foregroundGenerationActive === true
-            || window.is_send_press === true
-            || window.isStreaming === true
-            || window.isGenerating === true
-            || ctx?.is_send_press === true
-            || ctx?.isStreaming === true
-            || ctx?.generationStarted === true;
-    }
-
-    function isChatRequestBusy() {
-        const state = YuzukiMemory.RequestProbe?.getChatRequestState?.() || {};
-        const activeCount = Math.max(
-            0,
-            Number(state.activeCount ?? window.yzmMemoryChatRequestActiveCount) || 0
-        );
-        if (activeCount > 0) return true;
-        const lastFinishedAt = Number(state.lastFinishedAt ?? window.yzmMemoryLastChatRequestFinishedAt) || 0;
-        return lastFinishedAt > 0 && Date.now() - lastFinishedAt < CHAT_REQUEST_COOLDOWN_MS;
-    }
-
-    function isChatGenerationBusy() {
-        return isGenerationBusy() || isChatRequestBusy();
-    }
-
-    async function waitForChatGenerationIdle(options = {}) {
-        const timeoutMs = Math.max(1000, Number(options.timeoutMs) || CHAT_IDLE_WAIT_TIMEOUT_MS);
-        const startedAt = Date.now();
-        let idleSince = 0;
-
-        while (Date.now() - startedAt < timeoutMs) {
-            if (options.signal?.aborted) {
-                return { success: false, aborted: true, error: '已中断发送' };
-            }
-            if (isChatGenerationBusy()) {
-                idleSince = 0;
-            } else {
-                if (!idleSince) idleSince = Date.now();
-                if (Date.now() - idleSince >= CHAT_IDLE_STABLE_MS) return { success: true };
-            }
-            await new Promise((resolve) => window.setTimeout(resolve, CHAT_IDLE_POLL_MS));
-        }
-
-        return {
-            success: false,
-            error: '等待酒馆正文生成结束超时，记忆任务未发送。',
-        };
-    }
-
-    function getChatContentVersion() {
-        return [
-            getCurrentSessionId(),
-            getChatLength(),
-            getLatestAssistantMessageSignature(),
-        ].join('\n');
-    }
-
-    async function buildTaskInputAfterChatIdle(buildInput, options = {}) {
-        const timeoutMs = Math.max(1000, Number(options.chatIdleTimeoutMs) || CHAT_IDLE_WAIT_TIMEOUT_MS);
-        const startedAt = Date.now();
-
-        while (Date.now() - startedAt < timeoutMs) {
-            const idleResult = await waitForChatGenerationIdle({
-                signal: options.signal,
-                timeoutMs: timeoutMs - (Date.now() - startedAt),
-            });
-            if (!idleResult.success) return idleResult;
-
-            const version = getChatContentVersion();
-            const value = await buildInput();
-            if (options.signal?.aborted) {
-                return { success: false, aborted: true, error: '已中断发送' };
-            }
-            if (!isChatGenerationBusy() && version === getChatContentVersion()) {
-                return { success: true, value };
-            }
-        }
-
-        return {
-            success: false,
-            error: '等待酒馆正文稳定超时，记忆任务未读取聊天内容。',
-        };
-    }
 
     function isUserTextInputActive() {
         const active = document.activeElement;
@@ -873,21 +775,6 @@
 
     async function generate(messages, options = {}) {
         if (!YuzukiMemory.LlmClient) return { success: false, error: 'LLM 客户端尚未加载。' };
-        if (options.chatIdlePrepared === true) {
-            if (isChatGenerationBusy()) {
-                return {
-                    success: false,
-                    deferred: true,
-                    error: '酒馆正文又开始生成，记忆任务未发送。',
-                };
-            }
-        } else {
-            const idleResult = await waitForChatGenerationIdle({
-                signal: options.signal,
-                timeoutMs: options.chatIdleTimeoutMs,
-            });
-            if (!idleResult.success) return idleResult;
-        }
         const previousSummarizing = window.isSummarizing;
         window.isSummarizing = true;
         try {
@@ -2258,11 +2145,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     async function runTrace(state, options = {}) {
-        const prepared = await buildTaskInputAfterChatIdle(() => buildTraceMessages(state, options), options);
-        if (!prepared.success) return prepared;
-        const built = prepared.value;
+        const built = await buildTraceMessages(state, options);
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
-        const response = await generate(built.messages, { ...options, kind: 'trace', chatIdlePrepared: true });
+        const response = await generate(built.messages, { ...options, kind: 'trace' });
         if (!response.success) return response;
         const parsed = filterTraceResultByTarget(state, parseTraceResponse(response.text), options);
         const result = {
@@ -2282,11 +2167,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     async function runSummary(state, options = {}) {
-        const prepared = await buildTaskInputAfterChatIdle(() => buildSummaryMessages(state, options), options);
-        if (!prepared.success) return prepared;
-        const built = prepared.value;
+        const built = await buildSummaryMessages(state, options);
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
-        const response = await generate(built.messages, { ...options, kind: 'summary', chatIdlePrepared: true });
+        const response = await generate(built.messages, { ...options, kind: 'summary' });
         if (!response.success) return response;
         const payloads = parseSummaryResponse(response.text);
         if (!payloads.length) return { success: false, error: formatSummaryParseError('总结结果缺少可落盘的分块正文。', response.text), text: response.text };
@@ -2745,7 +2628,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         autoSummaryTimer = window.setTimeout(async () => {
             if (!autoTaskArmed) return;
             if (!isAutoTaskStateReady(callbacks)) {
-                scheduleAutoSummary(callbacks, 500);
+                autoTaskArmed = false;
                 return;
             }
             const currentSessionId = getCurrentSessionId();
@@ -2760,11 +2643,11 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 return;
             }
             if (isManualTaskBusy()) {
-                scheduleAutoSummary(callbacks, 2000);
+                autoTaskArmed = false;
                 return;
             }
-            if (isPluginTaskBusy() || isChatGenerationBusy()) {
-                scheduleAutoSummary(callbacks, 2000);
+            if (isPluginTaskBusy()) {
+                autoTaskArmed = false;
                 return;
             }
             if (!isLatestAssistantMessageStable()) {
@@ -2772,12 +2655,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 return;
             }
             if (isUserTextInputActive()) {
-                scheduleAutoSummary(callbacks, USER_INPUT_RETRY_MS);
+                autoTaskArmed = false;
                 return;
             }
             const state = callbacks.getState?.();
             if (!state) {
-                scheduleAutoSummary(callbacks, 2000);
+                autoTaskArmed = false;
                 return;
             }
             const settings = getAutoSummarySettings();
@@ -2792,8 +2675,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 
             autoSummaryRunning = true;
             const skippedTypes = new Set();
-            let shouldContinueBackfill = false;
-            let continueDelay = AUTO_TASK_BACKFILL_NEXT_MS;
             try {
                 let activeTask = task;
                 let activeState = state;
@@ -2805,16 +2686,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                         ? await runAutoTraceTask(activeState, activeTask, callbacks)
                         : await runAutoSummaryTask(activeState, activeTask, settings, callbacks);
                     if (result?.success === false) {
-                        if (result?.deferred) {
-                            console.info('[yuzuki-Memory] 正文生成状态发生变化，自动任务已延期。');
-                            shouldContinueBackfill = true;
-                            continueDelay = 2000;
-                            break;
-                        }
                         console.warn('[yuzuki-Memory] Auto task skipped:', result.error);
                         notifyAutoTaskFailure(activeTask, result.error);
-                        shouldContinueBackfill = true;
-                        continueDelay = AUTO_TASK_BACKFILL_RETRY_MS;
                         break;
                     }
                     if (result?.skipped || result?.postponed) {
@@ -2827,50 +2700,25 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                             pluginSettings,
                             { skippedTypes: [...skippedTypes] }
                         );
-                        shouldContinueBackfill = !!activeTask;
-                        continueDelay = AUTO_TASK_SKIPPED_NEXT_MS;
                         continue;
                     }
 
                     notifyAutoTaskSuccess(activeTask, result);
-                    activeState = callbacks.getState?.() || activeState;
-                    activeTask = buildPendingAutoTask(
-                        normalizePointers(activeState),
-                        getChatLength(),
-                        settings,
-                        pluginSettings,
-                        { skippedTypes: [...skippedTypes] }
-                    );
-                    shouldContinueBackfill = !!activeTask;
-                    continueDelay = AUTO_TASK_BACKFILL_NEXT_MS;
                     break;
                 }
             } catch (error) {
                 console.warn('[yuzuki-Memory] Auto task failed:', error);
                 notifyAutoTaskFailure(task, error);
-                shouldContinueBackfill = true;
-                continueDelay = AUTO_TASK_BACKFILL_RETRY_MS;
             } finally {
                 autoSummaryRunning = false;
                 autoSummaryPromptOpen = false;
                 autoTaskBaselineChatLength = getChatLength();
-                if (shouldContinueBackfill) {
-                    autoTaskArmed = true;
-                    autoTaskBaselineChatLength = Math.max(0, getChatLength() - 1);
-                    scheduleAutoSummary(callbacks, continueDelay);
-                } else {
-                    autoTaskArmed = false;
-                }
+                autoTaskArmed = false;
             }
         }, delayMs);
     }
 
-    function armAutoTaskAfterGeneration(callbacks = {}, expectedGenerationSequence = null) {
-        if (foregroundGenerationActive) return;
-        if (
-            expectedGenerationSequence !== null
-            && expectedGenerationSequence !== foregroundGenerationSequence
-        ) return;
+    function armAutoTaskAfterGeneration(callbacks = {}) {
         if (!isAutoTaskStateReady(callbacks)) return;
         const currentSessionId = getCurrentSessionId();
         const chatLength = getChatLength();
@@ -2886,34 +2734,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         scheduleAutoSummary(callbacks);
     }
 
-    function isIgnoredGenerationEvent(args = []) {
-        if (args.some((arg) => arg?.dry_run === true || arg?.dryRun === true || arg?.isDryRun === true)) return true;
-        const generationType = String(args[0] || '').toLowerCase();
-        return generationType === 'quiet';
-    }
-
-    function handleForegroundGenerationStarted(args = []) {
-        if (isIgnoredGenerationEvent(args)) return;
-        foregroundGenerationActive = true;
-        foregroundGenerationSequence += 1;
-        window.clearTimeout(autoSummaryTimer);
-        autoTaskMessageSignature = '';
-        autoTaskMessageStableSince = 0;
-    }
-
-    function handleForegroundGenerationFinished(callbacks = {}, args = []) {
-        if (isIgnoredGenerationEvent(args)) return;
-        if (!foregroundGenerationSequence) foregroundGenerationSequence = 1;
-        const sequence = foregroundGenerationSequence;
-        if (!foregroundGenerationActive && completedGenerationSequence === sequence) return;
-        foregroundGenerationActive = false;
-        completedGenerationSequence = sequence;
-        window.setTimeout(() => {
-            if (foregroundGenerationActive || sequence !== foregroundGenerationSequence) return;
-            armAutoTaskAfterGeneration(callbacks, sequence);
-        }, 300);
-    }
-
     function bindAutoSummary(callbacks = {}) {
         autoTaskCallbacks = callbacks;
         if (autoSummaryBound) return;
@@ -2924,8 +2744,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const eventSource = ctx?.eventSource;
         const eventTypes = ctx?.event_types;
         if (eventSource && eventTypes) {
-            const onGenerationStarted = (...args) => handleForegroundGenerationStarted(args);
-            const onGenerationFinished = (...args) => handleForegroundGenerationFinished(callbacks, args);
             const onCharacterRendered = () => {
                 markLatestAssistantMessageActivity();
                 armAutoTaskAfterGeneration(callbacks);
@@ -2934,9 +2752,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 clampPointersToChatLength(chatLength, 'message_deleted');
                 refreshAutoTaskBaseline();
             };
-            if (eventTypes.GENERATION_STARTED) eventSource.on?.(eventTypes.GENERATION_STARTED, onGenerationStarted);
-            if (eventTypes.GENERATION_STOPPED) eventSource.on?.(eventTypes.GENERATION_STOPPED, onGenerationFinished);
-            if (eventTypes.GENERATION_ENDED) eventSource.on?.(eventTypes.GENERATION_ENDED, onGenerationFinished);
             if (eventTypes.CHARACTER_MESSAGE_RENDERED) eventSource.on?.(eventTypes.CHARACTER_MESSAGE_RENDERED, onCharacterRendered);
             if (eventTypes.MESSAGE_DELETED) eventSource.on?.(eventTypes.MESSAGE_DELETED, onMessageDeleted);
         }
@@ -2966,8 +2781,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         createLlmRequestSnapshot,
         cleanupSmallAutoSummaries,
         hidePlotSummaryItemsCoveredByExistingSummaries,
-        isChatGenerationBusy,
-        waitForChatGenerationIdle,
         bindAutoSummary,
         cancelPendingAutoTask,
     });

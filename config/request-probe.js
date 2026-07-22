@@ -130,81 +130,6 @@
         window.yzmMemoryLastChatRequestFinishedAt = lastChatRequestFinishedAt;
     }
 
-    function createTrackedChatResponse(response) {
-        if (!response?.body || typeof Proxy !== 'function') return { response, tracked: false };
-        let finished = false;
-        const finish = () => {
-            if (finished) return;
-            finished = true;
-            markChatRequestFinished();
-        };
-        const wrapReader = (reader) => new Proxy(reader, {
-            get(target, property) {
-                if (property === 'read') {
-                    return async (...args) => {
-                        try {
-                            const result = await target.read(...args);
-                            if (result?.done) finish();
-                            return result;
-                        } catch (error) {
-                            finish();
-                            throw error;
-                        }
-                    };
-                }
-                if (property === 'cancel') {
-                    return async (...args) => {
-                        try {
-                            return await target.cancel(...args);
-                        } finally {
-                            finish();
-                        }
-                    };
-                }
-                const value = Reflect.get(target, property, target);
-                return typeof value === 'function' ? value.bind(target) : value;
-            },
-        });
-        const body = response.body;
-        const trackedBody = new Proxy(body, {
-            get(target, property) {
-                if (property === 'getReader') return (...args) => wrapReader(target.getReader(...args));
-                if (property === 'cancel') {
-                    return async (...args) => {
-                        try {
-                            return await target.cancel(...args);
-                        } finally {
-                            finish();
-                        }
-                    };
-                }
-                if (property === 'pipeTo') {
-                    return (...args) => target.pipeTo(...args).finally(finish);
-                }
-                const value = Reflect.get(target, property, target);
-                return typeof value === 'function' ? value.bind(target) : value;
-            },
-        });
-        const consumingMethods = new Set(['arrayBuffer', 'blob', 'bytes', 'formData', 'json', 'text']);
-        const trackedResponse = new Proxy(response, {
-            get(target, property) {
-                if (property === 'body') return trackedBody;
-                if (consumingMethods.has(property) && typeof target[property] === 'function') {
-                    return async (...args) => {
-                        try {
-                            return await target[property](...args);
-                        } finally {
-                            finish();
-                        }
-                    };
-                }
-                const value = Reflect.get(target, property, target);
-                return typeof value === 'function' ? value.bind(target) : value;
-            },
-        });
-        return { response: trackedResponse, tracked: true };
-    }
-
     function markDryRunGenerationStarted() {
         dryRunGenerationDepth += 1;
         dryRunCaptureUntil = Date.now() + 15000;
@@ -1372,22 +1297,16 @@
             const url = requestInput ? requestInput.url : (input ? input.toString() : '');
             const options = nextArgs[1] || {};
             const shouldTrack = isExternalTextGenerationRequest(url, options);
-            let responseBodyTracked = false;
             if (shouldTrack) markChatRequestStarted();
             try {
-                let response = await baseFetch.apply(this, nextArgs);
-                if (shouldTrack) {
-                    const tracked = createTrackedChatResponse(response);
-                    response = tracked.response;
-                    responseBodyTracked = tracked.tracked;
-                }
+                const response = await baseFetch.apply(this, nextArgs);
                 if (shouldTrack) await captureAfterDownstream(nextArgs, url);
                 return response;
             } catch (error) {
                 if (shouldTrack) await captureAfterDownstream(nextArgs, url);
                 throw error;
             } finally {
-                if (shouldTrack && !responseBodyTracked) markChatRequestFinished();
+                if (shouldTrack) markChatRequestFinished();
             }
         };
         Object.defineProperty(wrappedFetch, FETCH_WRAPPER_FLAG, {
@@ -1520,8 +1439,6 @@
         getChatRequestState: () => ({
             activeCount: activeChatRequestCount,
             lastFinishedAt: lastChatRequestFinishedAt,
-            foregroundGenerationActive,
-            foregroundGenerationSequence,
         }),
     });
 
