@@ -6367,6 +6367,9 @@
             window.alert('当前已有追溯/总结任务正在执行，请等待完成后再开始。');
             return;
         }
+        if (YuzukiMemory.TaskRunner.isChatGenerationBusy?.()) {
+            showTaskToast('酒馆正文仍在生成，记忆任务会等待正文完整结束后再发送。', 'info');
+        }
         const panel = button.closest('.yzm-trace-panel');
         const options = getTaskPanelOptions(panel);
         if ((action === 'trace' || action === 'traceOptimize') && getPluginSettings().enableFilling === false) {
