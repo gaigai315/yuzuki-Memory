@@ -11,6 +11,7 @@
         hiddenFloorCount: 50,
     };
     const DEFAULT_AUTO_SUMMARY_SETTINGS = {
+        summaryDelay: 2,
         hideSummaryFloors: false,
     };
 
@@ -42,6 +43,7 @@
             const source = YuzukiMemory.GlobalSettings?.get?.(AUTO_SUMMARY_SETTINGS_KEY, {})
                 ?? JSON.parse(localStorage.getItem(AUTO_SUMMARY_SETTINGS_KEY) || '{}');
             return {
+                summaryDelay: normalizeNumber(source.summaryDelay, DEFAULT_AUTO_SUMMARY_SETTINGS.summaryDelay),
                 hideSummaryFloors: typeof source.hideSummaryFloors === 'boolean'
                     ? source.hideSummaryFloors
                     : DEFAULT_AUTO_SUMMARY_SETTINGS.hideSummaryFloors,
@@ -281,6 +283,23 @@
                 chatLength: chat.length,
             });
             return { success: false, skipped: true, reason: 'stale_summary_pointer', summaryPointer, chatLength: chat.length };
+        }
+        const delayFloors = normalizeNumber(options.delayFloors ?? settings.summaryDelay, DEFAULT_AUTO_SUMMARY_SETTINGS.summaryDelay);
+        const dialogueCount = chat.reduce((count, message) => count + (isDialogueMessage(message) ? 1 : 0), 0);
+        if (dialogueCount < summaryPointer + delayFloors) {
+            console.info('[yuzuki-Memory] 总结后隐藏等待延迟楼层。', {
+                summaryPointer,
+                dialogueCount,
+                delayFloors,
+            });
+            return {
+                success: false,
+                skipped: true,
+                reason: 'summary_delay',
+                summaryPointer,
+                dialogueCount,
+                delayFloors,
+            };
         }
         const indices = collectSummaryIndicesToHide(chat, summaryPointer);
         if (!indices.length) return { success: true, count: 0, indices: [] };
