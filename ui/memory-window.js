@@ -4154,8 +4154,8 @@
         row.dataset.yzmVectorSegmentIndex = String(segment.index);
         row.setAttribute('role', 'button');
         row.setAttribute('tabindex', '0');
-        row.setAttribute('aria-label', `预览分段 ${segment.id}`);
-        row.title = '点击预览完整分段内容';
+        row.setAttribute('aria-label', `编辑分段 ${segment.id}`);
+        row.title = '点击编辑分段内容';
         const id = document.createElement('span');
         id.textContent = segment.id;
         const text = document.createElement('span');
@@ -4168,11 +4168,12 @@
         return row;
     }
 
-    function openVectorSegmentPreview(root, segmentIndex) {
+    function openVectorSegmentEditor(root, segmentIndex) {
         const store = getVectorStore();
         const book = store?.getBook?.();
+        const bookId = String(store?.selectedBookId || '');
         const index = Number.parseInt(segmentIndex, 10);
-        if (!book || !Number.isFinite(index) || index < 0) return;
+        if (!book || !bookId || !Number.isFinite(index) || index < 0) return;
         const text = String(book.chunks?.[index] || '');
         const modalHost = getModalHost(root);
         removeModal(root, '.yzm-vector-preview-modal');
@@ -4182,7 +4183,7 @@
 
         const dialog = document.createElement('section');
         dialog.className = 'yzm-structure-dialog yzm-vector-preview-dialog';
-        dialog.setAttribute('aria-label', `预览分段 ${String(index + 1).padStart(5, '0')}`);
+        dialog.setAttribute('aria-label', `编辑分段 ${String(index + 1).padStart(5, '0')}`);
 
         const header = document.createElement('div');
         header.className = 'yzm-structure-header yzm-vector-preview-header';
@@ -4200,24 +4201,79 @@
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'yzm-structure-close';
-        close.setAttribute('aria-label', '关闭分段预览');
+        close.setAttribute('aria-label', '关闭分段编辑');
         close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
 
-        const content = document.createElement('div');
-        content.className = 'yzm-vector-preview-content';
-        content.textContent = text || '该分段没有内容。';
+        const content = document.createElement('textarea');
+        content.className = 'yzm-vector-preview-content yzm-vector-segment-editor';
+        content.value = text;
+        content.setAttribute('aria-label', `分段 ${String(index + 1).padStart(5, '0')} 内容`);
 
-        const closeModal = () => removePluginElement(overlay);
+        const actions = document.createElement('div');
+        actions.className = 'yzm-record-actions yzm-vector-segment-actions';
+        const save = createIconButton('保存', 'fa-solid fa-floppy-disk', 'yzm-add-table-confirm yzm-vector-segment-save');
+        actions.appendChild(save);
+
+        let saving = false;
+        const removeEditor = () => removePluginElement(overlay);
+        const closeModal = () => {
+            if (!saving) removeEditor();
+        };
+        const saveSegment = async () => {
+            if (saving) return;
+            const nextText = String(content.value || '').trim();
+            if (!nextText) {
+                content.focus();
+                return;
+            }
+            if (nextText === text) {
+                removeEditor();
+                return;
+            }
+
+            saving = true;
+            save.disabled = true;
+            close.disabled = true;
+            content.disabled = true;
+            save.innerHTML = '<i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i><span>保存中</span>';
+            try {
+                await store.updateBookChunk(bookId, index, nextText);
+                removeEditor();
+                refreshVectorAfterAction(root);
+            } catch (error) {
+                const message = String(error?.message || error || '分段保存失败');
+                if (error?.vectorSegmentSaved === true) {
+                    removeEditor();
+                    refreshVectorAfterAction(root);
+                    window.alert(`文本已保存，但该分段重新向量化失败：${message}`);
+                    return;
+                }
+                window.alert(message);
+                saving = false;
+                save.disabled = false;
+                close.disabled = false;
+                content.disabled = false;
+                save.innerHTML = '<i class="fa-solid fa-floppy-disk" aria-hidden="true"></i><span>保存</span>';
+                content.focus();
+            }
+        };
+
         close.addEventListener('click', closeModal);
         overlay.addEventListener('click', (event) => {
             if (event.target === overlay) closeModal();
         });
         dialog.addEventListener('click', (event) => event.stopPropagation());
+        content.addEventListener('input', () => {
+            meta.textContent = `${book.name || '未命名书籍'} · ${content.value.length.toLocaleString()} 字`;
+        });
+        save.addEventListener('click', saveSegment);
 
         header.append(titleWrap, close);
-        dialog.append(header, content);
+        dialog.append(header, content, actions);
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
+        content.focus();
+        content.setSelectionRange(content.value.length, content.value.length);
     }
 
     async function ensureVectorStoreReady() {
@@ -10952,8 +11008,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】隐藏楼层设置、当前记忆方案与角色专用自动加载改为全局共享；新开聊天或浏览器窗口后无需重复设置。',
-            '【优化】修正默认提示词的物品命名规则；物品名称只保留稳定名称，完好、破损、沾血等状态或描述写入对应字段，避免同一物品产生重复记录。',
+            '【新增】向量化书籍的分段内容现在可以直接编辑，保存后只重新向量化当前分段，便于精准修订。',
+            '【优化】编辑失败时保留清晰的待处理状态，并阻止已过期的旧分段索引再次进入召回结果。',
+            '【修复】剧情摘要现在会注入全部未隐藏的主线与支线节点；带删除线的隐藏节点仍不会发送。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -12781,7 +12838,7 @@
                 if (segmentRow) {
                     event.preventDefault();
                     event.stopPropagation();
-                    openVectorSegmentPreview(root, segmentRow.dataset.yzmVectorSegmentIndex);
+                    openVectorSegmentEditor(root, segmentRow.dataset.yzmVectorSegmentIndex);
                     return;
                 }
 
@@ -12801,7 +12858,7 @@
                 if (!segmentRow) return;
                 event.preventDefault();
                 event.stopPropagation();
-                openVectorSegmentPreview(root, segmentRow.dataset.yzmVectorSegmentIndex);
+                openVectorSegmentEditor(root, segmentRow.dataset.yzmVectorSegmentIndex);
             });
 
             root.addEventListener('contextmenu', (event) => {

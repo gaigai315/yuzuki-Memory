@@ -7761,6 +7761,35 @@
     -webkit-overflow-scrolling: touch;
 }
 
+#yzm-memory-root .yzm-vector-segment-editor {
+    width: 100%;
+    min-width: 0;
+    font: inherit;
+    outline: 0;
+    resize: vertical;
+}
+
+#yzm-memory-root .yzm-vector-segment-editor:focus {
+    border-color: var(--yzm-selected-color);
+}
+
+#yzm-memory-root .yzm-vector-segment-actions {
+    flex: 0 0 auto;
+}
+
+#yzm-memory-root .yzm-vector-segment-save {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-width: 92px;
+}
+
+#yzm-memory-root .yzm-vector-segment-save:disabled {
+    cursor: wait;
+    opacity: 0.68;
+}
+
 #yzm-memory-root .yzm-record-fields {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));

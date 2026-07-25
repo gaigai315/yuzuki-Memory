@@ -546,10 +546,17 @@
                     if (!book) return;
                     const hash = Number(record.hash);
                     let index = Number.parseInt(record.index, 10);
-                    if (!Number.isFinite(index) || index < 0 || Number(book.vectorHashes?.[index]) !== hash) {
-                        index = book.vectorHashes?.findIndex((item) => Number(item) === hash) ?? -1;
+                    const indexedHashMatches = Number.isFinite(index)
+                        && index >= 0
+                        && Number(book.vectorHashes?.[index]) === hash
+                        && book.vectorized?.[index] === true;
+                    if (!indexedHashMatches) {
+                        index = book.vectorHashes?.findIndex((item, itemIndex) => (
+                            Number(item) === hash && book.vectorized?.[itemIndex] === true
+                        )) ?? -1;
                     }
-                    const text = String(record.text || book.chunks?.[index] || '').trim();
+                    if (index < 0) return;
+                    const text = String(book.chunks?.[index] || '').trim();
                     if (!text) return;
                     const candidate = {
                         text,
@@ -1349,12 +1356,12 @@
             }
         }
 
-        vectorizeBook(bookId = this.selectedBookId, progressCallback = null, options = {}) {
+        enqueueVectorTask(bookId, taskFactory) {
             const queueKey = String(bookId || '');
             const previous = this.vectorizeQueues.get(queueKey) || Promise.resolve();
             const task = previous
                 .catch(() => undefined)
-                .then(() => this.runVectorizeBook(queueKey, progressCallback, options));
+                .then(taskFactory);
             const tracked = task.finally(() => {
                 if (this.vectorizeQueues.get(queueKey) === tracked) this.vectorizeQueues.delete(queueKey);
             });
@@ -1362,11 +1369,86 @@
             return tracked;
         }
 
+        vectorizeBook(bookId = this.selectedBookId, progressCallback = null, options = {}) {
+            const queueKey = String(bookId || '');
+            return this.enqueueVectorTask(
+                queueKey,
+                () => this.runVectorizeBook(queueKey, progressCallback, options)
+            );
+        }
+
+        updateBookChunk(bookId, chunkIndex, text, progressCallback = null) {
+            const queueKey = String(bookId || '');
+            return this.enqueueVectorTask(
+                queueKey,
+                () => this.runUpdateBookChunk(queueKey, chunkIndex, text, progressCallback)
+            );
+        }
+
+        async runUpdateBookChunk(bookId, chunkIndex, text, progressCallback = null) {
+            await this.whenReady();
+            const book = this.library[bookId];
+            const index = Number.parseInt(chunkIndex, 10);
+            if (!book) throw new Error('向量书不存在');
+            if (!Number.isFinite(index) || index < 0 || index >= book.chunks.length) {
+                throw new Error('要编辑的分段不存在');
+            }
+
+            const normalizedChunks = this.normalizeChunks([text]);
+            if (!normalizedChunks.length) throw new Error('分段内容不能为空');
+            if (normalizedChunks.length !== 1) {
+                throw new Error(`单个分段不能超过 ${MAX_VECTOR_CHUNK_CHARS} 字，请在整书编辑中拆分后保存`);
+            }
+
+            const nextText = normalizedChunks[0];
+            if (book.chunks[index] === nextText) {
+                return { success: true, saved: true, changed: false, count: 0, errors: 0, index };
+            }
+
+            const previousState = {
+                chunk: book.chunks[index],
+                vector: book.vectors?.[index] || null,
+                vectorized: Boolean(book.vectorized?.[index]),
+                vectorHash: book.vectorHashes?.[index] ?? null,
+                updateTime: book.updateTime,
+            };
+            book.chunks[index] = nextText;
+            if (!Array.isArray(book.vectors)) book.vectors = book.chunks.map(() => null);
+            if (!Array.isArray(book.vectorized)) book.vectorized = book.chunks.map(() => false);
+            if (!Array.isArray(book.vectorHashes)) book.vectorHashes = book.chunks.map(() => null);
+            book.vectors[index] = null;
+            book.vectorized[index] = false;
+            book.vectorHashes[index] = null;
+            book.updateTime = Date.now();
+            const saved = await this.saveLibrary();
+            if (!saved) {
+                book.chunks[index] = previousState.chunk;
+                book.vectors[index] = previousState.vector;
+                book.vectorized[index] = previousState.vectorized;
+                book.vectorHashes[index] = previousState.vectorHash;
+                book.updateTime = previousState.updateTime;
+                throw new Error('分段保存失败，请稍后重试');
+            }
+
+            try {
+                const result = await this.runVectorizeBook(bookId, progressCallback, { segmentIndexes: [index] });
+                return { ...result, saved: true, changed: true, index };
+            } catch (error) {
+                if (error && typeof error === 'object') error.vectorSegmentSaved = true;
+                throw error;
+            }
+        }
+
         async runVectorizeBook(bookId, progressCallback = null, options = {}) {
             await this.whenReady();
             const book = this.library[bookId];
             if (!book) throw new Error('向量书不存在');
             const force = options && typeof options === 'object' && options.force === true;
+            const segmentIndexes = Array.isArray(options?.segmentIndexes)
+                ? new Set(options.segmentIndexes
+                    .map((index) => Number.parseInt(index, 10))
+                    .filter((index) => Number.isFinite(index) && index >= 0))
+                : null;
             if (Array.isArray(book.chunks) && book.chunks.some((chunk) => String(chunk || '').length > MAX_VECTOR_CHUNK_CHARS)) {
                 await this.setBookChunks(bookId, book.chunks);
             }
@@ -1446,6 +1528,7 @@
 
             const pendingByHash = new Map();
             book.chunks.forEach((chunk, index) => {
+                if (segmentIndexes && !segmentIndexes.has(index)) return;
                 const hash = vectorHashes[index];
                 if ((force || !savedHashes.has(hash)) && !pendingByHash.has(hash)) {
                     pendingByHash.set(hash, { chunk, index, hash });
@@ -1704,10 +1787,11 @@
                         if (!book || !Array.isArray(result?.metadata)) return;
                         result.metadata.forEach((metadata) => {
                             const hash = Number(metadata?.hash);
-                            let index = book.vectorHashes?.findIndex((item) => Number(item) === hash) ?? -1;
-                            const metadataText = String(metadata?.text || '').trim();
-                            if (index < 0 && metadataText) index = book.chunks.indexOf(metadataText);
-                            const chunk = metadataText || String(book.chunks?.[index] || '').trim();
+                            const index = book.vectorHashes?.findIndex((item, itemIndex) => (
+                                Number(item) === hash && book.vectorized?.[itemIndex] === true
+                            )) ?? -1;
+                            if (index < 0) return;
+                            const chunk = String(book.chunks?.[index] || '').trim();
                             if (!chunk || seen.has(chunk)) return;
                             seen.add(chunk);
                             const serverRankScore = Math.max(initialThreshold, 1 - (rank * 0.0001));

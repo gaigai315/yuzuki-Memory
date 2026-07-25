@@ -460,10 +460,9 @@
         const visibleLines = !states
             ? (record?.hiddenKinds?.[kind] ? [] : lines)
             : lines.filter((_line, index) => !states[index]);
-        // Older plot nodes remain available in the timeline UI, but only the
-        // latest visible node is needed to continue the live extraction.
-        const latestVisibleLine = visibleLines[visibleLines.length - 1];
-        return compactPlotSummaryInjectionLines(latestVisibleLine ? [latestVisibleLine] : []).join('\n');
+        // Keep every visible plot node in chronological order so the injected
+        // context matches the complete timeline shown in the memory UI.
+        return compactPlotSummaryInjectionLines(visibleLines).join('\n');
     }
 
     function recordToText(table, record) {
