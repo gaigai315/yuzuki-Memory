@@ -73,6 +73,7 @@
         { id: 'chart_bar', label: '图表', className: 'fa-regular fa-chart-bar' },
     ];
     const CHARACTER_MAIN_FIELDS = ['年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理'];
+    const CHARACTER_MAIN_FIELD_LIMIT = 7;
     const CHARACTER_FIELD_ICONS = {
         角色名: 'fa-solid fa-user',
         年龄: 'fa-solid fa-calendar-days',
@@ -1092,17 +1093,40 @@
         return `${label}（${maxIndex + 1}）`;
     }
 
-    function getCharacterMainColumns(table) {
+    function isCharacterGenderColumn(column) {
+        const name = cleanColumnName(column);
+        return name === '性别' || name === '生理性别';
+    }
+
+    function isPreferredCharacterMainColumn(column) {
+        const name = cleanColumnName(column);
+        return CHARACTER_MAIN_FIELDS.includes(name) || isCharacterGenderColumn(name);
+    }
+
+    function getCharacterColumnLayout(table) {
         const primaryColumn = getPrimaryColumn(table);
-        return (table?.columns || []).map(cleanColumnName).filter((column) => column !== primaryColumn && CHARACTER_MAIN_FIELDS.includes(column));
+        const columns = (table?.columns || [])
+            .map(cleanColumnName)
+            .filter((column) => column && column !== primaryColumn);
+        const preferredColumns = columns.filter(isPreferredCharacterMainColumn);
+        const fillColumns = columns.filter((column) => !isPreferredCharacterMainColumn(column));
+        const mainColumnSet = new Set([...preferredColumns, ...fillColumns].slice(0, CHARACTER_MAIN_FIELD_LIMIT));
+        return {
+            mainColumns: columns.filter((column) => mainColumnSet.has(column)),
+            detailColumns: columns.filter((column) => !mainColumnSet.has(column)),
+        };
+    }
+
+    function getCharacterMainColumns(table) {
+        return getCharacterColumnLayout(table).mainColumns;
     }
 
     function getCharacterDetailColumns(table) {
-        const primaryColumn = getPrimaryColumn(table);
-        return (table?.columns || []).map(cleanColumnName).filter((column) => column !== primaryColumn && !CHARACTER_MAIN_FIELDS.includes(column));
+        return getCharacterColumnLayout(table).detailColumns;
     }
 
     function getCharacterFieldIcon(column) {
+        if (isCharacterGenderColumn(column)) return CHARACTER_FIELD_ICONS.性别;
         return CHARACTER_FIELD_ICONS[column] || 'fa-solid fa-note-sticky';
     }
 
@@ -3187,7 +3211,9 @@
         tableFrame.setAttribute('aria-label', '记忆表格预览');
         const tableContent = document.createElement('div');
         tableContent.className = 'yzm-table-content-view';
-        tableContent.appendChild(createTableWorkspaceView(getActiveTable()));
+        const activeTable = getActiveTable();
+        tableContent.classList.toggle('yzm-character-table-content', activeTable?.id === 'character_profile');
+        tableContent.appendChild(createTableWorkspaceView(activeTable));
         const configView = createConfigWorkspaceView();
         configView.hidden = true;
         const apiView = createApiWorkspaceView();
@@ -3483,7 +3509,9 @@
         const tableContent = root.querySelector('.yzm-table-content-view');
         if (!tableContent) return;
 
-        tableContent.replaceChildren(createTableWorkspaceView(getActiveTable()));
+        const activeTable = getActiveTable();
+        tableContent.classList.toggle('yzm-character-table-content', activeTable?.id === 'character_profile');
+        tableContent.replaceChildren(createTableWorkspaceView(activeTable));
     }
 
     function renderWorkspaceList(root) {
@@ -10166,7 +10194,7 @@
 
     function renderCharacterFieldValue(valueNode, label, text = '') {
         const normalized = String(text || '').trim();
-        if (label !== '性别' || !['男', '女'].includes(normalized)) {
+        if (!isCharacterGenderColumn(label) || !['男', '女'].includes(normalized)) {
             valueNode.textContent = text;
             return;
         }
@@ -12075,7 +12103,9 @@
     function isRecordEditorMultilineField(table, column) {
         if (table?.id === 'plot_summary') return column === '主线' || column === '支线';
         if (table?.id === 'memory_summary') return ['核心角色', '总结内容', '未解决问题', '备注'].includes(cleanColumnName(column));
-        return getCharacterDetailColumns(table).includes(column);
+        if (table?.id === 'character_profile') return getCharacterDetailColumns(table).includes(cleanColumnName(column));
+        const name = cleanColumnName(column);
+        return name !== getPrimaryColumn(table) && !CHARACTER_MAIN_FIELDS.includes(name);
     }
 
     function openPlotSummaryKindChoiceDialog(root) {
