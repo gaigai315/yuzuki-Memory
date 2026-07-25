@@ -465,17 +465,33 @@
         return compactPlotSummaryInjectionLines(visibleLines).join('\n');
     }
 
+    function plotSummaryRecordToText(table, record) {
+        const values = record.values && typeof record.values === 'object' ? record.values : {};
+        return (Array.isArray(table.columns) ? table.columns : [])
+            .map((column) => {
+                const name = cleanColumnName(column);
+                const rawValue = String(values[name] ?? values[column] ?? '').trim();
+                const items = filterPlotSummaryValue(record, column, rawValue)
+                    .split(/\n+/)
+                    .map((line) => line.trim())
+                    .filter(Boolean);
+                if (!items.length) return '';
+                const title = /摘要$/.test(name) ? name : `${name}摘要`;
+                return [`【${title}】`, ...items.map((item) => `- ${item}`)].join('\n');
+            })
+            .filter(Boolean)
+            .join('\n\n');
+    }
+
     function recordToText(table, record) {
         if (!table || !record || !isRecordVisible(record)) return '';
+        if (table.id === PLOT_SUMMARY_TABLE_ID) return plotSummaryRecordToText(table, record);
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const lines = (Array.isArray(table.columns) ? table.columns : [])
             .map((column) => {
                 const name = cleanColumnName(column);
                 const rawValue = String(values[name] ?? values[column] ?? '').trim();
-                const value = table.id === PLOT_SUMMARY_TABLE_ID
-                    ? filterPlotSummaryValue(record, column, rawValue)
-                    : rawValue;
-                return value ? `${name}: ${value}` : '';
+                return rawValue ? `${name}: ${rawValue}` : '';
             })
             .filter(Boolean);
         return lines.length ? `- ${lines.join('；')}` : '';
@@ -626,20 +642,33 @@
                 if (!text) return null;
                 const values = record.values && typeof record.values === 'object' ? record.values : {};
                 const title = getSummaryFieldValue(values, getPrimaryColumn(table));
+                const character = getSummaryFieldValue(values, '核心角色');
                 return {
                     table,
                     record,
                     index,
                     number: index + 1,
                     title,
+                    character,
                     text,
                 };
             })
             .filter(Boolean);
     }
 
+    function getSummaryEntryHeading(entry) {
+        const character = String(entry?.character || '').trim();
+        if (character) return `【支线总结：${character}】`;
+        if (entry?.title) return `【${entry.title}】`;
+        return `【总结 ${entry?.number || ''}】`;
+    }
+
+    function summaryEntryToText(entry) {
+        return compactLines([getSummaryEntryHeading(entry), entry?.text]);
+    }
+
     function buildSummaryText(state = getCurrentState()) {
-        const text = getSummaryEntries(state).map((entry) => entry.text).join('\n\n');
+        const text = getSummaryEntries(state).map(summaryEntryToText).filter(Boolean).join('\n\n');
         return text || '';
     }
 
@@ -656,7 +685,7 @@
             || entries.find((item) => normalizeAnchorName(`总结${item.number}`) === requestedKey)
             || entries.find((item) => normalizeAnchorName(`剧情总结${item.number}`) === requestedKey)
             || entries.find((item) => item.title && item.title.includes(requested));
-        return entry?.text || '';
+        return entry ? summaryEntryToText(entry) : '';
     }
 
     function buildSummaryMessages(state = getCurrentState()) {
@@ -720,10 +749,7 @@
         if (!entries.length) return null;
         const first = entries[0];
         const blocks = entries
-            .map((entry) => compactLines([
-                entry.title ? `【${entry.title}】` : `【总结 ${entry.number}】`,
-                entry.text,
-            ]))
+            .map(summaryEntryToText)
             .filter(Boolean);
         if (!blocks.length) return null;
         return {
