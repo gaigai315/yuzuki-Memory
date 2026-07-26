@@ -6769,6 +6769,13 @@
     color: #aeb8ff;
 }
 
+#yzm-memory-root .yzm-plot-card-content {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
 #yzm-memory-root .yzm-plot-card-text {
     min-width: 0;
     margin-top: 0;
@@ -6777,6 +6784,23 @@
     line-height: 1.35;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-plot-card-source {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 0;
+    color: var(--yzm-muted);
+    font-size: 10px;
+    line-height: 1.25;
+    overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-plot-card-source i {
+    flex: 0 0 auto;
+    color: var(--yzm-icon);
+    font-size: 9px;
 }
 
 #yzm-memory-root .yzm-plot-empty {

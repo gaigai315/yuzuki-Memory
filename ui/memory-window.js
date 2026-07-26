@@ -4787,6 +4787,16 @@
         return getPlotSummaryKindKey(kind) === 'branch' ? '支线摘要' : '主线摘要';
     }
 
+    function getPlotSourceFloorText(meta) {
+        const range = meta?.sourceRange;
+        if (!range || typeof range !== 'object') return '';
+        const start = Math.max(0, Math.round(Number(range.start) || 0));
+        const end = Math.max(start, Math.round(Number(range.end) || 0));
+        if (end <= start) return '';
+        const floorText = end === start + 1 ? String(start) : `${start}-${end - 1}`;
+        return formatScopedFloorText(floorText, meta?.floorScope || range.floorScope);
+    }
+
     function getPlotSummaryLines(record, kind = activePlotSummaryKind) {
         return String(getRecordValue(record, getPlotSummaryField(kind)) || '')
             .split(/\n+/)
@@ -10802,7 +10812,22 @@
         text.className = 'yzm-plot-card-text';
         text.textContent = item.text || item.raw || '（暂无事件概要）';
 
-        card.append(marker, time, text, status);
+        const content = document.createElement('div');
+        content.className = 'yzm-plot-card-content';
+        content.appendChild(text);
+        const sourceFloorText = getPlotSourceFloorText(item.meta);
+        if (sourceFloorText) {
+            const source = document.createElement('div');
+            source.className = 'yzm-plot-card-source';
+            source.append(
+                createIconNode('fa-solid fa-layer-group', ''),
+                document.createTextNode(`来源楼层 ${sourceFloorText}`)
+            );
+            source.title = `本条剧情摘要来自楼层 ${sourceFloorText}`;
+            content.appendChild(source);
+        }
+
+        card.append(marker, time, content, status);
         return card;
     }
 
@@ -11039,6 +11064,7 @@
             '【新增】向量化书籍的分段内容现在可以直接编辑，保存后只重新向量化当前分段，便于精准修订。',
             '【优化】编辑失败时保留清晰的待处理状态，并阻止已过期的旧分段索引再次进入召回结果。',
             '【修复】剧情摘要现在会注入全部未隐藏的主线与支线节点；带删除线的隐藏节点仍不会发送。',
+            '【修复】手动分批追溯的剧情摘要现在会显示来源楼层，仅在总结完整覆盖对应楼层时自动隐藏，并恢复此前被误隐藏的条目。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11375,6 +11401,7 @@
         row.className = entry.hidden ? 'yzm-organizer-row yzm-organizer-row-hidden' : 'yzm-organizer-row';
         row.dataset.yzmOrganizerRecordId = entry.id;
         const displayTitle = formatPlotOrganizerTitle(entry);
+        const sourceFloorText = getPlotSourceFloorText(entry?.meta);
 
         const checkbox = document.createElement('input');
         checkbox.className = 'yzm-organizer-check';
@@ -11388,7 +11415,7 @@
         const text = document.createElement('div');
         text.className = 'yzm-organizer-text';
         const title = document.createElement('strong');
-        title.textContent = displayTitle;
+        title.textContent = [displayTitle, sourceFloorText ? `楼层 ${sourceFloorText}` : ''].filter(Boolean).join(' · ');
         const meta = document.createElement('span');
         meta.textContent = entry.text || entry.raw || '未填写事件概要';
         text.append(title, meta);

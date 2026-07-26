@@ -500,7 +500,7 @@
         return normalizePlotStoredLines([line]).split(/\n+/).map((entry) => entry.trim()).filter(Boolean)[0] || String(line || '').trim();
     }
 
-    function syncPlotItemMetadata(record, kind, previousLines, nextLines, newLines = [], options = {}) {
+    function syncPlotItemMetadata(record, kind, previousLines, nextLines, options = {}) {
         if (!record) return;
         const key = kind === 'branch' ? 'branch' : 'main';
         record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
@@ -524,15 +524,17 @@
             options.floorScope,
             YuzukiMemory.Storage?.getCurrentFloorScope?.()
         ) || options.floorScope || null;
-        const newLineSet = new Set(newLines.map(normalizePlotLineText).filter(Boolean));
         record.plotItemMeta[key] = nextLines.map((line) => {
             const normalized = normalizePlotLineText(line);
             const existing = metaByLine.get(normalized)?.shift();
             if (existing) return existing;
-            if (!newLineSet.has(normalized)) return { id: createPlotLineId(), text: normalized };
-            return {
+            const metadata = {
                 id: createPlotLineId(),
                 text: normalized,
+            };
+            if (!sourceRange) return metadata;
+            return {
+                ...metadata,
                 source: options.source || 'realtime',
                 sourceRange,
                 floorScope,
@@ -587,7 +589,7 @@
             ]);
             record.values[field] = nextText;
             const nextLines = nextText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
-            syncPlotItemMetadata(record, kind, previousLines, nextLines, [text], options);
+            syncPlotItemMetadata(record, kind, previousLines, nextLines, options);
             return true;
         }
 

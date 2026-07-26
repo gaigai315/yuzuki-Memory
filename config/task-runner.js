@@ -1216,7 +1216,6 @@
             key,
             previousLines,
             nextText.split(/\n+/).map((line) => line.trim()).filter(Boolean),
-            [nextLine],
             options
         );
         return record;
@@ -1326,7 +1325,7 @@
         return normalizePlotStoredLines([line]).split(/\n+/).map((entry) => entry.trim()).filter(Boolean)[0] || String(line || '').trim();
     }
 
-    function syncPlotItemMetadata(record, kind, previousLines, nextLines, newLines = [], options = {}) {
+    function syncPlotItemMetadata(record, kind, previousLines, nextLines, options = {}) {
         if (!record) return;
         const key = kind === 'branch' ? 'branch' : 'main';
         record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
@@ -1347,15 +1346,17 @@
 
         const sourceRange = getRangeMeta(options.range);
         const floorScope = normalizeFloorScope(options.floorScope, getCurrentFloorScope());
-        const newLineSet = new Set(newLines.map(normalizePlotLineText).filter(Boolean));
         record.plotItemMeta[key] = nextLines.map((line) => {
             const normalized = normalizePlotLineText(line);
             const existing = metaByLine.get(normalized)?.shift();
             if (existing) return existing;
-            if (!newLineSet.has(normalized)) return { id: createPlotLineId(), text: normalized };
-            return {
+            const metadata = {
                 id: createPlotLineId(),
                 text: normalized,
+            };
+            if (!sourceRange) return metadata;
+            return {
+                ...metadata,
                 source: options.source || 'trace',
                 sourceRange,
                 floorScope,
@@ -1401,21 +1402,12 @@
             && range.end <= target.end;
     }
 
-    function isRangeOverlappingTarget(range, target) {
-        if (!range || !target || !isSameFloorScope(range.floorScope, target.floorScope)) return false;
-        return Math.max(range.start, target.start) < Math.min(range.end, target.end);
-    }
-
     function isPlotItemCoveredBySummaryTarget(meta, target, fallbackFloorScope = null) {
         const sourceRange = getRangeMeta(meta?.sourceRange, meta?.floorScope || fallbackFloorScope);
-        if (sourceRange) {
-            return isRangeFullyCoveredByTarget(sourceRange, target)
-                || isRangeOverlappingTarget(sourceRange, target);
-        }
-        // Older plot-summary items may not have per-line sourceRange metadata.
-        // Treat those legacy entries as pre-summary content so automatic summary
-        // passes can still hide them instead of leaving stale plot details visible.
-        return true;
+        if (!sourceRange) return false;
+        // A trace batch is the narrowest reliable floor range stored for a plot
+        // node. Partial overlap is not enough to prove that the node was summarized.
+        return isRangeFullyCoveredByTarget(sourceRange, target);
     }
 
     function getRangeLabel(range) {
@@ -1833,10 +1825,9 @@
 
     function hidePlotSummaryItemsCoveredByExistingSummaries(state) {
         const table = stateTables(state).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
-        const records = stateRecords(state, FIXED_SUMMARY_TABLE_ID);
-        if (!table || !records.length) return 0;
-        let hiddenCount = 0;
-        records.forEach((record) => {
+        const summaryRecords = table ? stateRecords(state, FIXED_SUMMARY_TABLE_ID) : [];
+        const coverageTargets = [];
+        summaryRecords.forEach((record) => {
             if (!String(record?.values?.总结内容 || record?.values?.summary || '').trim()) return;
             const recordId = String(record?.id || '').trim();
             const ranges = [];
@@ -1856,10 +1847,75 @@
                 const key = `${range.floorScope?.id || ''}:${range.start}-${range.end}`;
                 if (seen.has(key)) return;
                 seen.add(key);
-                hiddenCount += hidePlotSummaryItemsCoveredByRange(state, range, recordId ? [recordId] : []);
+                coverageTargets.push({ range, recordId });
             });
         });
-        return hiddenCount;
+
+        let changedCount = 0;
+        stateRecords(state, PLOT_SUMMARY_TABLE_ID).forEach((record) => {
+            const recordFloorScope = getRecordFloorScope(record);
+            record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+            record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+            ['main', 'branch'].forEach((kind) => {
+                const field = kind === 'branch' ? '支线' : '主线';
+                const lineCount = String(record?.values?.[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean).length;
+                if (!lineCount) return;
+                const metaList = Array.isArray(record.plotItemMeta[kind]) ? record.plotItemMeta[kind] : [];
+                while (metaList.length < lineCount) metaList.push({});
+                if (metaList.length > lineCount) metaList.length = lineCount;
+                record.plotItemMeta[kind] = metaList;
+                const hiddenStates = Array.isArray(record.hiddenPlotItems[kind])
+                    ? record.hiddenPlotItems[kind].map(Boolean)
+                    : Array.from({ length: lineCount }, () => false);
+                while (hiddenStates.length < lineCount) hiddenStates.push(false);
+                if (hiddenStates.length > lineCount) hiddenStates.length = lineCount;
+
+                metaList.forEach((rawMeta, index) => {
+                    const meta = rawMeta && typeof rawMeta === 'object' ? rawMeta : {};
+                    metaList[index] = meta;
+                    const coveringTargets = coverageTargets.filter((target) => (
+                        isPlotItemCoveredBySummaryTarget(meta, target.range, recordFloorScope)
+                    ));
+                    const wasSummaryHidden = meta.hiddenReason === 'covered_by_summary';
+                    let changed = false;
+
+                    if (coveringTargets.length) {
+                        // Preserve an explicit manual hide without converting it into
+                        // an automatic hide that may later be cleared with a summary.
+                        if (hiddenStates[index] && !wasSummaryHidden) return;
+                        const coveredBySummaryIds = [...new Set(coveringTargets.map((target) => target.recordId).filter(Boolean))];
+                        const previousIds = Array.isArray(meta.coveredBySummaryIds)
+                            ? meta.coveredBySummaryIds.map(String)
+                            : [];
+                        const idsChanged = previousIds.length !== coveredBySummaryIds.length
+                            || previousIds.some((id, idIndex) => id !== coveredBySummaryIds[idIndex]);
+                        if (!hiddenStates[index]) {
+                            hiddenStates[index] = true;
+                            changed = true;
+                        }
+                        if (!wasSummaryHidden || idsChanged) {
+                            meta.hiddenReason = 'covered_by_summary';
+                            meta.coveredBySummaryIds = coveredBySummaryIds;
+                            meta.hiddenAt = Number(meta.hiddenAt) || Date.now();
+                            changed = true;
+                        }
+                    } else if (wasSummaryHidden) {
+                        if (hiddenStates[index]) {
+                            hiddenStates[index] = false;
+                            changed = true;
+                        }
+                        delete meta.hiddenReason;
+                        delete meta.coveredBySummaryIds;
+                        delete meta.hiddenAt;
+                        changed = true;
+                    }
+
+                    if (changed) changedCount += 1;
+                });
+                record.hiddenPlotItems[kind] = hiddenStates;
+            });
+        });
+        return changedCount;
     }
 
     function applyTraceResult(state, resultRows, options = {}) {
@@ -1929,7 +1985,8 @@
         const validPayloads = payloads.filter((payload) => payload?.summary);
         if (!validPayloads.length) return { ...result, success: false, error: '总结结果缺少 summary/总结内容。' };
         const records = validPayloads.map((payload) => upsertSummaryRecord(state, payload, result?.meta)).filter(Boolean);
-        return { ...result, success: true, count: records.length, record: records[0] || null, records };
+        const hiddenPlotSummaryCount = hidePlotSummaryItemsCoveredByExistingSummaries(state);
+        return { ...result, success: true, count: records.length, record: records[0] || null, records, hiddenPlotSummaryCount };
     }
 
     function overwriteSummaryRecord(table, record, payload) {
