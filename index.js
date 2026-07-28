@@ -7,7 +7,7 @@
     'use strict';
 
     const NAMESPACE = 'YuzukiMemory';
-    const VERSION = '0.5.9';
+    const VERSION = '0.6.0';
     const baseUrl = new URL('./', import.meta.url).href;
 
     const MODULES = [
@@ -17,6 +17,7 @@
         'config/memory-tag-parser.js',
         'config/branch-snapshot.js',
         'config/prompt-library.js',
+        'config/prompt-scheme-io.js',
         'config/llm-client.js',
         'config/worldbook-manager.js',
         'config/task-runner.js',

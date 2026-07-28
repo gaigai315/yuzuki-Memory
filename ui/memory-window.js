@@ -6890,13 +6890,18 @@
             createPromptSchemeAutoLoadRow(),
         ]);
 
-        const importCard = createApiCard('导入与导出', 'fa-solid fa-download', [
-            createApiActions([
-                ['导入', 'fa-solid fa-upload'],
-                ['导出当前', 'fa-solid fa-download'],
-                ['导出全部', 'fa-solid fa-box-archive'],
-            ]),
-        ]);
+        const transferActions = document.createElement('div');
+        transferActions.className = 'yzm-api-actions';
+        [
+            ['import', '导入', 'fa-solid fa-upload'],
+            ['export-current', '导出当前', 'fa-solid fa-download'],
+            ['export-all', '导出全部', 'fa-solid fa-box-archive'],
+        ].forEach(([action, label, iconClassName]) => {
+            const button = createIconButton(label, iconClassName, 'yzm-api-button');
+            button.dataset.yzmSchemeIoAction = action;
+            transferActions.appendChild(button);
+        });
+        const importCard = createApiCard('导入与导出', 'fa-solid fa-download', [transferActions]);
 
         panel.append(header, currentCard, autoCard, importCard);
         return panel;
@@ -7274,6 +7279,90 @@
         renderPromptSchemeWorkspace(root);
         renderPrimaryList(root);
         showPromptSchemeSaveFeedback(root);
+    }
+
+    function mergeImportedPromptSchemes(rawSchemes) {
+        const io = YuzukiMemory.PromptSchemeIO;
+        if (!io?.mergeSchemes) {
+            throw new Error('记忆方案合并模块尚未加载。');
+        }
+        const result = io.mergeSchemes(getPromptSchemes(), rawSchemes, {
+            normalizeScheme: normalizePromptScheme,
+            createId: createPromptSchemeId,
+        });
+        savePromptSchemes(result.schemes);
+        return result;
+    }
+
+    function exportPromptSchemes(scope) {
+        const io = YuzukiMemory.PromptSchemeIO;
+        if (!io) {
+            window.alert('记忆方案导入导出模块尚未加载。');
+            return;
+        }
+        try {
+            if (scope === 'all') {
+                const payload = io.downloadAll(getPromptSchemes());
+                showTaskToast(`已导出 ${payload.schemes.length} 套记忆方案。`, 'success');
+                return;
+            }
+            io.downloadCurrent(getActivePromptSchemeDraft());
+            showTaskToast('当前记忆方案已导出。', 'success');
+        } catch (error) {
+            window.alert(`导出失败：${error?.message || error}`);
+        }
+    }
+
+    function choosePromptSchemeImportFile(root) {
+        const io = YuzukiMemory.PromptSchemeIO;
+        if (!io?.parseFile) {
+            window.alert('记忆方案导入导出模块尚未加载。');
+            return;
+        }
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '.json,application/json';
+        input.hidden = true;
+        root.appendChild(input);
+        input.addEventListener('change', async () => {
+            const file = input.files?.[0];
+            if (!file) {
+                input.remove();
+                return;
+            }
+            try {
+                const imported = await io.parseFile(file);
+                const result = mergeImportedPromptSchemes(imported.schemes);
+                const schemes = getPromptSchemes();
+                if (imported.kind === 'single' && result.selectedId) {
+                    const selected = schemes.find((scheme) => scheme.id === result.selectedId);
+                    if (selected) {
+                        setActivePromptSchemeDraft(selected);
+                        getState().promptPresetId = selected.id;
+                        syncPromptSchemeTableVisibility(selected);
+                        if (isCharacterPromptSchemeAutoloadEnabled()) bindPromptSchemeToCurrentCharacter(selected.id);
+                        else saveGlobalPromptSchemeId(selected.id);
+                        saveState();
+                    }
+                } else {
+                    activePromptSchemeDraft = null;
+                }
+                renderPromptSchemeWorkspace(root);
+                refreshPromptSchemeNav(root);
+                renderPrimaryList(root);
+                const summary = [
+                    result.added ? `新增 ${result.added} 套` : '',
+                    result.updated ? `更新 ${result.updated} 套` : '',
+                    result.skippedBuiltin ? `跳过 ${result.skippedBuiltin} 套未修改的内置方案` : '',
+                ].filter(Boolean).join('，') || '没有需要变更的方案';
+                showTaskToast(`导入完成：${summary}。`, 'success');
+            } catch (error) {
+                window.alert(`导入失败：${error?.message || error}`);
+            } finally {
+                input.remove();
+            }
+        }, { once: true });
+        input.click();
     }
 
     function showPromptSchemeSaveFeedback(root) {
@@ -8690,8 +8779,8 @@
             ),
             createRequestProbeStat('Messages', `${data?.messages?.length || 0} 条`, 'fa-regular fa-message'),
             createRequestProbeStat(
-                data?.preparedTask || data?.preview ? '捕获阶段' : '最近捕获于',
-                data?.preparedTask ? '任务发送前快照' : (data?.preview ? '发送前预览' : formatRequestProbeTime(data?.timestamp)),
+                '最近捕获于',
+                formatRequestProbeTime(data?.timestamp),
                 'fa-regular fa-clock'
             )
         );
@@ -11061,10 +11150,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【新增】向量化书籍的分段内容现在可以直接编辑，保存后只重新向量化当前分段，便于精准修订。',
-            '【优化】编辑失败时保留清晰的待处理状态，并阻止已过期的旧分段索引再次进入召回结果。',
-            '【修复】剧情摘要现在会注入全部未隐藏的主线与支线节点；带删除线的隐藏节点仍不会发送。',
-            '【修复】手动分批追溯的剧情摘要现在会显示来源楼层，仅在总结完整覆盖对应楼层时自动隐藏，并恢复此前被误隐藏的条目。',
+            '【更新】记忆方案导出导入功能。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -13184,6 +13270,7 @@
                 const target = event.target instanceof Element ? event.target : null;
                 const menuButton = target?.closest('[data-yzm-scheme-menu]');
                 const schemeAction = target?.closest('[data-yzm-scheme-action]');
+                const schemeIoAction = target?.closest('[data-yzm-scheme-io-action]');
                 const modeButton = target?.closest('[data-yzm-scheme-mode]');
                 const autoLoadToggle = target?.closest('[data-yzm-scheme-autoload-toggle]');
                 const expandButton = target?.closest('[data-yzm-scheme-expand]');
@@ -13191,6 +13278,15 @@
                 const timedPromptAdd = target?.closest('[data-yzm-timed-prompt-add]');
                 const timedPromptEdit = target?.closest('[data-yzm-timed-prompt-edit]');
                 const timedPromptDelete = target?.closest('[data-yzm-timed-prompt-delete]');
+                if (schemeIoAction) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const action = schemeIoAction.dataset.yzmSchemeIoAction;
+                    if (action === 'import') choosePromptSchemeImportFile(root);
+                    if (action === 'export-current') exportPromptSchemes('current');
+                    if (action === 'export-all') exportPromptSchemes('all');
+                    return;
+                }
                 if (autoLoadToggle) {
                     event.preventDefault();
                     event.stopPropagation();
