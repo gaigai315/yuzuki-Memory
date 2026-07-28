@@ -6034,10 +6034,13 @@
 
 #yzm-memory-root .yzm-character-side {
     display: grid;
+    align-self: start;
     grid-auto-rows: minmax(112px, auto);
     gap: 16px;
     min-width: 0;
     min-height: 0;
+    max-height: 100%;
+    height: auto;
     overflow-x: hidden;
     overflow-y: auto;
     padding-right: 4px;
@@ -8751,6 +8754,7 @@
 
     #yzm-memory-root .yzm-character-side {
         grid-auto-rows: minmax(100px, auto);
+        max-height: none;
         overflow: visible;
         padding-right: 0;
     }
