@@ -6033,14 +6033,14 @@
 }
 
 #yzm-memory-root .yzm-character-side {
-    display: grid;
-    align-self: start;
-    grid-auto-rows: minmax(112px, auto);
+    display: flex;
+    align-self: stretch;
+    flex-direction: column;
     gap: 16px;
     min-width: 0;
     min-height: 0;
     max-height: 100%;
-    height: auto;
+    height: 100%;
     overflow-x: hidden;
     overflow-y: auto;
     padding-right: 4px;
@@ -6051,8 +6051,9 @@
 
 #yzm-memory-root .yzm-character-panel {
     display: flex;
+    flex: 0 0 auto;
     flex-direction: column;
-    min-height: 0;
+    min-height: 112px;
 }
 
 #yzm-memory-root .yzm-character-panel-body {
@@ -8753,10 +8754,14 @@
     }
 
     #yzm-memory-root .yzm-character-side {
-        grid-auto-rows: minmax(100px, auto);
         max-height: none;
+        height: auto;
         overflow: visible;
         padding-right: 0;
+    }
+
+    #yzm-memory-root .yzm-character-panel {
+        min-height: 100px;
     }
 
     #yzm-memory-root .yzm-item-view,
