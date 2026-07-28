@@ -5890,7 +5890,7 @@
 #yzm-memory-root .yzm-character-main-card {
     display: grid;
     align-self: start;
-    grid-template-rows: 40px 86px 30px minmax(0, 1fr);
+    grid-template-rows: 40px 86px 30px auto;
     min-height: 0;
     max-height: 100%;
     height: auto;
@@ -8715,7 +8715,7 @@
     }
 
     #yzm-memory-root .yzm-character-main-card {
-        grid-template-rows: 36px 70px 28px minmax(0, 1fr);
+        grid-template-rows: 36px 70px 28px auto;
         min-height: 330px;
         max-height: none;
         overflow: hidden;
