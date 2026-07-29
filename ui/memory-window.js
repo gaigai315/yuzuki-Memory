@@ -11150,7 +11150,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【更新】记忆方案导出导入功能。',
+            '【修复】修复重 Roll 后实时填表模式可能被本地旧设置覆盖并跳回批量填表的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

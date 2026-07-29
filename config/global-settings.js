@@ -1,7 +1,7 @@
 // ============================================================================
 // yuzuki-Memory global settings.
-// Stores global plugin config in localStorage so browser windows share the
-// latest value immediately, and mirrors it to SillyTavern extension_settings.
+// Stores global plugin config in SillyTavern extension_settings and keeps
+// localStorage only as a migration/fallback cache.
 // ============================================================================
 (function () {
     'use strict';
@@ -90,16 +90,9 @@
         const store = getExtensionSettings(false);
         const hasStoredValue = !!store && Object.prototype.hasOwnProperty.call(store, key);
 
-        if (localValue !== undefined) {
-            if (options.migrate !== false && (!hasStoredValue || !valuesMatch(store[key], localValue))) {
-                set(key, localValue);
-            }
-            return clone(localValue);
-        }
-
         if (hasStoredValue) {
             const storedValue = clone(store[key]);
-            if (options.localFallback !== false) {
+            if (options.localFallback !== false && !valuesMatch(localValue, storedValue)) {
                 try {
                     localStorage.setItem(key, JSON.stringify(storedValue));
                 } catch (error) {
@@ -107,6 +100,13 @@
                 }
             }
             return storedValue;
+        }
+
+        if (localValue !== undefined) {
+            if (options.migrate !== false) {
+                set(key, localValue);
+            }
+            return clone(localValue);
         }
 
         return clone(fallback);
