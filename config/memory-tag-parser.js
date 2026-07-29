@@ -496,6 +496,66 @@
         return end > start ? { start, end } : null;
     }
 
+    function isSameFloorScope(left, right) {
+        if (!left || !right) return true;
+        if (typeof YuzukiMemory.Storage?.isSameFloorScope === 'function') {
+            return YuzukiMemory.Storage.isSameFloorScope(left, right);
+        }
+        const leftId = String(left?.id || left || '').trim();
+        const rightId = String(right?.id || right || '').trim();
+        return !!leftId && leftId === rightId;
+    }
+
+    function removeRealtimePlotItemsForRange(state, range, floorScope = null) {
+        const targetRange = normalizeRangeMeta(range);
+        const record = state?.records?.[PLOT_SUMMARY_TABLE_ID]?.[0];
+        if (!targetRange || !record) return 0;
+
+        const targetScope = YuzukiMemory.Storage?.normalizeFloorScope?.(
+            floorScope,
+            YuzukiMemory.Storage?.getCurrentFloorScope?.()
+        ) || floorScope || null;
+        let removed = 0;
+
+        [
+            { kind: 'main', field: '主线' },
+            { kind: 'branch', field: '支线' },
+        ].forEach(({ kind, field }) => {
+            const lines = String(record.values?.[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+            const metadata = Array.isArray(record.plotItemMeta?.[kind]) ? record.plotItemMeta[kind] : [];
+            const hiddenStates = Array.isArray(record.hiddenPlotItems?.[kind]) ? record.hiddenPlotItems[kind] : [];
+            const keptLines = [];
+            const keptMetadata = [];
+            const keptHiddenStates = [];
+
+            lines.forEach((line, index) => {
+                const meta = metadata[index];
+                const sourceRange = normalizeRangeMeta(meta?.sourceRange);
+                const shouldRemove = meta?.source === 'realtime'
+                    && sourceRange?.start === targetRange.start
+                    && sourceRange?.end === targetRange.end
+                    && isSameFloorScope(meta?.floorScope, targetScope);
+                if (shouldRemove) {
+                    removed += 1;
+                    return;
+                }
+                keptLines.push(line);
+                keptMetadata.push(meta || null);
+                keptHiddenStates.push(!!hiddenStates[index]);
+            });
+
+            if (keptLines.length === lines.length) return;
+            record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+            record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+            record.values[field] = keptLines.join('\n');
+            record.plotItemMeta[kind] = keptMetadata;
+            record.hiddenPlotItems[kind] = keptHiddenStates;
+        });
+
+        return removed;
+    }
+
     function normalizePlotLineText(line = '') {
         return normalizePlotStoredLines([line]).split(/\n+/).map((entry) => entry.trim()).filter(Boolean)[0] || String(line || '').trim();
     }
@@ -665,6 +725,9 @@
         const floor = Number.isFinite(Number(options.floor))
             ? Math.round(Number(options.floor))
             : (Array.isArray(chat) ? chat.length - 1 : -1);
+        const range = floor >= 0 ? { start: floor, end: floor + 1 } : null;
+        const floorScope = YuzukiMemory.Storage?.getCurrentFloorScope?.() || null;
+        const replacedPlotItems = removeRealtimePlotItemsForRange(state, range, floorScope);
         YuzukiMemory.BranchSnapshot?.captureBaseSnapshotBeforeMessage?.(floor, { state });
         let count = 0;
         applying = true;
@@ -672,9 +735,10 @@
             count = applyRowsToState(state, rows, {
                 source: 'realtime',
                 floor,
-                range: floor >= 0 ? { start: floor, end: floor + 1 } : null,
+                range,
+                floorScope,
             });
-            if (count) {
+            if (count || replacedPlotItems) {
                 const saved = YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, {
                     allowDuringSwitch: true,
                     force: true,
@@ -685,6 +749,7 @@
                     floor,
                     rows: rows.length,
                     applied: count,
+                    replacedPlotItems,
                     saved: !!saved,
                     stateCounts: getRecordCounts(state),
                     storedCounts: getRecordCounts(storedState),
@@ -699,7 +764,9 @@
                 }
                 YuzukiMemory.BranchSnapshot?.captureMessageSnapshot?.(floor, { state });
                 if (options.dispatch !== false) {
-                    window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', { detail: { source: 'memory-tag-parser', count } }));
+                    window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
+                        detail: { source: 'memory-tag-parser', count, replacedPlotItems },
+                    }));
                 }
             } else {
                 console.info('[yuzuki-Memory Realtime] parsed rows but nothing applied', {
@@ -707,7 +774,7 @@
                     rows: rows.length,
                 });
             }
-            return { success: count > 0, count };
+            return { success: count > 0 || replacedPlotItems > 0, count, replacedPlotItems };
         } finally {
             applying = false;
         }
