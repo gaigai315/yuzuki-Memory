@@ -225,6 +225,7 @@
     let extensionRetryTimer = null;
     let floatingResizeController = null;
     let floatingVisibilityTimer = null;
+    let shellOpenInteractionGuardUntil = 0;
     let chatContextRefreshBound = false;
     let managedVectorSyncTimer = null;
     let managedVectorSyncRunning = false;
@@ -2106,6 +2107,22 @@
         }
     }
 
+    function armShellOpenInteractionGuard(duration = 600) {
+        shellOpenInteractionGuardUntil = Date.now() + Math.max(0, Number(duration) || 0);
+    }
+
+    function bindShellOpenInteractionGuard(root) {
+        if (!root || root.dataset.yzmShellOpenGuardBound === 'true') return;
+        root.dataset.yzmShellOpenGuardBound = 'true';
+        root.addEventListener('click', (event) => {
+            if (Date.now() > shellOpenInteractionGuardUntil) return;
+            const target = event.target instanceof Element ? event.target : null;
+            if (!target?.closest('.yzm-shell')) return;
+            event.preventDefault();
+            event.stopImmediatePropagation();
+        }, true);
+    }
+
     function bindFloatingIconDrag(button) {
         let pointerId = null;
         let startX = 0;
@@ -2125,9 +2142,12 @@
                 const rect = button.getBoundingClientRect();
                 applyFloatingIconPosition(button, rect.left, rect.top, { persist: true });
             } else if (!cancelled) {
+                event.preventDefault();
+                event.stopPropagation();
                 const now = Date.now();
                 if (now - lastTapAt > 500) {
                     lastTapAt = now;
+                    armShellOpenInteractionGuard();
                     toggleShell(true);
                 }
             }
@@ -2139,6 +2159,8 @@
 
         button.addEventListener('pointerdown', (event) => {
             if (event.button !== undefined && event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
             pointerId = event.pointerId;
             startX = event.clientX;
             startY = event.clientY;
@@ -2166,7 +2188,7 @@
         button.addEventListener('pointercancel', (event) => finish(event, true));
         button.addEventListener('click', (event) => {
             event.preventDefault();
-            event.stopPropagation();
+            event.stopImmediatePropagation();
         });
         button.addEventListener('dragstart', (event) => event.preventDefault());
     }
@@ -11150,7 +11172,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复重 Roll 后实时填表模式可能被本地旧设置覆盖并跳回批量填表的问题。',
+            '【修复】修正全局设置记录的加载来源，并修复移动端悬浮入口触摸穿透导致填表模式被误切换的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -13923,6 +13945,7 @@
             updateFloatingIconVisibility();
         });
 
+        bindShellOpenInteractionGuard(root);
         bindPanelInteractions(root);
         return root;
     }
