@@ -11172,6 +11172,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
+            '【修复】修正全局设置记录的加载来源，并修复移动端悬浮入口触摸穿透导致填表模式被误切换的问题。',
             '【修复】修复实时填表重 Roll 时剧情摘要未按楼层替换，导致同一楼层的旧分支摘要重复累积的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
