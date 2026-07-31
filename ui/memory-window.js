@@ -11172,8 +11172,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修正全局设置记录的加载来源，并修复移动端悬浮入口触摸穿透导致填表模式被误切换的问题。',
-            '【修复】修复实时填表重 Roll 时剧情摘要未按楼层替换，导致同一楼层的旧分支摘要重复累积的问题。',
+            '【修复】修复 Claude 与 Google 官方 Gemini 请求末尾错误注入 Assistant Prefill，导致部分中转或原生接口拒绝请求的问题。',
+            '【修复】修复 Google Gemini 官方 /v1beta 地址被误判为 OpenAI 兼容端点，并规范原生请求的 systemInstruction 与消息角色。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

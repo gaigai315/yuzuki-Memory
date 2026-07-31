@@ -778,7 +778,6 @@
         const previousSummarizing = window.isSummarizing;
         window.isSummarizing = true;
         try {
-            captureTaskRequest(messages, options);
             const taskOptions = {
                 ...options,
                 yzmMemoryTask: buildTaskRequestMeta(options),
@@ -786,16 +785,20 @@
             };
             const snapshot = options.llmSnapshot && typeof options.llmSnapshot === 'object' ? options.llmSnapshot : null;
             const mode = snapshot?.mode || getLlmMode();
+            const preset = mode === 'custom'
+                ? (snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset())
+                : null;
+            const requestMessages = await prepareTaskMessages(messages, mode, preset, taskOptions);
+            captureTaskRequest(requestMessages, options);
             if (mode === 'custom') {
-                const preset = snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset();
                 if (!preset) return { success: false, error: '未选择可用的 LLM API 预设。' };
-                const result = await YuzukiMemory.LlmClient.generateWithCustom(preset, messages, { stream: preset.stream !== false, ...taskOptions });
+                const result = await YuzukiMemory.LlmClient.generateWithCustom(preset, requestMessages, { stream: preset.stream !== false, ...taskOptions });
                 return normalizeGenerationResult(result);
             }
             const shouldStream = options.stream !== undefined
                 ? options.stream !== false
                 : !['trace', 'traceOptimize'].includes(String(options.kind || ''));
-            const result = await YuzukiMemory.LlmClient.generateWithTavern(messages, { ...taskOptions, stream: shouldStream });
+            const result = await YuzukiMemory.LlmClient.generateWithTavern(requestMessages, { ...taskOptions, stream: shouldStream });
             return normalizeGenerationResult(result);
         } finally {
             window.isSummarizing = previousSummarizing;
@@ -997,15 +1000,33 @@
         return String(value || '').trim();
     }
 
-    function withMemoryPrefill(messages = [], prefill = '<Memory>\n') {
-        const normalized = (Array.isArray(messages) ? messages : [])
+    function normalizeTaskMessages(messages = []) {
+        return (Array.isArray(messages) ? messages : [])
             .filter((message) => message?.content && String(message.content).trim());
+    }
+
+    function withMemoryPrefill(messages = [], prefill = '<Memory>\n') {
+        const normalized = normalizeTaskMessages(messages);
         const last = normalized[normalized.length - 1];
         if (last && ['assistant', 'model'].includes(String(last.role || '').toLowerCase())
             && /^<Memory(?:\s+[^>]*)?>/i.test(String(last.content || '').trim())) {
             return normalized;
         }
         return [...normalized, { role: 'assistant', content: prefill }];
+    }
+
+    async function prepareTaskMessages(messages, mode, preset, options = {}) {
+        let config = preset;
+        if (mode !== 'custom') {
+            try {
+                config = await YuzukiMemory.LlmClient?.getTavernStatus?.(options);
+            } catch (_error) {
+                config = null;
+            }
+        }
+        return YuzukiMemory.LlmClient?.supportsAssistantPrefill?.(config)
+            ? withMemoryPrefill(messages)
+            : normalizeTaskMessages(messages);
     }
 
     function normalizeMemoryEnvelope(text = '') {
@@ -2147,7 +2168,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const tracePrompt = resolveTaskPromptVariables(getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options), state, taskPromptOptions);
         const targetRestriction = buildTraceTargetRestrictionText(state, options);
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const messages = withMemoryPrefill([
+        const messages = normalizeTaskMessages([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText() },
             worldbookMessage,
@@ -2156,7 +2177,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             { role: 'system', content: tracePrompt },
             targetRestriction ? { role: 'system', content: targetRestriction } : null,
             { role: 'user', content: '请立即根据以上待追溯聊天内容和批量追溯填表提示词执行任务。' },
-        ].filter(Boolean), '<Memory>');
+        ]);
         return { messages, range };
     }
 
@@ -2172,7 +2193,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             suppressMemoryTables: true,
         });
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const messages = withMemoryPrefill([
+        const messages = normalizeTaskMessages([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
             worldbookMessage,
@@ -2180,7 +2201,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             ...range.messages,
             { role: 'system', content: summaryPrompt },
             { role: 'user', content: '请立即根据以上待总结聊天内容和总结提示词执行任务。' },
-        ].filter(Boolean));
+        ]);
         return { messages, range };
     }
 
@@ -2258,14 +2279,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
         const note = String(options.note || '').trim();
         const tableText = tablesToReferenceText(state, options) || '（暂无）';
-        const messages = withMemoryPrefill([
+        const messages = normalizeTaskMessages([
             historianPrompt ? { role: 'system', content: historianPrompt } : null,
             { role: 'system', content: buildRuntimeBackgroundText() },
             worldbookMessage,
             recentContextMessage,
             { role: 'system', content: `【待优化表格】\n${tableText}` },
             { role: 'user', content: `${prompt}${note ? `\n\n【本次重点优化建议】\n${note}` : ''}\n\n请根据以上待优化表格和优化要求输出优化后的结果。` },
-        ].filter(Boolean));
+        ]);
         const response = await generate(messages, { ...options, kind: 'traceOptimize' });
         if (!response.success) return response;
         const parsed = parseTraceResponse(response.text);
@@ -2292,14 +2313,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             : (schemePrompt || getDefaultOptimizePrompt('summary'));
         const prompt = resolveTaskPromptVariables(promptSource, state, options);
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const messages = withMemoryPrefill([
+        const messages = normalizeTaskMessages([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
             worldbookMessage,
             { role: 'user', content: `【待优化总结】\n${summaries || '（暂无）'}` },
             { role: 'system', content: prompt },
             { role: 'user', content: '请立即根据以上待优化总结和优化要求输出优化后的 <Memory> 总结。' },
-        ].filter(Boolean));
+        ]);
         const response = await generate(messages, { ...options, kind: 'summaryOptimize' });
         if (!response.success) return response;
         const payloads = parseSummaryResponse(response.text);

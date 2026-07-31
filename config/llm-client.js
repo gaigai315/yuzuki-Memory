@@ -222,27 +222,56 @@
     function shouldUseGeminiNative(configOrProvider) {
         const provider = typeof configOrProvider === 'string'
             ? configOrProvider
-            : configOrProvider?.provider;
-        const apiUrl = typeof configOrProvider === 'string' ? '' : String(configOrProvider?.apiUrl || '');
-        return provider === 'gemini' && !apiUrl.toLowerCase().includes('/v1');
+            : (configOrProvider?.provider || configOrProvider?.source);
+        if (provider !== 'gemini') return false;
+        const apiUrl = typeof configOrProvider === 'string'
+            ? ''
+            : String(configOrProvider?.apiUrl || configOrProvider?.baseUrl || configOrProvider?.reverseProxy || '');
+        if (/\/openai(?:\/|$|[?#])/i.test(apiUrl)) return false;
+        try {
+            if (new URL(apiUrl).hostname.toLowerCase() === 'generativelanguage.googleapis.com') return true;
+        } catch (_error) {}
+        return !/\/v1(?:\/|$|[?#])/i.test(apiUrl);
+    }
+
+    function supportsAssistantPrefill(config = {}) {
+        const provider = String(config.provider || config.source || '').trim().toLowerCase();
+        const model = String(config.model || '').trim().toLowerCase();
+        if (provider === 'makersuite' || shouldUseGeminiNative(config)) return false;
+        return model.includes('gemini');
     }
 
     function resolveGeminiGenerateUrl(apiUrl, model, apiKey = '') {
-        let directUrl = String(apiUrl || '').trim().replace(/\/+$/, '');
-        if (!directUrl) return '';
-        if (!directUrl.includes(':generateContent')) {
-            if (/\/models\/[^/?#]+$/i.test(directUrl)) {
-                directUrl += ':generateContent';
-            } else if (/\/models$/i.test(directUrl)) {
-                directUrl += `/${encodeURIComponent(model)}:generateContent`;
-            } else {
-                directUrl += `/models/${encodeURIComponent(model)}:generateContent`;
+        const source = String(apiUrl || '').trim();
+        if (!source) return '';
+        const modelId = String(model || '').trim().replace(/^models\//i, '');
+        try {
+            const url = new URL(source);
+            let path = url.pathname.replace(/\/+$/, '');
+            if (!/:generateContent$/i.test(path)) {
+                if (/\/models\/[^/]+$/i.test(path)) {
+                    path += ':generateContent';
+                } else if (/\/models$/i.test(path)) {
+                    path += `/${encodeURIComponent(modelId)}:generateContent`;
+                } else {
+                    path += `/models/${encodeURIComponent(modelId)}:generateContent`;
+                }
             }
+            url.pathname = path;
+            if (apiKey && !url.searchParams.has('key') && !url.searchParams.has('goog_api_key')) {
+                url.searchParams.set('key', apiKey);
+            }
+            return url.href;
+        } catch (_error) {
+            let directUrl = source.replace(/\/+$/, '');
+            if (!directUrl.includes(':generateContent')) {
+                directUrl += `/models/${encodeURIComponent(modelId)}:generateContent`;
+            }
+            if (apiKey && !directUrl.includes('key=') && !directUrl.includes('goog_api_key=')) {
+                directUrl += `${directUrl.includes('?') ? '&' : '?'}key=${encodeURIComponent(apiKey)}`;
+            }
+            return directUrl;
         }
-        if (apiKey && !directUrl.includes('key=') && !directUrl.includes('goog_api_key=')) {
-            directUrl += `${directUrl.includes('?') ? '&' : '?'}key=${encodeURIComponent(apiKey)}`;
-        }
-        return directUrl;
     }
 
     function normalizeCustomConfig(rawConfig = {}) {
@@ -277,7 +306,7 @@
         const authHeader = createAuthHeader(config.apiKey);
         const stream = options.stream ?? config.stream;
 
-        if (isGeminiProvider(provider)) {
+        if (shouldUseGeminiNative(config)) {
             return {
                 chat_completion_source: 'makersuite',
                 reverse_proxy: apiUrl,
@@ -738,17 +767,31 @@
     function resolveDirectPayload(config, messages, stream) {
         const modelLower = config.model.toLowerCase();
         if (shouldUseGeminiNative(config)) {
-            return {
-                contents: messages.map((message) => ({
-                    role: message.role === 'user' ? 'user' : 'model',
-                    parts: [{ text: message.content }],
-                })),
+            const systemParts = [];
+            const contents = [];
+            messages.forEach((message) => {
+                if (message.role === 'system') {
+                    systemParts.push({ text: message.content });
+                    return;
+                }
+                const role = message.role === 'assistant' ? 'model' : 'user';
+                const last = contents[contents.length - 1];
+                if (last?.role === role) {
+                    last.parts.push({ text: message.content });
+                } else {
+                    contents.push({ role, parts: [{ text: message.content }] });
+                }
+            });
+            const payload = {
+                contents,
                 generationConfig: {
                     temperature: config.temperature,
                     maxOutputTokens: config.maxTokens,
                 },
                 safetySettings: GEMINI_SAFETY_SETTINGS,
             };
+            if (systemParts.length) payload.systemInstruction = { parts: systemParts };
+            return payload;
         }
 
         const payload = {
@@ -1134,6 +1177,7 @@
         getProviderMeta,
         getProviderOptions,
         getProviderDefaultMaxTokens,
+        supportsAssistantPrefill,
         getTavernStatus,
         generateWithTavern,
         generateWithCustom,
