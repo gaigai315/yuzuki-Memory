@@ -231,6 +231,7 @@
     let managedVectorSyncRunning = false;
     const managedVectorSyncPending = {
         character: null,
+        itemTracking: null,
         worldSetting: null,
     };
     let taskRunnerBusy = false;
@@ -1289,6 +1290,15 @@
         if (!table) return [];
         return getRecords(table.id)
             .filter((record) => record?.characterVectorSynced === true)
+            .map((record) => recordToVectorChunk(table, record))
+            .filter(Boolean);
+    }
+
+    function getItemTrackingVectorChunks() {
+        const table = getTables().find((entry) => entry.id === 'item_tracking');
+        if (!table) return [];
+        return getRecords(table.id)
+            .filter((record) => record?.itemTrackingVectorSynced === true)
             .map((record) => recordToVectorChunk(table, record))
             .filter(Boolean);
     }
@@ -4375,6 +4385,18 @@
         return { ...result, vectorized: false };
     }
 
+    async function syncItemTrackingToVectorBook(options = {}) {
+        const store = await ensureVectorStoreReady();
+        if (!store) return { success: false, error: '向量书模块尚未加载' };
+        const result = await store.syncItemTrackingToBook(getItemTrackingVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', `${getCurrentChatVectorBookName()} · 物品追踪`);
+        if (!result.success) return result;
+        if (options.vectorize === true) {
+            const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
+            return { ...result, vectorized: true, vectorizeResult };
+        }
+        return { ...result, vectorized: false };
+    }
+
     async function syncWorldSettingsToVectorBook(options = {}) {
         const store = await ensureVectorStoreReady();
         if (!store) return { success: false, error: '向量书模块尚未加载' };
@@ -4391,6 +4413,10 @@
         return getRecords('character_profile').some((record) => record?.characterVectorSynced === true);
     }
 
+    function hasItemTrackingVectorRecords() {
+        return getRecords('item_tracking').some((record) => record?.itemTrackingVectorSynced === true);
+    }
+
     function hasWorldSettingVectorRecords() {
         return getRecords('world_setting').some((record) => record?.worldSettingVectorSynced === true);
     }
@@ -4398,10 +4424,12 @@
     async function flushManagedVectorSync() {
         if (managedVectorSyncRunning) return;
         const characterOptions = managedVectorSyncPending.character;
+        const itemTrackingOptions = managedVectorSyncPending.itemTracking;
         const worldSettingOptions = managedVectorSyncPending.worldSetting;
-        if (!characterOptions && !worldSettingOptions) return;
+        if (!characterOptions && !itemTrackingOptions && !worldSettingOptions) return;
 
         managedVectorSyncPending.character = null;
+        managedVectorSyncPending.itemTracking = null;
         managedVectorSyncPending.worldSetting = null;
         managedVectorSyncRunning = true;
         try {
@@ -4419,11 +4447,18 @@
                     console.warn('[yuzuki-Memory] 世界设定向量书同步失败。', error);
                 }
             }
+            if (itemTrackingOptions) {
+                try {
+                    await syncItemTrackingToVectorBook({ vectorize: itemTrackingOptions.vectorize });
+                } catch (error) {
+                    console.warn('[yuzuki-Memory] 物品追踪向量书同步失败。', error);
+                }
+            }
             const root = document.getElementById(ROOT_ID);
             if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root);
         } finally {
             managedVectorSyncRunning = false;
-            if (managedVectorSyncPending.character || managedVectorSyncPending.worldSetting) {
+            if (managedVectorSyncPending.character || managedVectorSyncPending.itemTracking || managedVectorSyncPending.worldSetting) {
                 window.clearTimeout(managedVectorSyncTimer);
                 managedVectorSyncTimer = window.setTimeout(flushManagedVectorSync, 0);
             }
@@ -4445,6 +4480,11 @@
     function scheduleCharacterVectorSync(options = {}) {
         if (!hasCharacterVectorRecords() && options.force !== true) return;
         queueManagedVectorSync('character', options);
+    }
+
+    function scheduleItemTrackingVectorSync(options = {}) {
+        if (!hasItemTrackingVectorRecords() && options.force !== true) return;
+        queueManagedVectorSync('itemTracking', options);
     }
 
     function scheduleWorldSettingVectorSync(options = {}) {
@@ -11224,9 +11264,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复 Claude 与 Google 官方 Gemini 请求末尾错误注入 Assistant Prefill，导致部分中转或原生接口拒绝请求的问题。',
-            '【修复】修复 Google Gemini 官方 /v1beta 地址被误判为 OpenAI 兼容端点，并规范原生请求的 systemInstruction 与消息角色。',
             '【优化】修复剧情摘要的时间轴问题。',
+            '【新增】物品追踪支持向量化。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11803,7 +11842,7 @@
             toggleButton.setAttribute('aria-label', toggleButton.title);
         }
         if (vectorizeButton) {
-            vectorizeButton.hidden = table?.id !== 'character_profile' && table?.id !== 'world_setting';
+            vectorizeButton.hidden = !['character_profile', 'item_tracking', 'world_setting'].includes(table?.id);
         }
     }
 
@@ -11852,7 +11891,7 @@
         toggleButton.dataset.yzmOrganizerBatch = 'toggle';
         const vectorizeButton = createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-organizer-action yzm-organizer-vectorize');
         vectorizeButton.dataset.yzmOrganizerBatch = 'vectorize';
-        vectorizeButton.hidden = table.id !== 'character_profile' && table.id !== 'world_setting';
+        vectorizeButton.hidden = !['character_profile', 'item_tracking', 'world_setting'].includes(table.id);
         const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-organizer-action yzm-organizer-danger');
         deleteButton.dataset.yzmOrganizerBatch = 'delete';
         actions.append(toggleButton, vectorizeButton, deleteButton);
@@ -11894,11 +11933,14 @@
             if (action === 'delete') {
                 if (!window.confirm(`确定删除选中的 ${ids.length} 个条目吗？`)) return;
                 getState().records[table.id] = records.filter((record) => !idSet.has(record.id));
-            } else if (action === 'vectorize' && (table.id === 'character_profile' || table.id === 'world_setting')) {
+            } else if (action === 'vectorize' && ['character_profile', 'item_tracking', 'world_setting'].includes(table.id)) {
                 let removedVectorCount = 0;
                 const isWorldSetting = table.id === 'world_setting';
-                const syncFlag = isWorldSetting ? 'worldSettingVectorSynced' : 'characterVectorSynced';
-                const itemLabel = isWorldSetting ? '世界设定' : '角色档案';
+                const isItemTracking = table.id === 'item_tracking';
+                const syncFlag = isWorldSetting
+                    ? 'worldSettingVectorSynced'
+                    : (isItemTracking ? 'itemTrackingVectorSynced' : 'characterVectorSynced');
+                const itemLabel = isWorldSetting ? '世界设定' : (isItemTracking ? '物品追踪' : '角色档案');
                 records.forEach((record) => {
                     if (idSet.has(record.id)) {
                         record.hidden = true;
@@ -11917,7 +11959,9 @@
                 try {
                     const result = isWorldSetting
                         ? await syncWorldSettingsToVectorBook({ vectorize: true })
-                        : await syncCharacterProfilesToVectorBook({ vectorize: true });
+                        : (isItemTracking
+                            ? await syncItemTrackingToVectorBook({ vectorize: true })
+                            : await syncCharacterProfilesToVectorBook({ vectorize: true }));
                     const added = result.vectorizeResult?.count || 0;
                     const removedText = removedVectorCount ? `，已恢复 ${removedVectorCount} 个未选中的旧向量化${itemLabel}` : '';
                     window.alert(`已用当前选中的 ${ids.length} 个${itemLabel}覆盖当前会话${itemLabel}向量书，新增向量化 ${added} 条${removedText}。`);
@@ -11936,6 +11980,9 @@
                     if (table.id === 'character_profile' && nextAction === 'show') {
                         record.characterVectorSynced = false;
                     }
+                    if (table.id === 'item_tracking' && nextAction === 'show') {
+                        record.itemTrackingVectorSynced = false;
+                    }
                     if (table.id === 'world_setting' && nextAction === 'show') {
                         record.worldSettingVectorSynced = false;
                     }
@@ -11944,6 +11991,7 @@
 
             const saved = refreshAfterRecordOrganizerChange(root, table);
             if (saved && table.id === 'character_profile') scheduleCharacterVectorSync({ force: true });
+            if (saved && table.id === 'item_tracking') scheduleItemTrackingVectorSync({ force: true });
             if (saved && table.id === 'world_setting') scheduleWorldSettingVectorSync({ force: true });
             rerenderOrganizer();
         };
@@ -14045,6 +14093,7 @@
         if (taskRunnerBusy && event?.detail?.source === 'task-runner') {
             refreshActiveWorkspace(root);
             scheduleCharacterVectorSync();
+            scheduleItemTrackingVectorSync();
             scheduleWorldSettingVectorSync();
             return;
         }
@@ -14054,6 +14103,7 @@
         applyResolvedPromptSchemeToState({ save: false });
         refreshActiveWorkspace(root);
         scheduleCharacterVectorSync();
+        scheduleItemTrackingVectorSync();
         scheduleWorldSettingVectorSync();
     }
 

@@ -11,6 +11,7 @@
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
     const CHARACTER_PROFILE_TABLE_ID = 'character_profile';
+    const ITEM_TRACKING_TABLE_ID = 'item_tracking';
     const WORLD_SETTING_TABLE_ID = 'world_setting';
     const DEFAULT_STATE_REVISION = 13;
     const MEMORY_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/gi;
@@ -501,10 +502,13 @@
         if (!table || table.hidden || table.id === FIXED_SUMMARY_TABLE_ID) return '';
         const rows = tableRecords(state, table.id).map((record) => recordToText(table, record)).filter(Boolean);
         const characterVectorText = table.id === CHARACTER_PROFILE_TABLE_ID ? String(options.characterProfileText || '').trim() : '';
+        const itemTrackingVectorText = table.id === ITEM_TRACKING_TABLE_ID ? String(options.itemTrackingText || '').trim() : '';
         const worldSettingVectorText = table.id === WORLD_SETTING_TABLE_ID ? String(options.worldSettingText || '').trim() : '';
-        const vectorText = characterVectorText || worldSettingVectorText;
+        const vectorText = characterVectorText || itemTrackingVectorText || worldSettingVectorText;
         if (!rows.length && !vectorText) return `【${table.name}】\n(历史存档，当前暂无数据)`;
-        const vectorTitle = table.id === WORLD_SETTING_TABLE_ID ? '世界设定向量召回' : '角色档案向量召回';
+        const vectorTitle = table.id === WORLD_SETTING_TABLE_ID
+            ? '世界设定向量召回'
+            : (table.id === ITEM_TRACKING_TABLE_ID ? '物品追踪向量召回' : '角色档案向量召回');
         const vectorBlock = vectorText ? `【${vectorTitle}】\n${vectorText}` : '';
         return compactLines([`【${table.name}】`, ...rows, vectorBlock]);
     }
@@ -1252,6 +1256,7 @@
         const settings = options.settings || getPluginSettings();
         const tableOptions = {
             characterProfileText: options.characterProfileText || '',
+            itemTrackingText: options.itemTrackingText || '',
             worldSettingText: options.worldSettingText || '',
         };
         const extractedTableIds = new Set(Array.isArray(options.excludeTableIds) ? options.excludeTableIds.map(String) : []);
@@ -1536,6 +1541,7 @@
         const allowTable = settings.injectMemoryTable && settings.injectTable !== false;
         const tableOptions = {
             characterProfileText: options.characterProfileText || '',
+            itemTrackingText: options.itemTrackingText || '',
             worldSettingText: options.worldSettingText || '',
             excludeTableIds: Array.isArray(options.excludeTableIds) ? options.excludeTableIds : [],
         };
@@ -1729,15 +1735,18 @@
             : '';
         let genericVectorText = vectorText;
         let characterProfileVectorText = '';
+        let itemTrackingVectorText = '';
         let worldSettingVectorText = '';
         if (vectorText && typeof vectorText === 'object') {
             genericVectorText = String(vectorText.generic || vectorText.text || '');
             characterProfileVectorText = String(vectorText.characterProfile || '');
+            itemTrackingVectorText = String(vectorText.itemTracking || '');
             worldSettingVectorText = String(vectorText.worldSetting || '');
         }
         const extractedTableIds = [...collectSpecificTableAnchorIds(body, state)];
         const runtimeOptions = {
             characterProfileText: characterProfileVectorText,
+            itemTrackingText: itemTrackingVectorText,
             worldSettingText: worldSettingVectorText,
             excludeTableIds: extractedTableIds,
         };
@@ -1748,6 +1757,7 @@
             replaceMemoryDataAnchorsInRequest(body, state, genericVectorText, injectedVars, {
                 settings,
                 characterProfileText: characterProfileVectorText,
+                itemTrackingText: itemTrackingVectorText,
                 worldSettingText: worldSettingVectorText,
                 excludeTableIds: extractedTableIds,
                 preserveUnresolvedVectorAnchors: options.preserveUnresolvedVectorAnchors === true,

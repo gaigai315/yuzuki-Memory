@@ -573,6 +573,24 @@
         return parts.length ? `- ${parts.join('；')}` : '';
     }
 
+    function compactItemTrackingChunk(text = '') {
+        const source = String(text || '').trim();
+        if (!source) return '';
+        if (!source.includes('\n')) return source.startsWith('- ') ? source : `- ${source}`;
+        const titleMatch = source.match(/^【物品追踪[:：]([^】]+)】/m);
+        const titleName = String(titleMatch?.[1] || '').trim();
+        const rawParts = source
+            .split(/\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .map((line) => line.replace(/^[-•]\s*/, '').trim())
+            .filter((line) => !/^【物品追踪[:：][^】]+】$/.test(line))
+            .filter(Boolean);
+        const hasName = rawParts.some((part) => /^物品名称\s*[:：]/.test(part));
+        const parts = titleName && !hasName ? [`物品名称: ${titleName}`, ...rawParts] : rawParts;
+        return parts.length ? `- ${parts.join('；')}` : '';
+    }
+
     function compactWorldSettingChunk(text = '') {
         const source = String(text || '').trim();
         if (!source) return '';
@@ -626,22 +644,32 @@
                 ? store.getActiveBooksByKind('character_profile')
                 : activeBooks.filter((bookId) => typeof store.isCharacterProfileBook === 'function' && store.isCharacterProfileBook(bookId));
             const characterBookSet = new Set(characterBookIds);
+            const itemTrackingBookIds = typeof store.getActiveBooksByKind === 'function'
+                ? store.getActiveBooksByKind('item_tracking')
+                : activeBooks.filter((bookId) => typeof store.isItemTrackingBook === 'function' && store.isItemTrackingBook(bookId));
+            const itemTrackingBookSet = new Set(itemTrackingBookIds);
             const worldSettingBookIds = typeof store.getActiveBooksByKind === 'function'
                 ? store.getActiveBooksByKind('world_setting')
                 : activeBooks.filter((bookId) => typeof store.isWorldSettingBook === 'function' && store.isWorldSettingBook(bookId));
             const worldSettingBookSet = new Set(worldSettingBookIds);
-            const genericBookIds = activeBooks.filter((bookId) => !characterBookSet.has(bookId) && !worldSettingBookSet.has(bookId));
+            const genericBookIds = activeBooks.filter((bookId) => (
+                !characterBookSet.has(bookId)
+                && !itemTrackingBookSet.has(bookId)
+                && !worldSettingBookSet.has(bookId)
+            ));
             const searchPromise = Promise.all([
                 genericBookIds.length ? store.search(query, genericBookIds) : Promise.resolve([]),
                 characterBookIds.length ? store.search(query, characterBookIds) : Promise.resolve([]),
+                itemTrackingBookIds.length ? store.search(query, itemTrackingBookIds) : Promise.resolve([]),
                 worldSettingBookIds.length ? store.search(query, worldSettingBookIds) : Promise.resolve([]),
             ]);
             const timeoutPromise = new Promise((_, reject) => {
                 window.setTimeout(() => reject(new Error('向量检索超时')), 20000);
             });
-            const [genericResults, characterResults, worldSettingResults] = await Promise.race([searchPromise, timeoutPromise]);
+            const [genericResults, characterResults, itemTrackingResults, worldSettingResults] = await Promise.race([searchPromise, timeoutPromise]);
             if ((!Array.isArray(genericResults) || !genericResults.length)
                 && (!Array.isArray(characterResults) || !characterResults.length)
+                && (!Array.isArray(itemTrackingResults) || !itemTrackingResults.length)
                 && (!Array.isArray(worldSettingResults) || !worldSettingResults.length)) {
                 logVectorInfo('检索完成：没有命中内容', {
                     activeBooks: activeBooks.length,
@@ -655,21 +683,31 @@
                 .map((item) => compactCharacterProfileChunk(item.text))
                 .filter(Boolean)
                 .join('\n');
+            const itemTrackingText = (itemTrackingResults || [])
+                .map((item) => compactItemTrackingChunk(item.text))
+                .filter(Boolean)
+                .join('\n');
             const worldSettingText = (worldSettingResults || [])
                 .map((item) => compactWorldSettingChunk(item.text))
                 .filter(Boolean)
                 .join('\n');
             logVectorInfo('检索完成', {
-                count: (genericResults || []).length + (characterResults || []).length + (worldSettingResults || []).length,
+                count: (genericResults || []).length + (characterResults || []).length + (itemTrackingResults || []).length + (worldSettingResults || []).length,
                 genericCount: (genericResults || []).length,
                 characterProfileCount: (characterResults || []).length,
+                itemTrackingCount: (itemTrackingResults || []).length,
                 worldSettingCount: (worldSettingResults || []).length,
-                contentLength: vectorText.length + characterProfileText.length + worldSettingText.length,
-                topScore: Number((genericResults?.[0] || characterResults?.[0] || worldSettingResults?.[0])?.score || 0).toFixed(4),
-                topSource: (genericResults?.[0] || characterResults?.[0] || worldSettingResults?.[0])?.source || '',
+                contentLength: vectorText.length + characterProfileText.length + itemTrackingText.length + worldSettingText.length,
+                topScore: Number((genericResults?.[0] || characterResults?.[0] || itemTrackingResults?.[0] || worldSettingResults?.[0])?.score || 0).toFixed(4),
+                topSource: (genericResults?.[0] || characterResults?.[0] || itemTrackingResults?.[0] || worldSettingResults?.[0])?.source || '',
                 rerank: rerankSettings.enabled === true,
             });
-            return { generic: vectorText, characterProfile: characterProfileText, worldSetting: worldSettingText };
+            return {
+                generic: vectorText,
+                characterProfile: characterProfileText,
+                itemTracking: itemTrackingText,
+                worldSetting: worldSettingText,
+            };
         } catch (error) {
             logVectorInfo('检索失败，已跳过', String(error?.message || error || ''), 'warn');
             return '';

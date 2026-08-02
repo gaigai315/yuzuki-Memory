@@ -24,6 +24,7 @@
     const DEFAULT_SEPARATOR = '===';
     const BOOK_KIND_SUMMARY = 'summary';
     const BOOK_KIND_CHARACTER_PROFILE = 'character_profile';
+    const BOOK_KIND_ITEM_TRACKING = 'item_tracking';
     const BOOK_KIND_WORLD_SETTING = 'world_setting';
     const MAX_VECTOR_CHUNK_CHARS = 4000;
     const VECTOR_CHUNK_OVERLAP_CHARS = 180;
@@ -1226,6 +1227,15 @@
                 || String(bookId || '').startsWith('yzm_character_book_');
         }
 
+        getItemTrackingBookId(sessionId = 'default') {
+            return `yzm_item_tracking_book_${String(sessionId || 'default').replace(/[^\w-]/g, '_')}`;
+        }
+
+        isItemTrackingBook(bookId) {
+            return this.library[bookId]?.kind === BOOK_KIND_ITEM_TRACKING
+                || String(bookId || '').startsWith('yzm_item_tracking_book_');
+        }
+
         getWorldSettingBookId(sessionId = 'default') {
             return `yzm_world_setting_book_${String(sessionId || 'default').replace(/[^\w-]/g, '_')}`;
         }
@@ -1236,7 +1246,9 @@
         }
 
         isManagedTableVectorBook(bookId) {
-            return this.isCharacterProfileBook(bookId) || this.isWorldSettingBook(bookId);
+            return this.isCharacterProfileBook(bookId)
+                || this.isItemTrackingBook(bookId)
+                || this.isWorldSettingBook(bookId);
         }
 
         getActiveBooksByKind(kind = '') {
@@ -1245,6 +1257,7 @@
                 const book = this.library[bookId];
                 if (!book) return false;
                 if (expected === BOOK_KIND_CHARACTER_PROFILE) return this.isCharacterProfileBook(bookId);
+                if (expected === BOOK_KIND_ITEM_TRACKING) return this.isItemTrackingBook(bookId);
                 if (expected === BOOK_KIND_WORLD_SETTING) return this.isWorldSettingBook(bookId);
                 if (!expected) return !this.isManagedTableVectorBook(bookId);
                 return book.kind === expected;
@@ -1272,6 +1285,39 @@
             this.library[id] = this.normalizeBook({
                 name: normalizedName,
                 kind: BOOK_KIND_CHARACTER_PROFILE,
+                sessionId: normalizedSessionId,
+                chunks: normalizedChunks,
+                ...preserved,
+                createTime: oldBook?.createTime || Date.now(),
+                updateTime: Date.now(),
+            }, normalizedName);
+            this.selectedBookId = id;
+            await this.saveLibrary();
+            this.toggleActiveBook(id, true);
+            return { success: true, bookId: id, count: normalizedChunks.length };
+        }
+
+        async syncItemTrackingToBook(chunks, sessionId = 'default', bookName = '') {
+            const normalizedChunks = this.normalizeChunks(chunks);
+            const id = this.getItemTrackingBookId(sessionId);
+            const oldBook = this.library[id];
+            const normalizedName = String(bookName || '').trim() || '当前会话物品追踪';
+            const normalizedSessionId = String(sessionId || 'default');
+            const unchanged = oldBook
+                && oldBook.name === normalizedName
+                && oldBook.kind === BOOK_KIND_ITEM_TRACKING
+                && oldBook.sessionId === normalizedSessionId
+                && this.areChunksEqual(oldBook.chunks, normalizedChunks);
+            if (unchanged) {
+                this.selectedBookId = id;
+                this.toggleActiveBook(id, true);
+                return { success: true, bookId: id, count: normalizedChunks.length, unchanged: true };
+            }
+            const preserved = this.buildPreservedVectorState(oldBook, normalizedChunks);
+
+            this.library[id] = this.normalizeBook({
+                name: normalizedName,
+                kind: BOOK_KIND_ITEM_TRACKING,
                 sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 ...preserved,
