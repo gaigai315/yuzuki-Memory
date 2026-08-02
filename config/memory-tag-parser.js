@@ -239,7 +239,6 @@
         const entries = splitPlotSummaryEntries(source);
         if (!entries.length) return [createPlotRow(normalizedKind, source, fallbackTitle)];
         const rows = [];
-        let lastDate = '';
         entries.forEach((entry) => {
             const bracketMatch = entry.match(/^\[([^\]]+)\]\s*\|\s*(?:内容|摘要内容|总结内容)\s*[:：]\s*([\s\S]*)$/);
             if (!bracketMatch) {
@@ -248,10 +247,7 @@
             }
             const rawTime = bracketMatch[1].trim();
             const content = bracketMatch[2].trim();
-            const dateMatch = rawTime.match(/(?:\d{1,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
-            if (dateMatch) lastDate = dateMatch[0].replace(/\s+/g, '');
-            const time = !dateMatch && lastDate ? `${lastDate},${rawTime}` : rawTime;
-            rows.push(createPlotRow(normalizedKind, `日期:${time}|内容:${content}`, fallbackTitle));
+            rows.push(createPlotRow(normalizedKind, `日期:${rawTime}|内容:${content}`, fallbackTitle));
         });
         return rows;
     }
@@ -449,6 +445,9 @@
     }
 
     function normalizePlotStoredLines(lines = []) {
+        if (typeof YuzukiMemory.PlotSummary?.normalizeStoredLines === 'function') {
+            return YuzukiMemory.PlotSummary.normalizeStoredLines(lines, { repairRepeatedDates: true });
+        }
         let lastDate = '';
         const items = lines
             .map((line, index) => {

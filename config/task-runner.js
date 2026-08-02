@@ -1301,6 +1301,9 @@
     }
 
     function normalizePlotStoredLines(lines = []) {
+        if (typeof YuzukiMemory.PlotSummary?.normalizeStoredLines === 'function') {
+            return YuzukiMemory.PlotSummary.normalizeStoredLines(lines, { repairRepeatedDates: true });
+        }
         let lastDate = '';
         const items = lines
             .map((line, index) => {

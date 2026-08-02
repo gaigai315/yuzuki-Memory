@@ -4899,7 +4899,7 @@
         const items = getPlotSummaryItems(lines.join('\n'));
         const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, items.length);
         const metaList = normalizePlotItemMeta(record, normalizedKind, items.length);
-        return items.map((item, index) => ({
+        const entries = items.map((item, index) => ({
             ...item,
             id: `plot:${normalizedKind}:${index}`,
             lineId: metaList[index]?.id || '',
@@ -4908,6 +4908,10 @@
             raw: lines[index] || item.raw,
             hidden: !!hiddenStates[index],
         }));
+        if (typeof YuzukiMemory.PlotSummary?.applyDisplayStatuses === 'function') {
+            return YuzukiMemory.PlotSummary.applyDisplayStatuses(entries);
+        }
+        return entries.map((item, index) => ({ ...item, status: index === entries.length - 1 ? 'running' : 'completed' }));
     }
 
     function getPlotOrganizerEntryIndex(id = '') {
@@ -10557,6 +10561,14 @@
     }
 
     function getPlotSummaryItems(text = '') {
+        if (typeof YuzukiMemory.PlotSummary?.normalizeStoredItems === 'function') {
+            return YuzukiMemory.PlotSummary.normalizeStoredItems(text, { repairRepeatedDates: true }).map((item) => ({
+                ...item,
+                date: item.date || '未记录日期',
+                startTime: item.startTime || '—',
+                endTime: item.endTime || '—',
+            }));
+        }
         let lastDate = '';
         const entries = String(text || '')
             .split(/\n+/)
@@ -10772,6 +10784,9 @@
     }
 
     function normalizePlotSummaryStoredText(text = '') {
+        if (typeof YuzukiMemory.PlotSummary?.normalizeStoredLines === 'function') {
+            return YuzukiMemory.PlotSummary.normalizeStoredLines(text, { repairRepeatedDates: true });
+        }
         return getPlotSummaryItems(text)
             .map((item) => {
                 const time = item.date && item.startTime !== '—'
@@ -10836,14 +10851,51 @@
     function normalizePlotSummaryRecordValues(record) {
         if (!record) return false;
         record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+        record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
         let changed = false;
-        ['主线', '支线'].forEach((field) => {
+        [{ field: '主线', kind: 'main' }, { field: '支线', kind: 'branch' }].forEach(({ field, kind }) => {
             const current = String(record.values[field] || '').trim();
             if (!current) return;
-            const normalized = normalizePlotSummaryStoredText(current);
+            const currentLines = current.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+            const previousMeta = Array.isArray(record.plotItemMeta[kind]) ? record.plotItemMeta[kind] : [];
+            const previousHidden = Array.isArray(record.hiddenPlotItems[kind]) ? record.hiddenPlotItems[kind].map(Boolean) : [];
+            const normalizedItems = typeof YuzukiMemory.PlotSummary?.normalizeStoredItems === 'function'
+                ? YuzukiMemory.PlotSummary.normalizeStoredItems(currentLines, {
+                    metadata: previousMeta,
+                    orderByProvenance: true,
+                    repairRepeatedDates: true,
+                })
+                : null;
+            const normalized = normalizedItems
+                ? normalizedItems.map((item) => item.raw).join('\n')
+                : normalizePlotSummaryStoredText(current);
             if (normalized && normalized !== current) {
                 record.values[field] = normalized;
                 changed = true;
+            }
+            if (normalizedItems) {
+                const usedMetaIndexes = new Set();
+                const nextMeta = normalizedItems.map((item) => {
+                    const source = previousMeta[item.metaIndex] && typeof previousMeta[item.metaIndex] === 'object'
+                        ? previousMeta[item.metaIndex]
+                        : {};
+                    const reused = usedMetaIndexes.has(item.metaIndex);
+                    usedMetaIndexes.add(item.metaIndex);
+                    return {
+                        ...source,
+                        id: reused ? createPlotLineId() : String(source.id || createPlotLineId()),
+                        text: item.raw,
+                    };
+                });
+                const nextHidden = normalizedItems.map((item) => !!previousHidden[item.metaIndex]);
+                const previousMetaSignature = previousMeta.map((item) => `${item?.id || ''}|${item?.text || ''}`).join('\n');
+                const nextMetaSignature = nextMeta.map((item) => `${item.id}|${item.text}`).join('\n');
+                if (previousMetaSignature !== nextMetaSignature || previousHidden.join('|') !== nextHidden.join('|')) {
+                    record.plotItemMeta[kind] = nextMeta;
+                    record.hiddenPlotItems[kind] = nextHidden;
+                    changed = true;
+                }
             }
         });
         if (changed) saveState();
@@ -11174,6 +11226,7 @@
         [
             '【修复】修复 Claude 与 Google 官方 Gemini 请求末尾错误注入 Assistant Prefill，导致部分中转或原生接口拒绝请求的问题。',
             '【修复】修复 Google Gemini 官方 /v1beta 地址被误判为 OpenAI 兼容端点，并规范原生请求的 systemInstruction 与消息角色。',
+            '【优化】修复剧情摘要的时间轴问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
