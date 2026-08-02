@@ -577,7 +577,12 @@
                 .filter(Boolean);
             if (!columns.length) return `#${table.name}：包含`;
             const primary = columns[0];
-            const fields = columns.map((column, index) => index === 0 ? `${column}(主键)` : column).join(', ');
+            const fields = columns.map((column, index) => {
+                if (index !== 0) return column;
+                return table.id === CHARACTER_PROFILE_TABLE_ID
+                    ? `${column}(主键；值含“|”时各姓名均指同一角色，第一段为主姓名)`
+                    : `${column}(主键)`;
+            }).join(', ');
             return `#${table.name}：包含 ${fields}`;
         }).filter(Boolean);
         return compactLines(lines);

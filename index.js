@@ -7,12 +7,13 @@
     'use strict';
 
     const NAMESPACE = 'YuzukiMemory';
-    const VERSION = '0.6.5';
+    const VERSION = '0.6.6';
     const baseUrl = new URL('./', import.meta.url).href;
 
     const MODULES = [
         'config/global-settings.js',
         'config/storage.js',
+        'config/character-name-matcher.js',
         'config/memory-io.js',
         'config/plot-summary.js',
         'config/memory-tag-parser.js',

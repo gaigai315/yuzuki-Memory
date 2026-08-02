@@ -620,7 +620,12 @@
                     return '#剧情摘要：包含 #主线摘要：摘要名称，日期，摘要内容；#支线摘要：日期，摘要内容';
                 }
                 const columns = (table.columns || []).map(cleanColumnName).filter(Boolean);
-                const fields = columns.map((column, index) => index === 0 ? `${column}(主键)` : column).join(', ');
+                const fields = columns.map((column, index) => {
+                    if (index !== 0) return column;
+                    return table.id === 'character_profile'
+                        ? `${column}(主键；值含“|”时各姓名均指同一角色，第一段为主姓名)`
+                        : `${column}(主键)`;
+                }).join(', ');
                 return `#${table.name}：包含 ${fields}`;
             })
             .filter(Boolean);
@@ -1193,13 +1198,19 @@
             .some((name) => name !== primary && String(normalizedValues[name] || '').trim());
         if (!hasValidUpdate) return null;
 
-        let record = records.find((entry) => recordTitle(table, entry) === normalizedValues[primary]);
+        const characterNameMatcher = table.id === 'character_profile' ? YuzukiMemory.CharacterNameMatcher : null;
+        let record = characterNameMatcher?.findMatchingRecord
+            ? characterNameMatcher.findMatchingRecord(records, primary, normalizedValues[primary])
+            : records.find((entry) => recordTitle(table, entry) === normalizedValues[primary]);
         if (!record) {
+            if (characterNameMatcher?.formatNames) {
+                normalizedValues[primary] = characterNameMatcher.formatNames(normalizedValues[primary]);
+            }
             record = createRecord(table, normalizedValues);
             records.push(record);
         } else {
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
-            record.values[primary] = normalizedValues[primary];
+            if (!characterNameMatcher) record.values[primary] = normalizedValues[primary];
             (table.columns || []).forEach((column) => {
                 const name = cleanColumnName(column);
                 if (name === primary) return;

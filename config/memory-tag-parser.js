@@ -169,10 +169,21 @@
     }
 
     function splitSegments(line) {
-        return String(line || '')
-            .split('|')
-            .map((part) => part.trim())
-            .filter(Boolean);
+        const segments = [];
+        let current = '';
+        let squareBracketDepth = 0;
+        for (const character of String(line || '')) {
+            if (character === '[' || character === '【') squareBracketDepth += 1;
+            if (character === ']' || character === '】') squareBracketDepth = Math.max(0, squareBracketDepth - 1);
+            if (character === '|' && squareBracketDepth === 0) {
+                if (current.trim()) segments.push(current.trim());
+                current = '';
+                continue;
+            }
+            current += character;
+        }
+        if (current.trim()) segments.push(current.trim());
+        return segments;
     }
 
     function parseFieldSegment(segment) {
@@ -669,16 +680,23 @@
             .filter(Boolean);
         if (!validUpdates.length) return false;
 
-        let record = records.find((entry) => String(entry?.values?.[primaryName] || '').trim() === primaryValue);
+        const characterNameMatcher = table.id === 'character_profile' ? YuzukiMemory.CharacterNameMatcher : null;
+        let record = characterNameMatcher?.findMatchingRecord
+            ? characterNameMatcher.findMatchingRecord(records, primaryName, primaryValue)
+            : records.find((entry) => String(entry?.values?.[primaryName] || '').trim() === primaryValue);
         if (!record) {
-            record = createRecord(table, { [primaryName]: primaryValue });
+            const storedPrimaryValue = characterNameMatcher?.formatNames
+                ? characterNameMatcher.formatNames(primaryValue)
+                : primaryValue;
+            record = createRecord(table, { [primaryName]: storedPrimaryValue });
             records.push(record);
         }
         record.values = record.values && typeof record.values === 'object' ? record.values : {};
-        record.values[primaryName] = primaryValue;
+        if (!characterNameMatcher) record.values[primaryName] = primaryValue;
 
         validUpdates.forEach(({ column, value }) => {
             const columnName = cleanColumnName(column);
+            if (characterNameMatcher && columnName === primaryName) return;
             const currentValue = String(record.values[columnName] || '').trim();
             if (isFillOnceColumn(column) && currentValue) return;
             const shouldAppend = isAppendColumn(column);

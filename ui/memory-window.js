@@ -805,7 +805,11 @@
     }
 
     function getRecordTitle(table, record) {
-        return getRecordValue(record, getPrimaryColumn(table)) || '未命名';
+        const title = getRecordValue(record, getPrimaryColumn(table));
+        if (table?.id === 'character_profile' && YuzukiMemory.CharacterNameMatcher?.getDisplayName) {
+            return YuzukiMemory.CharacterNameMatcher.getDisplayName(title) || '未命名';
+        }
+        return title || '未命名';
     }
 
     function normalizePhoneWechatLookupName(value) {
@@ -889,7 +893,7 @@
             getRecordValue(record, '姓名'),
             getRecordValue(record, '名字'),
             getRecordValue(record, '昵称'),
-        ];
+        ].flatMap((name) => YuzukiMemory.CharacterNameMatcher?.parseNames?.(name) || [name]);
         const seen = new Set();
         return names
             .map((name) => String(name || '').trim())
@@ -5118,15 +5122,16 @@
         const characterName = String(record.values?.[primary] || '').trim();
         if (!characterName) return null;
         const records = getRecords(table.id);
-        const target = records.find((entry) => (
-            entry
-            && entry !== record
-            && String(entry?.values?.[primary] || '').trim() === characterName
-        ));
+        const candidates = records.filter((entry) => entry && entry !== record);
+        const target = YuzukiMemory.CharacterNameMatcher?.findMatchingRecord
+            ? YuzukiMemory.CharacterNameMatcher.findMatchingRecord(candidates, primary, characterName)
+            : candidates.find((entry) => String(entry?.values?.[primary] || '').trim() === characterName);
         if (!target) return null;
 
         target.values = target.values && typeof target.values === 'object' ? target.values : {};
-        target.values[primary] = characterName;
+        target.values[primary] = YuzukiMemory.CharacterNameMatcher?.mergeNames
+            ? YuzukiMemory.CharacterNameMatcher.mergeNames(target.values[primary], characterName)
+            : characterName;
         (table.columns || []).forEach((column) => {
             const name = cleanColumnName(column);
             if (name === primary) return;
@@ -11266,6 +11271,7 @@
         [
             '【优化】修复剧情摘要的时间轴问题。',
             '【新增】物品追踪支持向量化。',
+            '【新增】角色档案支持姓名别名，角色名可填写“全名|别名”，AI 使用任一姓名都会更新同一角色。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -12572,9 +12578,13 @@
             : (isMemorySummaryRecord ? createMainSummaryRecordFields(table, record) : document.createElement('div'));
         if (!isBranchSummaryRecord && !isMemorySummaryRecord) {
             fields.className = 'yzm-record-fields';
+            const primary = getPrimaryColumn(table);
             table.columns.forEach((column) => {
                 const name = cleanColumnName(column);
-                fields.appendChild(createRecordInput(name, getRecordValue(record, name), isRecordEditorMultilineField(table, name)));
+                const options = table.id === 'character_profile' && name === primary
+                    ? { placeholder: '主姓名|别名1|别名2' }
+                    : {};
+                fields.appendChild(createRecordInput(name, getRecordValue(record, name), isRecordEditorMultilineField(table, name), options));
             });
         }
 
@@ -12668,6 +12678,9 @@
             }
 
             const primary = getPrimaryColumn(table);
+            if (table.id === 'character_profile' && YuzukiMemory.CharacterNameMatcher?.formatNames) {
+                values[primary] = YuzukiMemory.CharacterNameMatcher.formatNames(values[primary]);
+            }
             if (table.id !== 'plot_summary' && !values[primary]) {
                 window.alert(`${primary}不能为空。`);
                 return;
