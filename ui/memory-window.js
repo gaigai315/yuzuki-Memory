@@ -10607,7 +10607,7 @@
 
     function getPlotSummaryItems(text = '') {
         if (typeof YuzukiMemory.PlotSummary?.normalizeStoredItems === 'function') {
-            return YuzukiMemory.PlotSummary.normalizeStoredItems(text, { repairRepeatedDates: true }).map((item) => ({
+            return YuzukiMemory.PlotSummary.normalizeStoredItems(text).map((item) => ({
                 ...item,
                 date: item.date || '未记录日期',
                 startTime: item.startTime || '—',
@@ -10830,7 +10830,7 @@
 
     function normalizePlotSummaryStoredText(text = '') {
         if (typeof YuzukiMemory.PlotSummary?.normalizeStoredLines === 'function') {
-            return YuzukiMemory.PlotSummary.normalizeStoredLines(text, { repairRepeatedDates: true });
+            return YuzukiMemory.PlotSummary.normalizeStoredLines(text);
         }
         return getPlotSummaryItems(text)
             .map((item) => {
@@ -10909,7 +10909,6 @@
                 ? YuzukiMemory.PlotSummary.normalizeStoredItems(currentLines, {
                     metadata: previousMeta,
                     orderByProvenance: true,
-                    repairRepeatedDates: true,
                 })
                 : null;
             const normalized = normalizedItems
@@ -11269,7 +11268,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】修复剧情摘要的时间轴问题。',
+            '【修复】修复剧情摘要时间错误更新问题。',
             '【新增】物品追踪支持向量化。',
             '【新增】角色档案支持姓名别名，角色名可填写“全名|别名”，AI 使用任一姓名都会更新同一角色。',
         ].forEach((text) => {

@@ -457,7 +457,7 @@
 
     function normalizePlotStoredLines(lines = []) {
         if (typeof YuzukiMemory.PlotSummary?.normalizeStoredLines === 'function') {
-            return YuzukiMemory.PlotSummary.normalizeStoredLines(lines, { repairRepeatedDates: true });
+            return YuzukiMemory.PlotSummary.normalizeStoredLines(lines);
         }
         let lastDate = '';
         const items = lines

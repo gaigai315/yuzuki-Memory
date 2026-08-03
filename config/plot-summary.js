@@ -123,6 +123,13 @@
         };
     }
 
+    function isLikelyMidnightRollover(previousClock, clock) {
+        if (!previousClock || !clock || previousClock.crossesMidnight || clock.start >= previousClock.start) {
+            return false;
+        }
+        return previousClock.start - clock.start >= 12 * 60;
+    }
+
     function getProvenance(meta, index) {
         const range = meta?.sourceRange;
         const start = Number(range?.start);
@@ -136,12 +143,6 @@
             createdAt: Number.isFinite(createdAt) ? createdAt : Number.MAX_SAFE_INTEGER,
             index,
         };
-    }
-
-    function provenanceKey(meta, index) {
-        const value = getProvenance(meta, index);
-        if (!value.hasValue) return `index:${index}`;
-        return `range:${value.start}:${value.end}`;
     }
 
     function compareProvenance(left, right) {
@@ -191,7 +192,6 @@
         const sequence = options.orderByProvenance === true ? [...expanded].sort(compareProvenance) : expanded;
         let carryDate = '';
         let previousClock = null;
-        let previousGroup = '';
 
         const resolved = sequence.map((entry, sequenceIndex) => {
             const parsed = splitTimeAndContent(entry.line);
@@ -200,24 +200,11 @@
 
             const explicitDate = getDateToken(parsed.time);
             const clock = getClockRange(parsed.time);
-            const group = provenanceKey(entry.meta, entry.metaIndex);
-            const sourceAdvanced = group !== previousGroup;
             let date = explicitDate || carryDate;
-            if (!explicitDate && date && clock && previousClock && !previousClock.crossesMidnight && clock.start < previousClock.start) {
+            // An explicit date is authoritative. Infer a new day only for an undated,
+            // large clock rollback that plausibly crosses midnight.
+            if (!explicitDate && date && isLikelyMidnightRollover(previousClock, clock)) {
                 date = addDateDays(date, 1);
-            } else if (
-                explicitDate
-                && options.repairRepeatedDates === true
-                && sourceAdvanced
-                && clock
-                && previousClock
-                && clock.start < previousClock.start
-                && carryDate
-                && getDateSortValue(explicitDate) <= getDateSortValue(carryDate)
-            ) {
-                date = getDateSortValue(explicitDate) < getDateSortValue(carryDate)
-                    ? carryDate
-                    : (previousClock.crossesMidnight ? explicitDate : addDateDays(carryDate, 1));
             }
 
             const timeWithoutDate = String(parsed.time || '')
@@ -246,7 +233,6 @@
 
             if (date) carryDate = normalizedClock?.crossesMidnight ? addDateDays(date, 1) : date;
             previousClock = normalizedClock || previousClock;
-            previousGroup = group;
             return item;
         }).filter(Boolean);
 
