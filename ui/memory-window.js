@@ -157,6 +157,7 @@
         smartCalculationLinkage: false,
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
+        includeCharacterGreetingInTasks: false,
         enableFloatingIcon: false,
         enableFilling: true,
         fillMode: 'realtime',
@@ -1945,6 +1946,7 @@
             smartCalculationLinkage: typeof source.smartCalculationLinkage === 'boolean' ? source.smartCalculationLinkage : DEFAULT_PLUGIN_SETTINGS.smartCalculationLinkage,
             hideFloorsEnabled: typeof source.hideFloorsEnabled === 'boolean' ? source.hideFloorsEnabled : DEFAULT_PLUGIN_SETTINGS.hideFloorsEnabled,
             hiddenFloorCount: Math.round(normalizeNumberSetting(source.hiddenFloorCount, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0)),
+            includeCharacterGreetingInTasks: typeof source.includeCharacterGreetingInTasks === 'boolean' ? source.includeCharacterGreetingInTasks : DEFAULT_PLUGIN_SETTINGS.includeCharacterGreetingInTasks,
             enableFloatingIcon: typeof source.enableFloatingIcon === 'boolean' ? source.enableFloatingIcon : DEFAULT_PLUGIN_SETTINGS.enableFloatingIcon,
             enableFilling: typeof source.enableFilling === 'boolean' ? source.enableFilling : DEFAULT_PLUGIN_SETTINGS.enableFilling,
             fillMode: source.fillMode === 'batch' ? 'batch' : DEFAULT_PLUGIN_SETTINGS.fillMode,
@@ -9276,6 +9278,7 @@
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
             createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标，点击即可打开记忆插件。拖动后会记住位置。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon')),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
+            createPluginConfigRow('任务包含角色卡开场白', '开启后，填表、总结和优化任务会额外注入角色卡的默认开场白；默认关闭，关闭时仅使用任务楼层范围内的实际聊天内容。', 'fa-solid fa-message', createConfigSwitch(settings.includeCharacterGreetingInTasks, 'includeCharacterGreetingInTasks')),
             createTaskWorldbookPanel()
         );
         window.setTimeout(() => refreshTaskWorldbookList(ensureRoot()), 0);
@@ -11268,9 +11271,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复剧情摘要时间错误更新问题。',
-            '【新增】物品追踪支持向量化。',
-            '【新增】角色档案支持姓名别名，角色名可填写“全名|别名”，AI 使用任一姓名都会更新同一角色。',
+            '【优化】移除聊天输入框焦点拦截，自动填表与自动总结不再因输入框保持焦点而取消本次触发。',
+            '【新增】新增“任务包含角色卡开场白”开关，默认关闭；关闭时不会把角色卡默认开场白注入后续填表、总结和优化任务。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

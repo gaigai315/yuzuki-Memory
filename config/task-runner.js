@@ -66,18 +66,6 @@
     let autoTaskMessageStableSince = 0;
     const AUTO_TASK_MESSAGE_STABLE_MS = 1200;
 
-    function isUserTextInputActive() {
-        const active = document.activeElement;
-        if (!active || active === document.body) return false;
-        const tagName = String(active.tagName || '').toLowerCase();
-        if (tagName === 'textarea') return true;
-        if (tagName === 'input') {
-            const type = String(active.type || 'text').toLowerCase();
-            return !['button', 'checkbox', 'radio', 'range', 'submit', 'reset', 'file', 'color'].includes(type);
-        }
-        return active.isContentEditable === true;
-    }
-
     function isPluginTaskBusy() {
         return window.isSummarizing === true
             || window.yzmMemoryManualTaskRunning === true
@@ -190,6 +178,7 @@
         const settings = parseJsonStorage(PLUGIN_SETTINGS_STORAGE_KEY, {});
         return {
             enableFilling: settings?.enableFilling !== false,
+            includeCharacterGreetingInTasks: settings?.includeCharacterGreetingInTasks === true,
             fillMode: settings?.fillMode === 'batch' ? 'batch' : 'realtime',
             traceBatchEnabled: settings?.traceBatchEnabled !== false,
             autoTraceBatchSize: Math.max(1, Math.round(Number(settings?.autoTraceBatchSize ?? settings?.traceBatchSize) || 40)),
@@ -494,6 +483,7 @@
         const character = getRuntimeCharacter() || {};
         const persona = ctx.persona || ctx.userPersona || ctx.persona_description || ctx.user_description || ctx.power_user?.persona_description || '';
         const chatMetadata = ctx.chatMetadata && typeof ctx.chatMetadata === 'object' ? ctx.chatMetadata : {};
+        const includeCharacterGreeting = getPluginSettings().includeCharacterGreetingInTasks;
         const chatMetadataKeys = options.includeChatSummary === false
             ? ['note_prompt', 'scenario', 'description']
             : ['note_prompt', 'scenario', 'summary', 'description'];
@@ -505,7 +495,7 @@
             compactField('角色描述', firstTextValue(character, ['description', 'desc'])),
             compactField('角色性格', firstTextValue(character, ['personality'])),
             compactField('场景/故事背景', firstTextValue(character, ['scenario', 'world_scenario'])),
-            compactField('开场消息', firstTextValue(character, ['first_mes', 'first_message', 'firstMessage'])),
+            includeCharacterGreeting ? compactField('开场消息', firstTextValue(character, ['first_mes', 'first_message', 'firstMessage'])) : '',
             compactField('对话示例', firstTextValue(character, ['mes_example', 'example_dialogue'])),
             compactField('角色备注', firstTextValue(character, ['creatorcomment', 'creator_comment', 'comment', 'notes'])),
             compactField('聊天备注', firstTextValue(chatMetadata, chatMetadataKeys)),
@@ -2744,10 +2734,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             }
             if (!isLatestAssistantMessageStable()) {
                 scheduleAutoSummary(callbacks, AUTO_TASK_MESSAGE_STABLE_MS);
-                return;
-            }
-            if (isUserTextInputActive()) {
-                autoTaskArmed = false;
                 return;
             }
             const state = callbacks.getState?.();
