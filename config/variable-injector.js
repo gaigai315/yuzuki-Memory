@@ -505,7 +505,7 @@
         const itemTrackingVectorText = table.id === ITEM_TRACKING_TABLE_ID ? String(options.itemTrackingText || '').trim() : '';
         const worldSettingVectorText = table.id === WORLD_SETTING_TABLE_ID ? String(options.worldSettingText || '').trim() : '';
         const vectorText = characterVectorText || itemTrackingVectorText || worldSettingVectorText;
-        if (!rows.length && !vectorText) return `【${table.name}】\n(历史存档，当前暂无数据)`;
+        if (!rows.length && !vectorText) return '';
         const vectorTitle = table.id === WORLD_SETTING_TABLE_ID
             ? '世界设定向量召回'
             : (table.id === ITEM_TRACKING_TABLE_ID ? '物品追踪向量召回' : '角色档案向量召回');
