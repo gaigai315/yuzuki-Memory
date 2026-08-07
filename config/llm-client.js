@@ -12,25 +12,25 @@
             label: '自定义（兼容 OpenAI）',
             placeholderUrl: '例如: http://127.0.0.1:8889/v1',
             placeholderModel: '例如: gemini-2.5-pro',
-            defaultMaxTokens: 65536,
+            defaultMaxTokens: 50000,
         },
         openai: {
             label: 'OpenAI',
             placeholderUrl: '例如: https://api.openai.com/v1',
             placeholderModel: '例如: gpt-4o',
-            defaultMaxTokens: 65536,
+            defaultMaxTokens: 50000,
         },
         gemini: {
             label: 'Google Gemini',
             placeholderUrl: '例如: https://generativelanguage.googleapis.com/v1beta',
             placeholderModel: '例如: gemini-1.5-flash',
-            defaultMaxTokens: 65536,
+            defaultMaxTokens: 50000,
         },
         claude: {
             label: 'Claude',
             placeholderUrl: '例如: https://api.anthropic.com/v1/messages',
             placeholderModel: '例如: claude-3-5-sonnet-20241022',
-            defaultMaxTokens: 65536,
+            defaultMaxTokens: 50000,
         },
         deepseek: {
             label: 'DeepSeek',
@@ -48,13 +48,13 @@
             label: '本地反代（内网）',
             placeholderUrl: '例如: http://127.0.0.1:7860/v1',
             placeholderModel: '例如: gpt-3.5-turbo',
-            defaultMaxTokens: 65536,
+            defaultMaxTokens: 50000,
         },
         compatible: {
             label: '兼容中转/代理',
             placeholderUrl: '例如: https://api.xxx.com/v1',
             placeholderModel: '例如: gpt-4o, deepseek-chat',
-            defaultMaxTokens: 65536,
+            defaultMaxTokens: 50000,
         },
     };
     const GEMINI_SAFETY_SETTINGS = [
@@ -296,7 +296,7 @@
     }
 
     function getProviderDefaultMaxTokens(provider) {
-        return PROVIDERS[provider]?.defaultMaxTokens || 65536;
+        return PROVIDERS[provider]?.defaultMaxTokens || 50000;
     }
 
     function resolveCustomProxyPayload(config, messages, options = {}) {
@@ -347,13 +347,11 @@
         };
 
         if (source === 'custom') {
-            payload.custom_include_headers = {
+            const customHeaders = {
                 'Content-Type': 'application/json',
             };
-        }
-
-        if (source === 'custom' && authHeader) {
-            payload.custom_include_headers.Authorization = authHeader;
+            if (authHeader) customHeaders.Authorization = authHeader;
+            payload.custom_include_headers = JSON.stringify(customHeaders);
         }
 
         if (model.toLowerCase().includes('gemini')) {
@@ -1069,8 +1067,9 @@
                 proxy_password: config.apiKey,
             };
             if (nextSource === 'custom') {
-                payload.custom_include_headers = { 'Content-Type': 'application/json' };
-                if (authHeader) payload.custom_include_headers.Authorization = authHeader;
+                const customHeaders = { 'Content-Type': 'application/json' };
+                if (authHeader) customHeaders.Authorization = authHeader;
+                payload.custom_include_headers = JSON.stringify(customHeaders);
             }
             return payload;
         };

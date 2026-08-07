@@ -1552,7 +1552,7 @@
     function getDefaultLlmMaxTokens(provider = '') {
         const clientDefault = YuzukiMemory.LlmClient?.getProviderDefaultMaxTokens?.(provider);
         if (Number.isFinite(Number(clientDefault))) return String(clientDefault);
-        return provider === 'deepseek' || provider === 'siliconflow' ? '8192' : '65536';
+        return provider === 'deepseek' || provider === 'siliconflow' ? '8192' : '50000';
     }
 
     function createPromptSchemeId() {
@@ -11271,8 +11271,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】移除聊天输入框焦点拦截，自动填表与自动总结不再因输入框保持焦点而取消本次触发。',
-            '【新增】新增“任务包含角色卡开场白”开关，默认关闭；关闭时不会把角色卡默认开场白注入后续填表、总结和优化任务。',
+            '【修复】修复同一个 URL 使用不同 key 时，独立 API 错误调用酒馆主 API 的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
