@@ -9,6 +9,7 @@
         smartCalculationLinkage: false,
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
+        keepFirstFloorVisible: false,
     };
     const DEFAULT_AUTO_SUMMARY_SETTINGS = {
         summaryDelay: 2,
@@ -32,6 +33,9 @@
                 smartCalculationLinkage: typeof source.smartCalculationLinkage === 'boolean' ? source.smartCalculationLinkage : DEFAULT_SETTINGS.smartCalculationLinkage,
                 hideFloorsEnabled: typeof source.hideFloorsEnabled === 'boolean' ? source.hideFloorsEnabled : DEFAULT_SETTINGS.hideFloorsEnabled,
                 hiddenFloorCount: normalizeNumber(source.hiddenFloorCount, DEFAULT_SETTINGS.hiddenFloorCount),
+                keepFirstFloorVisible: typeof source.keepFirstFloorVisible === 'boolean'
+                    ? source.keepFirstFloorVisible
+                    : DEFAULT_SETTINGS.keepFirstFloorVisible,
             };
         } catch (_error) {
             return { ...DEFAULT_SETTINGS };
@@ -80,7 +84,7 @@
         return true;
     }
 
-    function collectIndicesToHide(chat, keepFloors) {
+    function collectIndicesToHide(chat, keepFloors, options = {}) {
         const dialogueIndexMap = [];
         chat.forEach((message, index) => {
             if (isDialogueMessage(message)) dialogueIndexMap.push(index);
@@ -93,9 +97,11 @@
         const hideRangeEnd = dialogueIndexMap[hideDialogueCount - 1];
         if (!Number.isInteger(hideRangeEnd) || hideRangeEnd < 0) return [];
 
+        const rangeStart = options.keepFirstFloorVisible === true ? 1 : 0;
+        if (hideRangeEnd < rangeStart) return [];
         const alreadyHidden = getHiddenMessageIndices(chat);
         let lastHiddenBoundary = -1;
-        for (let index = hideRangeEnd; index >= 0; index -= 1) {
+        for (let index = hideRangeEnd; index >= rangeStart; index -= 1) {
             if (alreadyHidden.has(index)) {
                 lastHiddenBoundary = index;
                 break;
@@ -105,14 +111,14 @@
         const shouldHide = [];
         if (lastHiddenBoundary >= 0) {
             const oldRangeEnd = lastHiddenBoundary;
-            const oldRangeSize = oldRangeEnd + 1;
+            const oldRangeSize = oldRangeEnd - rangeStart + 1;
             let oldRangeHiddenCount = 0;
-            for (let index = 0; index <= oldRangeEnd; index += 1) {
+            for (let index = rangeStart; index <= oldRangeEnd; index += 1) {
                 if (alreadyHidden.has(index)) oldRangeHiddenCount += 1;
             }
 
             if (oldRangeHiddenCount / oldRangeSize < 0.5) {
-                for (let index = 0; index <= oldRangeEnd; index += 1) {
+                for (let index = rangeStart; index <= oldRangeEnd; index += 1) {
                     if (!alreadyHidden.has(index)) shouldHide.push(index);
                 }
             }
@@ -123,27 +129,29 @@
             return shouldHide;
         }
 
-        const totalSize = hideRangeEnd + 1;
+        const totalSize = hideRangeEnd - rangeStart + 1;
         let totalHiddenCount = 0;
-        for (let index = 0; index <= hideRangeEnd; index += 1) {
+        for (let index = rangeStart; index <= hideRangeEnd; index += 1) {
             if (alreadyHidden.has(index)) totalHiddenCount += 1;
         }
 
         if (totalHiddenCount / totalSize >= 0.5) return [];
-        for (let index = 0; index <= hideRangeEnd; index += 1) {
+        for (let index = rangeStart; index <= hideRangeEnd; index += 1) {
             if (!alreadyHidden.has(index)) shouldHide.push(index);
         }
         return shouldHide;
     }
 
-    function collectSummaryIndicesToHide(chat, summaryPointer) {
+    function collectSummaryIndicesToHide(chat, summaryPointer, options = {}) {
         if (!Array.isArray(chat)) return [];
         const rangeEnd = Math.min(chat.length, normalizeNumber(summaryPointer, 0)) - 1;
         if (rangeEnd < 0) return [];
 
+        const rangeStart = options.keepFirstFloorVisible === true ? 1 : 0;
+        if (rangeEnd < rangeStart) return [];
         const alreadyHidden = getHiddenMessageIndices(chat);
         let lastHiddenBoundary = -1;
-        for (let index = rangeEnd; index >= 0; index -= 1) {
+        for (let index = rangeEnd; index >= rangeStart; index -= 1) {
             if (alreadyHidden.has(index)) {
                 lastHiddenBoundary = index;
                 break;
@@ -153,14 +161,14 @@
         const shouldHide = [];
         if (lastHiddenBoundary >= 0) {
             const oldRangeEnd = lastHiddenBoundary;
-            const oldRangeSize = oldRangeEnd + 1;
+            const oldRangeSize = oldRangeEnd - rangeStart + 1;
             let oldRangeHiddenCount = 0;
-            for (let index = 0; index <= oldRangeEnd; index += 1) {
+            for (let index = rangeStart; index <= oldRangeEnd; index += 1) {
                 if (alreadyHidden.has(index)) oldRangeHiddenCount += 1;
             }
 
             if (oldRangeHiddenCount / oldRangeSize < 0.5) {
-                for (let index = 0; index <= oldRangeEnd; index += 1) {
+                for (let index = rangeStart; index <= oldRangeEnd; index += 1) {
                     if (!alreadyHidden.has(index)) shouldHide.push(index);
                 }
             }
@@ -171,14 +179,14 @@
             return shouldHide;
         }
 
-        const totalSize = rangeEnd + 1;
+        const totalSize = rangeEnd - rangeStart + 1;
         let totalHiddenCount = 0;
-        for (let index = 0; index <= rangeEnd; index += 1) {
+        for (let index = rangeStart; index <= rangeEnd; index += 1) {
             if (alreadyHidden.has(index)) totalHiddenCount += 1;
         }
 
         if (totalHiddenCount / totalSize >= 0.5) return [];
-        for (let index = 0; index <= rangeEnd; index += 1) {
+        for (let index = rangeStart; index <= rangeEnd; index += 1) {
             if (!alreadyHidden.has(index)) shouldHide.push(index);
         }
         return shouldHide;
@@ -198,11 +206,32 @@
         }
     }
 
-    function updateMessageDom(index) {
+    function updateMessageDom(index, hidden = true) {
         const selector = `#chat .mes[mesid="${index}"], #chat .mes[data-mesid="${index}"]`;
         document.querySelectorAll(selector).forEach((node) => {
-            node.setAttribute('is_system', 'true');
+            node.setAttribute('is_system', String(hidden));
         });
+    }
+
+    async function ensureFirstFloorVisible(options = {}) {
+        const context = options.context || getContext();
+        const chat = options.chat || context?.chat;
+        const firstMessage = Array.isArray(chat) ? chat[0] : null;
+        if (!firstMessage || firstMessage.is_yzm_hidden_floor !== true) {
+            return { success: true, count: 0, indices: [] };
+        }
+
+        firstMessage.is_system = false;
+        delete firstMessage.is_yzm_hidden_floor;
+        updateMessageDom(0, false);
+        try {
+            await saveChat(context);
+            console.log('[yuzuki-Memory] 首楼常驻：已恢复第 0 楼显示。');
+            return { success: true, count: 1, indices: [0] };
+        } catch (error) {
+            console.warn('[yuzuki-Memory] 恢复第 0 楼显示失败。', error);
+            return { success: false, error: String(error?.message || error || '恢复第 0 楼显示失败') };
+        }
     }
 
     function getSummaryPointer(options = {}) {
@@ -251,7 +280,9 @@
         const chat = context?.chat;
         if (!Array.isArray(chat) || !chat.length) return { success: false, skipped: true, reason: 'no_chat' };
 
-        const indices = collectIndicesToHide(chat, keepFloors);
+        const keepFirstFloorVisible = options.keepFirstFloorVisible ?? settings.keepFirstFloorVisible;
+        if (keepFirstFloorVisible) await ensureFirstFloorVisible({ context, chat });
+        const indices = collectIndicesToHide(chat, keepFloors, { keepFirstFloorVisible });
         if (!indices.length) return { success: true, count: 0, indices: [] };
 
         running = true;
@@ -275,6 +306,9 @@
         const chat = context?.chat;
         if (!Array.isArray(chat) || !chat.length) return { success: false, skipped: true, reason: 'no_chat' };
 
+        const pluginSettings = loadSettings();
+        const keepFirstFloorVisible = options.keepFirstFloorVisible ?? pluginSettings.keepFirstFloorVisible;
+        if (keepFirstFloorVisible) await ensureFirstFloorVisible({ context, chat });
         const summaryPointer = getSummaryPointer(options);
         if (summaryPointer <= 0) return { success: true, count: 0, indices: [] };
         if (summaryPointer > chat.length) {
@@ -301,7 +335,7 @@
                 delayFloors,
             };
         }
-        const indices = collectSummaryIndicesToHide(chat, summaryPointer);
+        const indices = collectSummaryIndicesToHide(chat, summaryPointer, { keepFirstFloorVisible });
         if (!indices.length) return { success: true, count: 0, indices: [] };
 
         running = true;
@@ -332,6 +366,7 @@
         loadAutoSummarySettings,
         collectIndicesToHide,
         collectSummaryIndicesToHide,
+        ensureFirstFloorVisible,
         applyContextLimitHiding,
         applySummaryPointerHiding,
         applyConfiguredHiding,

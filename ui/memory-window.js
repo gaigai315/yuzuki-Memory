@@ -157,6 +157,7 @@
         smartCalculationLinkage: false,
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
+        keepFirstFloorVisible: false,
         includeCharacterGreetingInTasks: false,
         enableFloatingIcon: false,
         enableFilling: true,
@@ -1946,6 +1947,7 @@
             smartCalculationLinkage: typeof source.smartCalculationLinkage === 'boolean' ? source.smartCalculationLinkage : DEFAULT_PLUGIN_SETTINGS.smartCalculationLinkage,
             hideFloorsEnabled: typeof source.hideFloorsEnabled === 'boolean' ? source.hideFloorsEnabled : DEFAULT_PLUGIN_SETTINGS.hideFloorsEnabled,
             hiddenFloorCount: Math.round(normalizeNumberSetting(source.hiddenFloorCount, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0)),
+            keepFirstFloorVisible: typeof source.keepFirstFloorVisible === 'boolean' ? source.keepFirstFloorVisible : DEFAULT_PLUGIN_SETTINGS.keepFirstFloorVisible,
             includeCharacterGreetingInTasks: typeof source.includeCharacterGreetingInTasks === 'boolean' ? source.includeCharacterGreetingInTasks : DEFAULT_PLUGIN_SETTINGS.includeCharacterGreetingInTasks,
             enableFloatingIcon: typeof source.enableFloatingIcon === 'boolean' ? source.enableFloatingIcon : DEFAULT_PLUGIN_SETTINGS.enableFloatingIcon,
             enableFilling: typeof source.enableFilling === 'boolean' ? source.enableFilling : DEFAULT_PLUGIN_SETTINGS.enableFilling,
@@ -2016,6 +2018,7 @@
         void YuzukiMemory.FloorHider?.applyContextLimitHiding?.({
             force: options.force === true,
             keepFloors: settings.hiddenFloorCount,
+            keepFirstFloorVisible: settings.keepFirstFloorVisible,
         });
     }
 
@@ -2024,6 +2027,7 @@
         if (!settings.hideSummaryFloors && !options.force) return;
         void YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
             force: options.force === true,
+            keepFirstFloorVisible: getPluginSettings().keepFirstFloorVisible,
         });
     }
 
@@ -9278,6 +9282,7 @@
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
             createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标，点击即可打开记忆插件。拖动后会记住位置。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon')),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
+            createPluginConfigRow('首楼常驻', '开启后，酒馆第 0 楼始终保持显示；仅影响隐藏楼层，不改变填表、总结和优化任务的取材范围。', 'fa-solid fa-thumbtack', createConfigSwitch(settings.keepFirstFloorVisible, 'keepFirstFloorVisible')),
             createPluginConfigRow('任务包含角色卡开场白', '开启后，填表、总结和优化任务会额外注入角色卡的默认开场白；默认关闭，关闭时仅使用任务楼层范围内的实际聊天内容。', 'fa-solid fa-message', createConfigSwitch(settings.includeCharacterGreetingInTasks, 'includeCharacterGreetingInTasks')),
             createTaskWorldbookPanel()
         );
@@ -11271,7 +11276,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复同一个 URL 使用不同 key 时，独立 API 错误调用酒馆主 API 的问题。',
+            '【新增】正文首楼常驻，开启后不再隐藏0楼。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -13798,6 +13803,9 @@
                         updatePluginSetting(pluginSettingKey, isOn);
                         if (pluginSettingKey === 'hideFloorsEnabled' && isOn) {
                             applyHiddenFloorsFromSettings();
+                        }
+                        if (pluginSettingKey === 'keepFirstFloorVisible' && isOn) {
+                            void YuzukiMemory.FloorHider?.ensureFirstFloorVisible?.();
                         }
                         if (pluginSettingKey === 'enableFilling') {
                             configSwitch.closest('.yzm-fill-mode-card')?.querySelectorAll('.yzm-fill-settings-body').forEach((panel) => {
