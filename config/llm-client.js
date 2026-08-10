@@ -753,7 +753,7 @@
         const message = String(error?.message || error || '解析响应失败').trim();
         const status = response ? `HTTP ${response.status || '?'} ${response.statusText || ''}`.trim() : '';
         const body = String(rawText || '').trim();
-        const preview = body ? `\n\n响应体预览：\n${body.slice(0, 1200)}` : '\n\n响应体为空。';
+        const preview = body ? `\n\n响应体（完整）：\n${body}` : '\n\n响应体为空。';
         return [message, status, preview].filter(Boolean).join('\n');
     }
 

@@ -83,7 +83,7 @@
         return `${from}-${Math.max(from, exclusiveEnd - 1)}`;
     }
 
-    function notifyAutoTaskFailure(task = {}, error = '') {
+    function notifyAutoTaskFailure(task = {}, error = '', callbacks = {}) {
         const taskTitle = String(task?.title || '自动记忆任务').trim();
         const message = String(error?.message || error || '未知错误').trim();
         const range = Number.isFinite(Number(task?.start)) && Number.isFinite(Number(task?.end))
@@ -93,6 +93,20 @@
         const detail = message
             ? `${taskTitle}失败${range}：${message}\n${retryHint}`
             : `${taskTitle}失败${range}。\n${retryHint}`;
+        if (typeof callbacks.onAutoTaskFailure === 'function') {
+            try {
+                const handled = callbacks.onAutoTaskFailure({ task, taskTitle, message, range, retryHint, detail });
+                if (handled !== false) {
+                    Promise.resolve(handled).catch((callbackError) => {
+                        console.warn('[yuzuki-Memory] Failed to show auto task failure dialog:', callbackError);
+                    });
+                    console.warn(`[yuzuki-Memory] ${detail}`);
+                    return;
+                }
+            } catch (callbackError) {
+                console.warn('[yuzuki-Memory] Failed to show auto task failure dialog:', callbackError);
+            }
+        }
         try {
             if (typeof toastr !== 'undefined' && typeof toastr.error === 'function') {
                 toastr.error(detail, '柚月记忆', { timeOut: 8000 });
@@ -1045,15 +1059,15 @@
 
     function previewRawModelText(text = '') {
         const source = String(text || '').trim();
-        return source ? source.slice(0, 2000) : '（空）';
+        return source || '（空）';
     }
 
     function formatTraceParseError(message, text = '') {
-        return `${message}\n\n模型原始回复预览：\n${previewRawModelText(text)}`;
+        return `${message}\n\n模型原始回复（完整）：\n${previewRawModelText(text)}`;
     }
 
     function formatSummaryParseError(message, text = '') {
-        return `${message}\n\n模型原始回复预览：\n${previewRawModelText(text)}`;
+        return `${message}\n\n模型原始回复（完整）：\n${previewRawModelText(text)}`;
     }
 
     function getSummaryResponseIntegrityError(text = '', response = {}) {
@@ -2926,7 +2940,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                         : await runAutoSummaryTask(activeState, activeTask, settings, callbacks);
                     if (result?.success === false) {
                         console.warn('[yuzuki-Memory] Auto task skipped:', result.error);
-                        notifyAutoTaskFailure(activeTask, result.error);
+                        notifyAutoTaskFailure(activeTask, result.error, callbacks);
                         break;
                     }
                     if (result?.skipped || result?.postponed) {
@@ -2947,7 +2961,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 }
             } catch (error) {
                 console.warn('[yuzuki-Memory] Auto task failed:', error);
-                notifyAutoTaskFailure(task, error);
+                notifyAutoTaskFailure(task, error, callbacks);
             } finally {
                 autoSummaryRunning = false;
                 autoSummaryPromptOpen = false;

@@ -6141,6 +6141,7 @@
             const preview = document.createElement('textarea');
             preview.className = 'yzm-task-result-preview';
             preview.value = formatTaskPreview(options.result);
+            preview.readOnly = options.readOnly === true;
             preparePluginTextControl(preview);
 
             let compare = null;
@@ -6173,7 +6174,7 @@
 
             const actions = document.createElement('div');
             actions.className = 'yzm-structure-actions yzm-task-result-actions';
-            const confirm = createButton('确认写入', 'yzm-add-table-confirm');
+            const confirm = createButton(options.confirmLabel || '确认写入', 'yzm-add-table-confirm');
             actions.append(confirm);
 
             dialog.append(header, meta, compare || preview, actions);
@@ -6197,7 +6198,9 @@
                 event.stopImmediatePropagation?.();
             };
             close.onclick = () => closeWith({ action: 'cancel', cancelled: true });
-            confirm.onclick = () => closeWith({ action: 'confirm', text: editableTextarea.value });
+            confirm.onclick = () => closeWith(options.readOnly === true
+                ? { action: 'confirm' }
+                : { action: 'confirm', text: editableTextarea.value });
             dialog.addEventListener('click', (event) => event.stopPropagation());
             document.addEventListener('keydown', handleKeydown, true);
         });
@@ -14280,6 +14283,17 @@
                     title: `${task?.title || '自动任务'}结果确认`,
                     description: '完成后未启用静默保存，确认后才会写入插件记忆。可先编辑结果再写入。',
                     result,
+                });
+            },
+            onAutoTaskFailure(payload = {}) {
+                const root = document.getElementById(ROOT_ID);
+                if (!root) return false;
+                return openTaskResultConfirmDialog(root, {
+                    title: `${payload.taskTitle || '自动任务'}失败`,
+                    description: '以下为完整错误与模型原始回复。此次结果未写入，任务指针也未推进。',
+                    result: { text: String(payload.detail || payload.message || '未知错误') },
+                    readOnly: true,
+                    confirmLabel: '确定',
                 });
             },
             syncSummaryToVectorBook(options = {}) {
