@@ -5450,10 +5450,10 @@
             createTraceExecutionCard({
                 taskKind: 'summary',
                 includeBatch: false,
+                forceConfirm: true,
                 radioName: 'yzm-summary-run-mode',
-                confirmLabel: '弹窗确认（推荐）',
-                confirmDesc: '优化完成后弹窗对比旧内容和新内容，确认后写入',
-                silentDesc: '自动完成当前总结优化，完成后仅显示最终结果',
+                confirmLabel: '弹窗确认',
+                confirmDesc: '优化完成后对比旧内容和新内容，确认后替换所选总结',
             }),
             createTraceStartButton('开始优化', 'summaryOptimize')
         );
@@ -5609,7 +5609,7 @@
 
         const actions = document.createElement('div');
         actions.className = 'yzm-structure-actions yzm-summary-optimize-dialog-actions';
-        const cancel = createButton('取消', 'yzm-add-table-cancel');
+        const cancel = createButton('取消', 'yzm-add-table-confirm');
         const confirm = createButton('确定', 'yzm-add-table-confirm');
         actions.append(cancel, confirm);
 
@@ -5840,7 +5840,8 @@
     function createTraceRunModeSettings(options = {}) {
         const settings = getPluginSettings();
         const modeKey = options.taskKind === 'summary' ? 'summaryRunMode' : 'traceRunMode';
-        const mode = settings[modeKey] === 'silent' ? 'silent' : 'confirm';
+        const forceConfirm = options.forceConfirm === true;
+        const mode = !forceConfirm && settings[modeKey] === 'silent' ? 'silent' : 'confirm';
         const block = document.createElement('div');
         block.className = 'yzm-trace-setting-block';
         const title = document.createElement('div');
@@ -5849,11 +5850,11 @@
         const confirmLabel = options.confirmLabel || '弹窗确认';
         const confirmDesc = options.confirmDesc || '每批处理后弹窗确认，便于检查结果与进度';
         const silentDesc = options.silentDesc || '自动执行全部批次，完成后仅显示最终结果';
-        block.append(
-            title,
-            createTraceRadioOption(confirmLabel, confirmDesc, mode !== 'silent', options.radioName),
-            createTraceRadioOption('静默执行（不弹窗，直接写入）', silentDesc, mode === 'silent', options.radioName)
-        );
+        const choices = [createTraceRadioOption(confirmLabel, confirmDesc, mode !== 'silent', options.radioName)];
+        if (!forceConfirm) {
+            choices.push(createTraceRadioOption('静默执行（不弹窗，直接写入）', silentDesc, mode === 'silent', options.radioName));
+        }
+        block.append(title, ...choices);
         return block;
     }
 
@@ -6099,6 +6100,7 @@
                 const payload = target.oldPayload || {};
                 return [
                     `【原总结 ${index + 1}】${target.title ? ` ${target.title}` : ''}`,
+                    target.floorText ? `楼层范围：${target.floorText}` : '',
                     payload.character ? `核心角色：${payload.character}` : '',
                     payload.summary ? `总结内容：\n${payload.summary}` : '',
                     payload.unresolved ? `未解决问题：\n${payload.unresolved}` : '',
@@ -6436,7 +6438,8 @@
     }
 
     async function runSingleTaskBatch(action, options) {
-        const taskOptions = { ...options, previewOnly: !options.silent };
+        const requiresConfirmation = action === 'summaryOptimize' || !options.silent;
+        const taskOptions = { ...options, previewOnly: requiresConfirmation };
         let state = getState();
         let result;
         if (action === 'trace') result = await YuzukiMemory.TaskRunner.runTrace(state, taskOptions);
@@ -6464,15 +6467,18 @@
                 if (!result?.success) return result;
                 state = getState();
                 result = commitTaskResult(action, state, result);
+                return result;
             }
         }
         if (!result?.success) return result;
-        if (!options.silent) {
+        if (requiresConfirmation) {
             const confirmation = await openTaskResultConfirmDialog(ensureRoot(), {
                 title: `${getTaskActionLabel(action)}结果确认`,
                 description: options.batchIndex
                     ? `第 ${options.batchIndex}/${options.batchTotal} 批，楼层 ${formatTaskDisplayRange(options.start, options.end)}。确认后才会写入插件记忆。`
-                    : (action === 'summaryOptimize' ? '请对比旧内容和新内容，确认后才会写入插件记忆。' : '非静默模式下，确认后才会写入插件记忆。'),
+                    : (action === 'summaryOptimize'
+                        ? `请对比旧内容和新内容。本次返回的全部总结将写入${result?.floorText ? `楼层 ${result.floorText}` : '所选总结对应楼层'}，确认后替换所选旧总结。`
+                        : '非静默模式下，确认后才会写入插件记忆。'),
                 result,
                 compare: action === 'summaryOptimize',
             });
@@ -11276,7 +11282,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【新增】正文首楼常驻，开启后不再隐藏0楼。',
+            '【优化】总结优化及流式返回的兼容问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

@@ -1056,6 +1056,49 @@
         return `${message}\n\n模型原始回复预览：\n${previewRawModelText(text)}`;
     }
 
+    function getSummaryResponseIntegrityError(text = '', response = {}) {
+        let source = String(text || '').trim();
+        if (!source) return '模型返回的总结内容为空。';
+        if (response?.truncated === true || /达到最大 Token 限制|finish_reason=(?:length|MAX_TOKENS)/i.test(source)) {
+            return '模型输出达到最大 Token 限制，结果已被截断。';
+        }
+        source = source.replace(/^```(?:xml|html|memory)?\s*/i, '').replace(/```\s*$/i, '').trim();
+        const closeMatches = [...source.matchAll(/<\/Memory\s*>/gi)];
+        if (!closeMatches.length) return '总结回复缺少结尾 </Memory>，可能已被截断。';
+        if (closeMatches.length > 1) return '总结回复包含多个 </Memory> 结尾，疑似重复生成。';
+        const closeMatch = closeMatches[0];
+        const trailingText = source.slice((closeMatch.index || 0) + closeMatch[0].length).trim();
+        if (trailingText) return '总结回复在 </Memory> 之后仍有额外内容，疑似重复生成。';
+        const openMatches = [...source.matchAll(/<Memory(?:\s+[^>]*)?>/gi)];
+        if (openMatches.length > 1) return '总结回复包含多个 <Memory> 开头，疑似重复生成。';
+
+        const headingPattern = /【\s*(主线总结|支线总结)\s*(?:[:：\-－—]\s*([^】]+?))?\s*】/g;
+        const seenSections = new Set();
+        for (const match of source.matchAll(headingPattern)) {
+            const kind = match[1].includes('支线') ? 'branch' : 'main';
+            const character = kind === 'branch' ? String(match[2] || '').trim().toLowerCase() : '';
+            const key = `${kind}:${character}`;
+            if (seenSections.has(key)) {
+                return kind === 'main'
+                    ? '总结回复包含多个【主线总结】分块，疑似重复生成。'
+                    : `总结回复重复生成了同一支线角色“${String(match[2] || '').trim()}”。`;
+            }
+            seenSections.add(key);
+        }
+        return '';
+    }
+
+    function validateSummaryGenerationResponse(response = {}) {
+        const error = getSummaryResponseIntegrityError(response?.text, response);
+        if (!error) return response;
+        return {
+            ...response,
+            success: false,
+            error: formatSummaryParseError(error, response?.text),
+            text: String(response?.text || ''),
+        };
+    }
+
     function extractMemorySummaryText(text = '') {
         const source = normalizeMemoryEnvelope(text);
         const match = source.match(/<Memory(?:\s+[^>]*)?>([\s\S]*?)<\/Memory>/i);
@@ -1563,6 +1606,98 @@
         return end > start ? { start, end, floorScope: getRecordFloorScope(record) } : null;
     }
 
+    function parseSummaryFloorBounds(value) {
+        const source = String(value || '').trim();
+        if (!source) return [];
+        const ranges = [...source.matchAll(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/g)].map((match) => {
+            const first = Math.max(0, Math.round(Number(match[1]) || 0));
+            const second = Math.max(0, Math.round(Number(match[2]) || 0));
+            return { start: Math.min(first, second), end: Math.max(first, second) };
+        });
+        if (ranges.length) return ranges;
+        if (!/^\d+$/.test(source)) return [];
+        const floor = Math.max(0, Math.round(Number(source) || 0));
+        return [{ start: floor, end: floor }];
+    }
+
+    function getSummaryRecordOptimizeRanges(record, fallbackFloorScope = null) {
+        const recordScope = getRecordFloorScope(record, fallbackFloorScope);
+        const ranges = [];
+        const appendFloorText = (value, floorScope = recordScope) => {
+            parseSummaryFloorBounds(value).forEach((range) => ranges.push({
+                ...range,
+                floorScope: normalizeFloorScope(floorScope, recordScope),
+            }));
+        };
+        const appendStoredRange = (range, floorScope = recordScope) => {
+            const normalized = getRangeMeta(range, floorScope);
+            if (!normalized) return;
+            ranges.push({
+                start: normalized.start,
+                end: Math.max(normalized.start, normalized.end - 1),
+                floorScope: normalizeFloorScope(normalized.floorScope, floorScope),
+            });
+        };
+
+        if (Array.isArray(record?.summarySegments) && record.summarySegments.length) {
+            record.summarySegments.forEach((segment) => {
+                const before = ranges.length;
+                appendFloorText(segment?.floor || segment?.楼层数 || segment?.rangeLabel, segment?.floorScope || recordScope);
+                if (ranges.length === before) appendStoredRange(segment?.range, segment?.floorScope || recordScope);
+            });
+            if (ranges.length) return ranges;
+        }
+
+        const values = record?.values || {};
+        appendFloorText(values.楼层数 || values.range || values['楼层范围'] || values['楼层'], recordScope);
+        if (ranges.length) return ranges;
+        const task = getSummaryRecordTaskMeta(record);
+        appendStoredRange(task?.range, task?.floorScope || recordScope);
+        return ranges;
+    }
+
+    function getSummaryOptimizeRange(records = [], state = null) {
+        const fallbackFloorScope = getCurrentFloorScope(state);
+        const recordRanges = (Array.isArray(records) ? records : []).map((record) => (
+            getSummaryRecordOptimizeRanges(record, fallbackFloorScope)
+        ));
+        const knownRanges = recordRanges.flat();
+        if (!knownRanges.length) {
+            return { range: null, floorScope: fallbackFloorScope, floorText: '', missingCount: recordRanges.length };
+        }
+        const missingCount = recordRanges.filter((ranges) => !ranges.length).length;
+        if (missingCount) {
+            return {
+                range: null,
+                floorScope: fallbackFloorScope,
+                floorText: '',
+                missingCount,
+                error: `所选总结中有 ${missingCount} 条缺少楼层范围，无法安全计算合并后的范围。`,
+            };
+        }
+        const scopeIds = new Set(knownRanges
+            .map((range) => normalizeFloorScope(range.floorScope, fallbackFloorScope)?.id || '')
+            .filter(Boolean));
+        if (scopeIds.size > 1) {
+            return {
+                range: null,
+                floorScope: null,
+                floorText: '',
+                missingCount: 0,
+                error: '所选总结跨越不同篇章，不能合并为同一个楼层范围。',
+            };
+        }
+        const start = Math.min(...knownRanges.map((range) => range.start));
+        const end = Math.max(...knownRanges.map((range) => range.end));
+        const floorScope = normalizeFloorScope(knownRanges[0]?.floorScope, fallbackFloorScope);
+        return {
+            range: getRangeMeta({ start, end: end + 1, floorScope }, floorScope),
+            floorScope,
+            floorText: `${start}-${end}`,
+            missingCount: 0,
+        };
+    }
+
     function getRangeMetaFromFloorText(value, floorScope = null) {
         const match = String(value || '').match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
         if (!match) return null;
@@ -2014,41 +2149,44 @@
         return { ...result, success: true, count: records.length, record: records[0] || null, records, hiddenPlotSummaryCount };
     }
 
-    function overwriteSummaryRecord(table, record, payload) {
-        if (!table || !record || !payload?.summary) return null;
-        record.values = record.values && typeof record.values === 'object' ? record.values : {};
-        const primary = getPrimaryColumn(table);
-        record.values[primary] = record.values[primary] || payload.title || (payload.kind === 'branch' ? '支线总结' : '主线总结');
-        record.values.核心角色 = payload.kind === 'branch' ? (payload.character || record.values.核心角色 || '') : '';
-        record.values.总结内容 = payload.summary;
-        record.values.未解决问题 = payload.unresolved || '';
-        record.values.备注 = payload.remark || '';
-        return record;
-    }
-
     function commitSummaryOptimizeResult(state, result) {
         const targets = Array.isArray(result?.targets) ? result.targets : [];
         const payloads = (Array.isArray(result?.payloads) ? result.payloads : [result?.payload].filter(Boolean)).filter((payload) => payload?.summary);
         if (!payloads.length) return { ...result, success: false, error: '优化结果缺少 summary/总结内容。' };
         const table = stateTables(state).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
         if (!table) return { ...result, success: false, error: '未找到记忆总结表。' };
+        if (!targets.length) return { ...result, success: false, error: '优化结果缺少原总结目标，已取消写入以避免误删数据。' };
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
         const records = stateRecords(state, FIXED_SUMMARY_TABLE_ID);
-        if (targets.length <= 1) {
-            const targetId = String(targets[0]?.id || '');
-            const record = records.find((entry) => String(entry?.id || '') === targetId);
-            if (!record) return { ...result, success: false, error: '未找到要覆盖的原总结。' };
-            const updated = overwriteSummaryRecord(table, record, {
-                ...payloads[0],
-                kind: payloads[0].kind || targets[0]?.kind || getSummaryRecordKind(record),
-            });
-            return { ...result, success: true, count: updated ? 1 : 0, record: updated, records: updated ? [updated] : [] };
-        }
-
         const removeIds = new Set(targets.map((target) => String(target?.id || '')).filter(Boolean));
+        const sourceRecords = records.filter((record) => removeIds.has(String(record?.id || '')));
+        if (sourceRecords.length !== removeIds.size) {
+            return { ...result, success: false, error: '部分原总结已发生变化，已取消写入以避免误删数据。' };
+        }
+        const calculatedRange = getSummaryOptimizeRange(sourceRecords, state);
+        if (calculatedRange.error) return { ...result, success: false, error: calculatedRange.error };
+        const range = calculatedRange.range;
+        const floorScope = normalizeFloorScope(result?.meta?.floorScope, calculatedRange.floorScope || getCurrentFloorScope(state));
         state.records[FIXED_SUMMARY_TABLE_ID] = records.filter((record) => !removeIds.has(String(record?.id || '')));
-        const created = payloads.map((payload) => upsertSummaryRecord(state, payload, { autoTaskType: 'optimize' })).filter(Boolean);
-        return { ...result, success: true, count: created.length, record: created[0] || null, records: created, removedCount: removeIds.size };
+        const created = payloads.map((payload) => upsertSummaryRecord(state, payload, {
+            autoTaskType: 'optimize',
+            range,
+            floorScope,
+        })).filter(Boolean);
+        if (created.length !== payloads.length) {
+            state.records[FIXED_SUMMARY_TABLE_ID] = records;
+            return { ...result, success: false, count: 0, error: '优化结果没有完整写入全部新总结，原总结未被替换。' };
+        }
+        return {
+            ...result,
+            success: true,
+            count: created.length,
+            record: created[0] || null,
+            records: created,
+            removedCount: sourceRecords.length,
+            range,
+            floorText: calculatedRange.floorText || result?.floorText || '',
+        };
     }
 
     function rebuildTaskResultFromText(action, originalResult = {}, editedText = '') {
@@ -2065,6 +2203,15 @@
             };
         }
         if (action === 'summary' || action === 'summaryOptimize') {
+            const integrityError = getSummaryResponseIntegrityError(text);
+            if (integrityError) {
+                return {
+                    ...originalResult,
+                    success: false,
+                    error: formatSummaryParseError(integrityError, text),
+                    text,
+                };
+            }
             const payloads = parseSummaryResponse(text);
             return {
                 ...originalResult,
@@ -2125,11 +2272,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 优化后的支线总结正文
 </Memory>
 规则：
-1. 单条优化只输出对应分块，分块类型必须与原总结一致。
-2. 多条合并优化可输出一个或多个分块，但必须覆盖被选中旧总结里的关键事实，不要只输出增量差异。
-3. 主线分块标题必须是【主线总结】。
-4. 支线分块标题必须是【支线总结：角色名】，且只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
-5. 分块正文必须是最终可直接落盘的内容。`;
+1. 无论输入几条总结，同一主线只输出一个主线分块，同一核心角色的支线只输出一个支线分块。
+2. 原总结中确实包含独立角色支线时，即使输入只有一条主线，也可以在保留主线的同时新增对应支线分块；不得编造没有依据的支线。
+3. 多条合并优化必须覆盖被选中旧总结里的关键事实，不要只输出增量差异；同一事件最终只能保留在一个分块中。
+4. 主线分块标题必须是【主线总结】。
+5. 支线分块标题必须是【支线总结：角色名】，且只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
+6. 分块正文必须是最终可直接落盘的内容。楼层范围由插件本地绑定，不要输出或猜测楼层范围。`;
         }
         return `你是记忆表格优化助手。请整理现有表格内容，合并重复、修正冲突。只输出 JSON，格式同追溯任务。`;
     }
@@ -2143,7 +2291,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 【支线总结：角色名】
 优化后的支线总结正文
 </Memory>
-单条优化只输出对应分块；多条合并优化可输出一个或多个分块。分块正文必须是最终可直接落盘的内容。支线标题中的角色名只能填写一个具体角色名，不要写组织名、势力名、事件名、分类名或多个角色名。`;
+同一主线只输出一个主线分块，同一核心角色的支线只输出一个支线分块。原总结中确实包含独立角色支线时，即使输入只有一条主线，也可以新增对应支线分块，但不得编造。多条合并结果必须覆盖被选中旧总结里的关键事实，不要只输出增量差异。分块正文必须是最终可直接落盘的内容。支线标题中的角色名只能填写一个具体角色名，不要写组织名、势力名、事件名、分类名或多个角色名。楼层范围由插件本地绑定，不要输出或猜测。`;
     }
 
     function buildTaskRangeText(range, kind = 'trace') {
@@ -2253,7 +2401,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
         const response = await generate(built.messages, { ...options, kind: 'summary' });
         if (!response.success) return response;
-        const payloads = parseSummaryResponse(response.text);
+        const validatedResponse = validateSummaryGenerationResponse(response);
+        if (!validatedResponse.success) return validatedResponse;
+        const payloads = parseSummaryResponse(validatedResponse.text);
         if (!payloads.length) return { success: false, error: formatSummaryParseError('总结结果缺少可落盘的分块正文。', response.text), text: response.text };
         const result = {
             success: true,
@@ -2301,6 +2451,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     async function runSummaryOptimize(state, options = {}) {
         const targetInfo = getSummaryOptimizeTargets(state, options);
         if (!targetInfo.records.length) return { success: false, error: '没有可优化的总结内容。' };
+        const optimizeRange = getSummaryOptimizeRange(targetInfo.records, state);
+        if (optimizeRange.error) return { success: false, error: optimizeRange.error };
         const summaries = targetInfo.records
             .map((record, index) => summaryRecordToOptimizeText(targetInfo.table, record, index))
             .filter(Boolean)
@@ -2327,7 +2479,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         ]);
         const response = await generate(messages, { ...options, kind: 'summaryOptimize' });
         if (!response.success) return response;
-        const payloads = parseSummaryResponse(response.text);
+        const validatedResponse = validateSummaryGenerationResponse(response);
+        if (!validatedResponse.success) return validatedResponse;
+        const payloads = parseSummaryResponse(validatedResponse.text);
         if (!payloads.length) return { success: false, error: formatSummaryParseError('优化结果缺少可落盘的分块正文。', response.text), text: response.text };
         const result = {
             success: true,
@@ -2335,15 +2489,22 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             payload: payloads[0],
             payloads,
             preview: payloads.map((payload) => getSummaryPreview(payload)).filter(Boolean).join('\n\n'),
-            text: response.text,
+            text: validatedResponse.text,
+            range: optimizeRange.range,
+            floorText: optimizeRange.floorText,
             targets: targetInfo.records.map((record) => ({
                 id: record.id,
                 kind: getSummaryRecordKind(record),
                 title: String(record?.values?.[getPrimaryColumn(targetInfo.table)] || record?.values?.总结标题 || '').trim(),
+                floorText: String(record?.values?.楼层数 || record?.values?.range || record?.values?.['楼层范围'] || '').trim(),
                 oldPayload: getSummaryRecordPayload(targetInfo.table, record),
                 oldText: summaryRecordToOptimizeText(targetInfo.table, record, 0),
             })),
-            meta: { autoTaskType: '' },
+            meta: {
+                autoTaskType: '',
+                range: optimizeRange.range,
+                floorScope: optimizeRange.floorScope,
+            },
         };
         return options.previewOnly ? result : commitSummaryOptimizeResult(state, result);
     }
@@ -2378,7 +2539,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             success: true,
             floor: latest.index,
             rawText,
-            text: response.text,
+            text: validatedResponse.text,
             reasoning: String(parsed?.reasoning || '').trim(),
             blacklist: normalizeTagList(parsed?.blacklist),
             whitelist: normalizeTagList(parsed?.whitelist),

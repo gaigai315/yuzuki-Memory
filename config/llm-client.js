@@ -96,6 +96,10 @@
         return `${base}\n\n[上游返回 finish_reason=length，已输出已接收内容；来源=${source}]`;
     }
 
+    function isTokenLimitFinishReason(value = '') {
+        return ['LENGTH', 'MAX_TOKENS', 'MAX_TOKEN'].includes(String(value || '').trim().toUpperCase());
+    }
+
     async function getCsrfToken(forceRefresh = false) {
         if (!forceRefresh && typeof window.getRequestHeaders === 'function') {
             const headers = window.getRequestHeaders() || {};
@@ -430,50 +434,91 @@
             .filter(Boolean);
     }
 
-    function extractStreamContent(chunk) {
-        if (!chunk || typeof chunk !== 'object') return { content: '', reasoning: '', finishReason: '', error: '' };
-        const error = chunk.error?.message || chunk.error || '';
-        const finishReason = chunk.choices?.[0]?.finish_reason || chunk.candidates?.[0]?.finishReason || '';
-        if (['SAFETY', 'RECITATION', 'safety'].includes(finishReason)) {
-            return { content: '', reasoning: '', finishReason, error: `内容被安全策略拦截 (${finishReason})` };
+    function normalizeStreamTextValue(value) {
+        if (typeof value === 'string') return value;
+        if (typeof value === 'number') return String(value);
+        if (Array.isArray(value)) {
+            return value.map((part) => normalizeStreamTextValue(part?.text ?? part?.content ?? part)).join('');
         }
-        const reasoning = chunk.choices?.[0]?.delta?.reasoning_content
-            || chunk.choices?.[0]?.message?.reasoning_content
-            || chunk.data?.choices?.[0]?.delta?.reasoning_content
-            || chunk.data?.choices?.[0]?.message?.reasoning_content
+        if (value && typeof value === 'object') {
+            return normalizeStreamTextValue(value.text ?? value.content ?? '');
+        }
+        return '';
+    }
+
+    function extractStreamContent(chunk) {
+        if (!chunk || typeof chunk !== 'object') {
+            return { content: '', contentMode: 'delta', reasoning: '', reasoningMode: 'delta', finishReason: '', terminal: false, error: '' };
+        }
+        const error = chunk.error?.message || (typeof chunk.error === 'string' ? chunk.error : '') || '';
+        const choice = chunk.choices?.[0] || chunk.data?.choices?.[0] || null;
+        const finishReason = choice?.finish_reason
+            || choice?.finishReason
+            || chunk.candidates?.[0]?.finishReason
+            || chunk.data?.candidates?.[0]?.finishReason
             || '';
-        const geminiPartsText = Array.isArray(chunk.candidates?.[0]?.content?.parts)
-            ? chunk.candidates[0].content.parts.map((part) => String(part?.text || '')).join('')
-            : '';
-        const content = chunk.choices?.[0]?.delta?.content
-            || chunk.choices?.[0]?.message?.content
-            || chunk.data?.choices?.[0]?.message?.content
-            || chunk.choices?.[0]?.text
-            || chunk.data?.choices?.[0]?.text
-            || geminiPartsText
-            || chunk.delta?.text
-            || chunk.content_block?.text
-            || '';
-        return { content, reasoning, finishReason, error };
+        if (['SAFETY', 'RECITATION', 'safety'].includes(finishReason)) {
+            return {
+                content: '',
+                contentMode: 'delta',
+                reasoning: '',
+                reasoningMode: 'delta',
+                finishReason,
+                terminal: true,
+                error: `内容被安全策略拦截 (${finishReason})`,
+            };
+        }
+
+        const contentCandidates = [
+            { value: choice?.delta?.content, mode: 'delta' },
+            { value: choice?.message?.content, mode: 'snapshot' },
+            { value: choice?.text, mode: 'delta' },
+            { value: chunk.candidates?.[0]?.content?.parts, mode: 'delta' },
+            { value: chunk.data?.candidates?.[0]?.content?.parts, mode: 'delta' },
+            { value: typeof chunk.delta === 'string' ? chunk.delta : chunk.delta?.text, mode: 'delta' },
+            { value: chunk.content_block?.text, mode: 'delta' },
+            { value: chunk.response?.output_text, mode: 'snapshot' },
+        ];
+        const reasoningCandidates = [
+            { value: choice?.delta?.reasoning_content, mode: 'delta' },
+            { value: choice?.message?.reasoning_content, mode: 'snapshot' },
+        ];
+        const contentEntry = contentCandidates.find((entry) => normalizeStreamTextValue(entry.value));
+        const reasoningEntry = reasoningCandidates.find((entry) => normalizeStreamTextValue(entry.value));
+        const responseType = String(chunk.type || '').trim().toLowerCase();
+        const terminal = !!finishReason || ['message_stop', 'response.completed', 'response.done', 'done'].includes(responseType);
+        return {
+            content: normalizeStreamTextValue(contentEntry?.value),
+            contentMode: contentEntry?.mode || 'delta',
+            reasoning: normalizeStreamTextValue(reasoningEntry?.value),
+            reasoningMode: reasoningEntry?.mode || 'delta',
+            finishReason,
+            terminal,
+            error,
+        };
     }
 
     function parseResponsePayload(rawData) {
         let data = rawData;
         if (typeof data === 'string') {
-            const plain = stripThinking(data);
-            if (/^\s*data:\s*/m.test(plain)) {
-                const parsedStream = parseSseTextPayload(plain);
+            const rawText = data;
+            if (/(?:^|\r?\n)\s*(?:event:[^\r\n]*[\r\n]+)?\s*data:\s*/m.test(rawText)) {
+                const parsedStream = parseSseTextPayload(rawText);
                 if (parsedStream.text) {
                     return {
                         success: true,
                         text: parsedStream.truncated ? appendTokenTruncationMarker(parsedStream.text, 'SSE 文本响应') : parsedStream.text,
                         truncated: parsedStream.truncated,
                         reasoningFallback: parsedStream.reasoningFallback,
+                        streamComplete: parsedStream.streamComplete,
+                        streamTermination: parsedStream.streamTermination,
                     };
                 }
+                throw new Error(parsedStream.parseError || 'SSE 流式响应中未解析到正文');
             }
+            const plain = stripThinking(rawText);
             try {
-                data = JSON.parse(data);
+                data = JSON.parse(rawText);
             } catch {
                 if (!plain) throw new Error('API 返回内容为空');
                 return { success: true, text: plain };
@@ -521,41 +566,167 @@
         if (!content) throw new Error('API 返回内容为空');
         return {
             success: true,
-            text: finishReason === 'length' ? appendTokenTruncationMarker(content, '非流式响应') : content,
-            truncated: finishReason === 'length',
+            text: isTokenLimitFinishReason(finishReason) ? appendTokenTruncationMarker(content, '非流式响应') : content,
+            truncated: isTokenLimitFinishReason(finishReason),
             reasoningFallback: !primaryContent && !!reasoningContent,
         };
     }
 
-    function parseSseTextPayload(text = '') {
-        let fullText = '';
-        let fullReasoning = '';
-        let truncated = false;
-        String(text || '').split(/\r?\n/).forEach((line) => {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith(':') || trimmed === 'data: [DONE]' || trimmed === 'data:[DONE]') return;
-            const jsonText = trimmed.startsWith('data:') ? trimmed.replace(/^data:\s*/, '') : '';
-            if (!jsonText || jsonText === '[DONE]') return;
-            try {
-                const chunk = JSON.parse(jsonText);
-                const { content, reasoning, finishReason, error } = extractStreamContent(chunk);
-                if (error) throw new Error(error);
-                if (finishReason === 'length') truncated = true;
-                if (reasoning) fullReasoning += reasoning;
-                if (content) fullText += content;
-            } catch (_error) {
-                const fallback = extractMalformedStreamText(jsonText);
-                if (fallback.reasoning) fullReasoning += fallback.reasoning;
-                if (fallback.content) fullText += fallback.content;
-            }
-        });
-        const primaryText = stripThinking(fullText);
-        const reasoningText = stripThinking(fullReasoning);
-        return {
-            text: primaryText || reasoningText,
-            truncated,
-            reasoningFallback: !primaryText && !!reasoningText,
+    function mergeStreamText(current = '', incoming = '', mode = 'delta') {
+        const existing = String(current || '');
+        const next = String(incoming || '');
+        if (!next) return existing;
+        if (mode !== 'snapshot' || !existing) return existing + next;
+        if (existing === next || existing.endsWith(next) || existing.includes(next)) return existing;
+        if (next.startsWith(existing) || next.includes(existing)) return next;
+
+        const maxOverlap = Math.min(existing.length, next.length);
+        for (let length = maxOverlap; length > 0; length -= 1) {
+            if (existing.slice(-length) === next.slice(0, length)) return existing + next.slice(length);
+        }
+        return existing + next;
+    }
+
+    function isCompleteStreamPayload(value = '') {
+        const source = String(value || '').trim();
+        if (!source) return false;
+        if (source === '[DONE]') return true;
+        try {
+            JSON.parse(source);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    function createSseEventParser(onPayload) {
+        let lineBuffer = '';
+        let eventName = '';
+        let dataLines = [];
+
+        const dispatch = () => {
+            if (dataLines.length) onPayload(dataLines.join('\n'), eventName);
+            eventName = '';
+            dataLines = [];
         };
+        const processLine = (rawLine) => {
+            const line = String(rawLine || '');
+            if (!line) {
+                dispatch();
+                return;
+            }
+            if (line.startsWith(':')) return;
+
+            const separator = line.indexOf(':');
+            const field = (separator >= 0 ? line.slice(0, separator) : line).trim();
+            let value = separator >= 0 ? line.slice(separator + 1) : '';
+            if (value.startsWith(' ')) value = value.slice(1);
+            if (field === 'event') {
+                if (dataLines.length) dispatch();
+                eventName = value.trim();
+                return;
+            }
+            if (field === 'data') {
+                const previousPayload = dataLines.join('\n');
+                if (dataLines.length && isCompleteStreamPayload(previousPayload) && /^\s*(?:\{|\[|\[DONE\])/.test(value)) {
+                    dispatch();
+                }
+                dataLines.push(value);
+                return;
+            }
+            if (field === 'id' || field === 'retry') return;
+
+            const plain = line.trim();
+            if (/^[{[]/.test(plain)) {
+                if (dataLines.length) dispatch();
+                onPayload(plain, '');
+            }
+        };
+        const feed = (value = '', flush = false) => {
+            lineBuffer += String(value || '');
+            let cursor = 0;
+            for (let index = 0; index < lineBuffer.length; index += 1) {
+                const char = lineBuffer[index];
+                if (char !== '\n' && char !== '\r') continue;
+                if (char === '\r' && index === lineBuffer.length - 1 && !flush) break;
+                processLine(lineBuffer.slice(cursor, index));
+                if (char === '\r' && lineBuffer[index + 1] === '\n') index += 1;
+                cursor = index + 1;
+            }
+            lineBuffer = lineBuffer.slice(cursor);
+            if (flush) {
+                if (lineBuffer) processLine(lineBuffer);
+                lineBuffer = '';
+                dispatch();
+            }
+        };
+        return { feed };
+    }
+
+    function createStreamCollector() {
+        const state = {
+            fullText: '',
+            fullReasoning: '',
+            truncated: false,
+            sawDone: false,
+            sawTerminalEvent: false,
+            finishReason: '',
+            parseErrors: [],
+        };
+        const appendChunk = (chunk) => {
+            const { content, contentMode, reasoning, reasoningMode, finishReason, terminal, error } = extractStreamContent(chunk);
+            if (error) throw new Error(error);
+            if (finishReason) state.finishReason = String(finishReason);
+            if (isTokenLimitFinishReason(finishReason)) state.truncated = true;
+            if (terminal) state.sawTerminalEvent = true;
+            state.fullText = mergeStreamText(state.fullText, content, contentMode);
+            state.fullReasoning = mergeStreamText(state.fullReasoning, reasoning, reasoningMode);
+        };
+        const accept = (payload = '', eventName = '') => {
+            const jsonText = String(payload || '').trim();
+            if (!jsonText) return;
+            if (jsonText === '[DONE]') {
+                state.sawDone = true;
+                return;
+            }
+            if (String(eventName || '').toLowerCase() === 'error') {
+                throw new Error(jsonText);
+            }
+            try {
+                const parsed = JSON.parse(jsonText);
+                (Array.isArray(parsed) ? parsed : [parsed]).forEach(appendChunk);
+            } catch (error) {
+                if (/安全策略|内容被|unauthori|csrf|forbidden/i.test(String(error?.message || ''))) throw error;
+                const fallback = extractMalformedStreamText(jsonText);
+                if (fallback.content || fallback.reasoning) {
+                    state.fullText = mergeStreamText(state.fullText, fallback.content, 'delta');
+                    state.fullReasoning = mergeStreamText(state.fullReasoning, fallback.reasoning, 'delta');
+                    return;
+                }
+                state.parseErrors.push(String(error?.message || '无法解析流事件'));
+            }
+        };
+        const result = () => {
+            const primaryText = stripThinking(state.fullText);
+            const reasoningText = stripThinking(state.fullReasoning);
+            const streamComplete = state.sawDone || state.sawTerminalEvent;
+            return {
+                text: primaryText || reasoningText,
+                truncated: state.truncated,
+                reasoningFallback: !primaryText && !!reasoningText,
+                streamComplete,
+                streamTermination: state.sawDone ? 'done' : (state.finishReason || (state.sawTerminalEvent ? 'terminal-event' : 'eof')),
+                parseError: state.parseErrors[0] || '',
+            };
+        };
+        return { accept, result };
+    }
+
+    function parseSseTextPayload(text = '') {
+        const collector = createStreamCollector();
+        const parser = createSseEventParser(collector.accept);
+        parser.feed(String(text || ''), true);
+        return collector.result();
     }
 
     function extractMalformedStreamText(jsonText = '') {
@@ -574,7 +745,8 @@
 
         const content = readJsonStringField('content') || readJsonStringField('text');
         const reasoning = readJsonStringField('reasoning_content');
-        return { content: content || (reasoning ? '' : raw), reasoning };
+        const plainText = !content && !reasoning && !/^[{[]/.test(raw) ? raw : '';
+        return { content: content || plainText, reasoning };
     }
 
     function formatResponseParseError(error, response, rawText = '') {
@@ -605,46 +777,33 @@
     async function readStream(body) {
         const reader = body.getReader();
         const decoder = new TextDecoder('utf-8');
-        let buffer = '';
-        let fullText = '';
-        let fullReasoning = '';
-        let truncated = false;
+        const collector = createStreamCollector();
+        const parser = createSseEventParser(collector.accept);
         try {
             while (true) {
                 const { done, value } = await reader.read();
-                buffer += value ? decoder.decode(value, { stream: !done }) : (done ? decoder.decode() : '');
-                const lines = buffer.split('\n');
-                buffer = done ? '' : (lines.pop() || '');
-                for (const line of lines) {
-                    const trimmed = line.trim();
-                    if (!trimmed || trimmed.startsWith(':') || trimmed === 'data: [DONE]' || trimmed === 'data:[DONE]') continue;
-                    const jsonText = trimmed.startsWith('data:') ? trimmed.replace(/^data:\s*/, '') : (trimmed.startsWith('{') ? trimmed : '');
-                    if (!jsonText || jsonText === '[DONE]') continue;
-                    try {
-                        const chunk = JSON.parse(jsonText);
-                        const { content, reasoning, finishReason, error } = extractStreamContent(chunk);
-                        if (error) throw new Error(error);
-                        if (finishReason === 'length') truncated = true;
-                        if (content) fullText += content;
-                        if (reasoning) fullReasoning += reasoning;
-                    } catch (error) {
-                        if (/安全策略|内容被|unauthori|csrf|forbidden/i.test(String(error?.message || ''))) throw error;
-                        const fallback = extractMalformedStreamText(jsonText);
-                        if (fallback.content) fullText += fallback.content;
-                        if (fallback.reasoning) fullReasoning += fallback.reasoning;
-                    }
+                if (done) {
+                    const tail = `${value ? decoder.decode(value, { stream: true }) : ''}${decoder.decode()}`;
+                    parser.feed(tail, true);
+                    break;
                 }
-                if (done) break;
+                parser.feed(value ? decoder.decode(value, { stream: true }) : '', false);
             }
         } finally {
             reader.releaseLock();
         }
-        const primaryText = stripThinking(fullText);
-        const reasoningText = stripThinking(fullReasoning);
-        let text = primaryText || reasoningText;
-        if (truncated && text) text = appendTokenTruncationMarker(text, '流式响应');
+        const parsed = collector.result();
+        let text = parsed.text;
+        if (parsed.truncated && text) text = appendTokenTruncationMarker(text, '流式响应');
         if (!text) throw new Error('流式传输返回为空');
-        return { success: true, text, truncated, reasoningFallback: !primaryText && !!reasoningText };
+        return {
+            success: true,
+            text,
+            truncated: parsed.truncated,
+            reasoningFallback: parsed.reasoningFallback,
+            streamComplete: parsed.streamComplete,
+            streamTermination: parsed.streamTermination,
+        };
     }
 
     async function generateWithTavern(messages, options = {}) {
@@ -700,7 +859,7 @@
             }
 
             const contentType = response.headers.get('content-type') || '';
-            const result = await parseGenerateResponse(response, contentType.includes('text/event-stream'));
+            const result = await parseGenerateResponse(response, payload.stream === true || contentType.includes('text/event-stream'));
             return { ...result, config };
         } catch (error) {
             if (options.signal?.aborted || error?.name === 'AbortError') return { success: false, error: '已中断发送', aborted: true };
@@ -738,7 +897,7 @@
 
         try {
             const contentType = response.headers.get('content-type') || '';
-            const result = await parseGenerateResponse(response, contentType.includes('text/event-stream'));
+            const result = await parseGenerateResponse(response, payload.stream === true || contentType.includes('text/event-stream'));
             return { ...result };
         } catch (error) {
             return {
@@ -835,7 +994,7 @@
         }
 
         try {
-            const result = await parseGenerateResponse(response, contentType.includes('text/event-stream'));
+            const result = await parseGenerateResponse(response, stream === true || contentType.includes('text/event-stream'));
             return { ...result };
         } catch (error) {
             if (stream && options.forceNonStream !== true && !options.signal?.aborted) {
