@@ -1102,14 +1102,38 @@
         return '';
     }
 
+    function canRepairSummaryMemoryEnvelope(text = '', response = {}) {
+        const source = String(text || '').trim();
+        if (!source || /<\/Memory\s*>/i.test(source)) return false;
+        if (response?.truncated === true || /达到最大 Token 限制|finish_reason=(?:length|MAX_TOKENS)/i.test(source)) return false;
+        if (response?.streamComplete === false) return false;
+        const termination = String(response?.streamTermination || '').trim().toLowerCase();
+        return !['eof', 'length', 'max_tokens', 'max_token'].includes(termination);
+    }
+
+    function normalizeSummaryGenerationText(text = '', response = {}) {
+        const source = String(text || '');
+        return canRepairSummaryMemoryEnvelope(source, response) ? normalizeMemoryEnvelope(source) : source;
+    }
+
     function validateSummaryGenerationResponse(response = {}) {
-        const error = getSummaryResponseIntegrityError(response?.text, response);
-        if (!error) return response;
+        const rawText = String(response?.text || '');
+        const normalizedText = normalizeSummaryGenerationText(rawText, response);
+        const error = getSummaryResponseIntegrityError(normalizedText, response);
+        if (!error) {
+            if (normalizedText === rawText) return response;
+            return {
+                ...response,
+                text: normalizedText,
+                rawText,
+                memoryEnvelopeRepaired: true,
+            };
+        }
         return {
             ...response,
             success: false,
-            error: formatSummaryParseError(error, response?.text),
-            text: String(response?.text || ''),
+            error: formatSummaryParseError(error, rawText),
+            text: rawText,
         };
     }
 
@@ -2217,23 +2241,23 @@
             };
         }
         if (action === 'summary' || action === 'summaryOptimize') {
-            const integrityError = getSummaryResponseIntegrityError(text);
-            if (integrityError) {
+            const validatedResponse = validateSummaryGenerationResponse({ success: true, text });
+            if (!validatedResponse.success) {
                 return {
                     ...originalResult,
                     success: false,
-                    error: formatSummaryParseError(integrityError, text),
+                    error: validatedResponse.error,
                     text,
                 };
             }
-            const payloads = parseSummaryResponse(text);
+            const payloads = parseSummaryResponse(validatedResponse.text);
             return {
                 ...originalResult,
                 success: true,
                 payload: payloads[0],
                 payloads,
                 preview: payloads.map((payload) => getSummaryPreview(payload)).filter(Boolean).join('\n\n'),
-                text,
+                text: validatedResponse.text,
             };
         }
         return { ...originalResult, success: true, text };
@@ -2366,7 +2390,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             { role: 'system', content: buildTaskRangeText(range, 'summary') },
             ...range.messages,
             { role: 'system', content: summaryPrompt },
-            { role: 'user', content: '请立即根据以上待总结聊天内容和总结提示词执行任务。' },
+            { role: 'user', content: '请立即根据以上待总结聊天内容和总结提示词执行任务。不得遗漏最后结尾</Memory>标签。' },
         ]);
         return { messages, range };
     }
@@ -2425,7 +2449,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             payload: payloads[0],
             payloads,
             preview: payloads.map((payload) => getSummaryPreview(payload)).filter(Boolean).join('\n\n'),
-            text: response.text,
+            text: validatedResponse.text,
             range: built.range,
             meta: {
                 autoTaskType: options.autoTaskType || '',
