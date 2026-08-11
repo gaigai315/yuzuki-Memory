@@ -11930,10 +11930,7 @@
         modalHost.appendChild(overlay);
         updateRecordOrganizerSelection(dialog);
 
-        const closeModal = () => {
-            if (document.activeElement === textarea) textarea.blur();
-            removePluginElement(overlay);
-        };
+        const closeModal = () => removePluginElement(overlay);
         const rerenderOrganizer = () => {
             renderRecordOrganizerList(list, table);
             updateRecordOrganizerSelection(dialog);

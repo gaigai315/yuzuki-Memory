@@ -241,7 +241,12 @@
 
     async function readJsonResponse(response) {
         const text = await response.text().catch(() => '');
-        if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}\n${text}`.trim());
+        if (!response.ok) {
+            if (response.status === 401) {
+                throw new Error(`Embedding API 鉴权失败（HTTP 401）：请检查当前向量化服务商的 API Key。\n${text}`.trim());
+            }
+            throw new Error(`HTTP ${response.status} ${response.statusText}\n${text}`.trim());
+        }
         try {
             return JSON.parse(text);
         } catch (error) {
