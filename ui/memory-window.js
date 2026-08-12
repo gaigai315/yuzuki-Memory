@@ -11286,6 +11286,7 @@
         const list = document.createElement('ul');
         [
             '【优化】总结优化及流式返回的兼容问题。',
+            '【优化】兼容解析总结与优化任务的 AI 返回格式。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

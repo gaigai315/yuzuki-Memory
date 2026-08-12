@@ -978,10 +978,10 @@
     function normalizeSummaryPayload(parsed) {
         const source = parsed && typeof parsed === 'object' ? parsed : {};
         let title = String(source.title || source['总结标题'] || source.name || '').trim();
-        const titleMatch = title.match(/^【?支线总结[-－—:： ]+(.+?)】?$/);
+        const titleMatch = title.match(/^【?支线(?:总结|剧情)[-－—:： ]+(.+?)】?$/);
         const branchCharacterFromTitle = titleMatch ? titleMatch[1].trim() : '';
         if (branchCharacterFromTitle) title = '';
-        if (/^(总结标题|标题|主线总结|支线总结)$/.test(title)) title = '';
+        if (/^(总结标题|标题|主线(?:总结|剧情)|支线(?:总结|剧情))$/.test(title)) title = '';
         const kindSource = String(source.kind || source.type || title || '').trim();
         const kind = kindSource.includes('branch') || kindSource.includes('支线') || !!branchCharacterFromTitle ? 'branch' : 'main';
         const summary = normalizeSummaryText(source.summary ?? source['总结内容']);
@@ -1070,6 +1070,38 @@
         return `${message}\n\n模型原始回复（完整）：\n${previewRawModelText(text)}`;
     }
 
+    function getSummarySectionHeadingPattern() {
+        return /【\s*((?:主线|支线)(?:总结|剧情))\s*(?:[:：\-－—]\s*([^】]+?))?\s*】/g;
+    }
+
+    function normalizeSummarySectionHeadings(text = '') {
+        const source = String(text || '');
+        const matches = [...source.matchAll(getSummarySectionHeadingPattern())];
+        if (!matches.length) return source;
+
+        let output = '';
+        let cursor = 0;
+        let previousHeadingKey = '';
+        let previousHeadingType = '';
+        matches.forEach((match) => {
+            const between = source.slice(cursor, match.index);
+            const kind = match[1].includes('支线') ? 'branch' : 'main';
+            const character = String(match[2] || '').trim();
+            const headingKey = `${kind}:${kind === 'branch' ? character.toLowerCase() : ''}`;
+            const headingType = match[1].endsWith('剧情') ? 'plot' : 'summary';
+            const isAdjacentAliasDuplicate = previousHeadingKey === headingKey
+                && previousHeadingType !== headingType
+                && !between.trim();
+            if (!isAdjacentAliasDuplicate) {
+                output += `${between}【${kind === 'branch' ? '支线总结' : '主线总结'}${character ? `：${character}` : ''}】`;
+            }
+            previousHeadingKey = headingKey;
+            previousHeadingType = headingType;
+            cursor = (match.index || 0) + match[0].length;
+        });
+        return output + source.slice(cursor);
+    }
+
     function getSummaryResponseIntegrityError(text = '', response = {}) {
         let source = String(text || '').trim();
         if (!source) return '模型返回的总结内容为空。';
@@ -1086,9 +1118,8 @@
         const openMatches = [...source.matchAll(/<Memory(?:\s+[^>]*)?>/gi)];
         if (openMatches.length > 1) return '总结回复包含多个 <Memory> 开头，疑似重复生成。';
 
-        const headingPattern = /【\s*(主线总结|支线总结)\s*(?:[:：\-－—]\s*([^】]+?))?\s*】/g;
         const seenSections = new Set();
-        for (const match of source.matchAll(headingPattern)) {
+        for (const match of source.matchAll(getSummarySectionHeadingPattern())) {
             const kind = match[1].includes('支线') ? 'branch' : 'main';
             const character = kind === 'branch' ? String(match[2] || '').trim().toLowerCase() : '';
             const key = `${kind}:${character}`;
@@ -1113,7 +1144,8 @@
 
     function normalizeSummaryGenerationText(text = '', response = {}) {
         const source = String(text || '');
-        return canRepairSummaryMemoryEnvelope(source, response) ? normalizeMemoryEnvelope(source) : source;
+        const envelopeNormalized = canRepairSummaryMemoryEnvelope(source, response) ? normalizeMemoryEnvelope(source) : source;
+        return normalizeSummarySectionHeadings(envelopeNormalized);
     }
 
     function validateSummaryGenerationResponse(response = {}) {
@@ -1122,11 +1154,14 @@
         const error = getSummaryResponseIntegrityError(normalizedText, response);
         if (!error) {
             if (normalizedText === rawText) return response;
+            const envelopeRepaired = canRepairSummaryMemoryEnvelope(rawText, response);
+            const envelopeNormalized = envelopeRepaired ? normalizeMemoryEnvelope(rawText) : rawText;
             return {
                 ...response,
                 text: normalizedText,
                 rawText,
-                memoryEnvelopeRepaired: true,
+                memoryEnvelopeRepaired: envelopeRepaired,
+                summaryHeadingsNormalized: normalizeSummarySectionHeadings(envelopeNormalized) !== envelopeNormalized,
             };
         }
         return {
@@ -1147,8 +1182,7 @@
         const body = extractMemorySummaryText(text);
         if (!body) throw new Error(formatSummaryParseError('未找到 <Memory>...</Memory> 总结标签。', text));
 
-        const headingPattern = /【\s*(主线总结|支线总结)\s*(?:[:：\-－—]\s*([^】]+?))?\s*】/g;
-        const matches = [...body.matchAll(headingPattern)];
+        const matches = [...body.matchAll(getSummarySectionHeadingPattern())];
         if (!matches.length) throw new Error(formatSummaryParseError('Memory 标签内未找到【主线总结】或【支线总结：角色名】分块。', text));
 
         return matches.map((match, index) => {

@@ -554,6 +554,37 @@
         return '';
     }
 
+    function stripStoredSummaryHeading(value, kind, character = '') {
+        let source = String(value || '').trim();
+        const expectedKind = kind === 'branch' ? '支线' : '主线';
+        const expectedCharacter = String(character || '').trim().toLowerCase();
+        while (source) {
+            const match = source.match(/^【\s*(主线|支线)(?:总结|剧情)\s*(?:[:：\-－—]\s*([^】]+?))?\s*】\s*/);
+            if (!match || match[1] !== expectedKind) break;
+            const headingCharacter = String(match[2] || '').trim().toLowerCase();
+            if (expectedKind === '支线' && headingCharacter && headingCharacter !== expectedCharacter) break;
+            source = source.slice(match[0].length).trim();
+        }
+        return source;
+    }
+
+    function normalizeStoredSummaryRecord(record, values) {
+        const kind = /支线/.test(String(values?.总结标题 || '')) ? 'branch' : 'main';
+        const character = String(values?.核心角色 || '').trim();
+        values.总结内容 = stripStoredSummaryHeading(values.总结内容, kind, character);
+        const summarySegments = Array.isArray(record?.summarySegments)
+            ? record.summarySegments.map((segment) => ({
+                ...segment,
+                summary: stripStoredSummaryHeading(segment?.summary, kind, character),
+            }))
+            : record?.summarySegments;
+        return {
+            ...record,
+            values,
+            ...(Array.isArray(summarySegments) ? { summarySegments } : {}),
+        };
+    }
+
     function normalizeTableColumns(table, fallback) {
         const rawColumns = Array.isArray(table?.columns)
             ? table.columns.map(normalizeColumnDefinition).filter(Boolean)
@@ -627,16 +658,18 @@
             const table = tables.find((entry) => entry.id === tableId);
             if (!tableIds.has(tableId) || !table) return;
             records[tableId] = Array.isArray(tableRecords)
-                ? tableRecords.map((record) => ({
-                    ...record,
-                    values: Object.fromEntries((table.columns || []).map((column) => {
+                ? tableRecords.map((record) => {
+                    const values = Object.fromEntries((table.columns || []).map((column) => {
                         const name = cleanColumnName(column);
                         if (table.id === 'memory_summary') {
                             return [name, getFirstDefinedValue(record?.values, name) || String(record?.values?.[name] ?? record?.values?.[column] ?? '')];
                         }
                         return [name, String(record?.values?.[name] ?? record?.values?.[column] ?? '')];
-                    })),
-                }))
+                    }));
+                    return table.id === 'memory_summary'
+                        ? normalizeStoredSummaryRecord(record, values)
+                        : { ...record, values };
+                })
                 : [];
         });
 
