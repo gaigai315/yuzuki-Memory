@@ -10110,7 +10110,7 @@
 
             const actions = document.createElement('div');
             actions.className = 'yzm-structure-actions yzm-tag-diagnostic-actions';
-            const cancel = createIconButton('不应用', 'fa-regular fa-circle-xmark', 'yzm-add-table-cancel');
+            const cancel = createIconButton('不应用', 'fa-regular fa-circle-xmark', 'yzm-add-table-confirm');
             const apply = createIconButton('应用并保存', 'fa-regular fa-circle-check', 'yzm-add-table-confirm');
             apply.disabled = result?.noTags || (!normalizeTagList(result?.blacklist).length && !normalizeTagList(result?.whitelist).length);
             actions.append(cancel, apply);

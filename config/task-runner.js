@@ -2577,7 +2577,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             success: true,
             floor: latest.index,
             rawText,
-            text: validatedResponse.text,
+            text: response.text,
             reasoning: String(parsed?.reasoning || '').trim(),
             blacklist: normalizeTagList(parsed?.blacklist),
             whitelist: normalizeTagList(parsed?.whitelist),
