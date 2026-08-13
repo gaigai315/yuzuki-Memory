@@ -1,4 +1,4 @@
-﻿(function () {
+(function () {
     'use strict';
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
@@ -9,6 +9,7 @@
     const GLOBAL_MODAL_ROOT_ID = 'yzm-memory-global-modal-root';
     const FLOATING_ROOT_ID = 'yzm-memory-floating-root';
     const FLOATING_BUTTON_ID = 'yzm-memory-floating-button';
+    const FLOATING_LONG_PRESS_MS = 650;
     const TEXT_CONTROL_SELECTOR = [
         'textarea',
         'input:not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="submit"]):not([type="reset"])',
@@ -1053,6 +1054,11 @@
             return `<img src="${escaped}" alt="">`;
         }
         return '';
+    }
+
+    function renderCharacterAvatarHtml(record) {
+        const characterTable = getTables().find((table) => table?.id === 'character_profile');
+        return characterTable && record ? renderPhoneWechatAvatarHtml(characterTable, record) : '';
     }
 
     function applyCharacterAvatarNode(avatar, table, record) {
@@ -2150,10 +2156,26 @@
         let startLeft = 0;
         let startTop = 0;
         let moved = false;
+        let longPressed = false;
+        let longPressTimer = null;
+        let graphOpenTimer = null;
         let lastTapAt = 0;
+
+        const cancelLongPress = () => {
+            window.clearTimeout(longPressTimer);
+            longPressTimer = null;
+            button.classList.remove('yzm-floating-button-long-pressing');
+        };
 
         const finish = (event, cancelled = false) => {
             if (pointerId === null || event.pointerId !== pointerId) return;
+            const shouldOpenGraph = !cancelled && !moved && longPressed;
+            cancelLongPress();
+            if (!cancelled) {
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation?.();
+            }
             button.releasePointerCapture?.(pointerId);
             pointerId = null;
             button.classList.remove('yzm-floating-button-dragging');
@@ -2161,9 +2183,13 @@
             if (moved && !cancelled) {
                 const rect = button.getBoundingClientRect();
                 applyFloatingIconPosition(button, rect.left, rect.top, { persist: true });
+            } else if (shouldOpenGraph) {
+                window.clearTimeout(graphOpenTimer);
+                graphOpenTimer = window.setTimeout(() => {
+                    graphOpenTimer = null;
+                    YuzukiMemory.CharacterGraphWindow?.open?.();
+                }, 80);
             } else if (!cancelled) {
-                event.preventDefault();
-                event.stopPropagation();
                 const now = Date.now();
                 if (now - lastTapAt > 500) {
                     lastTapAt = now;
@@ -2174,6 +2200,7 @@
 
             window.setTimeout(() => {
                 moved = false;
+                longPressed = false;
             }, 40);
         };
 
@@ -2188,8 +2215,22 @@
             startLeft = rect.left;
             startTop = rect.top;
             moved = false;
+            longPressed = false;
+            window.clearTimeout(graphOpenTimer);
+            graphOpenTimer = null;
             button.classList.add('yzm-floating-button-dragging');
             button.setPointerCapture?.(pointerId);
+            cancelLongPress();
+            button.classList.add('yzm-floating-button-long-pressing');
+            longPressTimer = window.setTimeout(() => {
+                longPressTimer = null;
+                if (pointerId === null || moved) return;
+                longPressed = true;
+                button.classList.remove('yzm-floating-button-long-pressing');
+                button.classList.add('yzm-floating-button-long-pressed');
+                window.setTimeout(() => button.classList.remove('yzm-floating-button-long-pressed'), 180);
+                navigator.vibrate?.(24);
+            }, FLOATING_LONG_PRESS_MS);
         });
 
         button.addEventListener('pointermove', (event) => {
@@ -2198,6 +2239,7 @@
             const deltaY = event.clientY - startY;
             if (!moved && Math.hypot(deltaX, deltaY) > 8) {
                 moved = true;
+                cancelLongPress();
             }
             if (!moved) return;
             event.preventDefault();
@@ -2210,6 +2252,7 @@
             event.preventDefault();
             event.stopImmediatePropagation();
         });
+        button.addEventListener('contextmenu', (event) => event.preventDefault());
         button.addEventListener('dragstart', (event) => event.preventDefault());
     }
 
@@ -2221,7 +2264,7 @@
     function updateFloatingIconVisibility() {
         const button = document.getElementById(FLOATING_BUTTON_ID);
         if (!button) return;
-        const shouldHide = isMemoryShellOpen();
+        const shouldHide = isMemoryShellOpen() || YuzukiMemory.CharacterGraphWindow?.isOpen?.();
         button.hidden = shouldHide;
         button.setAttribute('aria-hidden', String(shouldHide));
         if (!shouldHide) ensureFloatingIconVisible(button);
@@ -2232,8 +2275,8 @@
         button.id = FLOATING_BUTTON_ID;
         button.type = 'button';
         button.className = 'yzm-floating-button';
-        button.title = '打开柚月の记忆';
-        button.setAttribute('aria-label', '打开柚月の记忆');
+        button.title = '点击打开记忆，长按打开角色图谱';
+        button.setAttribute('aria-label', '点击打开记忆，长按打开角色图谱');
 
         const icon = document.createElement('img');
         icon.className = 'yzm-floating-button-image';
@@ -11366,6 +11409,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
+            '【新增】角色档案人物图谱。长按插件悬浮按钮即可打开人物图谱，快速查看角色关系与角色状态。',
             '【优化】角色档案下的待办事项更新功能与样式显示。待办事项现以追加模式新增，插件会读取剧情全局时间，并在事项过期一小时后自动清理。',
             '【迁移提示】请在类脑帖子中使用全局时间格式，替换原有预设的时间格式，以便插件准确判断待办事项是否过期。',
         ].forEach((text) => {
@@ -14420,5 +14464,7 @@
         mount,
         toggle: toggleShell,
         setTheme,
+        renderCharacterAvatarHtml,
+        syncFloatingIcon: updateFloatingIconVisibility,
     });
 })();

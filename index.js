@@ -14,6 +14,7 @@
         'config/global-settings.js',
         'config/storage.js',
         'config/character-name-matcher.js',
+        'config/character-graph.js',
         'config/memory-io.js',
         'config/plot-summary.js',
         'config/memory-tag-parser.js',
@@ -32,6 +33,7 @@
         'config/prompt-ready-injector.js',
         'config/request-probe.js',
         'config/log-viewer.js',
+        'ui/character-graph-window.js',
         'ui/memory-window.js',
     ];
 
