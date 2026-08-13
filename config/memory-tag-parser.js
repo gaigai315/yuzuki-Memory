@@ -11,7 +11,7 @@
     const COMMENT_PATTERN = /<!--|-->/g;
     const GLOBAL_CUSTOM_TABLES_STORAGE_KEY = 'yzm_memory_global_custom_tables';
     const GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY = 'yzm_memory_global_deleted_custom_table_ids';
-    const DEFAULT_STATE_REVISION = 13;
+    const DEFAULT_STATE_REVISION = 14;
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
     let bound = false;
@@ -23,7 +23,7 @@
 
     const DEFAULT_TABLES = [
         { id: 'plot_summary', name: '剧情摘要', icon: 'timeline', columns: ['#主线', '#支线'] },
-        { id: 'character_profile', name: '角色档案', icon: 'person', columns: ['角色名', '年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理', '人际关系', '着装', '待办事项', '约定'] },
+        { id: 'character_profile', name: '角色档案', icon: 'person', columns: ['角色名', '年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理', '人际关系', '着装', '#待办事项', '约定'] },
         { id: 'item_tracking', name: '物品追踪', icon: 'item', columns: ['物品名称', '物品描述', '物品位置', '持有者', '状态', '备注'] },
         { id: 'world_setting', name: '世界设定', icon: 'world', columns: ['设定名', '类型', '详细说明', '影响范围'] },
         { id: 'memory_summary', name: '记忆总结', icon: 'memory_book', columns: ['总结标题', '核心角色', '楼层数', '总结内容', '未解决问题', '备注'] },
@@ -700,9 +700,12 @@
             const currentValue = String(record.values[columnName] || '').trim();
             if (isFillOnceColumn(column) && currentValue) return;
             const shouldAppend = isAppendColumn(column);
-            record.values[columnName] = shouldAppend
-                ? appendCellValue(record.values[columnName], value)
-                : value;
+            if (shouldAppend && table.id === 'character_profile' && columnName === '待办事项') {
+                record.values[columnName] = YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[columnName], value)
+                    || appendCellValue(record.values[columnName], value);
+                return;
+            }
+            record.values[columnName] = shouldAppend ? appendCellValue(record.values[columnName], value) : value;
         });
         return true;
     }

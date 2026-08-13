@@ -585,7 +585,7 @@
         };
     }
 
-    function normalizeTableColumns(table, fallback) {
+    function normalizeTableColumns(table, fallback, options = {}) {
         const rawColumns = Array.isArray(table?.columns)
             ? table.columns.map(normalizeColumnDefinition).filter(Boolean)
             : ['名称', '内容'];
@@ -604,6 +604,13 @@
         if (table?.id === 'memory_summary') {
             return [...fallbackColumns];
         }
+        const usesUnmodifiedDefaultColumns = matchesDefaultShape
+            && rawColumns.every((column, index) => column === rawNames[index]);
+        if (table?.id === 'character_profile'
+            && Number(options.rawDefaultRevision || 1) < 14
+            && usesUnmodifiedDefaultColumns) {
+            return [...fallbackColumns];
+        }
         const allRawColumnsPrefixed = rawColumns.length > 0 && rawColumns.every((column) => column.startsWith('#'));
         return matchesDefaultShape && allRawColumnsPrefixed ? [...fallbackColumns] : rawColumns;
     }
@@ -620,6 +627,7 @@
         }
 
         const defaultRevision = Number(fallback.defaultRevision || 1);
+        const rawDefaultRevision = Number(rawState.defaultRevision || 1);
 
         const tables = Array.isArray(rawState.tables) && rawState.tables.length > 0
             ? rawState.tables
@@ -628,7 +636,7 @@
                     id: String(table.id || `table_${index}_${Date.now()}`),
                     name: String((String(table.id || '').startsWith('custom_') && fallback.tables?.find((entry) => entry.id === table.id)?.name) || table.name || `未命名表${index + 1}`),
                     icon: String((String(table.id || '').startsWith('custom_') && fallback.tables?.find((entry) => entry.id === table.id)?.icon) || table.icon || 'summary'),
-                    columns: normalizeTableColumns(table, fallback),
+                    columns: normalizeTableColumns(table, fallback, { rawDefaultRevision }),
                     hidden: !!table.hidden,
                 }))
             : fallback.tables;

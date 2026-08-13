@@ -37,6 +37,15 @@
     --yzm-selected-color: #5b87f3;
     --yzm-overlay-bg: rgba(0, 0, 0, 0.18);
     --yzm-shadow: 0 22px 60px rgba(78, 98, 160, 0.28);
+    --yzm-todo-high: #d85f58;
+    --yzm-todo-high-soft: rgba(216, 95, 88, 0.06);
+    --yzm-todo-high-border: rgba(216, 95, 88, 0.2);
+    --yzm-todo-medium: #d78943;
+    --yzm-todo-medium-soft: rgba(215, 137, 67, 0.06);
+    --yzm-todo-medium-border: rgba(215, 137, 67, 0.2);
+    --yzm-todo-low: #58a36d;
+    --yzm-todo-low-soft: rgba(88, 163, 109, 0.06);
+    --yzm-todo-low-border: rgba(88, 163, 109, 0.2);
     --yzm-desktop-sidebar-width: 180px;
     --yzm-desktop-primary-width: 168px;
     --yzm-mobile-sidebar-width: 118px;
@@ -71,6 +80,15 @@
     --yzm-selected-color: #82a8ff;
     --yzm-overlay-bg: rgba(2, 6, 18, 0.42);
     --yzm-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+    --yzm-todo-high: #ff8d86;
+    --yzm-todo-high-soft: rgba(255, 141, 134, 0.1);
+    --yzm-todo-high-border: rgba(255, 141, 134, 0.28);
+    --yzm-todo-medium: #f2b56f;
+    --yzm-todo-medium-soft: rgba(242, 181, 111, 0.1);
+    --yzm-todo-medium-border: rgba(242, 181, 111, 0.28);
+    --yzm-todo-low: #83cf96;
+    --yzm-todo-low-soft: rgba(131, 207, 150, 0.1);
+    --yzm-todo-low-border: rgba(131, 207, 150, 0.28);
 }
 
 #yzm-memory-root .yzm-shell[hidden] {
@@ -6069,6 +6087,105 @@
     word-break: break-word;
 }
 
+#yzm-memory-root .yzm-character-todo-panel {
+    min-height: 0;
+}
+
+#yzm-memory-root .yzm-character-panel-body.yzm-character-todo-list {
+    display: grid;
+    flex: 0 0 auto;
+    gap: 8px;
+    padding: 10px 12px;
+    white-space: normal;
+}
+
+#yzm-memory-root .yzm-character-todo-item {
+    --yzm-todo-accent: var(--yzm-icon);
+    --yzm-todo-item-bg: var(--yzm-row-bg);
+    --yzm-todo-item-border: var(--yzm-border-soft);
+    display: grid;
+    grid-template-columns: 14px minmax(0, 1fr) auto;
+    gap: 8px;
+    align-items: start;
+    min-width: 0;
+    min-height: 44px;
+    padding: 9px 10px;
+    color: var(--yzm-text);
+    background: var(--yzm-todo-item-bg);
+    border: 1px solid var(--yzm-todo-item-border);
+    border-radius: 8px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-todo-item[data-yzm-priority="high"] {
+    --yzm-todo-accent: var(--yzm-todo-high);
+    --yzm-todo-item-bg: var(--yzm-todo-high-soft);
+    --yzm-todo-item-border: var(--yzm-todo-high-border);
+}
+
+#yzm-memory-root .yzm-character-todo-item[data-yzm-priority="medium"] {
+    --yzm-todo-accent: var(--yzm-todo-medium);
+    --yzm-todo-item-bg: var(--yzm-todo-medium-soft);
+    --yzm-todo-item-border: var(--yzm-todo-medium-border);
+}
+
+#yzm-memory-root .yzm-character-todo-item[data-yzm-priority="low"] {
+    --yzm-todo-accent: var(--yzm-todo-low);
+    --yzm-todo-item-bg: var(--yzm-todo-low-soft);
+    --yzm-todo-item-border: var(--yzm-todo-low-border);
+}
+
+#yzm-memory-root .yzm-character-todo-marker {
+    width: 12px;
+    height: 12px;
+    margin-top: 4px;
+    background: transparent;
+    border: 1px solid var(--yzm-todo-accent);
+    border-radius: 50%;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-todo-main {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 6px;
+    min-width: 0;
+    line-height: 1.45;
+}
+
+#yzm-memory-root .yzm-character-todo-time {
+    flex: 0 0 auto;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    font-weight: 600;
+}
+
+#yzm-memory-root .yzm-character-todo-text {
+    flex: 1 1 180px;
+    min-width: 0;
+    color: var(--yzm-text);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+#yzm-memory-root .yzm-character-todo-priority {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+    height: 22px;
+    padding: 0 5px;
+    color: var(--yzm-todo-accent);
+    background: var(--yzm-surface);
+    border-radius: 8px;
+    box-sizing: border-box;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+}
+
 #yzm-memory-root .yzm-panel-blue .yzm-character-panel-title {
     color: #355bc5;
 }
@@ -8762,6 +8879,25 @@
 
     #yzm-memory-root .yzm-character-panel {
         min-height: 100px;
+    }
+
+    #yzm-memory-root .yzm-character-todo-main {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 2px;
+    }
+
+    #yzm-memory-root .yzm-character-todo-time,
+    #yzm-memory-root .yzm-character-todo-text {
+        display: block;
+        min-width: 0;
+        width: 100%;
+    }
+
+    #yzm-memory-root .yzm-character-todo-time {
+        white-space: normal;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
 
     #yzm-memory-root .yzm-item-view,

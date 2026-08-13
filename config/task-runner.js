@@ -1323,6 +1323,11 @@
                 if (!nextValue) return;
                 const currentValue = String(record.values[name] || '').trim();
                 if (isFillOnceColumn(column) && currentValue) return;
+                if (isAppendColumn(column) && table.id === 'character_profile' && name === '待办事项') {
+                    record.values[name] = YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[name], nextValue)
+                        || [String(record.values[name] || '').trim(), nextValue].filter(Boolean).join('；');
+                    return;
+                }
                 record.values[name] = isAppendColumn(column)
                     ? [String(record.values[name] || '').trim(), nextValue].filter(Boolean).join('；')
                     : nextValue;

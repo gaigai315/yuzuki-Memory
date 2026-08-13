@@ -185,7 +185,7 @@
         hideSummaryFloors: false,
     };
     const FIXED_TABLE_ID = 'memory_summary';
-    const DEFAULT_STATE_REVISION = 13;
+    const DEFAULT_STATE_REVISION = 14;
     const DEFAULT_TABLES = [
         {
             id: 'plot_summary',
@@ -197,7 +197,7 @@
             id: 'character_profile',
             name: '角色档案',
             icon: 'person',
-            columns: ['角色名', '年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理', '人际关系', '着装', '待办事项', '约定'],
+            columns: ['角色名', '年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理', '人际关系', '着装', '#待办事项', '约定'],
         },
         {
             id: 'item_tracking',
@@ -10404,9 +10404,90 @@
             .trim();
     }
 
+    function parseCharacterTodoItems(text = '') {
+        const parsedItems = YuzukiMemory.TodoManager?.parseTodoItems?.(text);
+        if (Array.isArray(parsedItems)) return parsedItems;
+
+        const source = formatCharacterPanelText('待办事项', text);
+        if (!source) return [];
+
+        return source
+            .split(/\n+/)
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .map((entry) => {
+                let content = entry.replace(/^(?:[（(〔\[]\s*\d+\s*[）)〕\]]|\d+\s*[）)〕\].、])\s*/, '').trim();
+                const priorityMatch = content.match(/[（(]\s*(高|中|低)(?:优先级)?\s*[）)]\s*$/);
+                const priority = priorityMatch?.[1] || '';
+                if (priorityMatch) content = content.slice(0, priorityMatch.index).trim();
+
+                const detailMatch = content.match(/^((?:\d{2,4}年)?\d{1,2}月\d{1,2}日)\s*(\d{1,2}:\d{2})\s*[·・•:：]\s*(.+)$/);
+                if (!detailMatch) return { text: content, dateTime: '', priority };
+
+                return {
+                    text: detailMatch[3].trim(),
+                    dateTime: `${detailMatch[1]} ${detailMatch[2]}`,
+                    priority,
+                };
+            })
+            .filter((item) => item.text || item.dateTime);
+    }
+
+    function createCharacterTodoItem(item) {
+        const priorityNames = { 高: 'high', 中: 'medium', 低: 'low' };
+        const row = document.createElement('div');
+        row.className = 'yzm-character-todo-item';
+        if (item.priority && priorityNames[item.priority]) {
+            row.dataset.yzmPriority = priorityNames[item.priority];
+        }
+
+        const marker = document.createElement('span');
+        marker.className = 'yzm-character-todo-marker';
+        marker.setAttribute('aria-hidden', 'true');
+
+        const main = document.createElement('div');
+        main.className = 'yzm-character-todo-main';
+        if (item.dateTime) {
+            const dateTime = document.createElement('time');
+            dateTime.className = 'yzm-character-todo-time';
+            dateTime.textContent = item.dateTime;
+            main.appendChild(dateTime);
+        }
+
+        if (item.text) {
+            const description = document.createElement('span');
+            description.className = 'yzm-character-todo-text';
+            description.textContent = item.text;
+            main.appendChild(description);
+        }
+
+        row.append(marker, main);
+        if (item.priority) {
+            const priority = document.createElement('span');
+            priority.className = 'yzm-character-todo-priority';
+            priority.textContent = item.priority;
+            priority.setAttribute('aria-label', `${item.priority}优先级`);
+            row.appendChild(priority);
+        }
+        return row;
+    }
+
+    function renderCharacterPanelBody(body, title, text = '') {
+        if (title !== '待办事项') {
+            body.textContent = formatCharacterPanelText(title, text);
+            return;
+        }
+
+        body.classList.add('yzm-character-todo-list');
+        parseCharacterTodoItems(text).forEach((item) => {
+            body.appendChild(createCharacterTodoItem(item));
+        });
+    }
+
     function createCharacterPanel(title, iconClassName, colorClassName, text = '') {
         const panel = document.createElement('article');
         panel.className = `yzm-character-panel ${colorClassName}`;
+        if (title === '待办事项') panel.classList.add('yzm-character-todo-panel');
 
         const header = document.createElement('div');
         header.className = 'yzm-character-panel-title';
@@ -10414,7 +10495,7 @@
 
         const body = document.createElement('div');
         body.className = 'yzm-character-panel-body';
-        body.textContent = formatCharacterPanelText(title, text);
+        renderCharacterPanelBody(body, title, text);
 
         panel.append(header, body);
         return panel;
@@ -11285,8 +11366,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】总结优化及流式返回的兼容问题。',
-            '【优化】兼容解析总结与优化任务的 AI 返回格式。',
+            '【优化】角色档案下的待办事项更新功能与样式显示。待办事项现以追加模式新增，插件会读取剧情全局时间，并在事项过期一小时后自动清理。',
+            '【迁移提示】请在类脑帖子中使用全局时间格式，替换原有预设的时间格式，以便插件准确判断待办事项是否过期。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
