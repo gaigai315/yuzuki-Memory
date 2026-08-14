@@ -8530,7 +8530,7 @@
     }
 
     #yzm-memory-root .yzm-vector-book-row {
-        grid-template-columns: 16px minmax(0, 1fr) 44px;
+        grid-template-columns: minmax(0, 1fr) 54px;
         min-height: 34px;
         padding: 0 6px;
     }
