@@ -2119,14 +2119,14 @@
 
     function ensureFloatingIconVisible(button) {
         if (!button?.isConnected) return;
-        if (isMemoryShellOpen()) return;
+        if (button.hidden || isMemoryShellOpen() || YuzukiMemory.CharacterGraphWindow?.isOpen?.()) return;
         const rect = button.getBoundingClientRect();
         const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || rect.width;
         const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || rect.height;
         const outside = rect.right < 0 || rect.left > viewportWidth || rect.bottom < 0 || rect.top > viewportHeight;
         if (outside) {
             const saved = getSavedFloatingIconPosition();
-            if (saved) applyFloatingIconPosition(button, saved.left, saved.top, { persist: true });
+            if (saved) applyFloatingIconPosition(button, saved.left, saved.top, { persist: false });
             else positionFloatingIcon(button);
         } else {
             applyFloatingIconPosition(button, rect.left, rect.top, { persist: false });
@@ -2264,10 +2264,16 @@
     function updateFloatingIconVisibility() {
         const button = document.getElementById(FLOATING_BUTTON_ID);
         if (!button) return;
+        const wasHidden = button.hidden;
         const shouldHide = isMemoryShellOpen() || YuzukiMemory.CharacterGraphWindow?.isOpen?.();
         button.hidden = shouldHide;
         button.setAttribute('aria-hidden', String(shouldHide));
-        if (!shouldHide) ensureFloatingIconVisible(button);
+        if (shouldHide) return;
+        if (wasHidden) {
+            positionFloatingIcon(button);
+            return;
+        }
+        ensureFloatingIconVisible(button);
     }
 
     function createFloatingIconButton() {
