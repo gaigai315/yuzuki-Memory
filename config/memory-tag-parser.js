@@ -750,7 +750,10 @@
             : (Array.isArray(chat) ? chat.length - 1 : -1);
         const range = floor >= 0 ? { start: floor, end: floor + 1 } : null;
         const floorScope = YuzukiMemory.Storage?.getCurrentFloorScope?.() || null;
-        const storyTime = YuzukiMemory.TodoManager?.parseStoryTimeText?.(text) || null;
+        const storyTime = options.storyTime
+            || YuzukiMemory.TodoManager?.parseStoryTimeText?.(text)
+            || YuzukiMemory.TodoManager?.getStoryTimeForFloor?.(floor, { chat })
+            || null;
         const replacedPlotItems = removeRealtimePlotItemsForRange(state, range, floorScope);
         YuzukiMemory.BranchSnapshot?.captureBaseSnapshotBeforeMessage?.(floor, { state });
         let count = 0;

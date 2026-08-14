@@ -8,6 +8,7 @@
     const MEMORY_TAG_PATTERN = /<(Memory|GaigaiMemory|memory|tableEdit|gaigaimemory|tableedit)>[\s\S]*?<\/\1>/gi;
     const BRACKETED_TODO_MARKER_SOURCE = '[（(〔\\[]\\s*\\d+\\s*[）)〕\\]]';
     const TODO_MARKER_SOURCE = '(?:[（(〔\\[]\\s*\\d+\\s*[）)〕\\]]|\\d+\\s*[）)〕\\].、])';
+    const TODO_DATE_SOURCE = '(?:\\d{1,6}年\\s*\\d{1,2}月\\s*\\d{1,2}日|\\d{1,6}\\s*[-/／]\\s*\\d{1,2}\\s*[-/／]\\s*\\d{1,2})';
     let bound = false;
     let bindRetryTimer = null;
     let cleanupTimer = null;
@@ -32,6 +33,11 @@
         return String(message.mes || message.content || message.text || '');
     }
 
+    function getMessageBodyText(message) {
+        if (!message || typeof message !== 'object') return String(message || '');
+        return String(message.mes || message.content || message.text || '');
+    }
+
     function isAssistantMessage(message) {
         return !!message && (message.is_user === false || message.role === 'assistant') && !message.is_system;
     }
@@ -49,13 +55,15 @@
     }
 
     function parseDateTimeParts(dateText = '', timeText = '') {
-        const dateMatch = String(dateText || '').match(/^(\d{1,6})年\s*(\d{1,2})月\s*(\d{1,2})日$/);
+        const normalizedDate = String(dateText || '').trim().replace(/／/g, '/');
+        const chineseDateMatch = normalizedDate.match(/^(\d{1,6})年\s*(\d{1,2})月\s*(\d{1,2})日$/);
+        const delimitedDateMatch = normalizedDate.match(/^(\d{1,6})\s*([\-/])\s*(\d{1,2})\s*\2\s*(\d{1,2})$/);
         const timeMatch = String(timeText || '').match(/^(\d{1,2})\s*[:：]\s*(\d{2})$/);
-        if (!dateMatch || !timeMatch) return null;
+        if ((!chineseDateMatch && !delimitedDateMatch) || !timeMatch) return null;
 
-        const year = Number(dateMatch[1]);
-        const month = Number(dateMatch[2]);
-        const day = Number(dateMatch[3]);
+        const year = Number(chineseDateMatch?.[1] ?? delimitedDateMatch[1]);
+        const month = Number(chineseDateMatch?.[2] ?? delimitedDateMatch[3]);
+        const day = Number(chineseDateMatch?.[3] ?? delimitedDateMatch[4]);
         const hour = Number(timeMatch[1]);
         const minute = Number(timeMatch[2]);
         if (!isValidDateTimeParts(year, month, day, hour, minute)) return null;
@@ -105,17 +113,20 @@
                 const priority = priorityMatch?.[1] || '';
                 if (priorityMatch) content = content.slice(0, priorityMatch.index).trim();
 
-                const detailMatch = content.match(/^((\d{1,6})年\s*\d{1,2}月\s*\d{1,2}日)\s*(\d{1,2}[:：]\d{2})\s*[·・•:：]\s*(.+)$/);
+                const detailMatch = content.match(new RegExp(`^(${TODO_DATE_SOURCE})\\s*(\\d{1,2}[:：]\\d{2})\\s*[·・•:：]\\s*(.+)$`));
                 const rawContent = entry.replace(new RegExp(`^${TODO_MARKER_SOURCE}\\s*`), '').trim();
                 if (!detailMatch) {
                     return { text: content, dateTime: '', priority, rawContent, ordinalMinutes: null };
                 }
 
                 const dateText = detailMatch[1].replace(/\s+/g, '');
-                const timeText = detailMatch[3].replace('：', ':');
+                const timeText = detailMatch[2].replace('：', ':');
                 const parts = parseDateTimeParts(dateText, timeText);
+                if (!parts) {
+                    return { text: content, dateTime: '', priority, rawContent, ordinalMinutes: null };
+                }
                 return {
-                    text: detailMatch[4].trim(),
+                    text: detailMatch[3].trim(),
                     dateTime: `${dateText} ${timeText}`,
                     priority,
                     rawContent,
@@ -148,7 +159,7 @@
             if (!value) return '';
             const marker = value.match(markerPattern)?.[0] || '';
             const content = value.slice(marker.length).trimStart();
-            if (/^\d{1,6}年\s*\d{1,2}月\s*\d{1,2}日/.test(content)) return value;
+            if (new RegExp(`^${TODO_DATE_SOURCE}`).test(content)) return value;
 
             const timeMatch = content.match(/^(\d{1,2})\s*[:：]\s*(\d{2})(?=\s*(?:[·・•:：]\s*)?\S)/);
             if (!timeMatch) return value;
@@ -243,13 +254,28 @@
         return candidates[candidates.length - 1] || null;
     }
 
+    function getStoryTimeForFloor(floor, context = getContext()) {
+        const chat = Array.isArray(context?.chat) ? context.chat : [];
+        const target = Math.round(Number(floor));
+        if (!Number.isFinite(target) || target < 0 || target >= chat.length) return null;
+        const message = chat[target];
+        if (!isAssistantMessage(message)) return null;
+
+        const bodyText = getMessageBodyText(message);
+        const bodyTime = parseStoryTimeText(bodyText);
+        if (bodyTime) return { ...bodyTime, floor: target };
+
+        const selectedText = getMessageText(message);
+        if (!selectedText || selectedText === bodyText) return null;
+        const selectedTime = parseStoryTimeText(selectedText);
+        return selectedTime ? { ...selectedTime, floor: target } : null;
+    }
+
     function getChatStoryTime(context = getContext()) {
         const chat = Array.isArray(context?.chat) ? context.chat : [];
         for (let index = chat.length - 1; index >= 0; index -= 1) {
-            const message = chat[index];
-            if (!isAssistantMessage(message)) continue;
-            const parsed = parseStoryTimeText(getMessageText(message));
-            if (parsed) return { ...parsed, floor: index };
+            const parsed = getStoryTimeForFloor(index, context);
+            if (parsed) return parsed;
         }
         return null;
     }
@@ -410,6 +436,7 @@
         fillMissingTodoDates,
         mergeTodoTexts,
         parseStoryTimeText,
+        getStoryTimeForFloor,
         getCurrentStoryTime,
         pruneTodoText,
         cleanupExpiredTodos,
