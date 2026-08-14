@@ -700,9 +700,12 @@
             const currentValue = String(record.values[columnName] || '').trim();
             if (isFillOnceColumn(column) && currentValue) return;
             const shouldAppend = isAppendColumn(column);
-            if (shouldAppend && table.id === 'character_profile' && columnName === '待办事项') {
-                record.values[columnName] = YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[columnName], value)
-                    || appendCellValue(record.values[columnName], value);
+            if (table.id === 'character_profile' && columnName === '待办事项') {
+                const todoValue = YuzukiMemory.TodoManager?.fillMissingTodoDates?.(value, options.storyTime) || value;
+                record.values[columnName] = shouldAppend
+                    ? (YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[columnName], todoValue)
+                        || appendCellValue(record.values[columnName], todoValue))
+                    : todoValue;
                 return;
             }
             record.values[columnName] = shouldAppend ? appendCellValue(record.values[columnName], value) : value;
@@ -747,6 +750,7 @@
             : (Array.isArray(chat) ? chat.length - 1 : -1);
         const range = floor >= 0 ? { start: floor, end: floor + 1 } : null;
         const floorScope = YuzukiMemory.Storage?.getCurrentFloorScope?.() || null;
+        const storyTime = YuzukiMemory.TodoManager?.parseStoryTimeText?.(text) || null;
         const replacedPlotItems = removeRealtimePlotItemsForRange(state, range, floorScope);
         YuzukiMemory.BranchSnapshot?.captureBaseSnapshotBeforeMessage?.(floor, { state });
         let count = 0;
@@ -757,6 +761,7 @@
                 floor,
                 range,
                 floorScope,
+                storyTime,
             });
             if (count || replacedPlotItems) {
                 const saved = YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, {

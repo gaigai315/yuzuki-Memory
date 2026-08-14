@@ -39,9 +39,11 @@
     function normalizeTodoText(text = '') {
         return String(text || '')
             .trim()
-            .replace(new RegExp(`[；;]\\s*(?=${TODO_MARKER_SOURCE})`, 'g'), '\n')
+            .replace(/^(?:\s*[；;])+\s*/, '')
+            .replace(new RegExp(`(?:[；;]\\s*)+(?=${TODO_MARKER_SOURCE})`, 'g'), '\n')
             .replace(new RegExp(`\\s+(?=${BRACKETED_TODO_MARKER_SOURCE})`, 'g'), '\n')
             .replace(new RegExp(`([^\\n])(?=${BRACKETED_TODO_MARKER_SOURCE})`, 'g'), '$1\n')
+            .replace(/(?:[；;]\s*)+$/, '')
             .replace(/\n{2,}/g, '\n')
             .trim();
     }
@@ -132,6 +134,34 @@
             })
             .filter(Boolean)
             .join(';');
+    }
+
+    function fillMissingTodoDates(text = '', storyTime = null) {
+        const source = normalizeTodoText(text);
+        const date = String(storyTime?.date || '').replace(/\s+/g, '');
+        if (!source || !/^\d{1,6}年\d{1,2}月\d{1,2}日$/.test(date)) return String(text || '').trim();
+
+        let changed = false;
+        const markerPattern = new RegExp(`^${TODO_MARKER_SOURCE}\\s*`);
+        const entries = source.split(/\n+/).map((entry) => {
+            const value = String(entry || '').trim();
+            if (!value) return '';
+            const marker = value.match(markerPattern)?.[0] || '';
+            const content = value.slice(marker.length).trimStart();
+            if (/^\d{1,6}年\s*\d{1,2}月\s*\d{1,2}日/.test(content)) return value;
+
+            const timeMatch = content.match(/^(\d{1,2})\s*[:：]\s*(\d{2})(?=\s*(?:[·・•:：]\s*)?\S)/);
+            if (!timeMatch) return value;
+            const hour = Number(timeMatch[1]);
+            const minute = Number(timeMatch[2]);
+            if (!Number.isInteger(hour) || hour < 0 || hour > 23 || !Number.isInteger(minute) || minute < 0 || minute > 59) {
+                return value;
+            }
+
+            changed = true;
+            return `${marker}${date} ${content}`;
+        }).filter(Boolean);
+        return changed ? entries.join(';') : String(text || '').trim();
     }
 
     function getTodoIdentity(item = {}) {
@@ -377,6 +407,7 @@
         bind,
         parseTodoItems,
         serializeTodoItems,
+        fillMissingTodoDates,
         mergeTodoTexts,
         parseStoryTimeText,
         getCurrentStoryTime,

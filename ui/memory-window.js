@@ -14413,8 +14413,8 @@
                 if (!root) return false;
                 return openTaskResultConfirmDialog(root, {
                     title: `${payload.taskTitle || '自动任务'}失败`,
-                    description: '以下为完整错误与模型原始回复。此次结果未写入，任务指针也未推进。',
-                    result: { text: String(payload.detail || payload.message || '未知错误') },
+                    description: '以下为完整错误与模型原始回复，此次结果未写入。',
+                    result: { text: String(payload.message || '未知错误') },
                     readOnly: true,
                     confirmLabel: '确定',
                 });

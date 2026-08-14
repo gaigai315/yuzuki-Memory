@@ -90,31 +90,36 @@
             ? `（楼层 ${formatDisplayFloorRange(task.start, task.end)}）`
             : '';
         const retryHint = task?.type === 'trace' ? '填表指针未推进，后续正文结束后会继续尝试补跑。' : '总结指针未推进，后续正文结束后会继续尝试补跑。';
+        const notification = `${taskTitle}失败${range}。${retryHint}`;
         const detail = message
             ? `${taskTitle}失败${range}：${message}\n${retryHint}`
             : `${taskTitle}失败${range}。\n${retryHint}`;
+        let handled = false;
         if (typeof callbacks.onAutoTaskFailure === 'function') {
             try {
-                const handled = callbacks.onAutoTaskFailure({ task, taskTitle, message, range, retryHint, detail });
-                if (handled !== false) {
-                    Promise.resolve(handled).catch((callbackError) => {
+                const callbackResult = callbacks.onAutoTaskFailure({ task, taskTitle, message, range, retryHint, notification, detail });
+                if (callbackResult !== false) {
+                    handled = true;
+                    Promise.resolve(callbackResult).catch((callbackError) => {
                         console.warn('[yuzuki-Memory] Failed to show auto task failure dialog:', callbackError);
                     });
-                    console.warn(`[yuzuki-Memory] ${detail}`);
-                    return;
                 }
             } catch (callbackError) {
                 console.warn('[yuzuki-Memory] Failed to show auto task failure dialog:', callbackError);
             }
         }
+        let notified = false;
         try {
             if (typeof toastr !== 'undefined' && typeof toastr.error === 'function') {
-                toastr.error(detail, '柚月记忆', { timeOut: 8000 });
+                toastr.error(notification, '柚月记忆', { timeOut: 8000 });
+                notified = true;
             }
         } catch (_error) {}
-        try {
-            if (typeof window.alert === 'function') window.alert(detail);
-        } catch (_error) {}
+        if (!handled && !notified) {
+            try {
+                if (typeof window.alert === 'function') window.alert(detail);
+            } catch (_error) {}
+        }
         console.warn(`[yuzuki-Memory] ${detail}`);
     }
 
@@ -1142,9 +1147,56 @@
         return !['eof', 'length', 'max_tokens', 'max_token'].includes(termination);
     }
 
+    function normalizeCompletedSummaryMemoryEnvelope(text = '') {
+        const rawSource = String(text || '');
+        let source = rawSource.trim();
+        if (!source) return source;
+        source = source.replace(/^```(?:xml|html|memory)?\s*/i, '').trim();
+
+        const closeMatches = [...source.matchAll(/<\/Memory\s*>/gi)];
+        if (!closeMatches.length) return rawSource;
+
+        const closeMatch = closeMatches[closeMatches.length - 1];
+        const closeEnd = (closeMatch.index || 0) + closeMatch[0].length;
+        const trailingText = source.slice(closeEnd).trim();
+        const unexpectedTrailingText = trailingText.replace(/```(?:xml|html|memory)?/gi, '').trim();
+        if (unexpectedTrailingText) return rawSource;
+
+        const contentBeforeClose = source.slice(0, closeMatch.index || 0).trim();
+        const intermediateCloseMatches = closeMatches.slice(0, -1);
+        const hasUnstructuredContinuation = intermediateCloseMatches.some((match, index) => {
+            const segmentStart = (match.index || 0) + match[0].length;
+            const segmentEnd = intermediateCloseMatches[index + 1]?.index ?? contentBeforeClose.length;
+            const segment = contentBeforeClose.slice(segmentStart, segmentEnd)
+                .replace(/```(?:xml|html|memory)?/gi, '')
+                .trim();
+            return !getSummarySectionHeadingPattern().test(segment);
+        });
+        if (hasUnstructuredContinuation) return rawSource;
+
+        const openMatches = [...contentBeforeClose.matchAll(/<Memory(?:\s+[^>]*)?>/gi)];
+        if (openMatches.length > 1) return rawSource;
+
+        const bodyStart = openMatches.length
+            ? (openMatches[0].index || 0) + openMatches[0][0].length
+            : 0;
+        const body = contentBeforeClose
+            .slice(bodyStart)
+            .replace(/<\/Memory\s*>/gi, '')
+            .replace(/(?:^|\r?\n)\s*```(?:xml|html|memory)?\s*(?=\r?\n|$)/gi, '\n')
+            .trim();
+        return `<Memory>\n${body}\n</Memory>`;
+    }
+
+    function normalizeSummaryMemoryEnvelope(text = '', response = {}) {
+        const source = String(text || '');
+        if (canRepairSummaryMemoryEnvelope(source, response)) return normalizeMemoryEnvelope(source);
+        return normalizeCompletedSummaryMemoryEnvelope(source);
+    }
+
     function normalizeSummaryGenerationText(text = '', response = {}) {
         const source = String(text || '');
-        const envelopeNormalized = canRepairSummaryMemoryEnvelope(source, response) ? normalizeMemoryEnvelope(source) : source;
+        const envelopeNormalized = normalizeSummaryMemoryEnvelope(source, response);
         return normalizeSummarySectionHeadings(envelopeNormalized);
     }
 
@@ -1154,13 +1206,12 @@
         const error = getSummaryResponseIntegrityError(normalizedText, response);
         if (!error) {
             if (normalizedText === rawText) return response;
-            const envelopeRepaired = canRepairSummaryMemoryEnvelope(rawText, response);
-            const envelopeNormalized = envelopeRepaired ? normalizeMemoryEnvelope(rawText) : rawText;
+            const envelopeNormalized = normalizeSummaryMemoryEnvelope(rawText, response);
             return {
                 ...response,
                 text: normalizedText,
                 rawText,
-                memoryEnvelopeRepaired: envelopeRepaired,
+                memoryEnvelopeRepaired: envelopeNormalized !== rawText,
                 summaryHeadingsNormalized: normalizeSummarySectionHeadings(envelopeNormalized) !== envelopeNormalized,
             };
         }
