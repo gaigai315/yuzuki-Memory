@@ -54,20 +54,28 @@
             .trim();
     }
 
-    function parseDateTimeParts(dateText = '', timeText = '') {
+    function parseDateParts(dateText = '') {
         const normalizedDate = String(dateText || '').trim().replace(/／/g, '/');
         const chineseDateMatch = normalizedDate.match(/^(\d{1,6})年\s*(\d{1,2})月\s*(\d{1,2})日$/);
         const delimitedDateMatch = normalizedDate.match(/^(\d{1,6})\s*([\-/])\s*(\d{1,2})\s*\2\s*(\d{1,2})$/);
-        const timeMatch = String(timeText || '').match(/^(\d{1,2})\s*[:：]\s*(\d{2})$/);
-        if ((!chineseDateMatch && !delimitedDateMatch) || !timeMatch) return null;
+        if (!chineseDateMatch && !delimitedDateMatch) return null;
 
         const year = Number(chineseDateMatch?.[1] ?? delimitedDateMatch[1]);
         const month = Number(chineseDateMatch?.[2] ?? delimitedDateMatch[3]);
         const day = Number(chineseDateMatch?.[3] ?? delimitedDateMatch[4]);
+        if (!isValidDateTimeParts(year, month, day, 0, 0)) return null;
+        return { year, month, day };
+    }
+
+    function parseDateTimeParts(dateText = '', timeText = '') {
+        const dateParts = parseDateParts(dateText);
+        const timeMatch = String(timeText || '').match(/^(\d{1,2})\s*[:：]\s*(\d{2})$/);
+        if (!dateParts || !timeMatch) return null;
+
         const hour = Number(timeMatch[1]);
         const minute = Number(timeMatch[2]);
-        if (!isValidDateTimeParts(year, month, day, hour, minute)) return null;
-        return { year, month, day, hour, minute };
+        if (!isValidDateTimeParts(dateParts.year, dateParts.month, dateParts.day, hour, minute)) return null;
+        return { ...dateParts, hour, minute };
     }
 
     function isLeapYear(year) {
@@ -99,6 +107,12 @@
         return dayNumber * 1440 + parts.hour * 60 + parts.minute;
     }
 
+    function toOrdinalDay(parts) {
+        if (!parts) return null;
+        const ordinalMinutes = toOrdinalMinutes({ ...parts, hour: 0, minute: 0 });
+        return Number.isFinite(ordinalMinutes) ? Math.floor(ordinalMinutes / 1440) : null;
+    }
+
     function parseTodoItems(text = '') {
         const source = normalizeTodoText(text);
         if (!source) return [];
@@ -113,26 +127,45 @@
                 const priority = priorityMatch?.[1] || '';
                 if (priorityMatch) content = content.slice(0, priorityMatch.index).trim();
 
-                const detailMatch = content.match(new RegExp(`^(${TODO_DATE_SOURCE})\\s*(\\d{1,2}[:：]\\d{2})\\s*[·・•:：]\\s*(.+)$`));
                 const rawContent = entry.replace(new RegExp(`^${TODO_MARKER_SOURCE}\\s*`), '').trim();
-                if (!detailMatch) {
-                    return { text: content, dateTime: '', priority, rawContent, ordinalMinutes: null };
+                const detailMatch = content.match(new RegExp(`^(${TODO_DATE_SOURCE})\\s*(\\d{1,2}[:：]\\d{2})\\s*[·・•:：]\\s*(.+)$`));
+
+                if (detailMatch) {
+                    const dateText = detailMatch[1].replace(/\s+/g, '');
+                    const timeText = detailMatch[2].replace('：', ':');
+                    const parts = parseDateTimeParts(dateText, timeText);
+                    if (parts) {
+                        return {
+                            text: detailMatch[3].trim(),
+                            dateTime: `${dateText} ${timeText}`,
+                            priority,
+                            rawContent,
+                            dateTimeParts: parts,
+                            ordinalMinutes: toOrdinalMinutes(parts),
+                            ordinalDay: toOrdinalDay(parts),
+                        };
+                    }
                 }
 
-                const dateText = detailMatch[1].replace(/\s+/g, '');
-                const timeText = detailMatch[2].replace('：', ':');
-                const parts = parseDateTimeParts(dateText, timeText);
-                if (!parts) {
-                    return { text: content, dateTime: '', priority, rawContent, ordinalMinutes: null };
+                const dateOnlyMatch = content.match(new RegExp(`^(${TODO_DATE_SOURCE})\\s*(?:[·・•:：,，、]\\s*)?(.+)$`));
+                if (dateOnlyMatch) {
+                    const dateText = dateOnlyMatch[1].replace(/\s+/g, '');
+                    const dateParts = parseDateParts(dateText);
+                    const ordinalDay = toOrdinalDay(dateParts);
+                    if (dateParts && Number.isFinite(ordinalDay)) {
+                        return {
+                            text: dateOnlyMatch[2].trim(),
+                            dateTime: dateText,
+                            priority,
+                            rawContent,
+                            dateParts,
+                            ordinalMinutes: null,
+                            ordinalDay,
+                        };
+                    }
                 }
-                return {
-                    text: detailMatch[3].trim(),
-                    dateTime: `${dateText} ${timeText}`,
-                    priority,
-                    rawContent,
-                    dateTimeParts: parts,
-                    ordinalMinutes: toOrdinalMinutes(parts),
-                };
+
+                return { text: content, dateTime: '', priority, rawContent, ordinalMinutes: null, ordinalDay: null };
             })
             .filter((item) => item.text || item.dateTime || item.rawContent);
     }
@@ -316,9 +349,13 @@
             return { changed: false, removed: [], kept: items, value: String(text || '') };
         }
 
+        const currentOrdinalDay = Math.floor(currentOrdinalMinutes / 1440);
         const removed = items.filter((item) => (
-            Number.isFinite(item.ordinalMinutes)
-            && currentOrdinalMinutes - item.ordinalMinutes > EXPIRY_DELAY_MINUTES
+            (Number.isFinite(item.ordinalMinutes)
+                && currentOrdinalMinutes - item.ordinalMinutes > EXPIRY_DELAY_MINUTES)
+            || (!Number.isFinite(item.ordinalMinutes)
+                && Number.isFinite(item.ordinalDay)
+                && currentOrdinalDay > item.ordinalDay)
         ));
         if (!removed.length) return { changed: false, removed, kept: items, value: String(text || '') };
         const kept = items.filter((item) => !removed.includes(item));

@@ -1359,11 +1359,8 @@
 
     function getSummaryTimelineItems(text = '') {
         let lastDate = '';
-        return String(text || '')
-            .split(/\n+/)
-            .map((line) => line.trim())
-            .filter(Boolean)
-            .map((line) => {
+        return splitSummaryLines(text)
+            .map((line, sourceIndex) => {
                 const timelineItem = splitSummaryTimelineLine(line);
                 if (timelineItem) {
                     const displayDate = timelineItem.date && timelineItem.date !== lastDate ? timelineItem.date : '';
@@ -1372,12 +1369,47 @@
                         date: displayDate,
                         time: timelineItem.time,
                         event: timelineItem.event,
+                        sourceIndex,
+                        sourceText: line,
                     };
                 }
                 const parts = line.split(/\s*[|｜]\s*/);
-                if (parts.length > 1) return { date: '', time: parts.shift().trim(), event: parts.join('｜').trim() };
-                return { date: '', time: '', event: line };
+                if (parts.length > 1) {
+                    return {
+                        date: '',
+                        time: parts.shift().trim(),
+                        event: parts.join('｜').trim(),
+                        sourceIndex,
+                        sourceText: line,
+                    };
+                }
+                return { date: '', time: '', event: line, sourceIndex, sourceText: line };
             });
+    }
+
+    function normalizeSummaryParagraphValue(value = '') {
+        return String(value || '')
+            .split(/\r?\n+/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .join(' ');
+    }
+
+    function replaceSummaryTimelineLine(text = '', lineIndex = -1, value = '') {
+        const source = String(text || '');
+        const lines = source.split(/\r?\n/);
+        const contentIndexes = [];
+        lines.forEach((line, index) => {
+            if (line.trim()) contentIndexes.push(index);
+        });
+        const nextValue = normalizeSummaryParagraphValue(value);
+        if (!Number.isInteger(lineIndex) || lineIndex < 0 || !nextValue) return source;
+        if (lineIndex < contentIndexes.length) lines[contentIndexes[lineIndex]] = nextValue;
+        else if (lineIndex === contentIndexes.length) {
+            if (!source.trim()) return nextValue;
+            lines.push(nextValue);
+        }
+        return lines.join('\n');
     }
 
     function splitTagText(text = '') {
@@ -11258,16 +11290,20 @@
         if (summaryKind === '支线' && summarySegments.length > 0) {
             const segmentList = document.createElement('div');
             segmentList.className = 'yzm-summary-segment-list';
-            summarySegments.forEach((segment) => segmentList.appendChild(createSummarySegmentBlock(segment)));
+            summarySegments.forEach((segment, segmentIndex) => {
+                segmentList.appendChild(createSummarySegmentBlock(segment, segmentIndex));
+            });
             contentCard.append(contentTitle, segmentList);
         } else {
             const contentList = document.createElement('div');
             contentList.className = 'yzm-summary-timeline-list';
             const timelineItems = getSummaryTimelineItems(getSummaryValue(record, ['总结内容']));
             if (timelineItems.length) {
-                timelineItems.forEach((item) => contentList.appendChild(createSummaryTimelineRow(item)));
+                timelineItems.forEach((item) => contentList.appendChild(createSummaryTimelineRow(item, {
+                    lineIndex: item.sourceIndex,
+                })));
             } else {
-                contentList.appendChild(createSummaryTimelineRow({ time: '', event: '' }));
+                contentList.appendChild(createSummaryTimelineRow({ time: '', event: '' }, record ? { lineIndex: 0 } : {}));
             }
             contentCard.append(contentTitle, contentList);
         }
@@ -11283,7 +11319,7 @@
         return view;
     }
 
-    function createSummarySegmentBlock(segment) {
+    function createSummarySegmentBlock(segment, segmentIndex) {
         const block = document.createElement('section');
         block.className = 'yzm-summary-segment-block';
 
@@ -11296,9 +11332,15 @@
         list.className = 'yzm-summary-timeline-list';
         const items = getSummaryTimelineItems(segment.summary);
         if (items.length) {
-            items.forEach((item) => list.appendChild(createSummaryTimelineRow(item)));
+            items.forEach((item) => list.appendChild(createSummaryTimelineRow(item, {
+                lineIndex: item.sourceIndex,
+                segmentIndex,
+            })));
         } else {
-            list.appendChild(createSummaryTimelineRow({ time: '', event: segment.summary || '' }));
+            list.appendChild(createSummaryTimelineRow({ time: '', event: segment.summary || '' }, {
+                lineIndex: 0,
+                segmentIndex,
+            }));
         }
 
         block.append(header, list);
@@ -11321,12 +11363,23 @@
         return card;
     }
 
-    function createSummaryTimelineRow(item) {
+    function createSummaryTimelineRow(item, options = {}) {
         const row = document.createElement('div');
         row.className = 'yzm-summary-timeline-row';
 
-        const dot = document.createElement('span');
+        const isEditable = Number.isInteger(options.lineIndex) && options.lineIndex >= 0;
+        const dot = document.createElement(isEditable ? 'button' : 'span');
         dot.className = 'yzm-summary-timeline-dot';
+        if (isEditable) {
+            dot.type = 'button';
+            dot.classList.add('yzm-summary-timeline-dot-editable');
+            dot.dataset.yzmSummaryLineIndex = String(options.lineIndex);
+            if (Number.isInteger(options.segmentIndex) && options.segmentIndex >= 0) {
+                dot.dataset.yzmSummarySegmentIndex = String(options.segmentIndex);
+            }
+            dot.setAttribute('aria-label', '编辑对应总结段落');
+            dot.title = '编辑对应总结段落';
+        }
 
         const timeWrap = document.createElement('div');
         timeWrap.className = 'yzm-summary-timeline-time-wrap';
@@ -11415,7 +11468,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复隐藏楼层问题。',
+            '【优化】优化角色档案中待办事项的日期兼容与跨天清理。',
+            '【新增】总结面板新增单段落编辑入口。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -12568,7 +12622,7 @@
         overlay.className = 'yzm-structure-modal yzm-record-modal';
 
         const dialog = document.createElement('section');
-        dialog.className = 'yzm-structure-dialog yzm-record-dialog';
+        dialog.className = 'yzm-structure-dialog yzm-record-dialog yzm-tall-text-editor-dialog';
         dialog.setAttribute('aria-label', `${isAppend ? '新增' : '编辑'}${label}`);
 
         const header = document.createElement('div');
@@ -12585,7 +12639,7 @@
         close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
 
         const fields = document.createElement('div');
-        fields.className = 'yzm-record-fields';
+        fields.className = 'yzm-record-fields yzm-tall-text-editor-fields';
         fields.append(
             createRecordInput('时间', parsedValue.time, false, { placeholder: 'xxxx年x月x日，hh:mm' }),
             createRecordInput(field, parsedValue.content, true, { placeholder: `填写${label}内容` })
@@ -12675,6 +12729,114 @@
                 setPlotItemMeta(record, normalizedKind, nextValue ? [{ id: createPlotLineId(), text: nextValue, source: 'manual', floorScope: getCurrentFloorScope(), createdAt: Date.now() }] : []);
             }
             persistEditorChanges('当前会话尚未就绪，剧情摘要未保存。');
+        });
+
+        fields.querySelector('.yzm-record-input')?.focus();
+    }
+
+    function patchMemorySummaryContent(root, table) {
+        const currentCard = root.querySelector('.yzm-summary-main-content-card');
+        const nextCard = createMemorySummaryView(table).querySelector('.yzm-summary-main-content-card');
+        if (!currentCard || !nextCard) {
+            renderTableWorkspace(root);
+            bindPanelInteractions(root);
+            return;
+        }
+        currentCard.replaceWith(nextCard);
+        bindPanelInteractions(root);
+    }
+
+    function openSummaryParagraphEditor(root, options = {}) {
+        const table = getActiveTable();
+        const record = table?.id === 'memory_summary' ? getActiveRecord(table) : null;
+        if (!record) return;
+
+        const lineIndex = Number.parseInt(options.lineIndex, 10);
+        if (!Number.isInteger(lineIndex) || lineIndex < 0) return;
+
+        const isBranch = getSummaryKind(record) === 'branch';
+        const segmentIndex = Number.parseInt(options.segmentIndex, 10);
+        const summarySegments = isBranch ? getSummarySegments(record) : [];
+        if (isBranch && (!Number.isInteger(segmentIndex) || !summarySegments[segmentIndex])) return;
+
+        const sourceText = isBranch
+            ? summarySegments[segmentIndex].summary
+            : getSummaryValue(record, ['总结内容']);
+        const currentValue = splitSummaryLines(sourceText)[lineIndex] || '';
+        const label = isBranch ? '支线总结段落' : '主线总结段落';
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-record-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-record-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-record-dialog yzm-tall-text-editor-dialog yzm-summary-paragraph-dialog';
+        dialog.setAttribute('aria-label', `编辑${label}`);
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = `编辑${label}`;
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', `关闭编辑${label}`);
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const fields = document.createElement('div');
+        fields.className = 'yzm-record-fields yzm-tall-text-editor-fields yzm-summary-paragraph-fields';
+        fields.appendChild(createRecordInput('段落内容', currentValue, true, { placeholder: '填写该段总结内容' }));
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-record-actions';
+        const save = createButton('保存', 'yzm-add-table-confirm yzm-record-save');
+        actions.appendChild(save);
+
+        dialog.append(header, fields, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => removePluginElement(overlay);
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+
+        save.addEventListener('click', () => {
+            const input = fields.querySelector('[data-yzm-record-field="段落内容"]');
+            const nextValue = normalizeSummaryParagraphValue(input?.value);
+            if (!nextValue) {
+                window.alert('段落内容不能为空。');
+                input?.focus();
+                return;
+            }
+
+            record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            if (isBranch) {
+                if (!Array.isArray(record.summarySegments) || !record.summarySegments.length) {
+                    record.summarySegments = summarySegments.map((segment) => ({ ...segment }));
+                }
+                const targetSegment = record.summarySegments[segmentIndex];
+                if (!targetSegment) return;
+                targetSegment.summary = replaceSummaryTimelineLine(targetSegment.summary, lineIndex, nextValue);
+                targetSegment.editedAt = Date.now();
+                syncMergedBranchSummaryValues(record);
+            } else {
+                record.values.总结内容 = replaceSummaryTimelineLine(record.values.总结内容, lineIndex, nextValue);
+            }
+
+            setActiveRecordId(table.id, record.id);
+            if (!persistStateOrReload(root, '当前会话尚未就绪，总结段落未保存。', {
+                tableId: table.id,
+                recordId: record.id,
+                values: record.values,
+            })) return;
+            closeModal();
+            patchMemorySummaryContent(root, table);
         });
 
         fields.querySelector('.yzm-record-input')?.focus();
@@ -14015,6 +14177,19 @@
                 openTableEditor(root);
             });
         }
+
+        root.querySelectorAll('.yzm-summary-timeline-dot-editable').forEach((button) => {
+            if (button.dataset.yzmBound === 'true') return;
+            button.dataset.yzmBound = 'true';
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openSummaryParagraphEditor(root, {
+                    lineIndex: button.dataset.yzmSummaryLineIndex,
+                    segmentIndex: button.dataset.yzmSummarySegmentIndex,
+                });
+            });
+        });
 
         root.querySelectorAll('.yzm-plot-marker').forEach((button) => {
             if (button.dataset.yzmBound === 'true') return;

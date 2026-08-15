@@ -7187,11 +7187,57 @@
     position: absolute;
     left: 3px;
     top: 50%;
-    width: 9px;
-    height: 9px;
-    background: #9ea8ff;
+    width: 6px;
+    height: 6px;
+    background: #7c8fed;
+    border: 2px solid var(--yzm-surface);
     border-radius: 999px;
+    box-sizing: content-box;
+    box-shadow: 0 0 0 1px rgba(124, 145, 210, 0.42), 0 4px 10px rgba(90, 110, 200, 0.18);
     transform: translateY(-50%);
+}
+
+#yzm-memory-root .yzm-summary-timeline-dot.yzm-summary-timeline-dot-editable {
+    left: -5px;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 50%;
+    box-shadow: none;
+    cursor: pointer;
+    transform: translateY(-50%);
+    touch-action: manipulation;
+}
+
+#yzm-memory-root .yzm-summary-timeline-dot-editable::after {
+    content: "";
+    width: 6px;
+    height: 6px;
+    background: #7c8fed;
+    border: 2px solid var(--yzm-surface);
+    border-radius: 999px;
+    box-sizing: content-box;
+    box-shadow: 0 0 0 1px rgba(124, 145, 210, 0.42), 0 4px 10px rgba(90, 110, 200, 0.18);
+}
+
+#yzm-memory-root .yzm-summary-timeline-dot-editable:focus-visible {
+    outline: 1px solid var(--yzm-selected-color);
+    outline-offset: 1px;
+}
+
+#yzm-memory-root .yzm-summary-view-hidden .yzm-summary-timeline-dot.yzm-summary-timeline-dot-editable {
+    background: transparent;
+}
+
+#yzm-memory-root .yzm-summary-view-hidden .yzm-summary-timeline-dot-editable::after {
+    background: var(--yzm-muted);
+    border-color: var(--yzm-surface);
 }
 
 #yzm-memory-root .yzm-summary-timeline-time-wrap,
@@ -7577,6 +7623,37 @@
 
 #yzm-memory-root .yzm-record-dialog {
     width: min(680px, 100%);
+}
+
+#yzm-memory-root .yzm-tall-text-editor-dialog {
+    height: min(720px, calc(100% - 8px));
+    max-height: 100%;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-tall-text-editor-fields {
+    flex: 1 1 0;
+    grid-template-rows: auto minmax(0, 1fr);
+    min-height: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-summary-paragraph-fields {
+    grid-template-rows: minmax(0, 1fr);
+}
+
+#yzm-memory-root .yzm-tall-text-editor-fields .yzm-record-field-wide {
+    min-height: 0;
+}
+
+#yzm-memory-root .yzm-tall-text-editor-fields .yzm-record-textarea {
+    flex: 1 1 0;
+    height: auto;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    resize: none;
+    touch-action: pan-y;
 }
 
 #yzm-memory-root .yzm-clear-table-dialog {
@@ -9192,8 +9269,19 @@
 
     #yzm-memory-root .yzm-summary-timeline-dot {
         left: 1px;
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
+    }
+
+    #yzm-memory-root .yzm-summary-timeline-dot.yzm-summary-timeline-dot-editable {
+        left: -7px;
+        width: 24px;
+        height: 24px;
+    }
+
+    #yzm-memory-root .yzm-summary-timeline-dot-editable::after {
+        width: 6px;
+        height: 6px;
     }
 
     #yzm-memory-root .yzm-summary-timeline-time-wrap,
