@@ -408,6 +408,20 @@
         );
     }
 
+    function getActiveRequestFloorLimit() {
+        try {
+            const settings = YuzukiMemory.FloorHider?.loadSettings?.();
+            if (!settings?.hideFloorsEnabled) return null;
+            const keepFloors = Number(settings.hiddenFloorCount);
+            return {
+                keepFloors: Number.isFinite(keepFloors) ? Math.max(0, Math.round(keepFloors)) : 0,
+                keepFirstFloorVisible: settings.keepFirstFloorVisible === true,
+            };
+        } catch (_error) {
+            return null;
+        }
+    }
+
     function getHiddenContextInfo() {
         const contextItems = getContextChatItems();
         const dialogue = [];
@@ -420,7 +434,10 @@
                 hidden: isHiddenContextMessage(message),
             });
         });
-        return { dialogue };
+        return {
+            dialogue,
+            floorLimit: getActiveRequestFloorLimit(),
+        };
     }
 
     function isRequestDialogueMessage(message) {
@@ -471,15 +488,43 @@
         return hiddenIndexes;
     }
 
+    function getHiddenRequestIndexesByFloorLimit(targetItems, floorLimit) {
+        const hiddenIndexes = new Set();
+        if (!Array.isArray(targetItems) || !targetItems.length || !floorLimit) return hiddenIndexes;
+
+        const dialogueIndexes = [];
+        targetItems.forEach((item, index) => {
+            if (!isRequestDialogueMessage(item)) return;
+            if (item?.is_yzm_hidden_floor === true) {
+                hiddenIndexes.add(index);
+                return;
+            }
+            dialogueIndexes.push(index);
+        });
+
+        // Context-limit mode is defined by the final request, so dynamic macro
+        // expansion cannot make an old hidden message consume one of the N slots.
+        const keepFloors = Math.max(0, Math.round(Number(floorLimit.keepFloors) || 0));
+        const removableIndexes = floorLimit.keepFirstFloorVisible === true
+            ? dialogueIndexes.slice(1)
+            : dialogueIndexes;
+        const excessCount = Math.max(0, removableIndexes.length - keepFloors);
+        removableIndexes.slice(0, excessCount).forEach((index) => hiddenIndexes.add(index));
+        return hiddenIndexes;
+    }
+
     function removeHiddenMessagesFromBody(body, hiddenInfo = {}) {
         const targets = getRequestArrays(body);
         if (!targets.length) return body;
         const info = hiddenInfo && typeof hiddenInfo === 'object' ? hiddenInfo : {};
         const contextDialogue = Array.isArray(info.dialogue) ? info.dialogue : [];
-        if (!contextDialogue.some((entry) => entry?.hidden)) return body;
+        const floorLimit = info.floorLimit && typeof info.floorLimit === 'object' ? info.floorLimit : null;
+        if (!floorLimit && !contextDialogue.some((entry) => entry?.hidden)) return body;
         let removed = 0;
         targets.forEach((target) => {
-            const hiddenIndexes = getHiddenRequestIndexesByContext(target.items, contextDialogue);
+            const hiddenIndexes = floorLimit
+                ? getHiddenRequestIndexesByFloorLimit(target.items, floorLimit)
+                : getHiddenRequestIndexesByContext(target.items, contextDialogue);
             const kept = target.items.filter((item, index) => {
                 const shouldRemove = item?.is_yzm_hidden_floor === true || hiddenIndexes.has(index);
                 if (shouldRemove) removed += 1;
@@ -491,7 +536,9 @@
             console.info('[yuzuki-Memory] hidden context messages removed from final request.', {
                 removed,
                 hiddenContextMessages: contextDialogue.filter((entry) => entry?.hidden).length,
-                mode: 'context-signature-alignment',
+                keepFloors: floorLimit?.keepFloors,
+                keepFirstFloorVisible: floorLimit?.keepFirstFloorVisible,
+                mode: floorLimit ? 'final-request-floor-limit' : 'context-signature-alignment',
             });
         }
         return body;
