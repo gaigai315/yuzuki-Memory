@@ -386,17 +386,22 @@
             || message?.isGaigaiPrompt
             || message?.isGaigaiVector
             || message?.isYuzukiVector
+            || message?.isYuzukiTimedPrompt
             || message?.yzmMemoryInternal
             || message?.gaigaiPhoneSignal
             || message?.yzmMemoryInjectionType
+            || message?.isPhoneMessage
+            || message?.isMusicMessage
+            || message?.isVirtualPhoneApiCall
         );
     }
 
     function isContextDialogueMessage(message) {
         if (!message || typeof message !== 'object') return false;
         if (isPluginLikeRequestMessage(message)) return false;
-        if (message.is_user === true || message.is_user === false) return true;
         const role = String(message.role || '').toLowerCase();
+        if (role === 'system' || role === 'tool' || role === 'function') return false;
+        if (message.is_user === true || message.is_user === false) return true;
         return role === 'user' || role === 'assistant' || role === 'model' || role === 'human';
     }
 
@@ -446,10 +451,10 @@
         return !!getMessageRoleKind(message);
     }
 
-    function getHiddenRequestIndexesByContext(targetItems, contextDialogue) {
-        const hiddenIndexes = new Set();
+    function getRequestContextMatches(targetItems, contextDialogue) {
+        const matches = new Map();
         if (!Array.isArray(targetItems) || !targetItems.length || !Array.isArray(contextDialogue) || !contextDialogue.length) {
-            return hiddenIndexes;
+            return matches;
         }
 
         const signaturePositions = new Map();
@@ -460,7 +465,7 @@
             positions.push(dialogueIndex);
             signaturePositions.set(signature, positions);
         });
-        if (!signaturePositions.size) return hiddenIndexes;
+        if (!signaturePositions.size) return matches;
 
         const signatureCursors = new Map();
         let contextCursor = contextDialogue.length - 1;
@@ -481,35 +486,116 @@
             }
 
             const matchedDialogueIndex = positions[positionCursor];
-            if (contextDialogue[matchedDialogueIndex]?.hidden) hiddenIndexes.add(requestIndex);
+            matches.set(requestIndex, matchedDialogueIndex);
             signatureCursors.set(signature, positionCursor - 1);
             contextCursor = matchedDialogueIndex - 1;
         }
+        return matches;
+    }
+
+    function getHiddenRequestIndexesByContext(targetItems, contextDialogue) {
+        const hiddenIndexes = new Set();
+        getRequestContextMatches(targetItems, contextDialogue).forEach((dialogueIndex, requestIndex) => {
+            if (contextDialogue[dialogueIndex]?.hidden) hiddenIndexes.add(requestIndex);
+        });
         return hiddenIndexes;
+    }
+
+    function isMemoryAnchorRequestMessage(message) {
+        const text = getMessageText(message).trim();
+        return /\{\{\s*(?:MEMORY(?:_[^}\s]+)?|VECTOR_MEMORY)\s*\}\}/i.test(text);
+    }
+
+    function isLikelyPendingUserFloor(message) {
+        if (!isRequestDialogueMessage(message) || getMessageRoleKind(message) !== 'user') return false;
+        if (isSystemLikeMessage(message) || message?.is_yzm_hidden_floor === true) return false;
+        return !!getMessageText(message).trim() && !isMemoryAnchorRequestMessage(message);
+    }
+
+    function getPendingUserFloorIndex(targetItems, contextMatches, contextDialogue) {
+        const latestContextEntry = contextDialogue[contextDialogue.length - 1];
+        if (latestContextEntry?.role !== 'assistant') return -1;
+
+        let latestMatchedRequestIndex = -1;
+        contextMatches.forEach((_dialogueIndex, requestIndex) => {
+            latestMatchedRequestIndex = Math.max(latestMatchedRequestIndex, requestIndex);
+        });
+        for (let index = targetItems.length - 1; index > latestMatchedRequestIndex; index -= 1) {
+            const item = targetItems[index];
+            if (!isRequestDialogueMessage(item) || isSystemLikeMessage(item)) continue;
+            if (isMemoryAnchorRequestMessage(item)) continue;
+            return isLikelyPendingUserFloor(item) ? index : -1;
+        }
+        return -1;
+    }
+
+    function markContextFloorsInBody(body, hiddenInfo = {}) {
+        const contextDialogue = Array.isArray(hiddenInfo?.dialogue) ? hiddenInfo.dialogue : [];
+        if (!contextDialogue.length) return { matched: 0, pending: 0 };
+
+        let matched = 0;
+        let pending = 0;
+        getRequestArrays(body).forEach((target) => {
+            const contextMatches = getRequestContextMatches(target.items, contextDialogue);
+            contextMatches.forEach((dialogueIndex, requestIndex) => {
+                const contextEntry = contextDialogue[dialogueIndex];
+                const message = target.items[requestIndex];
+                if (!contextEntry || !message || typeof message !== 'object') return;
+                message.yzmContextFloorId = `context:${contextEntry.index}`;
+                message.yzmContextFloorHidden = contextEntry.hidden === true;
+                message.yzmContextFloorFirst = contextEntry.index === 0;
+                matched += 1;
+            });
+
+            if (!hiddenInfo?.floorLimit) return;
+            const pendingIndex = getPendingUserFloorIndex(target.items, contextMatches, contextDialogue);
+            if (pendingIndex < 0) return;
+            target.items[pendingIndex].yzmContextFloorId = 'pending:current-user';
+            target.items[pendingIndex].yzmContextFloorHidden = false;
+            target.items[pendingIndex].yzmContextFloorFirst = false;
+            pending += 1;
+        });
+        return { matched, pending };
     }
 
     function getHiddenRequestIndexesByFloorLimit(targetItems, floorLimit) {
         const hiddenIndexes = new Set();
         if (!Array.isArray(targetItems) || !targetItems.length || !floorLimit) return hiddenIndexes;
 
-        const dialogueIndexes = [];
+        const floorOrder = [];
+        const floorGroups = new Map();
         targetItems.forEach((item, index) => {
-            if (!isRequestDialogueMessage(item)) return;
-            if (item?.is_yzm_hidden_floor === true) {
-                hiddenIndexes.add(index);
+            const floorId = typeof item?.yzmContextFloorId === 'string' ? item.yzmContextFloorId : '';
+            if (!floorId) {
+                if (item?.is_yzm_hidden_floor === true) hiddenIndexes.add(index);
                 return;
             }
-            dialogueIndexes.push(index);
+            if (!floorGroups.has(floorId)) {
+                floorOrder.push(floorId);
+                floorGroups.set(floorId, {
+                    hidden: false,
+                    first: false,
+                });
+            }
+            const group = floorGroups.get(floorId);
+            group.hidden = group.hidden || item?.yzmContextFloorHidden === true;
+            group.first = group.first || item?.yzmContextFloorFirst === true;
         });
 
-        // Context-limit mode is defined by the final request, so dynamic macro
-        // expansion cannot make an old hidden message consume one of the N slots.
+        const removedFloorIds = new Set(
+            floorOrder.filter((floorId) => floorGroups.get(floorId)?.hidden === true),
+        );
         const keepFloors = Math.max(0, Math.round(Number(floorLimit.keepFloors) || 0));
-        const removableIndexes = floorLimit.keepFirstFloorVisible === true
-            ? dialogueIndexes.slice(1)
-            : dialogueIndexes;
-        const excessCount = Math.max(0, removableIndexes.length - keepFloors);
-        removableIndexes.slice(0, excessCount).forEach((index) => hiddenIndexes.add(index));
+        const removableFloorIds = floorOrder.filter((floorId) => {
+            const group = floorGroups.get(floorId);
+            if (!group || group.hidden) return false;
+            return !(floorLimit.keepFirstFloorVisible === true && group.first);
+        });
+        const excessCount = Math.max(0, removableFloorIds.length - keepFloors);
+        removableFloorIds.slice(0, excessCount).forEach((floorId) => removedFloorIds.add(floorId));
+        targetItems.forEach((item, index) => {
+            if (removedFloorIds.has(item?.yzmContextFloorId)) hiddenIndexes.add(index);
+        });
         return hiddenIndexes;
     }
 
@@ -522,11 +608,15 @@
         if (!floorLimit && !contextDialogue.some((entry) => entry?.hidden)) return body;
         let removed = 0;
         targets.forEach((target) => {
-            const hiddenIndexes = floorLimit
-                ? getHiddenRequestIndexesByFloorLimit(target.items, floorLimit)
-                : getHiddenRequestIndexesByContext(target.items, contextDialogue);
+            const hiddenIndexes = getHiddenRequestIndexesByContext(target.items, contextDialogue);
+            if (floorLimit) {
+                getHiddenRequestIndexesByFloorLimit(target.items, floorLimit)
+                    .forEach((index) => hiddenIndexes.add(index));
+            }
             const kept = target.items.filter((item, index) => {
-                const shouldRemove = item?.is_yzm_hidden_floor === true || hiddenIndexes.has(index);
+                const shouldRemove = hiddenIndexes.has(index)
+                    || item?.yzmContextFloorHidden === true
+                    || item?.is_yzm_hidden_floor === true;
                 if (shouldRemove) removed += 1;
                 return !shouldRemove;
             });
@@ -538,7 +628,7 @@
                 hiddenContextMessages: contextDialogue.filter((entry) => entry?.hidden).length,
                 keepFloors: floorLimit?.keepFloors,
                 keepFirstFloorVisible: floorLimit?.keepFirstFloorVisible,
-                mode: floorLimit ? 'final-request-floor-limit' : 'context-signature-alignment',
+                mode: floorLimit ? 'marked-context-floor-limit' : 'context-signature-alignment',
             });
         }
         return body;
@@ -1113,7 +1203,16 @@
             });
         }
         if (!isPreviewCapture) await applyPreRequestHiding();
-        removeHiddenMessagesFromBody(rawBody, getHiddenContextInfo());
+        const hiddenContextInfo = getHiddenContextInfo();
+        const markedContextFloors = markContextFloorsInBody(rawBody, hiddenContextInfo);
+        if (hiddenContextInfo.floorLimit) {
+            console.info('[yuzuki-Memory] real chat floors identified before request injection.', {
+                matched: markedContextFloors.matched,
+                pendingUser: markedContextFloors.pending,
+                keepFloors: hiddenContextInfo.floorLimit.keepFloors,
+            });
+        }
+        removeHiddenMessagesFromBody(rawBody, hiddenContextInfo);
         if (!isPreviewCapture) {
             YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
         }
