@@ -146,6 +146,14 @@
             .toLowerCase();
     }
 
+    function normalizeSummaryLabel(value = '') {
+        return normalizeName(value)
+            .replace(/線/g, '线')
+            .replace(/總/g, '总')
+            .replace(/結/g, '结')
+            .replace(/劇/g, '剧');
+    }
+
     function getPrimaryColumn(table) {
         return table?.columns?.[0] || '名称';
     }
@@ -196,7 +204,8 @@
     }
 
     function getPlotKind(value = '') {
-        return /支线/.test(String(value || '')) ? 'branch' : (/主线/.test(String(value || '')) ? 'main' : '');
+        const label = normalizeSummaryLabel(value);
+        return /支线/.test(label) ? 'branch' : (/主线/.test(label) ? 'main' : '');
     }
 
     function isPlotTimeBracket(value = '') {
@@ -305,14 +314,14 @@
             const parts = splitSegments(line);
             if (parts.length < 2) return false;
             const tableToken = parts[0].replace(/^#+/, '').trim();
-            const matchedTable = knownTableNames.find((name) => normalizeName(name) === normalizeName(tableToken));
+            const matchedTable = knownTableNames.find((name) => normalizeSummaryLabel(name) === normalizeSummaryLabel(tableToken));
             if (!matchedTable) return false;
             const keyPartIndex = parts.findIndex((part, index) => index > 0 && /^\[[^\]]+\]$/.test(part.trim()));
             if (keyPartIndex < 0) return false;
             const primaryValue = parts[keyPartIndex].trim().replace(/^\[|\]$/g, '').trim();
             const body = parts.slice(keyPartIndex + 1).join('|').trim().replace(/^内容\s*[:：]\s*/, '');
             const plotKind = getPlotKind(matchedTable) || getPlotKind(primaryValue);
-            if (plotKind || normalizeName(matchedTable) === normalizeName('剧情摘要')) {
+            if (plotKind || normalizeSummaryLabel(matchedTable) === normalizeSummaryLabel('剧情摘要')) {
                 rows.push(...expandPlotRows(plotKind || 'main', body, primaryValue));
                 return true;
             }
@@ -335,7 +344,7 @@
             if (!line) return;
             if (parseInlineTableLine(line)) return;
             if (line.startsWith('#')) {
-                const plotHeaderMatch = line.match(/^#+\s*(主线摘要|支线摘要)([\s\S]*)$/);
+                const plotHeaderMatch = line.match(/^#+\s*((?:主[线線]|支[线線])摘要)([\s\S]*)$/);
                 if (plotHeaderMatch) {
                     currentTable = '剧情摘要';
                     currentPlotKind = getPlotKind(plotHeaderMatch[1]);
@@ -347,7 +356,7 @@
                 currentPlotKind = getPlotKind(currentTable);
                 return;
             }
-            if (normalizeName(currentTable) === normalizeName('剧情摘要')) {
+            if (normalizeSummaryLabel(currentTable) === normalizeSummaryLabel('剧情摘要')) {
                 const keyMatch = line.match(/^\[([^\]]+)\]\s*(?:\||$)([\s\S]*)$/);
                 const bracketValue = keyMatch ? keyMatch[1].trim() : '';
                 const bracketIsPlotTime = isPlotTimeBracket(bracketValue);
@@ -620,7 +629,7 @@
     function plotRowToText(row) {
         const values = row?.values || {};
         let title = String(values['摘要名称'] || values['标题'] || '').trim();
-        if (/^(主线|支线)摘要$/.test(title)) title = '';
+        if (/^(主线|支线)摘要$/.test(normalizeSummaryLabel(title))) title = '';
         let date = String(values['日期'] || values['时间'] || '').replace(/：/g, ':').trim();
         let content = String(values['摘要内容'] || values['内容'] || values['总结内容'] || '').trim();
         if (!date && content) {

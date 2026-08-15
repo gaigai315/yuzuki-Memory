@@ -594,7 +594,7 @@
             if (!record || record.hidden) return;
             const values = record.values && typeof record.values === 'object' ? record.values : {};
             const title = getSummaryFieldValue(values, '总结标题');
-            if (!/支线/.test(title)) return;
+            if (!/支[线線]/.test(title)) return;
             const name = getSummaryFieldValue(values, '核心角色');
             if (name && !names.includes(name)) names.push(name);
         });

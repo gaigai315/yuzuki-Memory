@@ -666,7 +666,7 @@
         records.forEach((record) => {
             const values = record?.values || {};
             const title = String(values.总结标题 || values.title || '').trim();
-            if (!/支线/.test(title)) return;
+            if (!isBranchSummaryLabel(title)) return;
             const name = String(values.核心角色 || values.character || values.角色名 || values.主视角 || '').trim();
             if (name && !names.includes(name)) names.push(name);
         });
@@ -983,12 +983,12 @@
     function normalizeSummaryPayload(parsed) {
         const source = parsed && typeof parsed === 'object' ? parsed : {};
         let title = String(source.title || source['总结标题'] || source.name || '').trim();
-        const titleMatch = title.match(/^【?支线(?:总结|剧情)[-－—:： ]+(.+?)】?$/);
+        const titleMatch = title.match(/^【?支[线線](?:[总總][结結]|[剧劇]情)[-－—:： ]+(.+?)】?$/);
         const branchCharacterFromTitle = titleMatch ? titleMatch[1].trim() : '';
         if (branchCharacterFromTitle) title = '';
-        if (/^(总结标题|标题|主线(?:总结|剧情)|支线(?:总结|剧情))$/.test(title)) title = '';
+        if (/^(总结标题|标题|主线(?:总结|剧情)|支线(?:总结|剧情))$/.test(normalizeSummaryHeadingLabel(title))) title = '';
         const kindSource = String(source.kind || source.type || title || '').trim();
-        const kind = kindSource.includes('branch') || kindSource.includes('支线') || !!branchCharacterFromTitle ? 'branch' : 'main';
+        const kind = kindSource.includes('branch') || isBranchSummaryLabel(kindSource) || !!branchCharacterFromTitle ? 'branch' : 'main';
         const summary = normalizeSummaryText(source.summary ?? source['总结内容']);
         return {
             kind,
@@ -1075,8 +1075,20 @@
         return `${message}\n\n模型原始回复（完整）：\n${previewRawModelText(text)}`;
     }
 
+    function normalizeSummaryHeadingLabel(value = '') {
+        return String(value || '')
+            .replace(/線/g, '线')
+            .replace(/總/g, '总')
+            .replace(/結/g, '结')
+            .replace(/劇/g, '剧');
+    }
+
+    function isBranchSummaryLabel(value = '') {
+        return normalizeSummaryHeadingLabel(value).includes('支线');
+    }
+
     function getSummarySectionHeadingPattern() {
-        return /【\s*((?:主线|支线)(?:总结|剧情))\s*(?:[:：\-－—]\s*([^】]+?))?\s*】/g;
+        return /【\s*((?:主[线線]|支[线線])(?:[总總][结結]|[剧劇]情))\s*(?:[:：\-－—]\s*([^】]+?))?\s*】/g;
     }
 
     function normalizeSummarySectionHeadings(text = '') {
@@ -1090,10 +1102,11 @@
         let previousHeadingType = '';
         matches.forEach((match) => {
             const between = source.slice(cursor, match.index);
-            const kind = match[1].includes('支线') ? 'branch' : 'main';
+            const normalizedHeading = normalizeSummaryHeadingLabel(match[1]);
+            const kind = isBranchSummaryLabel(normalizedHeading) ? 'branch' : 'main';
             const character = String(match[2] || '').trim();
             const headingKey = `${kind}:${kind === 'branch' ? character.toLowerCase() : ''}`;
-            const headingType = match[1].endsWith('剧情') ? 'plot' : 'summary';
+            const headingType = normalizedHeading.endsWith('剧情') ? 'plot' : 'summary';
             const isAdjacentAliasDuplicate = previousHeadingKey === headingKey
                 && previousHeadingType !== headingType
                 && !between.trim();
@@ -1125,7 +1138,7 @@
 
         const seenSections = new Set();
         for (const match of source.matchAll(getSummarySectionHeadingPattern())) {
-            const kind = match[1].includes('支线') ? 'branch' : 'main';
+            const kind = isBranchSummaryLabel(match[1]) ? 'branch' : 'main';
             const character = kind === 'branch' ? String(match[2] || '').trim().toLowerCase() : '';
             const key = `${kind}:${character}`;
             if (seenSections.has(key)) {
@@ -1239,13 +1252,13 @@
         return matches.map((match, index) => {
             const start = match.index + match[0].length;
             const end = index + 1 < matches.length ? matches[index + 1].index : body.length;
-            const kindLabel = match[1];
+            const kindLabel = normalizeSummaryHeadingLabel(match[1]);
             const character = String(match[2] || '').trim();
             const summary = body.slice(start, end).trim();
             return {
-                kind: kindLabel.includes('支线') ? 'branch' : 'main',
+                kind: isBranchSummaryLabel(kindLabel) ? 'branch' : 'main',
                 title: '',
-                character: kindLabel.includes('支线') ? character : '',
+                character: isBranchSummaryLabel(kindLabel) ? character : '',
                 summary,
                 unresolved: '',
                 remark: '',
@@ -1327,7 +1340,7 @@
     function findTargetTable(state, tableKey) {
         const key = String(tableKey || '').trim();
         const tables = stateTables(state).filter((table) => table.id !== FIXED_SUMMARY_TABLE_ID);
-        if (/主线摘要|支线摘要|剧情摘要/.test(key)) {
+        if (/主线摘要|支线摘要|剧情摘要/.test(normalizeSummaryHeadingLabel(key))) {
             return tables.find((table) => table.id === PLOT_SUMMARY_TABLE_ID || table.name === '剧情摘要') || null;
         }
         return tables.find((table) => table.id === key)
@@ -1415,7 +1428,7 @@
     }
 
     function getPlotKind(value = '') {
-        return /支线/.test(String(value || '')) ? 'branch' : 'main';
+        return isBranchSummaryLabel(value) ? 'branch' : 'main';
     }
 
     function splitPlotTimeAndContent(text = '') {
@@ -1567,7 +1580,7 @@
 
     function plotValuesToText(values = {}, fallbackTitle = '') {
         let title = String(values['摘要名称'] || values['标题'] || values.name || values.title || '').trim();
-        if (/^(主线|支线)摘要$/.test(title)) title = '';
+        if (/^(主线|支线)摘要$/.test(normalizeSummaryHeadingLabel(title))) title = '';
         let date = String(values['日期'] || values['时间'] || values.date || values.time || '').replace(/：/g, ':').trim();
         let content = String(values['摘要内容'] || values['内容'] || values['总结内容'] || values.content || values.summary || '').trim();
         if (!date && content) {
@@ -1642,7 +1655,7 @@
             const values = record?.values || {};
             const title = String(values.总结标题 || values.title || '').trim();
             const recordCharacter = normalizeBranchCharacterName(values.核心角色 || values.character || values.角色名 || values.主视角);
-            return /支线/.test(title) && recordCharacter === key;
+            return isBranchSummaryLabel(title) && recordCharacter === key;
         }) || null;
     }
 
@@ -1958,7 +1971,7 @@
     function getSummaryRecordKind(record) {
         const values = record?.values || {};
         const title = String(values.总结标题 || values.title || '').trim();
-        return /支线/.test(title) ? 'branch' : 'main';
+        return isBranchSummaryLabel(title) ? 'branch' : 'main';
     }
 
     function getSummaryRecordPayload(table, record) {

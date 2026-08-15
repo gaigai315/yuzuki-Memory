@@ -4893,7 +4893,7 @@
     }
 
     function getSummaryKind(record) {
-        return /支线/.test(getRecordValue(record, '总结标题')) ? 'branch' : 'main';
+        return /支[线線]/.test(getRecordValue(record, '总结标题')) ? 'branch' : 'main';
     }
 
     function getPlotSummaryKindKey(kind = activePlotSummaryKind) {
@@ -11224,7 +11224,7 @@
 
         title.append(name);
         header.append(avatar, title);
-        const summaryKind = /支线/.test(name.textContent) ? '支线' : '主线';
+        const summaryKind = /支[线線]/.test(name.textContent) ? '支线' : '主线';
         const coreCharacter = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
         const floorText = getSummaryFloorText(record);
         const scopedFloorText = formatScopedFloorText(floorText, getRecordFloorScope(record));

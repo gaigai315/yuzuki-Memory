@@ -351,7 +351,7 @@
                 return Object.entries(values).some(([field, value]) => {
                     const text = String(value || '').trim();
                     if (!text) return false;
-                    if (tableId === 'memory_summary' && field === '总结标题' && /^(主线|支线)总结/.test(text)) return false;
+                    if (tableId === 'memory_summary' && field === '总结标题' && /^(?:主[线線]|支[线線])(?:[总總][结結])/.test(text)) return false;
                     return true;
                 });
             }).length;
@@ -559,8 +559,8 @@
         const expectedKind = kind === 'branch' ? '支线' : '主线';
         const expectedCharacter = String(character || '').trim().toLowerCase();
         while (source) {
-            const match = source.match(/^【\s*(主线|支线)(?:总结|剧情)\s*(?:[:：\-－—]\s*([^】]+?))?\s*】\s*/);
-            if (!match || match[1] !== expectedKind) break;
+            const match = source.match(/^【\s*(主[线線]|支[线線])(?:[总總][结結]|[剧劇]情)\s*(?:[:：\-－—]\s*([^】]+?))?\s*】\s*/);
+            if (!match || match[1].replace(/線/g, '线') !== expectedKind) break;
             const headingCharacter = String(match[2] || '').trim().toLowerCase();
             if (expectedKind === '支线' && headingCharacter && headingCharacter !== expectedCharacter) break;
             source = source.slice(match[0].length).trim();
@@ -569,7 +569,7 @@
     }
 
     function normalizeStoredSummaryRecord(record, values) {
-        const kind = /支线/.test(String(values?.总结标题 || '')) ? 'branch' : 'main';
+        const kind = /支[线線]/.test(String(values?.总结标题 || '')) ? 'branch' : 'main';
         const character = String(values?.核心角色 || '').trim();
         values.总结内容 = stripStoredSummaryHeading(values.总结内容, kind, character);
         const summarySegments = Array.isArray(record?.summarySegments)
