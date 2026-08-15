@@ -11415,9 +11415,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【新增】角色档案人物图谱。长按插件悬浮按钮即可打开人物图谱，快速查看角色关系与角色状态。',
-            '【优化】角色档案下的待办事项更新功能与样式显示。待办事项现以追加模式新增，插件会读取剧情全局时间，并在事项过期一小时后自动清理。',
-            '【迁移提示】请在类脑帖子中使用全局时间格式，替换原有预设的时间格式，以便插件准确判断待办事项是否过期。',
+            '【修复】修复隐藏楼层问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
