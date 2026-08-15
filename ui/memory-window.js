@@ -7572,8 +7572,9 @@
             return;
         }
         cleanupPromptSchemeBindings(draft.id);
-        const schemes = savePromptSchemes(getPromptSchemes().filter((scheme) => scheme.id !== draft.id));
-        setActivePromptSchemeDraft(schemes[0] || createEmptyPromptScheme(''));
+        savePromptSchemes(getPromptSchemes().filter((scheme) => scheme.id !== draft.id));
+        const nextScheme = getPromptSchemes()[0] || null;
+        setActivePromptSchemeDraft(nextScheme || createEmptyPromptScheme(''));
         getState().promptPresetId = activePromptSchemeDraft?.id || '';
         syncPromptSchemeTableVisibility(getState().promptPresetId);
         saveGlobalPromptSchemeId(getState().promptPresetId);

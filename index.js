@@ -3,6 +3,9 @@
 // SillyTavern memory table plugin entry.
 // Keep this file as the loader/bootstrap only; feature logic belongs in modules.
 // ============================================================================
+import { saveSettingsDebounced } from '../../../../script.js';
+import { extension_settings } from '../../../extensions.js';
+
 (function () {
     'use strict';
 
@@ -46,6 +49,10 @@
         loaded: true,
         version: VERSION,
         baseUrl,
+        settingsBridge: Object.freeze({
+            extensionSettings: extension_settings,
+            saveSettingsDebounced,
+        }),
     });
 
     function resolveModule(path) {
