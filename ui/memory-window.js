@@ -1412,6 +1412,13 @@
         return lines.join('\n');
     }
 
+    function removeSummaryTimelineLine(text = '', lineIndex = -1) {
+        const lines = splitSummaryLines(text);
+        if (!Number.isInteger(lineIndex) || lineIndex < 0 || lineIndex >= lines.length) return String(text || '').trim();
+        lines.splice(lineIndex, 1);
+        return lines.join('\n');
+    }
+
     function splitTagText(text = '') {
         return String(text || '')
             .split(/[,，\n]+/)
@@ -12791,8 +12798,12 @@
         fields.appendChild(createRecordInput('段落内容', currentValue, true, { placeholder: '填写该段总结内容' }));
 
         const actions = document.createElement('div');
-        actions.className = 'yzm-record-actions';
+        actions.className = 'yzm-record-actions yzm-plot-editor-actions';
+        const deleteCurrent = currentValue
+            ? createIconButton(`删除当前${label}`, 'fa-regular fa-trash-can', 'yzm-api-button yzm-api-button-danger yzm-plot-summary-delete')
+            : null;
         const save = createButton('保存', 'yzm-add-table-confirm yzm-record-save');
+        if (deleteCurrent) actions.appendChild(deleteCurrent);
         actions.appendChild(save);
 
         dialog.append(header, fields, actions);
@@ -12805,6 +12816,43 @@
             if (event.target === overlay) closeModal();
         });
         dialog.addEventListener('click', (event) => event.stopPropagation());
+
+        const persistEditorChanges = (failureMessage) => {
+            setActiveRecordId(table.id, record.id);
+            if (!persistStateOrReload(root, failureMessage, {
+                tableId: table.id,
+                recordId: record.id,
+                values: record.values,
+            })) return false;
+            closeModal();
+            patchMemorySummaryContent(root, table);
+            return true;
+        };
+
+        deleteCurrent?.addEventListener('click', () => {
+            if (!window.confirm(`确定删除当前${label}吗？`)) return;
+
+            record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            if (isBranch) {
+                if (!Array.isArray(record.summarySegments) || !record.summarySegments.length) {
+                    record.summarySegments = summarySegments.map((segment) => ({ ...segment }));
+                }
+                const targetSegment = record.summarySegments[segmentIndex];
+                if (!targetSegment) return;
+                targetSegment.summary = removeSummaryTimelineLine(targetSegment.summary, lineIndex);
+                targetSegment.editedAt = Date.now();
+                if (!targetSegment.summary.trim()
+                    && !String(targetSegment.unresolved || '').trim()
+                    && !String(targetSegment.remark || '').trim()) {
+                    record.summarySegments.splice(segmentIndex, 1);
+                }
+                syncMergedBranchSummaryValues(record);
+            } else {
+                record.values.总结内容 = removeSummaryTimelineLine(record.values.总结内容, lineIndex);
+            }
+
+            persistEditorChanges('当前会话尚未就绪，总结段落未删除。');
+        });
 
         save.addEventListener('click', () => {
             const input = fields.querySelector('[data-yzm-record-field="段落内容"]');
@@ -12829,14 +12877,7 @@
                 record.values.总结内容 = replaceSummaryTimelineLine(record.values.总结内容, lineIndex, nextValue);
             }
 
-            setActiveRecordId(table.id, record.id);
-            if (!persistStateOrReload(root, '当前会话尚未就绪，总结段落未保存。', {
-                tableId: table.id,
-                recordId: record.id,
-                values: record.values,
-            })) return;
-            closeModal();
-            patchMemorySummaryContent(root, table);
+            persistEditorChanges('当前会话尚未就绪，总结段落未保存。');
         });
 
         fields.querySelector('.yzm-record-input')?.focus();
