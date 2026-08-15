@@ -408,30 +408,19 @@
         );
     }
 
-    function getHiddenContextInfo(hidingResult = {}) {
+    function getHiddenContextInfo() {
         const contextItems = getContextChatItems();
-        const freshHiddenIndices = Array.isArray(hidingResult?.indices)
-            ? new Set(hidingResult.indices.map((index) => Number(index)).filter(Number.isInteger))
-            : null;
-        const hiddenSignatureCounts = new Map();
         const dialogue = [];
         contextItems.forEach((message, index) => {
             if (!isContextDialogueMessage(message)) return;
-            const hidden = isHiddenContextMessage(message);
-            if (hidden && freshHiddenIndices?.has(index)) {
-                const signature = getMessageMatchSignature(message);
-                if (signature) hiddenSignatureCounts.set(signature, (hiddenSignatureCounts.get(signature) || 0) + 1);
-            }
             dialogue.push({
                 index,
                 role: getMessageRoleKind(message),
-                hidden,
+                signature: getMessageMatchSignature(message),
+                hidden: isHiddenContextMessage(message),
             });
         });
-        return {
-            dialogue,
-            hiddenSignatures: Array.from(hiddenSignatureCounts, ([signature, count]) => ({ signature, count })),
-        };
+        return { dialogue };
     }
 
     function isRequestDialogueMessage(message) {
@@ -440,28 +429,44 @@
         return !!getMessageRoleKind(message);
     }
 
-    function getHiddenRequestIndexesBySignature(targetItems, hiddenSignatures) {
+    function getHiddenRequestIndexesByContext(targetItems, contextDialogue) {
         const hiddenIndexes = new Set();
-        if (!Array.isArray(targetItems) || !targetItems.length || !Array.isArray(hiddenSignatures) || !hiddenSignatures.length) {
+        if (!Array.isArray(targetItems) || !targetItems.length || !Array.isArray(contextDialogue) || !contextDialogue.length) {
             return hiddenIndexes;
         }
-        const hiddenCounts = new Map();
-        hiddenSignatures.forEach((entry) => {
-            const signature = String(entry?.signature || '');
-            const count = Math.max(0, Math.round(Number(entry?.count) || 0));
-            if (signature && count > 0) hiddenCounts.set(signature, (hiddenCounts.get(signature) || 0) + count);
-        });
-        if (!hiddenCounts.size) return hiddenIndexes;
 
-        for (let requestIndex = 0; requestIndex < targetItems.length; requestIndex += 1) {
+        const signaturePositions = new Map();
+        contextDialogue.forEach((entry, dialogueIndex) => {
+            const signature = String(entry?.signature || '');
+            if (!signature) return;
+            const positions = signaturePositions.get(signature) || [];
+            positions.push(dialogueIndex);
+            signaturePositions.set(signature, positions);
+        });
+        if (!signaturePositions.size) return hiddenIndexes;
+
+        const signatureCursors = new Map();
+        let contextCursor = contextDialogue.length - 1;
+        for (let requestIndex = targetItems.length - 1; requestIndex >= 0; requestIndex -= 1) {
             const item = targetItems[requestIndex];
             if (!isRequestDialogueMessage(item)) continue;
             const signature = getMessageMatchSignature(item);
-            const remaining = hiddenCounts.get(signature) || 0;
-            if (remaining <= 0) continue;
-            hiddenIndexes.add(requestIndex);
-            if (remaining === 1) hiddenCounts.delete(signature);
-            else hiddenCounts.set(signature, remaining - 1);
+            const positions = signaturePositions.get(signature);
+            if (!positions?.length) continue;
+
+            let positionCursor = signatureCursors.has(signature)
+                ? signatureCursors.get(signature)
+                : positions.length - 1;
+            while (positionCursor >= 0 && positions[positionCursor] > contextCursor) positionCursor -= 1;
+            if (positionCursor < 0) {
+                signatureCursors.set(signature, -1);
+                continue;
+            }
+
+            const matchedDialogueIndex = positions[positionCursor];
+            if (contextDialogue[matchedDialogueIndex]?.hidden) hiddenIndexes.add(requestIndex);
+            signatureCursors.set(signature, positionCursor - 1);
+            contextCursor = matchedDialogueIndex - 1;
         }
         return hiddenIndexes;
     }
@@ -471,11 +476,10 @@
         if (!targets.length) return body;
         const info = hiddenInfo && typeof hiddenInfo === 'object' ? hiddenInfo : {};
         const contextDialogue = Array.isArray(info.dialogue) ? info.dialogue : [];
-        const hiddenSignatures = Array.isArray(info.hiddenSignatures) ? info.hiddenSignatures : [];
-        if (!contextDialogue.some((entry) => entry?.hidden) && !hiddenSignatures.length) return body;
+        if (!contextDialogue.some((entry) => entry?.hidden)) return body;
         let removed = 0;
         targets.forEach((target) => {
-            const hiddenIndexes = getHiddenRequestIndexesBySignature(target.items, hiddenSignatures);
+            const hiddenIndexes = getHiddenRequestIndexesByContext(target.items, contextDialogue);
             const kept = target.items.filter((item, index) => {
                 const shouldRemove = item?.is_yzm_hidden_floor === true || hiddenIndexes.has(index);
                 if (shouldRemove) removed += 1;
@@ -487,8 +491,7 @@
             console.info('[yuzuki-Memory] hidden context messages removed from final request.', {
                 removed,
                 hiddenContextMessages: contextDialogue.filter((entry) => entry?.hidden).length,
-                matchedFreshHiddenMessages: hiddenSignatures.reduce((sum, entry) => sum + (Number(entry?.count) || 0), 0),
-                mode: 'exact-signature',
+                mode: 'context-signature-alignment',
             });
         }
         return body;
@@ -1062,8 +1065,8 @@
                 reason: injectionDecision.reason,
             });
         }
-        const hidingResult = isPreviewCapture ? null : await applyPreRequestHiding();
-        removeHiddenMessagesFromBody(rawBody, getHiddenContextInfo(hidingResult));
+        if (!isPreviewCapture) await applyPreRequestHiding();
+        removeHiddenMessagesFromBody(rawBody, getHiddenContextInfo());
         if (!isPreviewCapture) {
             YuzukiMemory.BranchSnapshot?.prepareBeforeRequest?.();
         }
