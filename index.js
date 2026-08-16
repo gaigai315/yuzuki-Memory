@@ -15,6 +15,7 @@ import { extension_settings } from '../../../extensions.js';
 
     const MODULES = [
         'config/global-settings.js',
+        'config/timed-prompt-settings.js',
         'config/storage.js',
         'config/character-name-matcher.js',
         'config/character-graph.js',

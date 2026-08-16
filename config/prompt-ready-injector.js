@@ -277,19 +277,19 @@
         };
     }
 
-    function getTimedPromptStateKey(sessionId, schemeId, ruleId) {
+    function getTimedPromptStateKey(sessionId, ruleId) {
         return [
             String(sessionId || 'default'),
-            String(schemeId || 'default_scheme'),
+            'global_timed_prompts',
             String(ruleId || ''),
         ].join('::');
     }
 
-    function shouldTriggerTimedPromptRule(rule, stats, state, sessionId, schemeId, options = {}) {
+    function shouldTriggerTimedPromptRule(rule, stats, state, sessionId, options = {}) {
         const interval = Math.max(1, Math.min(9999, Math.round(Number(rule?.interval) || 1)));
         const floor = Math.max(0, Math.round(Number(stats?.floor) || 0));
         if (!floor || floor < interval) return false;
-        const key = getTimedPromptStateKey(sessionId, schemeId, rule?.id);
+        const key = getTimedPromptStateKey(sessionId, rule?.id);
         const lastFloor = Math.max(0, Math.round(Number(state?.[key]?.lastFloor) || 0));
         if (lastFloor && floor - lastFloor < interval) return false;
         if (options.commit === true) state[key] = { lastFloor: floor, updatedAt: Date.now() };
@@ -314,8 +314,7 @@
 
     function injectTimedPromptMessages(chat, state, options = {}) {
         if (!Array.isArray(chat)) return 0;
-        const scheme = YuzukiMemory.VariableInjector?.getActivePromptScheme?.(state) || null;
-        const config = YuzukiMemory.VariableInjector?.normalizeTimedPromptInjection?.(scheme?.timedPromptInjection) || { enabled: false, rules: [] };
+        const config = YuzukiMemory.VariableInjector?.getTimedPromptInjection?.() || { enabled: false, rules: [] };
         if (!config.enabled || !config.rules.length) return 0;
         const userIndex = getLastRealUserMessageIndex(chat);
         if (userIndex < 0) return 0;
@@ -324,7 +323,7 @@
             console.info('[yuzuki-Memory] timed prompt injection skipped.', {
                 reason: 'not_user_turn',
                 stats,
-                scheme: scheme?.name || '',
+                scope: 'global',
             });
             return 0;
         }
@@ -333,7 +332,7 @@
         const dueRules = config.rules.filter((rule) => (
             rule?.enabled !== false
             && String(rule?.content || '').trim()
-            && shouldTriggerTimedPromptRule(rule, stats, timedState, sessionId, scheme?.id || '', {
+            && shouldTriggerTimedPromptRule(rule, stats, timedState, sessionId, {
                 commit: options.commitTimedPromptState === true,
             })
         ));
@@ -343,7 +342,7 @@
                 floor: stats.floor,
                 source: stats.source,
                 enabledRules: config.rules.filter((rule) => rule?.enabled !== false && String(rule?.content || '').trim()).length,
-                scheme: scheme?.name || '',
+                scope: 'global',
             });
             return 0;
         }
@@ -360,7 +359,7 @@
             mode: 'append_to_user',
             source: stats.source,
             committed: options.commitTimedPromptState === true,
-            scheme: scheme?.name || '',
+            scope: 'global',
             rules: dueRules.map((rule) => rule.name || rule.id),
         });
         return dueRules.length;

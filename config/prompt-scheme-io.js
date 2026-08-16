@@ -18,8 +18,7 @@
         if (!String(value.name || '').trim()) return false;
         return !!String(value.id || '').trim()
             || (value.prompts && typeof value.prompts === 'object')
-            || (value.modes && typeof value.modes === 'object')
-            || (value.timedPromptInjection && typeof value.timedPromptInjection === 'object');
+            || (value.modes && typeof value.modes === 'object');
     }
 
     function cleanScheme(scheme) {
@@ -30,9 +29,6 @@
             builtin: scheme.builtin === true,
             tableVisibility: scheme.tableVisibility && typeof scheme.tableVisibility === 'object'
                 ? scheme.tableVisibility
-                : {},
-            timedPromptInjection: scheme.timedPromptInjection && typeof scheme.timedPromptInjection === 'object'
-                ? scheme.timedPromptInjection
                 : {},
             prompts: scheme.prompts && typeof scheme.prompts === 'object' ? scheme.prompts : {},
             modes: scheme.modes && typeof scheme.modes === 'object' ? scheme.modes : {},
@@ -161,7 +157,6 @@
         return {
             name: cleaned.name,
             tableVisibility: cleaned.tableVisibility,
-            timedPromptInjection: cleaned.timedPromptInjection,
             prompts: cleaned.prompts,
             modes: cleaned.modes,
         };

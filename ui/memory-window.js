@@ -250,6 +250,7 @@
     let activeSummaryToolSectionId = 'manual';
     let activePromptSchemeSectionId = 'info';
     let activePromptSchemeDraft = null;
+    let activeTimedPromptInjectionDraft = null;
     let activePlotSummaryKind = 'main';
     let plotSummaryRepairSessionId = null;
     const plotSummaryExpandedDays = new Set();
@@ -1610,7 +1611,6 @@
         return {
             id: '',
             name: String(name || '').trim(),
-            timedPromptInjection: normalizeTimedPromptInjection(),
             prompts: {
                 historian: String(defaults.historian || ''),
                 traceRealtime: String(defaults.traceRealtime || defaults.trace || ''),
@@ -1637,7 +1637,6 @@
             name,
             builtin: rawScheme.builtin === true,
             tableVisibility: normalizePromptSchemeTableVisibility(rawScheme.tableVisibility),
-            timedPromptInjection: normalizeTimedPromptInjection(rawScheme.timedPromptInjection || rawScheme.timedInjection),
             prompts: {
                 historian: String(prompts.historian || ''),
                 traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
@@ -1654,10 +1653,14 @@
     }
 
     function createTimedPromptRuleId() {
-        return `timed_prompt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        return YuzukiMemory.TimedPromptSettings?.createRuleId?.()
+            || `timed_prompt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     }
 
     function normalizeTimedPromptRule(rawRule, index = 0) {
+        if (YuzukiMemory.TimedPromptSettings?.normalizeRule) {
+            return YuzukiMemory.TimedPromptSettings.normalizeRule(rawRule, index);
+        }
         const source = rawRule && typeof rawRule === 'object' ? rawRule : {};
         const interval = Math.round(normalizeNumberSetting(source.interval ?? source.every ?? source.floorInterval, 1, 9999, 8, 0));
         return {
@@ -1670,6 +1673,9 @@
     }
 
     function normalizeTimedPromptInjection(source = {}) {
+        if (YuzukiMemory.TimedPromptSettings?.normalize) {
+            return YuzukiMemory.TimedPromptSettings.normalize(source);
+        }
         const raw = source && typeof source === 'object' ? source : {};
         const rawRules = Array.isArray(raw.rules)
             ? raw.rules
@@ -1941,7 +1947,6 @@
             name: String(name || '').trim() || `${draft.name}（自定义）`,
             builtin: false,
             tableVisibility: captureCurrentTableVisibility(),
-            timedPromptInjection: normalizeTimedPromptInjection(draft.timedPromptInjection),
             prompts: { ...(draft.prompts || {}) },
             modes: { ...(draft.modes || {}) },
         });
@@ -1972,16 +1977,26 @@
         return draft;
     }
 
-    function updateActivePromptSchemeTimedInjection(updater) {
-        let draft = getActivePromptSchemeDraft();
-        const current = normalizeTimedPromptInjection(draft.timedPromptInjection);
-        const next = typeof updater === 'function' ? updater(current) : updater;
-        const normalized = normalizeTimedPromptInjection(next);
-        if (draft.builtin && JSON.stringify(current) !== JSON.stringify(normalized)) {
-            draft = forkBuiltinPromptSchemeDraft();
+    function getTimedPromptInjectionDraft() {
+        if (!activeTimedPromptInjectionDraft) {
+            const stored = YuzukiMemory.TimedPromptSettings?.load?.() || {};
+            activeTimedPromptInjectionDraft = normalizeTimedPromptInjection(stored);
         }
-        draft.timedPromptInjection = normalized;
-        return draft;
+        return activeTimedPromptInjectionDraft;
+    }
+
+    function updateTimedPromptInjectionDraft(updater) {
+        const current = normalizeTimedPromptInjection(getTimedPromptInjectionDraft());
+        const next = typeof updater === 'function' ? updater(current) : updater;
+        activeTimedPromptInjectionDraft = normalizeTimedPromptInjection(next);
+        return activeTimedPromptInjectionDraft;
+    }
+
+    function saveTimedPromptInjectionSettings(root) {
+        const saved = YuzukiMemory.TimedPromptSettings?.save?.(getTimedPromptInjectionDraft())
+            || normalizeTimedPromptInjection(getTimedPromptInjectionDraft());
+        activeTimedPromptInjectionDraft = normalizeTimedPromptInjection(saved);
+        showTimedPromptSaveFeedback(root);
     }
 
     function normalizePluginSettings(rawSettings) {
@@ -7084,7 +7099,7 @@
     function createTimedPromptSchemePanel(section) {
         const panel = document.createElement('section');
         panel.className = 'yzm-scheme-panel yzm-timed-prompt-panel';
-        const config = normalizeTimedPromptInjection(getActivePromptSchemeDraft().timedPromptInjection);
+        const config = normalizeTimedPromptInjection(getTimedPromptInjectionDraft());
 
         const header = document.createElement('div');
         header.className = 'yzm-scheme-header';
@@ -7140,9 +7155,9 @@
         listCard.append(listHeader, list);
 
         const footer = createApiActions([
-            ['保存设置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveScheme'],
+            ['保存设置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveTimedPrompt'],
         ]);
-        footer.querySelector('[data-yzm-api-action="saveScheme"]')?.setAttribute('data-yzm-scheme-action', 'save');
+        footer.querySelector('[data-yzm-api-action="saveTimedPrompt"]')?.setAttribute('data-yzm-timed-prompt-save', 'true');
 
         panel.append(header, configCard, listCard, footer);
         return panel;
@@ -7212,7 +7227,7 @@
     }
 
     function openTimedPromptRuleDialog(root, ruleId = '') {
-        const config = normalizeTimedPromptInjection(getActivePromptSchemeDraft().timedPromptInjection);
+        const config = normalizeTimedPromptInjection(getTimedPromptInjectionDraft());
         const target = String(ruleId || '');
         const sourceRule = config.rules.find((rule) => rule.id === target) || null;
         const isEdit = !!sourceRule;
@@ -7269,7 +7284,7 @@
         footer.className = 'yzm-scheme-modal-footer';
         const hint = document.createElement('span');
         hint.className = 'yzm-scheme-modal-counter';
-        hint.textContent = '保存后只会写入当前记忆方案。';
+        hint.textContent = '与当前记忆方案独立保存。';
         const cancelButton = createIconButton('取消', 'fa-solid fa-xmark', 'yzm-api-button');
         const saveButton = createIconButton('保存', 'fa-regular fa-floppy-disk', 'yzm-api-button yzm-api-button-primary');
         footer.append(hint, cancelButton, saveButton);
@@ -7560,6 +7575,27 @@
         }, 1200);
     }
 
+    function showTimedPromptSaveFeedback(root) {
+        showTaskToast('定时注入提示词已保存。', 'success');
+        const button = root.querySelector('.yzm-scheme-view [data-yzm-timed-prompt-save]');
+        if (!button) return;
+        const icon = button.querySelector('i');
+        const label = button.querySelector('span');
+        const originalIcon = icon?.className || '';
+        const originalText = label?.textContent || button.textContent || '';
+        button.classList.add('yzm-api-button-saved');
+        if (icon) icon.className = 'fa-solid fa-check';
+        if (label) label.textContent = '已保存';
+        button.disabled = true;
+        window.setTimeout(() => {
+            if (!button.isConnected) return;
+            button.classList.remove('yzm-api-button-saved');
+            if (icon) icon.className = originalIcon;
+            if (label) label.textContent = originalText;
+            button.disabled = false;
+        }, 1200);
+    }
+
     function deleteActivePromptScheme(root) {
         const draft = getActivePromptSchemeDraft();
         if (draft.builtin) {
@@ -7616,7 +7652,7 @@
 
     function upsertTimedPromptRule(rule) {
         const nextRule = normalizeTimedPromptRule(rule);
-        updateActivePromptSchemeTimedInjection((config) => {
+        updateTimedPromptInjectionDraft((config) => {
             const index = config.rules.findIndex((entry) => entry.id === nextRule.id);
             if (index < 0) {
                 return {
@@ -7639,7 +7675,7 @@
     function deleteTimedPromptRule(root, ruleId) {
         const target = String(ruleId || '');
         if (!target) return;
-        updateActivePromptSchemeTimedInjection((config) => ({
+        updateTimedPromptInjectionDraft((config) => ({
             ...config,
             rules: config.rules.filter((rule) => rule.id !== target),
         }));
@@ -7647,7 +7683,7 @@
     }
 
     function setTimedPromptGlobalEnabled(isEnabled) {
-        updateActivePromptSchemeTimedInjection((config) => ({
+        updateTimedPromptInjectionDraft((config) => ({
             ...config,
             enabled: isEnabled === true,
         }));
@@ -7655,7 +7691,7 @@
 
     function setTimedPromptRuleEnabled(ruleId, isEnabled) {
         const target = String(ruleId || '');
-        updateActivePromptSchemeTimedInjection((config) => ({
+        updateTimedPromptInjectionDraft((config) => ({
             ...config,
             rules: config.rules.map((rule) => rule.id === target ? { ...rule, enabled: isEnabled === true } : rule),
         }));
@@ -7665,7 +7701,7 @@
         const target = String(ruleId || '');
         const key = String(field || '');
         if (!target || !['name', 'interval', 'content'].includes(key)) return;
-        updateActivePromptSchemeTimedInjection((config) => ({
+        updateTimedPromptInjectionDraft((config) => ({
             ...config,
             rules: config.rules.map((rule) => {
                 if (rule.id !== target) return rule;
@@ -13760,6 +13796,7 @@
                 const timedPromptAdd = target?.closest('[data-yzm-timed-prompt-add]');
                 const timedPromptEdit = target?.closest('[data-yzm-timed-prompt-edit]');
                 const timedPromptDelete = target?.closest('[data-yzm-timed-prompt-delete]');
+                const timedPromptSave = target?.closest('[data-yzm-timed-prompt-save]');
                 if (schemeIoAction) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -13803,6 +13840,12 @@
                     event.preventDefault();
                     event.stopPropagation();
                     deleteTimedPromptRule(root, timedPromptDelete.dataset.yzmTimedPromptDelete || '');
+                    return;
+                }
+                if (timedPromptSave) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    saveTimedPromptInjectionSettings(root);
                     return;
                 }
                 if (modeButton) {

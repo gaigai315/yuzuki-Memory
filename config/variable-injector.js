@@ -5,6 +5,7 @@
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
+    const TIMED_PROMPT_SETTINGS_STORAGE_KEY = 'yzm_memory_global_timed_prompt_injection';
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const GLOBAL_CUSTOM_TABLES_STORAGE_KEY = 'yzm_memory_global_custom_tables';
     const GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY = 'yzm_memory_global_deleted_custom_table_ids';
@@ -260,7 +261,6 @@
         return {
             id: String(rawScheme.id || ''),
             name,
-            timedPromptInjection: normalizeTimedPromptInjection(rawScheme.timedPromptInjection || rawScheme.timedInjection),
             prompts: {
                 historian: String(prompts.historian || ''),
                 traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
@@ -277,6 +277,9 @@
     }
 
     function normalizeTimedPromptRule(rawRule, index = 0) {
+        if (YuzukiMemory.TimedPromptSettings?.normalizeRule) {
+            return YuzukiMemory.TimedPromptSettings.normalizeRule(rawRule, index);
+        }
         const source = rawRule && typeof rawRule === 'object' ? rawRule : {};
         const interval = Math.max(1, Math.min(9999, Math.round(Number(source.interval ?? source.every ?? source.floorInterval ?? 8) || 8)));
         return {
@@ -289,6 +292,9 @@
     }
 
     function normalizeTimedPromptInjection(source = {}) {
+        if (YuzukiMemory.TimedPromptSettings?.normalize) {
+            return YuzukiMemory.TimedPromptSettings.normalize(source);
+        }
         const raw = source && typeof source === 'object' ? source : {};
         const rawRules = Array.isArray(raw.rules)
             ? raw.rules
@@ -297,6 +303,14 @@
             enabled: raw.enabled === true,
             rules: rawRules.map(normalizeTimedPromptRule).filter((rule) => rule.content || rule.name),
         };
+    }
+
+    function getTimedPromptInjection() {
+        if (YuzukiMemory.TimedPromptSettings?.load) {
+            return YuzukiMemory.TimedPromptSettings.load();
+        }
+        const raw = YuzukiMemory.GlobalSettings?.get?.(TIMED_PROMPT_SETTINGS_STORAGE_KEY, {});
+        return normalizeTimedPromptInjection(raw);
     }
 
     function getPromptSchemes() {
@@ -1835,6 +1849,7 @@
         buildMemoryMessages,
         buildMemoryDataMessages,
         getActivePromptScheme,
+        getTimedPromptInjection,
         normalizeTimedPromptInjection,
         buildSummaryMessageEntries,
         buildTableMessageEntries,

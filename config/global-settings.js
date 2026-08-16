@@ -12,6 +12,7 @@
         'yzm_memory_global_prompt_schemes',
         'yzm_memory_global_prompt_scheme_active',
         'yzm_memory_global_prompt_scheme_character_bindings',
+        'yzm_memory_global_timed_prompt_injection',
     ]);
 
     function getContext() {
