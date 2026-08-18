@@ -762,6 +762,7 @@
         const storyTime = options.storyTime
             || YuzukiMemory.TodoManager?.parseStoryTimeText?.(text)
             || YuzukiMemory.TodoManager?.getStoryTimeForFloor?.(floor, { chat })
+            || YuzukiMemory.TodoManager?.getStoryTimeForRange?.({ start: 0, end: floor + 1 }, { chat })
             || null;
         const replacedPlotItems = removeRealtimePlotItemsForRange(state, range, floorScope);
         YuzukiMemory.BranchSnapshot?.captureBaseSnapshotBeforeMessage?.(floor, { state });

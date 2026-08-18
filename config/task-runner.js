@@ -569,8 +569,14 @@
         return String(record?.values?.[getPrimaryColumn(table)] || '').trim();
     }
 
-    function recordToText(table, record) {
-        if (!table || !record || record.hidden) return '';
+    function isRecordAutoVectorized(state, table, record) {
+        if (!['character_profile', 'item_tracking', 'world_setting'].includes(table?.id)) return false;
+        const enabled = state?.settings?.autoVectorizeTables?.[table.id] === true;
+        return enabled && record?.autoVectorResident !== true;
+    }
+
+    function recordToText(state, table, record) {
+        if (!table || !record || record.hidden || isRecordAutoVectorized(state, table, record)) return '';
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const body = (table.columns || [])
             .map((column) => {
@@ -610,7 +616,7 @@
             .filter((table) => !table.hidden && table.id !== FIXED_SUMMARY_TABLE_ID)
             .filter((table) => !options.tableId || table.id === options.tableId)
             .map((table) => {
-                const rows = stateRecords(state, table.id).map((record) => recordToText(table, record)).filter(Boolean);
+                const rows = stateRecords(state, table.id).map((record) => recordToText(state, table, record)).filter(Boolean);
                 return compactLines([`【当前世界状态参考—${table.name}】`, rows.length ? rows.join('\n') : '（当前暂无数据）']);
             })
             .filter(Boolean)
@@ -1349,7 +1355,7 @@
             || null;
     }
 
-    function upsertRecord(state, table, values = {}) {
+    function upsertRecord(state, table, values = {}, options = {}) {
         if (!table) return null;
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
         state.records[table.id] = Array.isArray(state.records[table.id]) ? state.records[table.id] : [];
@@ -1359,6 +1365,12 @@
             const name = cleanColumnName(column);
             return [name, String(values[name] ?? values[column] ?? values[name.toLowerCase()] ?? '')];
         }));
+        if (table.id === 'character_profile' && normalizedValues['待办事项']) {
+            normalizedValues['待办事项'] = YuzukiMemory.TodoManager?.fillMissingTodoDates?.(
+                normalizedValues['待办事项'],
+                options.storyTime
+            ) || normalizedValues['待办事项'];
+        }
         const primaryValue = String(normalizedValues[primary] || values[primary] || values.name || values.title || '').trim();
         if (primaryValue) normalizedValues[primary] = primaryValue;
         if (!normalizedValues[primary]) normalizedValues[primary] = `${primary}${records.length + 1}`;
@@ -2221,6 +2233,10 @@
 
     function applyTraceResult(state, resultRows, options = {}) {
         const targetTable = getOptionTargetTable(state, options);
+        const storyTime = options.storyTime
+            || YuzukiMemory.TodoManager?.getStoryTimeForRange?.(options.range)
+            || YuzukiMemory.TodoManager?.getCurrentStoryTime?.()
+            || null;
         if (resultRows?.memoryRows && YuzukiMemory.MemoryTagParser?.applyRowsToState) {
             const memoryRows = targetTable
                 ? resultRows.memoryRows
@@ -2232,6 +2248,7 @@
                 source: options.source || 'trace',
                 range: options.range,
                 floorScope: options.floorScope || getCurrentFloorScope(state),
+                storyTime,
             });
         }
         const rows = normalizeTaskRows(resultRows)
@@ -2257,7 +2274,7 @@
                 count += 1;
                 return;
             }
-            if (upsertRecord(state, table, row.values)) count += 1;
+            if (upsertRecord(state, table, row.values, { storyTime })) count += 1;
         });
         return count;
     }

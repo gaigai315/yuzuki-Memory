@@ -186,6 +186,11 @@
         hideSummaryFloors: false,
     };
     const FIXED_TABLE_ID = 'memory_summary';
+    const MANAGED_VECTOR_TABLES = {
+        character_profile: { queue: 'character', syncFlag: 'characterVectorSynced', label: '角色档案' },
+        item_tracking: { queue: 'itemTracking', syncFlag: 'itemTrackingVectorSynced', label: '物品追踪' },
+        world_setting: { queue: 'worldSetting', syncFlag: 'worldSettingVectorSynced', label: '世界设定' },
+    };
     const DEFAULT_STATE_REVISION = 14;
     const DEFAULT_TABLES = [
         {
@@ -706,6 +711,42 @@
         };
         state.settings.vectorSearch = normalized;
         return normalized;
+    }
+
+    function getManagedVectorTableConfig(tableId) {
+        return MANAGED_VECTOR_TABLES[String(tableId || '')] || null;
+    }
+
+    function getAutoVectorizeTableSettings() {
+        const state = getState();
+        state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
+        state.settings.autoVectorizeTables = state.settings.autoVectorizeTables && typeof state.settings.autoVectorizeTables === 'object'
+            ? state.settings.autoVectorizeTables
+            : {};
+        return state.settings.autoVectorizeTables;
+    }
+
+    function isTableAutoVectorizeEnabled(tableId) {
+        return getManagedVectorTableConfig(tableId)
+            ? getAutoVectorizeTableSettings()[tableId] === true
+            : false;
+    }
+
+    function setTableAutoVectorizeEnabled(tableId, enabled) {
+        if (!getManagedVectorTableConfig(tableId)) return false;
+        getAutoVectorizeTableSettings()[tableId] = enabled === true;
+        return enabled === true;
+    }
+
+    function isAutoVectorResident(record) {
+        return record?.autoVectorResident === true;
+    }
+
+    function isRecordIncludedInManagedVector(tableId, record) {
+        const config = getManagedVectorTableConfig(tableId);
+        if (!config || !record) return false;
+        if (isTableAutoVectorizeEnabled(tableId)) return !isAutoVectorResident(record);
+        return record?.[config.syncFlag] === true;
     }
 
     function updateVectorSearchSettings(nextSettings) {
@@ -1302,7 +1343,7 @@
         const table = getTables().find((entry) => entry.id === 'character_profile');
         if (!table) return [];
         return getRecords(table.id)
-            .filter((record) => record?.characterVectorSynced === true)
+            .filter((record) => isRecordIncludedInManagedVector(table.id, record))
             .map((record) => recordToVectorChunk(table, record))
             .filter(Boolean);
     }
@@ -1311,7 +1352,7 @@
         const table = getTables().find((entry) => entry.id === 'item_tracking');
         if (!table) return [];
         return getRecords(table.id)
-            .filter((record) => record?.itemTrackingVectorSynced === true)
+            .filter((record) => isRecordIncludedInManagedVector(table.id, record))
             .map((record) => recordToVectorChunk(table, record))
             .filter(Boolean);
     }
@@ -1320,7 +1361,7 @@
         const table = getTables().find((entry) => entry.id === 'world_setting');
         if (!table) return [];
         return getRecords(table.id)
-            .filter((record) => record?.worldSettingVectorSynced === true)
+            .filter((record) => isRecordIncludedInManagedVector(table.id, record))
             .map((record) => recordToVectorChunk(table, record))
             .filter(Boolean);
     }
@@ -4523,15 +4564,18 @@
     }
 
     function hasCharacterVectorRecords() {
-        return getRecords('character_profile').some((record) => record?.characterVectorSynced === true);
+        return isTableAutoVectorizeEnabled('character_profile')
+            || getRecords('character_profile').some((record) => record?.characterVectorSynced === true);
     }
 
     function hasItemTrackingVectorRecords() {
-        return getRecords('item_tracking').some((record) => record?.itemTrackingVectorSynced === true);
+        return isTableAutoVectorizeEnabled('item_tracking')
+            || getRecords('item_tracking').some((record) => record?.itemTrackingVectorSynced === true);
     }
 
     function hasWorldSettingVectorRecords() {
-        return getRecords('world_setting').some((record) => record?.worldSettingVectorSynced === true);
+        return isTableAutoVectorizeEnabled('world_setting')
+            || getRecords('world_setting').some((record) => record?.worldSettingVectorSynced === true);
     }
 
     async function flushManagedVectorSync() {
@@ -4603,6 +4647,13 @@
     function scheduleWorldSettingVectorSync(options = {}) {
         if (!hasWorldSettingVectorRecords() && options.force !== true) return;
         queueManagedVectorSync('worldSetting', options);
+    }
+
+    function scheduleManagedVectorTableSync(tableId, options = {}) {
+        const queue = getManagedVectorTableConfig(tableId)?.queue;
+        if (queue === 'character') scheduleCharacterVectorSync(options);
+        if (queue === 'itemTracking') scheduleItemTrackingVectorSync(options);
+        if (queue === 'worldSetting') scheduleWorldSettingVectorSync(options);
     }
 
     function getCurrentChatVectorBookName() {
@@ -11513,6 +11564,7 @@
         const list = document.createElement('ul');
         [
             '【修复】修复隐藏楼层执行时机异常导致旧楼层被错误发送的问题。',
+            '【新增】表格整理新增自动向量化开关：爱心标记的条目视为常驻发送，其余条目自动进入向量化。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -11805,8 +11857,10 @@
     }
 
     function createRecordOrganizerRow(table, record, index) {
+        const autoVectorEnabled = isTableAutoVectorizeEnabled(table?.id);
         const row = document.createElement('div');
         row.className = record.hidden ? 'yzm-organizer-row yzm-organizer-row-hidden' : 'yzm-organizer-row';
+        if (autoVectorEnabled) row.classList.add('yzm-organizer-row-auto-vector');
         row.dataset.yzmOrganizerRecordId = record.id;
 
         const checkbox = document.createElement('input');
@@ -11830,7 +11884,24 @@
         handle.dataset.yzmOrganizerDragHandle = 'true';
         handle.setAttribute('aria-label', `拖动 ${getRecordTitle(table, record)} 排序`);
 
-        row.append(checkbox, indexNode, text, handle);
+        row.append(checkbox, indexNode, text);
+        if (autoVectorEnabled) {
+            const resident = document.createElement('label');
+            resident.className = isAutoVectorResident(record)
+                ? 'yzm-organizer-heart yzm-organizer-heart-on'
+                : 'yzm-organizer-heart';
+            resident.title = isAutoVectorResident(record) ? '取消常驻，恢复自动向量化' : '设为常驻发送，不自动向量化';
+            const residentCheck = document.createElement('input');
+            residentCheck.type = 'checkbox';
+            residentCheck.checked = isAutoVectorResident(record);
+            residentCheck.className = 'yzm-organizer-heart-check';
+            residentCheck.dataset.yzmOrganizerResident = 'true';
+            residentCheck.setAttribute('aria-label', `${getRecordTitle(table, record)}常驻发送`);
+            const heart = createIconNode(isAutoVectorResident(record) ? 'fa-solid fa-heart' : 'fa-regular fa-heart', '');
+            resident.append(residentCheck, heart);
+            row.appendChild(resident);
+        }
+        row.appendChild(handle);
         return row;
     }
 
@@ -12060,6 +12131,7 @@
 
     function updateRecordOrganizerSelection(dialog) {
         const table = getActiveTable();
+        const autoVectorEnabled = isTableAutoVectorizeEnabled(table?.id);
         const rows = [...dialog.querySelectorAll('.yzm-organizer-row')];
         const selectedCount = rows.filter((row) => row.querySelector('.yzm-organizer-check')?.checked).length;
         const count = dialog.querySelector('.yzm-organizer-selected-count');
@@ -12087,9 +12159,17 @@
             if (label) label.textContent = '显/隐';
             toggleButton.title = mode === 'show' ? '显示选中条目' : '隐藏选中条目';
             toggleButton.setAttribute('aria-label', toggleButton.title);
+            if (autoVectorEnabled) {
+                toggleButton.disabled = true;
+                toggleButton.title = '自动向量化开启时，请使用爱心设置常驻发送';
+                toggleButton.setAttribute('aria-label', toggleButton.title);
+            }
         }
         if (vectorizeButton) {
             vectorizeButton.hidden = !['character_profile', 'item_tracking', 'world_setting'].includes(table?.id);
+            vectorizeButton.disabled = selectedCount === 0;
+            vectorizeButton.title = autoVectorEnabled ? '将选中条目恢复为向量化' : '向量化选中条目';
+            vectorizeButton.setAttribute('aria-label', vectorizeButton.title);
         }
     }
 
@@ -12136,12 +12216,23 @@
         actions.className = 'yzm-organizer-actions';
         const toggleButton = createIconButton('显/隐', 'fa-solid fa-eye-slash', 'yzm-organizer-action yzm-organizer-toggle');
         toggleButton.dataset.yzmOrganizerBatch = 'toggle';
+        const autoVectorControl = document.createElement('div');
+        autoVectorControl.className = 'yzm-organizer-auto-vector';
+        autoVectorControl.hidden = !getManagedVectorTableConfig(table.id);
+        const autoVectorLabel = document.createElement('span');
+        autoVectorLabel.textContent = '自动';
+        const autoVectorSwitch = createConfigSwitch(isTableAutoVectorizeEnabled(table.id));
+        autoVectorSwitch.classList.add('yzm-organizer-auto-vector-switch');
+        autoVectorSwitch.dataset.yzmOrganizerAutoVector = table.id;
+        autoVectorSwitch.title = '自动向量化未标记爱心的条目';
+        autoVectorSwitch.setAttribute('aria-label', '自动向量化');
+        autoVectorControl.append(autoVectorLabel, autoVectorSwitch);
         const vectorizeButton = createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-organizer-action yzm-organizer-vectorize');
         vectorizeButton.dataset.yzmOrganizerBatch = 'vectorize';
         vectorizeButton.hidden = !['character_profile', 'item_tracking', 'world_setting'].includes(table.id);
         const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-organizer-action yzm-organizer-danger');
         deleteButton.dataset.yzmOrganizerBatch = 'delete';
-        actions.append(toggleButton, vectorizeButton, deleteButton);
+        actions.append(toggleButton, autoVectorControl, vectorizeButton, deleteButton);
         toolbar.append(selectLabel, actions);
 
         const list = document.createElement('div');
@@ -12150,7 +12241,12 @@
 
         const hint = document.createElement('div');
         hint.className = 'yzm-structure-hint';
-        hint.textContent = '隐藏会让选中条目不再通过表格变量注入；不会删除条目，也不会写入全局配置。';
+        const updateHint = () => {
+            hint.textContent = isTableAutoVectorizeEnabled(table.id)
+                ? '自动向量化已开启：未点亮爱心的条目会自动入库；爱心条目常驻发送，也可选中后点击向量化恢复入库。'
+                : '隐藏会让选中条目不再通过表格变量注入；不会删除条目，也不会写入全局配置。';
+        };
+        updateHint();
 
         dialog.append(header, toolbar, list, hint);
         overlay.appendChild(dialog);
@@ -12161,6 +12257,7 @@
         const rerenderOrganizer = () => {
             renderRecordOrganizerList(list, table);
             updateRecordOrganizerSelection(dialog);
+            updateHint();
         };
         bindRecordOrganizerDrag(root, table, list, rerenderOrganizer);
         const applyBatch = async (action, ids) => {
@@ -12177,20 +12274,25 @@
             if (action === 'delete') {
                 if (!window.confirm(`确定删除选中的 ${ids.length} 个条目吗？`)) return;
                 getState().records[table.id] = records.filter((record) => !idSet.has(record.id));
-            } else if (action === 'vectorize' && ['character_profile', 'item_tracking', 'world_setting'].includes(table.id)) {
+            } else if (action === 'vectorize' && getManagedVectorTableConfig(table.id)) {
+                const autoVectorEnabled = isTableAutoVectorizeEnabled(table.id);
                 let removedVectorCount = 0;
+                let restoredResidentCount = 0;
+                const vectorConfig = getManagedVectorTableConfig(table.id);
                 const isWorldSetting = table.id === 'world_setting';
                 const isItemTracking = table.id === 'item_tracking';
-                const syncFlag = isWorldSetting
-                    ? 'worldSettingVectorSynced'
-                    : (isItemTracking ? 'itemTrackingVectorSynced' : 'characterVectorSynced');
-                const itemLabel = isWorldSetting ? '世界设定' : (isItemTracking ? '物品追踪' : '角色档案');
+                const syncFlag = vectorConfig.syncFlag;
+                const itemLabel = vectorConfig.label;
                 records.forEach((record) => {
                     if (idSet.has(record.id)) {
+                        if (record.autoVectorResident === true) restoredResidentCount += 1;
+                        record.autoVectorResident = false;
+                        if (autoVectorEnabled) return;
                         record.hidden = true;
                         record[syncFlag] = true;
                         return;
                     }
+                    if (autoVectorEnabled) return;
                     if (record?.[syncFlag] === true) {
                         record.hidden = false;
                         record[syncFlag] = false;
@@ -12207,12 +12309,17 @@
                             ? await syncItemTrackingToVectorBook({ vectorize: true })
                             : await syncCharacterProfilesToVectorBook({ vectorize: true }));
                     const added = result.vectorizeResult?.count || 0;
-                    const removedText = removedVectorCount ? `，已恢复 ${removedVectorCount} 个未选中的旧向量化${itemLabel}` : '';
-                    window.alert(`已用当前选中的 ${ids.length} 个${itemLabel}覆盖当前会话${itemLabel}向量书，新增向量化 ${added} 条${removedText}。`);
+                    if (autoVectorEnabled) {
+                        const restoredText = restoredResidentCount ? `，其中 ${restoredResidentCount} 个已取消爱心常驻` : '';
+                        window.alert(`已将选中的 ${ids.length} 个${itemLabel}恢复为向量化，新增向量化 ${added} 条${restoredText}。`);
+                    } else {
+                        const removedText = removedVectorCount ? `，已恢复 ${removedVectorCount} 个未选中的旧向量化${itemLabel}` : '';
+                        window.alert(`已用当前选中的 ${ids.length} 个${itemLabel}覆盖当前会话${itemLabel}向量书，新增向量化 ${added} 条${removedText}。`);
+                    }
                 } catch (error) {
                     window.alert(String(error?.message || error || `${itemLabel}向量化失败`));
                 } finally {
-                    vectorizeButton.disabled = false;
+                    updateRecordOrganizerSelection(dialog);
                     if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
                 }
                 return;
@@ -12247,6 +12354,18 @@
         dialog.addEventListener('click', (event) => {
             event.stopPropagation();
             const target = event.target instanceof Element ? event.target : null;
+            const autoSwitch = target?.closest('[data-yzm-organizer-auto-vector]');
+            if (autoSwitch) {
+                const enabled = setTableAutoVectorizeEnabled(table.id, !isTableAutoVectorizeEnabled(table.id));
+                setConfigSwitchState(autoSwitch, enabled);
+                if (!refreshAfterRecordOrganizerChange(root, table)) {
+                    setConfigSwitchState(autoSwitch, isTableAutoVectorizeEnabled(table.id));
+                    return;
+                }
+                rerenderOrganizer();
+                scheduleManagedVectorTableSync(table.id, { force: true, delay: 0 });
+                return;
+            }
             const batchButton = target?.closest('[data-yzm-organizer-batch]');
             if (batchButton) {
                 applyBatch(batchButton.dataset.yzmOrganizerBatch, getSelectedOrganizerRecordIds(dialog));
@@ -12255,6 +12374,25 @@
         });
         dialog.addEventListener('change', (event) => {
             const target = event.target instanceof Element ? event.target : null;
+            if (target?.matches('[data-yzm-organizer-resident]')) {
+                const recordId = target.closest('.yzm-organizer-row')?.dataset?.yzmOrganizerRecordId || '';
+                const record = getRecords(table.id).find((entry) => entry.id === recordId);
+                const vectorConfig = getManagedVectorTableConfig(table.id);
+                if (!record || !vectorConfig || !isTableAutoVectorizeEnabled(table.id)) {
+                    rerenderOrganizer();
+                    return;
+                }
+                record.autoVectorResident = target.checked === true;
+                if (record.autoVectorResident) {
+                    record[vectorConfig.syncFlag] = false;
+                    record.hidden = false;
+                }
+                if (refreshAfterRecordOrganizerChange(root, table)) {
+                    scheduleManagedVectorTableSync(table.id, { force: true, delay: 0 });
+                }
+                rerenderOrganizer();
+                return;
+            }
             if (target?.classList.contains('yzm-organizer-select-all')) {
                 dialog.querySelectorAll('.yzm-organizer-row .yzm-organizer-check').forEach((checkbox) => {
                     checkbox.checked = target.checked;
@@ -14494,6 +14632,9 @@
                 window.dispatchEvent(new CustomEvent('yzm-memory-session-ready', {
                     detail: { sessionId: loadedSessionId },
                 }));
+                scheduleCharacterVectorSync();
+                scheduleItemTrackingVectorSync();
+                scheduleWorldSettingVectorSync();
             }
         }, 220);
 
@@ -14707,6 +14848,9 @@
         getVectorStore()?.whenReady?.().then(() => {
             const root = document.getElementById(ROOT_ID);
             if (root) renderVectorWorkspace(root);
+            scheduleCharacterVectorSync();
+            scheduleItemTrackingVectorSync();
+            scheduleWorldSettingVectorSync();
         });
 
         if (!mountExtensionMenuEntry()) {

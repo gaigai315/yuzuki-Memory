@@ -9,6 +9,7 @@
     const BRACKETED_TODO_MARKER_SOURCE = '[（(〔\\[]\\s*\\d+\\s*[）)〕\\]]';
     const TODO_MARKER_SOURCE = '(?:[（(〔\\[]\\s*\\d+\\s*[）)〕\\]]|\\d+\\s*[）)〕\\].、])';
     const TODO_DATE_SOURCE = '(?:\\d{1,6}年\\s*\\d{1,2}月\\s*\\d{1,2}日|\\d{1,6}\\s*[-/／]\\s*\\d{1,2}\\s*[-/／]\\s*\\d{1,2})';
+    const TODO_MONTH_DAY_SOURCE = '(?:\\d{1,2}月\\s*\\d{1,2}日|\\d{1,2}\\s*[-/／]\\s*\\d{1,2})';
     let bound = false;
     let bindRetryTimer = null;
     let cleanupTimer = null;
@@ -65,6 +66,24 @@
         const day = Number(chineseDateMatch?.[3] ?? delimitedDateMatch[4]);
         if (!isValidDateTimeParts(year, month, day, 0, 0)) return null;
         return { year, month, day };
+    }
+
+    function parseMonthDayParts(dateText = '', fallbackYear = null) {
+        const normalizedDate = String(dateText || '').trim().replace(/／/g, '/');
+        const chineseDateMatch = normalizedDate.match(/^(\d{1,2})月\s*(\d{1,2})日$/);
+        const delimitedDateMatch = normalizedDate.match(/^(\d{1,2})\s*([-/])\s*(\d{1,2})$/);
+        const year = Number(fallbackYear);
+        if ((!chineseDateMatch && !delimitedDateMatch) || !Number.isInteger(year)) return null;
+
+        const month = Number(chineseDateMatch?.[1] ?? delimitedDateMatch[1]);
+        const day = Number(chineseDateMatch?.[2] ?? delimitedDateMatch[3]);
+        if (!isValidDateTimeParts(year, month, day, 0, 0)) return null;
+        return { year, month, day };
+    }
+
+    function formatChineseDate(parts) {
+        if (!parts) return '';
+        return `${parts.year}年${String(parts.month).padStart(2, '0')}月${String(parts.day).padStart(2, '0')}日`;
     }
 
     function parseDateTimeParts(dateText = '', timeText = '') {
@@ -182,17 +201,41 @@
 
     function fillMissingTodoDates(text = '', storyTime = null) {
         const source = normalizeTodoText(text);
-        const date = String(storyTime?.date || '').replace(/\s+/g, '');
-        if (!source || !/^\d{1,6}年\d{1,2}月\d{1,2}日$/.test(date)) return String(text || '').trim();
+        const storyDateParts = parseDateParts(storyTime?.date)
+            || (isValidDateTimeParts(
+                Number(storyTime?.dateTimeParts?.year),
+                Number(storyTime?.dateTimeParts?.month),
+                Number(storyTime?.dateTimeParts?.day),
+                0,
+                0
+            ) ? {
+                year: Number(storyTime.dateTimeParts.year),
+                month: Number(storyTime.dateTimeParts.month),
+                day: Number(storyTime.dateTimeParts.day),
+            } : null);
+        const date = formatChineseDate(storyDateParts);
+        if (!source || !date) return String(text || '').trim();
 
         let changed = false;
         const markerPattern = new RegExp(`^${TODO_MARKER_SOURCE}\\s*`);
+        const fullDatePattern = new RegExp(`^${TODO_DATE_SOURCE}`);
+        const monthDayPattern = new RegExp(`^(${TODO_MONTH_DAY_SOURCE})`);
         const entries = source.split(/\n+/).map((entry) => {
             const value = String(entry || '').trim();
             if (!value) return '';
             const marker = value.match(markerPattern)?.[0] || '';
             const content = value.slice(marker.length).trimStart();
-            if (new RegExp(`^${TODO_DATE_SOURCE}`).test(content)) return value;
+            if (fullDatePattern.test(content)) return value;
+
+            const monthDayMatch = content.match(monthDayPattern);
+            if (monthDayMatch) {
+                const monthDayParts = parseMonthDayParts(monthDayMatch[1], storyDateParts.year);
+                if (!monthDayParts) return value;
+                const remainder = content.slice(monthDayMatch[0].length).trimStart();
+                const separator = remainder && !/^[·・•:：,，、]/.test(remainder) ? ' ' : '';
+                changed = true;
+                return `${marker}${formatChineseDate(monthDayParts)}${separator}${remainder}`;
+            }
 
             const timeMatch = content.match(/^(\d{1,2})\s*[:：]\s*(\d{2})(?=\s*(?:[·・•:：]\s*)?\S)/);
             if (!timeMatch) return value;
@@ -302,6 +345,17 @@
         if (!selectedText || selectedText === bodyText) return null;
         const selectedTime = parseStoryTimeText(selectedText);
         return selectedTime ? { ...selectedTime, floor: target } : null;
+    }
+
+    function getStoryTimeForRange(range = {}, context = getContext()) {
+        const chat = Array.isArray(context?.chat) ? context.chat : [];
+        const start = Math.max(0, Math.round(Number(range?.start) || 0));
+        const end = Math.min(chat.length, Math.max(start, Math.round(Number(range?.end) || 0)));
+        for (let index = end - 1; index >= start; index -= 1) {
+            const parsed = getStoryTimeForFloor(index, context);
+            if (parsed) return parsed;
+        }
+        return null;
     }
 
     function getChatStoryTime(context = getContext()) {
@@ -474,6 +528,7 @@
         mergeTodoTexts,
         parseStoryTimeText,
         getStoryTimeForFloor,
+        getStoryTimeForRange,
         getCurrentStoryTime,
         pruneTodoText,
         cleanupExpiredTodos,

@@ -416,6 +416,12 @@
         return !record?.hidden;
     }
 
+    function isRecordAutoVectorized(state, table, record) {
+        if (![CHARACTER_PROFILE_TABLE_ID, ITEM_TRACKING_TABLE_ID, WORLD_SETTING_TABLE_ID].includes(table?.id)) return false;
+        const enabled = state?.settings?.autoVectorizeTables?.[table.id] === true;
+        return enabled && record?.autoVectorResident !== true;
+    }
+
     function getPlotSummaryKindByColumn(column) {
         return cleanColumnName(column) === '支线' ? 'branch' : 'main';
     }
@@ -498,8 +504,8 @@
             .join('\n\n');
     }
 
-    function recordToText(table, record) {
-        if (!table || !record || !isRecordVisible(record)) return '';
+    function recordToText(state, table, record) {
+        if (!table || !record || !isRecordVisible(record) || isRecordAutoVectorized(state, table, record)) return '';
         if (table.id === PLOT_SUMMARY_TABLE_ID) return plotSummaryRecordToText(table, record);
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const lines = (Array.isArray(table.columns) ? table.columns : [])
@@ -514,7 +520,7 @@
 
     function buildTableText(state, table, options = {}) {
         if (!table || table.hidden || table.id === FIXED_SUMMARY_TABLE_ID) return '';
-        const rows = tableRecords(state, table.id).map((record) => recordToText(table, record)).filter(Boolean);
+        const rows = tableRecords(state, table.id).map((record) => recordToText(state, table, record)).filter(Boolean);
         const characterVectorText = table.id === CHARACTER_PROFILE_TABLE_ID ? String(options.characterProfileText || '').trim() : '';
         const itemTrackingVectorText = table.id === ITEM_TRACKING_TABLE_ID ? String(options.itemTrackingText || '').trim() : '';
         const worldSettingVectorText = table.id === WORLD_SETTING_TABLE_ID ? String(options.worldSettingText || '').trim() : '';
