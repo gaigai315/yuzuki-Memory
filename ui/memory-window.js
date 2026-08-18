@@ -237,7 +237,18 @@
     let chatContextRefreshBound = false;
     let managedVectorSyncTimer = null;
     let managedVectorSyncRunning = false;
+    const MANAGED_VECTOR_RETRY_DELAYS = [1500, 5000, 15000];
     const managedVectorSyncPending = {
+        character: null,
+        itemTracking: null,
+        worldSetting: null,
+    };
+    const managedVectorRetryAttempts = {
+        character: 0,
+        itemTracking: 0,
+        worldSetting: 0,
+    };
+    const managedVectorRetryTimers = {
         character: null,
         itemTracking: null,
         worldSetting: null,
@@ -4578,6 +4589,72 @@
             || getRecords('world_setting').some((record) => record?.worldSettingVectorSynced === true);
     }
 
+    function getManagedVectorTableByQueue(kind) {
+        const entry = Object.entries(MANAGED_VECTOR_TABLES).find(([, config]) => config.queue === kind);
+        return entry ? { tableId: entry[0], ...entry[1] } : null;
+    }
+
+    function clearManagedVectorRetry(kind) {
+        window.clearTimeout(managedVectorRetryTimers[kind]);
+        managedVectorRetryTimers[kind] = null;
+        managedVectorRetryAttempts[kind] = 0;
+    }
+
+    function getManagedVectorPendingCount(result) {
+        if (!result?.success || result.vectorized !== true) return -1;
+        const book = getVectorStore()?.getBook?.(result.bookId);
+        if (book && Array.isArray(book.chunks)) {
+            return book.chunks.reduce((count, _chunk, index) => count + (book.vectorized?.[index] === true ? 0 : 1), 0);
+        }
+        return Math.max(0, Number.parseInt(result.vectorizeResult?.errors, 10) || 0);
+    }
+
+    function scheduleManagedVectorRetry(kind, pendingCount = -1, error = null) {
+        const table = getManagedVectorTableByQueue(kind);
+        if (!table || !isTableAutoVectorizeEnabled(table.tableId)) {
+            clearManagedVectorRetry(kind);
+            return;
+        }
+
+        const attempt = managedVectorRetryAttempts[kind] || 0;
+        if (attempt >= MANAGED_VECTOR_RETRY_DELAYS.length) {
+            console.warn(`[yuzuki-Memory] ${table.label}自动向量化补充重试已暂停，后续表格更新或重新进入会话时会再次尝试。`, error || '');
+            return;
+        }
+
+        const delay = MANAGED_VECTOR_RETRY_DELAYS[attempt];
+        managedVectorRetryAttempts[kind] = attempt + 1;
+        window.clearTimeout(managedVectorRetryTimers[kind]);
+        managedVectorRetryTimers[kind] = window.setTimeout(() => {
+            managedVectorRetryTimers[kind] = null;
+            if (!isTableAutoVectorizeEnabled(table.tableId)) {
+                clearManagedVectorRetry(kind);
+                return;
+            }
+            queueManagedVectorSync(kind, { force: true, delay: 0, retry: true });
+        }, delay);
+        const pendingText = pendingCount >= 0 ? `仍有 ${pendingCount} 个分段未完成` : '尚未完成';
+        console.warn(`[yuzuki-Memory] ${table.label}自动向量化${pendingText}，将在 ${delay}ms 后补充重试。`, error || '');
+    }
+
+    async function runManagedVectorSync(kind, options, syncAction) {
+        const table = getManagedVectorTableByQueue(kind);
+        try {
+            const result = await syncAction({ vectorize: options.vectorize });
+            const pendingCount = getManagedVectorPendingCount(result);
+            if (table && isTableAutoVectorizeEnabled(table.tableId) && pendingCount !== 0) {
+                scheduleManagedVectorRetry(kind, pendingCount, result?.error || result?.vectorizeResult?.error || null);
+            } else {
+                clearManagedVectorRetry(kind);
+            }
+            return result;
+        } catch (error) {
+            console.warn(`[yuzuki-Memory] ${table?.label || kind}向量书同步失败。`, error);
+            scheduleManagedVectorRetry(kind, -1, error);
+            return null;
+        }
+    }
+
     async function flushManagedVectorSync() {
         if (managedVectorSyncRunning) return;
         const characterOptions = managedVectorSyncPending.character;
@@ -4591,25 +4668,13 @@
         managedVectorSyncRunning = true;
         try {
             if (characterOptions) {
-                try {
-                    await syncCharacterProfilesToVectorBook({ vectorize: characterOptions.vectorize });
-                } catch (error) {
-                    console.warn('[yuzuki-Memory] 角色档案向量书同步失败。', error);
-                }
+                await runManagedVectorSync('character', characterOptions, syncCharacterProfilesToVectorBook);
             }
             if (worldSettingOptions) {
-                try {
-                    await syncWorldSettingsToVectorBook({ vectorize: worldSettingOptions.vectorize });
-                } catch (error) {
-                    console.warn('[yuzuki-Memory] 世界设定向量书同步失败。', error);
-                }
+                await runManagedVectorSync('worldSetting', worldSettingOptions, syncWorldSettingsToVectorBook);
             }
             if (itemTrackingOptions) {
-                try {
-                    await syncItemTrackingToVectorBook({ vectorize: itemTrackingOptions.vectorize });
-                } catch (error) {
-                    console.warn('[yuzuki-Memory] 物品追踪向量书同步失败。', error);
-                }
+                await runManagedVectorSync('itemTracking', itemTrackingOptions, syncItemTrackingToVectorBook);
             }
             const root = document.getElementById(ROOT_ID);
             if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root);
@@ -4623,6 +4688,7 @@
     }
 
     function queueManagedVectorSync(kind, options = {}) {
+        if (options.retry !== true) clearManagedVectorRetry(kind);
         const previous = managedVectorSyncPending[kind];
         managedVectorSyncPending[kind] = {
             vectorize: previous ? previous.vectorize || options.vectorize !== false : options.vectorize !== false,
@@ -4635,17 +4701,26 @@
     }
 
     function scheduleCharacterVectorSync(options = {}) {
-        if (!hasCharacterVectorRecords() && options.force !== true) return;
+        if (!hasCharacterVectorRecords() && options.force !== true) {
+            clearManagedVectorRetry('character');
+            return;
+        }
         queueManagedVectorSync('character', options);
     }
 
     function scheduleItemTrackingVectorSync(options = {}) {
-        if (!hasItemTrackingVectorRecords() && options.force !== true) return;
+        if (!hasItemTrackingVectorRecords() && options.force !== true) {
+            clearManagedVectorRetry('itemTracking');
+            return;
+        }
         queueManagedVectorSync('itemTracking', options);
     }
 
     function scheduleWorldSettingVectorSync(options = {}) {
-        if (!hasWorldSettingVectorRecords() && options.force !== true) return;
+        if (!hasWorldSettingVectorRecords() && options.force !== true) {
+            clearManagedVectorRetry('worldSetting');
+            return;
+        }
         queueManagedVectorSync('worldSetting', options);
     }
 
@@ -12168,7 +12243,7 @@
         if (vectorizeButton) {
             vectorizeButton.hidden = !['character_profile', 'item_tracking', 'world_setting'].includes(table?.id);
             vectorizeButton.disabled = selectedCount === 0;
-            vectorizeButton.title = autoVectorEnabled ? '将选中条目恢复为向量化' : '向量化选中条目';
+            vectorizeButton.title = '手动向量化选中条目';
             vectorizeButton.setAttribute('aria-label', vectorizeButton.title);
         }
     }
@@ -12243,7 +12318,7 @@
         hint.className = 'yzm-structure-hint';
         const updateHint = () => {
             hint.textContent = isTableAutoVectorizeEnabled(table.id)
-                ? '自动向量化已开启：未点亮爱心的条目会自动入库；爱心条目常驻发送，也可选中后点击向量化恢复入库。'
+                ? '自动向量化已开启：未点亮爱心的条目会自动入库；点击向量化按钮时，仍按当前勾选项执行手动向量化。'
                 : '隐藏会让选中条目不再通过表格变量注入；不会删除条目，也不会写入全局配置。';
         };
         updateHint();
@@ -12275,7 +12350,6 @@
                 if (!window.confirm(`确定删除选中的 ${ids.length} 个条目吗？`)) return;
                 getState().records[table.id] = records.filter((record) => !idSet.has(record.id));
             } else if (action === 'vectorize' && getManagedVectorTableConfig(table.id)) {
-                const autoVectorEnabled = isTableAutoVectorizeEnabled(table.id);
                 let removedVectorCount = 0;
                 let restoredResidentCount = 0;
                 const vectorConfig = getManagedVectorTableConfig(table.id);
@@ -12283,16 +12357,38 @@
                 const isItemTracking = table.id === 'item_tracking';
                 const syncFlag = vectorConfig.syncFlag;
                 const itemLabel = vectorConfig.label;
+                const selectedVectorChunks = records
+                    .filter((record) => idSet.has(record.id))
+                    .map((record) => recordToVectorChunk(table, record))
+                    .filter(Boolean);
+                const previousVectorStates = new Map(records.map((record) => [record.id, {
+                    hasHidden: Object.prototype.hasOwnProperty.call(record, 'hidden'),
+                    hidden: record.hidden,
+                    hasSyncFlag: Object.prototype.hasOwnProperty.call(record, syncFlag),
+                    syncFlag: record[syncFlag],
+                    hasResident: Object.prototype.hasOwnProperty.call(record, 'autoVectorResident'),
+                    resident: record.autoVectorResident,
+                }]));
+                const restorePreviousVectorStates = () => {
+                    getRecords(table.id).forEach((record) => {
+                        const previous = previousVectorStates.get(record.id);
+                        if (!previous) return;
+                        if (previous.hasHidden) record.hidden = previous.hidden;
+                        else delete record.hidden;
+                        if (previous.hasSyncFlag) record[syncFlag] = previous.syncFlag;
+                        else delete record[syncFlag];
+                        if (previous.hasResident) record.autoVectorResident = previous.resident;
+                        else delete record.autoVectorResident;
+                    });
+                };
                 records.forEach((record) => {
                     if (idSet.has(record.id)) {
                         if (record.autoVectorResident === true) restoredResidentCount += 1;
                         record.autoVectorResident = false;
-                        if (autoVectorEnabled) return;
                         record.hidden = true;
                         record[syncFlag] = true;
                         return;
                     }
-                    if (autoVectorEnabled) return;
                     if (record?.[syncFlag] === true) {
                         record.hidden = false;
                         record[syncFlag] = false;
@@ -12303,20 +12399,33 @@
                 rerenderOrganizer();
                 vectorizeButton.disabled = true;
                 try {
-                    const result = isWorldSetting
-                        ? await syncWorldSettingsToVectorBook({ vectorize: true })
+                    const syncResult = isWorldSetting
+                        ? await syncWorldSettingsToVectorBook({ vectorize: false })
                         : (isItemTracking
-                            ? await syncItemTrackingToVectorBook({ vectorize: true })
-                            : await syncCharacterProfilesToVectorBook({ vectorize: true }));
-                    const added = result.vectorizeResult?.count || 0;
-                    if (autoVectorEnabled) {
-                        const restoredText = restoredResidentCount ? `，其中 ${restoredResidentCount} 个已取消爱心常驻` : '';
-                        window.alert(`已将选中的 ${ids.length} 个${itemLabel}恢复为向量化，新增向量化 ${added} 条${restoredText}。`);
-                    } else {
-                        const removedText = removedVectorCount ? `，已恢复 ${removedVectorCount} 个未选中的旧向量化${itemLabel}` : '';
-                        window.alert(`已用当前选中的 ${ids.length} 个${itemLabel}覆盖当前会话${itemLabel}向量书，新增向量化 ${added} 条${removedText}。`);
+                            ? await syncItemTrackingToVectorBook({ vectorize: false })
+                            : await syncCharacterProfilesToVectorBook({ vectorize: false }));
+                    if (!syncResult?.success) {
+                        throw new Error(syncResult?.error || `${itemLabel}向量书同步失败`);
                     }
+                    const store = await ensureVectorStoreReady();
+                    if (!store?.vectorizeBookChunks) throw new Error('向量书模块不支持选中条目向量化');
+                    const vectorizeResult = await store.vectorizeBookChunks(syncResult.bookId, selectedVectorChunks);
+                    if (!vectorizeResult.matched) throw new Error('所选条目没有可向量化内容');
+                    if (vectorizeResult.pending > 0) {
+                        const detail = String(vectorizeResult.error || '').trim();
+                        throw new Error(`选中条目仍有 ${vectorizeResult.pending} 个分段未完成向量化${detail ? `：${detail}` : ''}`);
+                    }
+                    const added = vectorizeResult.count || 0;
+                    const completedText = `已确认 ${vectorizeResult.done}/${vectorizeResult.matched} 个选中分段完成`;
+                    const restoredText = restoredResidentCount ? `，其中 ${restoredResidentCount} 个已取消爱心常驻` : '';
+                    const removedText = removedVectorCount ? `，已恢复 ${removedVectorCount} 个未选中的旧向量化${itemLabel}` : '';
+                    window.alert(`已手动向量化选中的 ${ids.length} 个${itemLabel}，${completedText}，新增向量化 ${added} 条${restoredText}${removedText}。`);
                 } catch (error) {
+                    restorePreviousVectorStates();
+                    if (refreshAfterRecordOrganizerChange(root, table)) {
+                        scheduleManagedVectorTableSync(table.id, { force: true, delay: 0 });
+                    }
+                    rerenderOrganizer();
                     window.alert(String(error?.message || error || `${itemLabel}向量化失败`));
                 } finally {
                     updateRecordOrganizerSelection(dialog);

@@ -1423,6 +1423,33 @@
             );
         }
 
+        async vectorizeBookChunks(bookId, chunks, progressCallback = null, options = {}) {
+            await this.whenReady();
+            const book = this.getBook(bookId);
+            if (!book) throw new Error('向量书不存在');
+
+            const targetChunks = new Set(this.normalizeChunks(chunks));
+            const segmentIndexes = (Array.isArray(book.chunks) ? book.chunks : [])
+                .map((chunk, index) => targetChunks.has(chunk) ? index : -1)
+                .filter((index) => index >= 0);
+            if (!segmentIndexes.length) {
+                return { success: true, count: 0, errors: 0, matched: 0, done: 0, pending: 0 };
+            }
+
+            const result = await this.vectorizeBook(bookId, progressCallback, {
+                ...options,
+                segmentIndexes,
+            });
+            const updatedBook = this.getBook(bookId);
+            const done = segmentIndexes.filter((index) => updatedBook?.vectorized?.[index] === true).length;
+            return {
+                ...result,
+                matched: segmentIndexes.length,
+                done,
+                pending: Math.max(0, segmentIndexes.length - done),
+            };
+        }
+
         updateBookChunk(bookId, chunkIndex, text, progressCallback = null) {
             const queueKey = String(bookId || '');
             return this.enqueueVectorTask(
