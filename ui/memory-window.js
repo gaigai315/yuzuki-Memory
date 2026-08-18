@@ -686,14 +686,14 @@
     }
 
     function getVisibleRecords(tableId = getActiveTable()?.id) {
-        return getRecords(tableId).filter((record) => !record.hidden);
+        return getRecords(tableId).filter((record) => !isRecordDisplayedAsVectorized(tableId, record));
     }
 
     function getPrimaryDisplayRecords(tableId = getActiveTable()?.id) {
         const records = getRecords(tableId);
         return [
-            ...records.filter((record) => !record.hidden),
-            ...records.filter((record) => record.hidden),
+            ...records.filter((record) => !isRecordDisplayedAsVectorized(tableId, record)),
+            ...records.filter((record) => isRecordDisplayedAsVectorized(tableId, record)),
         ];
     }
 
@@ -758,6 +758,14 @@
         if (!config || !record) return false;
         if (isTableAutoVectorizeEnabled(tableId)) return !isAutoVectorResident(record);
         return record?.[config.syncFlag] === true;
+    }
+
+    function isRecordDisplayedAsVectorized(tableId, record) {
+        if (!record) return false;
+        if (getManagedVectorTableConfig(tableId) && isTableAutoVectorizeEnabled(tableId)) {
+            return !isAutoVectorResident(record);
+        }
+        return record.hidden === true;
     }
 
     function updateVectorSearchSettings(nextSettings) {
@@ -3743,7 +3751,11 @@
         const records = getPrimaryDisplayRecords(table.id);
         const nodes = [];
         records.forEach((record, index) => {
-            if (record.hidden && records[index - 1] && !records[index - 1].hidden) {
+            const displayedAsVectorized = isRecordDisplayedAsVectorized(table.id, record);
+            const previousDisplayedAsVectorized = records[index - 1]
+                ? isRecordDisplayedAsVectorized(table.id, records[index - 1])
+                : false;
+            if (displayedAsVectorized && records[index - 1] && !previousDisplayedAsVectorized) {
                 nodes.push(createPrimaryHiddenDivider());
             }
             let item;
@@ -3756,7 +3768,7 @@
             } else {
                 item = createButton(getRecordTitle(table, record), activeRecordId === record.id ? 'yzm-primary-item yzm-primary-item-active' : 'yzm-primary-item');
             }
-            item.classList.toggle('yzm-primary-item-hidden', !!record.hidden);
+            item.classList.toggle('yzm-primary-item-hidden', displayedAsVectorized);
             item.dataset.yzmRecordId = record.id;
             nodes.push(item);
         });
@@ -11940,7 +11952,9 @@
     function createRecordOrganizerRow(table, record, index) {
         const autoVectorEnabled = isTableAutoVectorizeEnabled(table?.id);
         const row = document.createElement('div');
-        row.className = record.hidden ? 'yzm-organizer-row yzm-organizer-row-hidden' : 'yzm-organizer-row';
+        row.className = isRecordDisplayedAsVectorized(table?.id, record)
+            ? 'yzm-organizer-row yzm-organizer-row-hidden'
+            : 'yzm-organizer-row';
         if (autoVectorEnabled) row.classList.add('yzm-organizer-row-auto-vector');
         row.dataset.yzmOrganizerRecordId = record.id;
 
