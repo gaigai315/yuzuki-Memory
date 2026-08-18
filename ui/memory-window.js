@@ -4731,6 +4731,12 @@
         if (queue === 'worldSetting') scheduleWorldSettingVectorSync(options);
     }
 
+    function scheduleAllManagedVectorSyncs(options = {}) {
+        scheduleCharacterVectorSync(options);
+        scheduleItemTrackingVectorSync(options);
+        scheduleWorldSettingVectorSync(options);
+    }
+
     function getCurrentChatVectorBookName() {
         const context = getContext() || {};
         const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
@@ -14758,9 +14764,7 @@
         if (getStorage()?.isSessionSwitching?.()) return;
         if (taskRunnerBusy && event?.detail?.source === 'task-runner') {
             refreshActiveWorkspace(root);
-            scheduleCharacterVectorSync();
-            scheduleItemTrackingVectorSync();
-            scheduleWorldSettingVectorSync();
+            scheduleAllManagedVectorSyncs();
             return;
         }
         loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
@@ -14768,9 +14772,17 @@
         sessionStateReady = Boolean(loadedSessionId);
         applyResolvedPromptSchemeToState({ save: false });
         refreshActiveWorkspace(root);
-        scheduleCharacterVectorSync();
-        scheduleItemTrackingVectorSync();
-        scheduleWorldSettingVectorSync();
+        scheduleAllManagedVectorSyncs();
+    }
+
+    function bindMemoryStateUpdateListener() {
+        const previousHandler = window.yzmMemoryStateUpdateHandler;
+        if (typeof previousHandler === 'function') {
+            window.removeEventListener('yzm-memory-state-updated', previousHandler);
+        }
+        window.yzmMemoryStateUpdateHandler = reloadStateFromStorage;
+        window.yzmMemoryStateUpdateBound = true;
+        window.addEventListener('yzm-memory-state-updated', reloadStateFromStorage);
     }
 
     function scheduleSessionWorkspaceRefresh(root, sessionId) {
@@ -14940,9 +14952,11 @@
             },
             onUpdate() {
                 const root = document.getElementById(ROOT_ID);
-                if (!root) return;
-                refreshAfterTask(root);
-                if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
+                if (root) {
+                    refreshAfterTask(root);
+                    if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
+                }
+                scheduleAllManagedVectorSyncs({ delay: 0 });
             },
         });
         watchExtensionMenuButton();
@@ -14950,16 +14964,11 @@
             reloadStateForCurrentSession(nextSessionId, previousSessionId);
         });
         bindChatContextRefresh();
-        if (!window.yzmMemoryStateUpdateBound) {
-            window.yzmMemoryStateUpdateBound = true;
-            window.addEventListener('yzm-memory-state-updated', reloadStateFromStorage);
-        }
+        bindMemoryStateUpdateListener();
         getVectorStore()?.whenReady?.().then(() => {
             const root = document.getElementById(ROOT_ID);
             if (root) renderVectorWorkspace(root);
-            scheduleCharacterVectorSync();
-            scheduleItemTrackingVectorSync();
-            scheduleWorldSettingVectorSync();
+            scheduleAllManagedVectorSyncs();
         });
 
         if (!mountExtensionMenuEntry()) {
