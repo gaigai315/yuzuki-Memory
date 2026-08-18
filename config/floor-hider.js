@@ -15,8 +15,10 @@
         summaryDelay: 2,
         hideSummaryFloors: false,
     };
+    const INSTALL_ID = `floor-hider-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
     let running = false;
+    let hookRetryTimer = null;
 
     function normalizeNumber(value, fallback = 0) {
         const number = Number(value);
@@ -361,7 +363,46 @@
         return { success: false, skipped: true, reason: 'disabled' };
     }
 
+    function isDryRunEvent(args = []) {
+        return args.some((arg) => arg?.dry_run === true || arg?.dryRun === true || arg?.isDryRun === true);
+    }
+
+    async function handleBeforePromptBuild(...args) {
+        if (YuzukiMemory.FloorHider?.activeInstallId !== INSTALL_ID || isDryRunEvent(args)) return;
+        // Hidden flags are applied in memory before saveChat resolves, so the native prompt builder sees them immediately.
+        await applyConfiguredHiding();
+    }
+
+    function installPreGenerationHidingHooks() {
+        if (YuzukiMemory.FloorHider?.activeInstallId !== INSTALL_ID) return false;
+        if (YuzukiMemory.FloorHider?.preGenerationHooksInstallId === INSTALL_ID) return true;
+        const context = getContext() || {};
+        const eventSource = context.eventSource || window.eventSource;
+        const eventTypes = context.event_types || window.event_types || {};
+        if (!eventSource || typeof eventSource.on !== 'function') {
+            if (!hookRetryTimer) {
+                hookRetryTimer = window.setTimeout(() => {
+                    hookRetryTimer = null;
+                    installPreGenerationHidingHooks();
+                }, 1000);
+            }
+            return false;
+        }
+
+        const eventNames = new Set([
+            eventTypes.MESSAGE_SENT || 'message_sent',
+            eventTypes.GENERATION_AFTER_COMMANDS || 'generation_after_commands',
+            eventTypes.GENERATE_BEFORE_COMBINE_PROMPTS || 'generate_before_combine_prompts',
+        ].filter(Boolean));
+        eventNames.forEach((eventName) => eventSource.on(eventName, handleBeforePromptBuild));
+        YuzukiMemory.FloorHider.preGenerationHooksInstalled = true;
+        YuzukiMemory.FloorHider.preGenerationHooksInstallId = INSTALL_ID;
+        YuzukiMemory.FloorHider.preGenerationHookNames = [...eventNames];
+        return true;
+    }
+
     YuzukiMemory.FloorHider = Object.assign(YuzukiMemory.FloorHider || {}, {
+        activeInstallId: INSTALL_ID,
         loadSettings,
         loadAutoSummarySettings,
         collectIndicesToHide,
@@ -370,5 +411,7 @@
         applyContextLimitHiding,
         applySummaryPointerHiding,
         applyConfiguredHiding,
+        installPreGenerationHidingHooks,
     });
+    installPreGenerationHidingHooks();
 })();

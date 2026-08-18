@@ -11512,8 +11512,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】优化角色档案中待办事项的日期兼容与跨天清理。',
-            '【新增】总结面板新增单段落编辑入口。',
+            '【修复】修复隐藏楼层执行时机异常导致旧楼层被错误发送的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

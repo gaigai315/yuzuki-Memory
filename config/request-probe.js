@@ -380,6 +380,34 @@
         return role && text ? `${role}\n${text}` : '';
     }
 
+    function getSignatureMatchText(signature) {
+        const value = String(signature || '');
+        const separatorIndex = value.indexOf('\n');
+        return separatorIndex >= 0 ? value.slice(separatorIndex + 1) : '';
+    }
+
+    function hasRelaxedRequestContextTextMatch(message, contextEntry) {
+        if (getMessageRoleKind(message) !== contextEntry?.role) return false;
+        const requestText = normalizeMessageMatchText(getMessageText(message)).replace(/\s+/g, '');
+        const contextText = normalizeMessageMatchText(getSignatureMatchText(contextEntry?.signature)).replace(/\s+/g, '');
+        if (!requestText || !contextText) return false;
+        if (requestText === contextText) return true;
+
+        const shorter = requestText.length <= contextText.length ? requestText : contextText;
+        const longer = requestText.length <= contextText.length ? contextText : requestText;
+        if (shorter.length < 48) return false;
+        const sampleLength = Math.min(64, Math.max(24, Math.floor(shorter.length / 8)));
+        const offsets = [
+            0,
+            Math.max(0, Math.floor((shorter.length - sampleLength) / 2)),
+            Math.max(0, shorter.length - sampleLength),
+        ];
+        const matchedSamples = offsets.reduce((count, offset) => (
+            longer.includes(shorter.slice(offset, offset + sampleLength)) ? count + 1 : count
+        ), 0);
+        return matchedSamples >= 2;
+    }
+
     function isPluginLikeRequestMessage(message) {
         return !!(
             message?.isGaigaiData
@@ -451,12 +479,61 @@
         return !!getMessageRoleKind(message);
     }
 
+    function isRequestFloorMatchCandidate(message) {
+        if (!isRequestDialogueMessage(message)) return false;
+        const role = String(message?.role || '').toLowerCase();
+        const name = String(message?.name || message?.identifier || '').toLowerCase();
+        if (role === 'system' || role === 'tool' || role === 'function' || name === 'system') return false;
+        if (message?.is_system_prompt === true) return false;
+        if (message?.is_system === true
+            && message?.is_user !== true
+            && message?.is_user !== false
+            && message?.is_yzm_hidden_floor !== true) {
+            return false;
+        }
+        return !isMemoryAnchorRequestMessage(message);
+    }
+
+    function getRequestTailFloorInfo(targetItems, contextDialogue) {
+        const info = {
+            pendingUserIndex: -1,
+            ignoredIndexes: new Set(),
+        };
+        const latestContextEntry = contextDialogue[contextDialogue.length - 1];
+        if (!latestContextEntry?.role) return info;
+
+        const trailingAssistantIndexes = [];
+        for (let index = targetItems.length - 1; index >= 0; index -= 1) {
+            const item = targetItems[index];
+            if (!isRequestFloorMatchCandidate(item)) continue;
+            const role = getMessageRoleKind(item);
+            if (role === 'assistant') {
+                if (latestContextEntry.role === 'assistant'
+                    && getMessageMatchSignature(item) === latestContextEntry.signature) {
+                    return info;
+                }
+                trailingAssistantIndexes.push(index);
+                continue;
+            }
+            if (role !== 'user') return info;
+
+            trailingAssistantIndexes.forEach((assistantIndex) => info.ignoredIndexes.add(assistantIndex));
+            if (latestContextEntry.role === 'assistant' && isLikelyPendingUserFloor(item)) {
+                info.pendingUserIndex = index;
+            }
+            return info;
+        }
+        return info;
+    }
+
     function getRequestContextMatches(targetItems, contextDialogue) {
         const matches = new Map();
         if (!Array.isArray(targetItems) || !targetItems.length || !Array.isArray(contextDialogue) || !contextDialogue.length) {
             return matches;
         }
 
+        const tailFloorInfo = getRequestTailFloorInfo(targetItems, contextDialogue);
+        const pendingUserCandidateIndex = tailFloorInfo.pendingUserIndex;
         const signaturePositions = new Map();
         contextDialogue.forEach((entry, dialogueIndex) => {
             const signature = String(entry?.signature || '');
@@ -471,6 +548,7 @@
         let contextCursor = contextDialogue.length - 1;
         for (let requestIndex = targetItems.length - 1; requestIndex >= 0; requestIndex -= 1) {
             const item = targetItems[requestIndex];
+            if (requestIndex === pendingUserCandidateIndex || tailFloorInfo.ignoredIndexes.has(requestIndex)) continue;
             if (!isRequestDialogueMessage(item)) continue;
             const signature = getMessageMatchSignature(item);
             const positions = signaturePositions.get(signature);
@@ -489,6 +567,55 @@
             matches.set(requestIndex, matchedDialogueIndex);
             signatureCursors.set(signature, positionCursor - 1);
             contextCursor = matchedDialogueIndex - 1;
+        }
+
+        if (!matches.size) return matches;
+
+        const exactAnchors = [...matches.entries()]
+            .map(([requestIndex, dialogueIndex]) => ({ requestIndex, dialogueIndex }))
+            .sort((left, right) => left.requestIndex - right.requestIndex);
+        const anchors = [
+            { requestIndex: -1, dialogueIndex: -1 },
+            ...exactAnchors,
+            { requestIndex: targetItems.length, dialogueIndex: contextDialogue.length },
+        ];
+
+        for (let anchorIndex = 1; anchorIndex < anchors.length; anchorIndex += 1) {
+            const left = anchors[anchorIndex - 1];
+            const right = anchors[anchorIndex];
+            if (right.requestIndex <= left.requestIndex || right.dialogueIndex <= left.dialogueIndex) continue;
+
+            const requestIndexes = [];
+            for (let index = left.requestIndex + 1; index < right.requestIndex; index += 1) {
+                if (index === pendingUserCandidateIndex || tailFloorInfo.ignoredIndexes.has(index)) continue;
+                if (!matches.has(index) && isRequestFloorMatchCandidate(targetItems[index])) requestIndexes.push(index);
+            }
+            let dialogueIndexes = [];
+            for (let index = left.dialogueIndex + 1; index < right.dialogueIndex; index += 1) {
+                dialogueIndexes.push(index);
+            }
+            const isOpenPrefix = left.requestIndex < 0 && left.dialogueIndex < 0;
+            if (isOpenPrefix && requestIndexes.length < dialogueIndexes.length) {
+                // SillyTavern can omit a long hidden prefix while retaining a transformed boundary message.
+                dialogueIndexes = dialogueIndexes.slice(-requestIndexes.length);
+                const textsAlign = requestIndexes.every((requestIndex, offset) => (
+                    hasRelaxedRequestContextTextMatch(
+                        targetItems[requestIndex],
+                        contextDialogue[dialogueIndexes[offset]],
+                    )
+                ));
+                if (!textsAlign) continue;
+            }
+            if (!requestIndexes.length || requestIndexes.length !== dialogueIndexes.length) continue;
+
+            const rolesAlign = requestIndexes.every((requestIndex, offset) => (
+                getMessageRoleKind(targetItems[requestIndex]) === contextDialogue[dialogueIndexes[offset]]?.role
+            ));
+            if (!rolesAlign) continue;
+
+            requestIndexes.forEach((requestIndex, offset) => {
+                matches.set(requestIndex, dialogueIndexes[offset]);
+            });
         }
         return matches;
     }
@@ -513,17 +640,19 @@
     }
 
     function getPendingUserFloorIndex(targetItems, contextMatches, contextDialogue) {
-        const latestContextEntry = contextDialogue[contextDialogue.length - 1];
-        if (latestContextEntry?.role !== 'assistant') return -1;
+        const tailFloorInfo = getRequestTailFloorInfo(targetItems, contextDialogue);
+        if (tailFloorInfo.pendingUserIndex >= 0 && !contextMatches.has(tailFloorInfo.pendingUserIndex)) {
+            return tailFloorInfo.pendingUserIndex;
+        }
 
         let latestMatchedRequestIndex = -1;
         contextMatches.forEach((_dialogueIndex, requestIndex) => {
             latestMatchedRequestIndex = Math.max(latestMatchedRequestIndex, requestIndex);
         });
         for (let index = targetItems.length - 1; index > latestMatchedRequestIndex; index -= 1) {
+            if (tailFloorInfo.ignoredIndexes.has(index)) continue;
             const item = targetItems[index];
-            if (!isRequestDialogueMessage(item) || isSystemLikeMessage(item)) continue;
-            if (isMemoryAnchorRequestMessage(item)) continue;
+            if (!isRequestFloorMatchCandidate(item)) continue;
             return isLikelyPendingUserFloor(item) ? index : -1;
         }
         return -1;
