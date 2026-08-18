@@ -7998,9 +7998,9 @@
     max-height: none;
     padding: 12px;
     overflow: auto;
-    color: var(--yzm-text);
-    background: var(--yzm-input-bg);
-    border: 1px solid var(--yzm-border);
+    color: var(--yzm-text) !important;
+    background: var(--yzm-input-bg) !important;
+    border: 1px solid var(--yzm-border) !important;
     border-radius: 10px;
     box-sizing: border-box;
     font-size: 13px;
@@ -8021,7 +8021,7 @@
 }
 
 #yzm-memory-root .yzm-vector-segment-editor:focus {
-    border-color: var(--yzm-selected-color);
+    border-color: var(--yzm-selected-color) !important;
 }
 
 #yzm-memory-root .yzm-vector-segment-actions {
