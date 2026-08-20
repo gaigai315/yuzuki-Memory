@@ -242,6 +242,7 @@
         const provider = String(config.provider || config.source || '').trim().toLowerCase();
         const model = String(config.model || '').trim().toLowerCase();
         if (provider === 'makersuite' || shouldUseGeminiNative(config)) return false;
+        if (/gemini-3\.(?:6|7)-flash(?:-|$)/.test(model)) return false;
         return model.includes('gemini');
     }
 

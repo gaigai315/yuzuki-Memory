@@ -11726,8 +11726,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复隐藏楼层执行时机异常导致旧楼层被错误发送的问题。',
-            '【新增】表格整理新增自动向量化开关：爱心标记的条目视为常驻发送，其余条目自动进入向量化。',
+            '【优化】兼容 Gemini 3.6 Flash、Gemini 3.7 Flash 及其变体：批量填表和总结任务不再使用其不支持的 assistant 预填充格式。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
