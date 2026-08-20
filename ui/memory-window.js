@@ -235,6 +235,9 @@
     let floatingVisibilityTimer = null;
     let shellOpenInteractionGuardUntil = 0;
     let chatContextRefreshBound = false;
+    let vectorBookNameSyncTimer = null;
+    let vectorBookNameSyncKey = '';
+    let vectorBookNameSyncRunning = false;
     let managedVectorSyncTimer = null;
     let managedVectorSyncRunning = false;
     const MANAGED_VECTOR_RETRY_DELAYS = [1500, 5000, 15000];
@@ -2183,12 +2186,45 @@
         }));
     }
 
-    function clampFloatingIconPosition(left, top, button = null) {
+    function getFloatingIconSize(button) {
+        const layoutSize = Math.max(Number(button?.offsetWidth) || 0, Number(button?.offsetHeight) || 0);
+        if (layoutSize > 0) return layoutSize;
         const rect = button?.getBoundingClientRect?.();
-        const size = Math.max(24, Math.round(Math.max(rect?.width || 0, rect?.height || 0, 52)));
+        const measuredSize = Math.max(Number(rect?.width) || 0, Number(rect?.height) || 0);
+        if (measuredSize > 0) return measuredSize;
+        return isMobileLayout() ? 34 : 52;
+    }
+
+    function getFloatingIconEdgeInset() {
+        return isMobileLayout() ? 0 : 8;
+    }
+
+    function getFloatingIconDefaultMargin() {
+        return isMobileLayout() ? 0 : 14;
+    }
+
+    function migrateSavedFloatingIconPosition(position, button) {
+        if (!position || !isMobileLayout()) return position;
+        const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || 0;
+        const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || 0;
+        const currentSize = Math.max(24, Math.round(getFloatingIconSize(button)));
+        const legacyEdgeInset = 8;
+        const legacySize = 52;
+        const legacyMaxLeft = Math.max(legacyEdgeInset, viewportWidth - legacySize - legacyEdgeInset);
+        const legacyMaxTop = Math.max(legacyEdgeInset, viewportHeight - legacySize - legacyEdgeInset);
+        const next = { ...position };
+        if (Math.abs(next.left - legacyEdgeInset) <= 1) next.left = 0;
+        else if (Math.abs(next.left - legacyMaxLeft) <= 1) next.left = Math.max(0, viewportWidth - currentSize);
+        if (Math.abs(next.top - legacyEdgeInset) <= 1) next.top = 0;
+        else if (Math.abs(next.top - legacyMaxTop) <= 1) next.top = Math.max(0, viewportHeight - currentSize);
+        return next;
+    }
+
+    function clampFloatingIconPosition(left, top, button = null) {
+        const size = Math.max(24, Math.round(getFloatingIconSize(button)));
         const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || size;
         const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || size;
-        const minEdge = 8;
+        const minEdge = getFloatingIconEdgeInset();
         const maxLeft = Math.max(minEdge, viewportWidth - size - minEdge);
         const maxTop = Math.max(minEdge, viewportHeight - size - minEdge);
         return {
@@ -2208,15 +2244,14 @@
     }
 
     function positionFloatingIcon(button) {
-        const saved = getSavedFloatingIconPosition();
+        const saved = migrateSavedFloatingIconPosition(getSavedFloatingIconPosition(), button);
         if (saved) {
             applyFloatingIconPosition(button, saved.left, saved.top, { persist: false });
             return;
         }
 
-        const rect = button?.getBoundingClientRect?.();
-        const size = Math.max(24, Math.round(Math.max(rect?.width || 0, rect?.height || 0, 52)));
-        const margin = 14;
+        const size = Math.max(24, Math.round(getFloatingIconSize(button)));
+        const margin = getFloatingIconDefaultMargin();
         const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || size;
         const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || size;
         let left = viewportWidth - size - margin;
@@ -2239,7 +2274,7 @@
         const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || rect.height;
         const outside = rect.right < 0 || rect.left > viewportWidth || rect.bottom < 0 || rect.top > viewportHeight;
         if (outside) {
-            const saved = getSavedFloatingIconPosition();
+            const saved = migrateSavedFloatingIconPosition(getSavedFloatingIconPosition(), button);
             if (saved) applyFloatingIconPosition(button, saved.left, saved.top, { persist: false });
             else positionFloatingIcon(button);
         } else {
@@ -4762,6 +4797,41 @@
             || context.characterName
             || '当前会话总结'
         ).replace(/\.[^.]+$/, '').trim() || '当前会话总结';
+    }
+
+    async function syncCurrentManagedVectorBookNames(options = {}) {
+        if (vectorBookNameSyncRunning || getStorage()?.isSessionSwitching?.()) return null;
+        const store = await ensureVectorStoreReady();
+        if (!store?.syncManagedBookNames) return null;
+
+        const sessionId = getStorage()?.getCurrentSessionId?.() || 'default';
+        const bookName = getCurrentChatVectorBookName();
+        const syncKey = `${sessionId}\u0000${bookName}`;
+        if (options.force !== true && syncKey === vectorBookNameSyncKey) return { success: true, unchanged: true };
+
+        vectorBookNameSyncRunning = true;
+        try {
+            vectorBookNameSyncKey = syncKey;
+            const result = await store.syncManagedBookNames(sessionId, bookName);
+            if (result?.changed && options.render !== false && activeWorkspaceView === 'vector') {
+                const root = document.getElementById(ROOT_ID);
+                if (root) renderVectorWorkspace(root);
+            }
+            return result;
+        } finally {
+            vectorBookNameSyncRunning = false;
+        }
+    }
+
+    function startManagedVectorBookNameSync() {
+        window.clearInterval(vectorBookNameSyncTimer);
+        const run = (options = {}) => {
+            syncCurrentManagedVectorBookNames(options).catch((error) => {
+                console.warn('[yuzuki-Memory] 向量书名称同步失败。', error);
+            });
+        };
+        vectorBookNameSyncTimer = window.setInterval(run, 1600);
+        run({ force: true });
     }
 
     async function saveVectorBookFromEditor(root, overlay, bookId = '') {
@@ -13702,7 +13772,10 @@
                 clearSidebarActionActive(root);
                 vectorButton.classList.add('yzm-sidebar-action-active');
                 updateWorkspaceMode(root);
-                getVectorStore()?.whenReady?.().then(() => renderVectorWorkspace(root, { selectFirstVisible: true }));
+                getVectorStore()?.whenReady?.().then(async () => {
+                    await syncCurrentManagedVectorBookNames({ force: true, render: false });
+                    renderVectorWorkspace(root, { selectFirstVisible: true });
+                });
             });
         }
 
@@ -14979,6 +15052,7 @@
         });
         bindChatContextRefresh();
         bindMemoryStateUpdateListener();
+        startManagedVectorBookNameSync();
         getVectorStore()?.whenReady?.().then(() => {
             const root = document.getElementById(ROOT_ID);
             if (root) renderVectorWorkspace(root);

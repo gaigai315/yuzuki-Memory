@@ -26,6 +26,12 @@
     const BOOK_KIND_CHARACTER_PROFILE = 'character_profile';
     const BOOK_KIND_ITEM_TRACKING = 'item_tracking';
     const BOOK_KIND_WORLD_SETTING = 'world_setting';
+    const AUTO_NAMED_BOOK_KINDS = [
+        BOOK_KIND_SUMMARY,
+        BOOK_KIND_CHARACTER_PROFILE,
+        BOOK_KIND_ITEM_TRACKING,
+        BOOK_KIND_WORLD_SETTING,
+    ];
     const MAX_VECTOR_CHUNK_CHARS = 4000;
     const VECTOR_CHUNK_OVERLAP_CHARS = 180;
     const MAX_VECTOR_BATCH_CHARS = 16000;
@@ -213,9 +219,13 @@
                 (maximum, vector) => Math.max(maximum, this.getVectorDimensionFromReference(vector)),
                 Math.max(0, Number.parseInt(book?.vectorDimension, 10) || 0)
             );
+            const kind = String(book?.kind || '').trim();
             return {
                 name: String(book?.name || fallbackName).trim() || fallbackName,
-                kind: String(book?.kind || '').trim(),
+                kind,
+                autoName: typeof book?.autoName === 'boolean'
+                    ? book.autoName
+                    : AUTO_NAMED_BOOK_KINDS.includes(kind),
                 sessionId: String(book?.sessionId || '').trim(),
                 chunks,
                 vectors: normalizedVectors,
@@ -1068,6 +1078,7 @@
             if (!book || !nextName) return false;
             if (book.name === nextName) return true;
             book.name = nextName;
+            book.autoName = false;
             book.updateTime = Date.now();
             await this.saveLibrary();
             return true;
@@ -1188,8 +1199,8 @@
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话总结';
             const oldName = String(oldBook?.name || '').trim();
-            const shouldUseSessionName = !oldName || oldName === '剧情总结归档' || oldName === '当前会话总结';
-            const nextName = shouldUseSessionName ? normalizedName : oldName;
+            const autoName = oldBook ? oldBook.autoName !== false : true;
+            const nextName = autoName ? normalizedName : (oldName || normalizedName);
             const normalizedSessionId = String(sessionId || 'default');
             const unchanged = oldBook
                 && oldBook.name === nextName
@@ -1206,12 +1217,13 @@
             this.library[id] = this.normalizeBook({
                 name: nextName,
                 kind: BOOK_KIND_SUMMARY,
+                autoName,
                 sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 ...preserved,
                 createTime: oldBook?.createTime || Date.now(),
                 updateTime: Date.now(),
-            }, normalizedName);
+            }, nextName);
             this.selectedBookId = id;
             await this.saveLibrary();
             this.toggleActiveBook(id, true);
@@ -1251,6 +1263,44 @@
                 || this.isWorldSettingBook(bookId);
         }
 
+        getManagedBookName(kind, bookName) {
+            const baseName = String(bookName || '').trim();
+            if (!baseName) return '';
+            if (kind === BOOK_KIND_SUMMARY) return baseName;
+            const suffix = {
+                [BOOK_KIND_CHARACTER_PROFILE]: '角色档案',
+                [BOOK_KIND_ITEM_TRACKING]: '物品追踪',
+                [BOOK_KIND_WORLD_SETTING]: '世界设定',
+            }[kind];
+            return suffix ? `${baseName} · ${suffix}` : '';
+        }
+
+        async syncManagedBookNames(sessionId = 'default', bookName = '') {
+            const normalizedSessionId = String(sessionId || 'default');
+            const normalizedName = String(bookName || '').trim();
+            if (!normalizedName) return { success: false, changed: 0, error: '会话名称为空' };
+
+            let changed = 0;
+            const now = Date.now();
+            Object.entries(this.library).forEach(([bookId, book]) => {
+                if (!book || String(book.sessionId || '') !== normalizedSessionId || book.autoName === false) return;
+                let kind = book.kind;
+                if (kind !== BOOK_KIND_SUMMARY) {
+                    if (this.isCharacterProfileBook(bookId)) kind = BOOK_KIND_CHARACTER_PROFILE;
+                    else if (this.isItemTrackingBook(bookId)) kind = BOOK_KIND_ITEM_TRACKING;
+                    else if (this.isWorldSettingBook(bookId)) kind = BOOK_KIND_WORLD_SETTING;
+                }
+                const expectedName = this.getManagedBookName(kind, normalizedName);
+                if (!expectedName || book.name === expectedName) return;
+                book.name = expectedName;
+                book.updateTime = now;
+                changed += 1;
+            });
+
+            if (changed) await this.saveLibrary();
+            return { success: true, changed, sessionId: normalizedSessionId, name: normalizedName };
+        }
+
         getActiveBooksByKind(kind = '') {
             const expected = String(kind || '').trim();
             return this.getActiveBooks().filter((bookId) => {
@@ -1270,8 +1320,10 @@
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话角色档案';
             const normalizedSessionId = String(sessionId || 'default');
+            const autoName = oldBook ? oldBook.autoName !== false : true;
+            const nextName = autoName ? normalizedName : String(oldBook?.name || normalizedName);
             const unchanged = oldBook
-                && oldBook.name === normalizedName
+                && oldBook.name === nextName
                 && oldBook.kind === BOOK_KIND_CHARACTER_PROFILE
                 && oldBook.sessionId === normalizedSessionId
                 && this.areChunksEqual(oldBook.chunks, normalizedChunks);
@@ -1283,8 +1335,9 @@
             const preserved = this.buildPreservedVectorState(oldBook, normalizedChunks);
 
             this.library[id] = this.normalizeBook({
-                name: normalizedName,
+                name: nextName,
                 kind: BOOK_KIND_CHARACTER_PROFILE,
+                autoName,
                 sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 ...preserved,
@@ -1303,8 +1356,10 @@
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话物品追踪';
             const normalizedSessionId = String(sessionId || 'default');
+            const autoName = oldBook ? oldBook.autoName !== false : true;
+            const nextName = autoName ? normalizedName : String(oldBook?.name || normalizedName);
             const unchanged = oldBook
-                && oldBook.name === normalizedName
+                && oldBook.name === nextName
                 && oldBook.kind === BOOK_KIND_ITEM_TRACKING
                 && oldBook.sessionId === normalizedSessionId
                 && this.areChunksEqual(oldBook.chunks, normalizedChunks);
@@ -1316,14 +1371,15 @@
             const preserved = this.buildPreservedVectorState(oldBook, normalizedChunks);
 
             this.library[id] = this.normalizeBook({
-                name: normalizedName,
+                name: nextName,
                 kind: BOOK_KIND_ITEM_TRACKING,
+                autoName,
                 sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 ...preserved,
                 createTime: oldBook?.createTime || Date.now(),
                 updateTime: Date.now(),
-            }, normalizedName);
+            }, nextName);
             this.selectedBookId = id;
             await this.saveLibrary();
             this.toggleActiveBook(id, true);
@@ -1336,8 +1392,10 @@
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话世界设定';
             const normalizedSessionId = String(sessionId || 'default');
+            const autoName = oldBook ? oldBook.autoName !== false : true;
+            const nextName = autoName ? normalizedName : String(oldBook?.name || normalizedName);
             const unchanged = oldBook
-                && oldBook.name === normalizedName
+                && oldBook.name === nextName
                 && oldBook.kind === BOOK_KIND_WORLD_SETTING
                 && oldBook.sessionId === normalizedSessionId
                 && this.areChunksEqual(oldBook.chunks, normalizedChunks);
@@ -1349,14 +1407,15 @@
             const preserved = this.buildPreservedVectorState(oldBook, normalizedChunks);
 
             this.library[id] = this.normalizeBook({
-                name: normalizedName,
+                name: nextName,
                 kind: BOOK_KIND_WORLD_SETTING,
+                autoName,
                 sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 ...preserved,
                 createTime: oldBook?.createTime || Date.now(),
                 updateTime: Date.now(),
-            }, normalizedName);
+            }, nextName);
             this.selectedBookId = id;
             await this.saveLibrary();
             this.toggleActiveBook(id, true);
