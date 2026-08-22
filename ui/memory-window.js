@@ -9692,15 +9692,36 @@
         return wrap;
     }
 
+    let taskWorldbookSourcesById = new Map();
+
     function getTaskWorldbookSelection() {
-        return getWorldbookManager()?.getSelectionState?.(getState()) || { enabled: false, initialized: false, ids: [] };
+        return getWorldbookManager()?.getSelectionState?.(getState()) || {
+            enabled: false,
+            initialized: false,
+            ids: [],
+            entryIdsBySource: {},
+        };
+    }
+
+    function persistTaskWorldbookSelection(selection) {
+        saveState({ force: true, saveOrigin: 'manual' });
+        dispatchManualStateUpdated({ source: 'worldbook-selection' });
+        return selection;
     }
 
     function saveTaskWorldbookSelection(nextSelection = {}) {
         const selection = getWorldbookManager()?.applySelectionState?.(getState(), nextSelection) || null;
-        saveState({ force: true, saveOrigin: 'manual' });
-        dispatchManualStateUpdated({ source: 'worldbook-selection' });
-        return selection;
+        return persistTaskWorldbookSelection(selection);
+    }
+
+    function saveTaskWorldbookSourceSelection(source, selected) {
+        const selection = getWorldbookManager()?.applySourceSelectionState?.(getState(), source, selected) || null;
+        return persistTaskWorldbookSelection(selection);
+    }
+
+    function saveTaskWorldbookEntrySelection(source, entryIds = []) {
+        const selection = getWorldbookManager()?.applySourceEntrySelectionState?.(getState(), source, entryIds) || null;
+        return persistTaskWorldbookSelection(selection);
     }
 
     function createTaskWorldbookPanel() {
@@ -9736,31 +9757,198 @@
         return panel;
     }
 
-    function createTaskWorldbookRow(source, selection) {
+    function createTaskWorldbookRow(source) {
         const manager = getWorldbookManager();
-        const checked = selection.initialized && manager?.matchesSelection?.(source, selection.ids);
-        const row = document.createElement('label');
+        const entryState = manager?.getSourceEntrySelectionState?.(getState(), source) || {
+            sourceSelected: false,
+            selectedIds: [],
+            allEntries: [],
+        };
+        const totalCount = entryState.allEntries.length;
+        const selectedCount = entryState.selectedIds.length;
+        const checked = entryState.sourceSelected && selectedCount > 0;
+        const unavailable = totalCount === 0;
+        const row = document.createElement('div');
         row.className = checked ? 'yzm-task-worldbook-item yzm-task-worldbook-item-active' : 'yzm-task-worldbook-item';
 
+        const selectionLabel = document.createElement('label');
+        selectionLabel.className = 'yzm-task-worldbook-item-select';
         const input = document.createElement('input');
         input.type = 'checkbox';
         input.className = 'yzm-task-worldbook-choice';
         input.value = source.id;
         input.checked = !!checked;
+        input.disabled = unavailable;
+        input.setAttribute('aria-label', `选择 ${source.name}`);
 
         const body = document.createElement('span');
         body.className = 'yzm-task-worldbook-item-body';
         const name = document.createElement('strong');
         name.textContent = source.name;
-        const activeCount = Number(source.entries?.length || 0);
-        const totalCount = Number(source.totalEntries ?? activeCount);
-        const disabledText = activeCount ? '' : (totalCount > 0 ? '（无开启条目）' : '（读取失败或为空）');
-        const countText = totalCount > activeCount ? `${activeCount}/${totalCount} 条可注入` : `${activeCount} 条`;
         const meta = document.createElement('span');
-        meta.textContent = `${source.sourceLabel || '世界书'} · ${countText}${disabledText}`;
+        const status = unavailable ? '读取失败或没有条目' : `${selectedCount}/${totalCount} 条已选`;
+        meta.textContent = `${source.sourceLabel || '世界书'} · ${status}`;
         body.append(name, meta);
-        row.append(input, body);
+        selectionLabel.append(input, body);
+
+        const entryButton = createButton('', 'yzm-task-worldbook-entry-trigger');
+        entryButton.dataset.yzmTaskWorldbookSourceId = source.id;
+        entryButton.title = '选择条目';
+        entryButton.setAttribute('aria-label', `选择 ${source.name} 的条目`);
+        entryButton.disabled = unavailable;
+        entryButton.appendChild(createIconNode('fa-solid fa-list-check', ''));
+
+        row.append(selectionLabel, entryButton);
         return row;
+    }
+
+    function openTaskWorldbookEntryDialog(root, source) {
+        const manager = getWorldbookManager();
+        if (!manager || !source) return Promise.resolve({ saved: false, entryIds: [] });
+
+        const modalHost = getModalHost(root);
+        const existing = modalHost.querySelector('.yzm-worldbook-entry-modal');
+        if (typeof existing?._yzmWorldbookClose === 'function') {
+            existing._yzmWorldbookClose({ saved: false, entryIds: [] });
+        } else {
+            removePluginElement(existing);
+        }
+
+        const entryState = manager.getSourceEntrySelectionState?.(getState(), source) || {
+            configuredIds: [],
+            allEntries: [],
+        };
+        const entries = entryState.allEntries;
+        const configuredIds = new Set(entryState.configuredIds);
+        const previouslyFocused = document.activeElement;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-worldbook-entry-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-worldbook-entry-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+        dialog.setAttribute('aria-label', `${source.name} 条目选择`);
+
+        const header = document.createElement('div');
+        header.className = 'yzm-worldbook-entry-header';
+        const heading = document.createElement('div');
+        heading.className = 'yzm-worldbook-entry-heading';
+        const title = document.createElement('strong');
+        title.className = 'yzm-worldbook-entry-title';
+        title.textContent = source.name;
+        const count = document.createElement('span');
+        count.className = 'yzm-worldbook-entry-count';
+        heading.append(title, count);
+        const closeButton = createButton('', 'yzm-worldbook-entry-close');
+        closeButton.title = '关闭';
+        closeButton.setAttribute('aria-label', '关闭条目选择');
+        closeButton.appendChild(createIconNode('fa-solid fa-xmark', ''));
+        header.append(heading, closeButton);
+
+        const selectAllLabel = document.createElement('label');
+        selectAllLabel.className = 'yzm-worldbook-entry-select-all';
+        const selectAll = document.createElement('input');
+        selectAll.type = 'checkbox';
+        selectAll.className = 'yzm-worldbook-entry-select-all-input';
+        const selectAllText = document.createElement('span');
+        selectAllText.textContent = '全选';
+        selectAllLabel.append(selectAll, selectAllText);
+
+        const list = document.createElement('div');
+        list.className = 'yzm-worldbook-entry-list';
+        const choices = entries.map((entry, index) => {
+            const row = document.createElement('label');
+            row.className = 'yzm-worldbook-entry-row';
+            const input = document.createElement('input');
+            input.type = 'checkbox';
+            input.className = 'yzm-worldbook-entry-choice';
+            input.value = entry.uid;
+            input.checked = configuredIds.has(entry.uid);
+
+            const copy = document.createElement('span');
+            copy.className = 'yzm-worldbook-entry-copy';
+            const entryTitle = document.createElement('strong');
+            entryTitle.className = 'yzm-worldbook-entry-item-title';
+            entryTitle.textContent = entry.comment || `条目 ${index + 1}`;
+            const origin = document.createElement('span');
+            origin.className = entry.enabled
+                ? 'yzm-worldbook-entry-origin yzm-worldbook-entry-origin-enabled'
+                : 'yzm-worldbook-entry-origin yzm-worldbook-entry-origin-disabled';
+            origin.textContent = entry.enabled ? '酒馆开启' : '酒馆关闭';
+            const preview = document.createElement('span');
+            preview.className = 'yzm-worldbook-entry-preview';
+            preview.textContent = String(entry.content || '').replace(/\s+/g, ' ').slice(0, 180);
+            copy.append(entryTitle, origin, preview);
+            row.append(input, copy);
+            list.appendChild(row);
+            return input;
+        });
+        if (!entries.length) {
+            const empty = document.createElement('div');
+            empty.className = 'yzm-worldbook-entry-empty';
+            empty.textContent = '这个世界书没有可读取的条目。';
+            list.appendChild(empty);
+        }
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-worldbook-entry-actions';
+        const cancelButton = createButton('取消', 'yzm-worldbook-entry-cancel');
+        const confirmButton = createButton('确定', 'yzm-worldbook-entry-confirm');
+        confirmButton.disabled = entries.length === 0;
+        actions.append(cancelButton, confirmButton);
+
+        dialog.append(header, selectAllLabel, list, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        return new Promise((resolve) => {
+            let settled = false;
+            const updateSelectionMeta = () => {
+                const selectedCount = choices.filter((input) => input.checked).length;
+                count.textContent = `${selectedCount}/${choices.length} 条已选`;
+                selectAll.checked = choices.length > 0 && selectedCount === choices.length;
+                selectAll.indeterminate = selectedCount > 0 && selectedCount < choices.length;
+                selectAll.disabled = choices.length === 0;
+            };
+            const closeModal = (result) => {
+                if (settled) return;
+                settled = true;
+                removePluginElement(overlay);
+                if (previouslyFocused instanceof HTMLElement && previouslyFocused.isConnected) {
+                    previouslyFocused.focus();
+                }
+                resolve(result);
+            };
+            overlay._yzmWorldbookClose = closeModal;
+            choices.forEach((input) => input.addEventListener('change', updateSelectionMeta));
+            selectAll.addEventListener('change', () => {
+                choices.forEach((input) => { input.checked = selectAll.checked; });
+                updateSelectionMeta();
+            });
+            overlay.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape') closeModal({ saved: false, entryIds: [] });
+            });
+            overlay.addEventListener('click', (event) => {
+                if (event.target === overlay) closeModal({ saved: false, entryIds: [] });
+            });
+            closeButton.addEventListener('click', () => closeModal({ saved: false, entryIds: [] }));
+            cancelButton.addEventListener('click', () => closeModal({ saved: false, entryIds: [] }));
+            confirmButton.addEventListener('click', () => {
+                const entryIds = choices.filter((input) => input.checked).map((input) => input.value);
+                saveTaskWorldbookEntrySelection(source, entryIds);
+                closeModal({ saved: true, entryIds });
+            });
+            updateSelectionMeta();
+            closeButton.focus();
+        });
+    }
+
+    async function chooseTaskWorldbookEntries(root, source) {
+        const result = await openTaskWorldbookEntryDialog(root, source);
+        await refreshTaskWorldbookList(root);
+        return result;
     }
 
     async function refreshTaskWorldbookList(root = ensureRoot(), options = {}) {
@@ -9772,6 +9960,7 @@
         summary.textContent = selection.enabled ? `已选择 ${selection.ids.length} 本` : '未启用';
         list.hidden = !selection.enabled;
         if (!selection.enabled) {
+            taskWorldbookSourcesById = new Map();
             list.textContent = '世界书注入已关闭。';
             return;
         }
@@ -9779,13 +9968,24 @@
         try {
             const sources = await manager.listAvailableWorldbooks({ includeEntries: true, force: options.force === true });
             if (!sources.length) {
+                taskWorldbookSourcesById = new Map();
                 list.textContent = '未读取到酒馆世界书列表。';
                 return;
             }
-            const isSelectedSource = (source) => selection.initialized && manager.matchesSelection?.(source, selection.ids);
-            const displaySources = [...sources].sort((a, b) => Number(isSelectedSource(b)) - Number(isSelectedSource(a)));
-            list.replaceChildren(...displaySources.map((source) => createTaskWorldbookRow(source, selection)));
+            taskWorldbookSourcesById = new Map(sources.map((source) => [String(source.id), source]));
+            const isSelectedSource = (source) => manager.getSourceEntrySelectionState?.(getState(), source)?.sourceSelected === true;
+            const displaySources = [...sources].sort((a, b) => (
+                Number(isSelectedSource(b)) - Number(isSelectedSource(a))
+                || String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN')
+            ));
+            const selectedCount = displaySources.filter((source) => {
+                const entryState = manager.getSourceEntrySelectionState?.(getState(), source);
+                return entryState?.sourceSelected === true && entryState.selectedIds.length > 0;
+            }).length;
+            summary.textContent = `已选择 ${selectedCount} 本`;
+            list.replaceChildren(...displaySources.map((source) => createTaskWorldbookRow(source)));
         } catch (error) {
+            taskWorldbookSourcesById = new Map();
             console.warn('[yuzuki-Memory] 世界书列表渲染失败:', error);
             list.textContent = '世界书读取失败，请稍后重试。';
         }
@@ -11726,7 +11926,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】兼容 Gemini 3.6 Flash、Gemini 3.7 Flash 及其变体：批量填表和总结任务不再使用其不支持的 assistant 预填充格式。',
+            '【优化】优化世界书勾选逻辑，支持按条目选择需要注入任务的世界书内容。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -14392,6 +14592,7 @@
                 const logFilter = target?.closest?.('[data-yzm-log-level]');
                 const updateNoticeButton = target?.closest?.('[data-yzm-action="showUpdateNotice"]');
                 const worldbookRefresh = target?.closest?.('.yzm-task-worldbook-refresh');
+                const worldbookEntryButton = target?.closest?.('.yzm-task-worldbook-entry-trigger');
 
                 if (updateNoticeButton) {
                     event.preventDefault();
@@ -14404,6 +14605,14 @@
                     event.preventDefault();
                     event.stopPropagation();
                     void refreshTaskWorldbookList(root, { force: true });
+                    return;
+                }
+
+                if (worldbookEntryButton) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const source = taskWorldbookSourcesById.get(String(worldbookEntryButton.dataset.yzmTaskWorldbookSourceId || ''));
+                    if (source) void chooseTaskWorldbookEntries(root, source);
                     return;
                 }
 
@@ -14539,17 +14748,17 @@
             configView.addEventListener('change', (event) => {
                 const target = event.target;
                 if (target?.matches?.('.yzm-task-worldbook-choice')) {
-                    const container = target.closest('[data-yzm-task-worldbook-list]');
-                    const ids = Array.from(container?.querySelectorAll('.yzm-task-worldbook-choice:checked') || [])
-                        .map((input) => input.value)
-                        .filter(Boolean);
-                    saveTaskWorldbookSelection({ initialized: true, ids });
-                    const summary = root.querySelector('[data-yzm-task-worldbook-summary]');
-                    if (summary) summary.textContent = `已选择 ${ids.length} 本`;
-                    container?.querySelectorAll('.yzm-task-worldbook-item').forEach((item) => {
-                        const input = item.querySelector('.yzm-task-worldbook-choice');
-                        item.classList.toggle('yzm-task-worldbook-item-active', input?.checked === true);
-                    });
+                    const source = taskWorldbookSourcesById.get(String(target.value || ''));
+                    if (!source) {
+                        void refreshTaskWorldbookList(root);
+                        return;
+                    }
+                    if (target.checked) {
+                        void chooseTaskWorldbookEntries(root, source);
+                    } else {
+                        saveTaskWorldbookSourceSelection(source, false);
+                        void refreshTaskWorldbookList(root);
+                    }
                     return;
                 }
                 if (target?.matches?.('.yzm-auto-summary-number-input[data-yzm-auto-summary-setting]')) {

@@ -70,16 +70,27 @@
         return getRawEntries(entries).length > 0;
     }
 
-    function normalizeEntries(entries) {
+    function normalizeEntries(entries, options = {}) {
+        const includeDisabled = options.includeDisabled === true;
         return getRawEntries(entries)
-            .filter(isWorldEntryEnabled)
-            .map((entry) => (typeof entry === 'string' ? { content: entry } : (entry || {})))
-            .map((entry, index) => ({
-                uid: safeString(entry.uid ?? entry.id ?? index),
-                comment: safeString(entry.comment || entry.name || entry.title || ''),
-                content: safeString(entry.content || entry.text || entry.value || ''),
-            }))
-            .filter((entry) => entry.content);
+            .map((rawEntry, index) => {
+                const enabled = isWorldEntryEnabled(rawEntry);
+                const entry = typeof rawEntry === 'string' ? { content: rawEntry } : (rawEntry || {});
+                return {
+                    uid: safeString(entry.uid ?? entry.id ?? index) || String(index),
+                    comment: safeString(entry.comment || entry.name || entry.title || ''),
+                    content: safeString(entry.content || entry.text || entry.value || ''),
+                    enabled,
+                };
+            })
+            .filter((entry) => entry.content && (includeDisabled || entry.enabled));
+    }
+
+    function normalizeEntrySelectionMap(value) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+        return Object.fromEntries(Object.entries(value)
+            .map(([sourceId, entryIds]) => [safeString(sourceId), uniqueStrings(Array.isArray(entryIds) ? entryIds : [])])
+            .filter(([sourceId]) => sourceId));
     }
 
     function normalizeWorldInfoData(data) {
@@ -457,21 +468,23 @@
 
         async _loadWorldContent(book) {
             const name = safeString(book?.name);
-            if (!name) return { ...book, entries: [] };
+            if (!name) return { ...book, entries: [], allEntries: [], totalEntries: 0, disabledEntries: 0 };
             try {
                 let data = normalizeWorldInfoData(await this._loadWorldInfoViaFrontendModule(name));
                 if (!data) data = await fetchWorldInfoByName(name);
-                const entries = normalizeEntries(data?.entries);
+                const allEntries = normalizeEntries(data?.entries, { includeDisabled: true });
+                const entries = allEntries.filter((entry) => entry.enabled);
                 const rawEntries = getRawEntries(data?.entries);
                 return {
                     ...book,
                     entries,
+                    allEntries,
                     totalEntries: rawEntries.length,
                     disabledEntries: rawEntries.filter((entry) => !isWorldEntryEnabled(entry)).length,
                 };
             } catch (error) {
                 console.warn(`[yuzuki-Memory Worldbook] 读取世界书失败: ${name}`, error);
-                return { ...book, entries: [] };
+                return { ...book, entries: [], allEntries: [], totalEntries: 0, disabledEntries: 0 };
             }
         }
 
@@ -479,7 +492,7 @@
             const force = options.force === true;
             const includeEntries = options.includeEntries === true;
             const now = Date.now();
-            if (!force && this._cache && now - this._cacheAt < 5000 && (!includeEntries || this._cache.every((book) => Array.isArray(book.entries)))) {
+            if (!force && this._cache && now - this._cacheAt < 5000 && (!includeEntries || this._cache.every((book) => Array.isArray(book.allEntries)))) {
                 return this._cache;
             }
             const books = await this.fetchAllAvailableWorldBooks();
@@ -495,9 +508,10 @@
                     enabled: raw.enabled === true,
                     initialized: raw.initialized === true,
                     ids: Array.isArray(raw.ids) ? raw.ids.map(String).filter(Boolean) : [],
+                    entryIdsBySource: normalizeEntrySelectionMap(raw.entryIdsBySource || raw.entrySelections),
                 };
             }
-            return { enabled: false, initialized: false, ids: [] };
+            return { enabled: false, initialized: false, ids: [], entryIdsBySource: {} };
         }
 
         applySelectionState(state, nextSelection = {}) {
@@ -507,9 +521,94 @@
                 enabled: nextSelection.enabled === undefined ? current.enabled : nextSelection.enabled === true,
                 initialized: nextSelection.initialized === undefined ? current.initialized : nextSelection.initialized === true,
                 ids: uniqueStrings(nextSelection.ids === undefined ? current.ids : nextSelection.ids),
+                entryIdsBySource: normalizeEntrySelectionMap(
+                    nextSelection.entryIdsBySource === undefined ? current.entryIdsBySource : nextSelection.entryIdsBySource
+                ),
             };
             state.settings[SETTINGS_KEY] = selection;
             return selection;
+        }
+
+        _getSourceSelectionAliases(source) {
+            return uniqueStrings([source?.id, source?.name, ...(source?.legacyIds || [])]);
+        }
+
+        _findExplicitEntrySelection(selection, source) {
+            const map = selection?.entryIdsBySource || {};
+            for (const key of this._getSourceSelectionAliases(source)) {
+                if (Object.prototype.hasOwnProperty.call(map, key)) {
+                    return { initialized: true, ids: uniqueStrings(map[key]) };
+                }
+            }
+            return { initialized: false, ids: [] };
+        }
+
+        _resolveSourceEntrySelection(selection, source) {
+            const allEntries = normalizeEntries(source?.allEntries ?? source?.entries, { includeDisabled: true });
+            const availableIds = new Set(allEntries.map((entry) => entry.uid));
+            const explicit = this._findExplicitEntrySelection(selection, source);
+            const sourceSelected = selection?.initialized === true && this.matchesSelection(source, selection.ids);
+            // Existing configurations selected whole books. Preserve that behavior until the
+            // user explicitly saves an entry selection for the source.
+            const fallbackIds = sourceSelected && !explicit.initialized
+                ? allEntries.filter((entry) => entry.enabled).map((entry) => entry.uid)
+                : [];
+            const configuredIds = (explicit.initialized ? explicit.ids : fallbackIds)
+                .filter((entryId) => availableIds.has(entryId));
+            const configuredSet = new Set(configuredIds);
+            return {
+                sourceSelected,
+                explicit: explicit.initialized,
+                configuredIds,
+                selectedIds: sourceSelected ? configuredIds : [],
+                selectedEntries: sourceSelected ? allEntries.filter((entry) => configuredSet.has(entry.uid)) : [],
+                allEntries,
+            };
+        }
+
+        getSourceEntrySelectionState(state = {}, source = {}) {
+            return this._resolveSourceEntrySelection(this.getSelectionState(state), source);
+        }
+
+        applySourceSelectionState(state, source, selected) {
+            const current = this.getSelectionState(state);
+            const resolved = this._resolveSourceEntrySelection(current, source);
+            const aliases = this._getSourceSelectionAliases(source);
+            const aliasSet = new Set(aliases);
+            const ids = current.ids.filter((id) => !aliasSet.has(String(id)));
+            const sourceId = safeString(source?.id || source?.name);
+            if (selected && sourceId) ids.push(sourceId);
+
+            const entryIdsBySource = { ...current.entryIdsBySource };
+            aliases.forEach((alias) => { delete entryIdsBySource[alias]; });
+            if (sourceId && (resolved.explicit || resolved.configuredIds.length > 0)) {
+                entryIdsBySource[sourceId] = resolved.configuredIds;
+            }
+            return this.applySelectionState(state, {
+                initialized: true,
+                ids,
+                entryIdsBySource,
+            });
+        }
+
+        applySourceEntrySelectionState(state, source, entryIds = []) {
+            const current = this.getSelectionState(state);
+            const aliases = this._getSourceSelectionAliases(source);
+            const aliasSet = new Set(aliases);
+            const sourceId = safeString(source?.id || source?.name);
+            const selectedEntryIds = uniqueStrings(entryIds);
+            const ids = current.ids.filter((id) => !aliasSet.has(String(id)));
+            if (sourceId && selectedEntryIds.length > 0) ids.push(sourceId);
+
+            const entryIdsBySource = { ...current.entryIdsBySource };
+            aliases.forEach((alias) => { delete entryIdsBySource[alias]; });
+            if (sourceId) entryIdsBySource[sourceId] = selectedEntryIds;
+
+            return this.applySelectionState(state, {
+                initialized: true,
+                ids,
+                entryIdsBySource,
+            });
         }
 
         async buildWorldbookMessage(state = {}, options = {}) {
@@ -523,7 +622,10 @@
             if (!selectedSources.length) return null;
             const loadedSources = await Promise.all(selectedSources.map((source) => this._loadWorldContent(source)));
             const blocks = loadedSources.map((source) => {
-                const parts = normalizeEntries(source.entries).map((entry) => entry.content).filter(Boolean);
+                const parts = this._resolveSourceEntrySelection(selection, source)
+                    .selectedEntries
+                    .map((entry) => entry.content)
+                    .filter(Boolean);
                 if (!parts.length) return '';
                 return `【${source.name}】\n${parts.join('\n---\n')}`;
             }).filter(Boolean);
