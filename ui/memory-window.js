@@ -6494,7 +6494,11 @@
             const confirm = createButton(options.confirmLabel || '确认写入', 'yzm-add-table-confirm');
             actions.append(confirm);
 
-            dialog.append(header, meta, compare || preview, actions);
+            const body = document.createElement('div');
+            body.className = 'yzm-task-result-body';
+            body.append(compare || preview);
+
+            dialog.append(header, meta, body, actions);
             overlay.appendChild(dialog);
             modalHost.appendChild(overlay);
 
@@ -11927,6 +11931,7 @@
         const list = document.createElement('ul');
         [
             '【优化】优化世界书勾选逻辑，支持按条目选择需要注入任务的世界书内容。',
+            '【优化】优化总结优化命名问题，单条总结优化时继承原总结标题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

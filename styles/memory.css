@@ -7719,6 +7719,28 @@
 #yzm-memory-root .yzm-task-result-dialog,
 #yzm-memory-global-modal-root .yzm-task-result-dialog {
     max-height: min(82vh, 720px);
+    min-height: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-task-result-dialog > .yzm-structure-header,
+#yzm-memory-root .yzm-task-result-dialog > .yzm-task-result-meta,
+#yzm-memory-root .yzm-task-result-dialog > .yzm-task-result-actions,
+#yzm-memory-global-modal-root .yzm-task-result-dialog > .yzm-structure-header,
+#yzm-memory-global-modal-root .yzm-task-result-dialog > .yzm-task-result-meta,
+#yzm-memory-global-modal-root .yzm-task-result-dialog > .yzm-task-result-actions {
+    flex: 0 0 auto;
+}
+
+#yzm-memory-root .yzm-task-result-body,
+#yzm-memory-global-modal-root .yzm-task-result-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
 }
 
 #yzm-memory-root .yzm-update-notice-dialog {
@@ -8735,6 +8757,39 @@
     #yzm-memory-root .yzm-task-result-compare,
     #yzm-memory-global-modal-root .yzm-task-result-compare {
         grid-template-columns: minmax(0, 1fr);
+    }
+
+    #yzm-memory-root .yzm-task-result-modal,
+    #yzm-memory-global-modal-root .yzm-task-result-modal {
+        position: fixed;
+        height: 100dvh;
+        padding: 6px;
+    }
+
+    #yzm-memory-root .yzm-task-result-dialog,
+    #yzm-memory-global-modal-root .yzm-task-result-dialog {
+        width: 100%;
+        height: calc(100dvh - 12px);
+        max-height: calc(100dvh - 12px);
+        padding: 12px;
+        border-radius: 12px;
+    }
+
+    #yzm-memory-root .yzm-task-result-body > .yzm-task-result-compare,
+    #yzm-memory-global-modal-root .yzm-task-result-body > .yzm-task-result-compare {
+        grid-template-rows: repeat(2, minmax(280px, 1fr));
+        min-height: 100%;
+    }
+
+    #yzm-memory-root .yzm-task-result-compare-pane,
+    #yzm-memory-global-modal-root .yzm-task-result-compare-pane {
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+
+    #yzm-memory-root .yzm-task-result-compare-text,
+    #yzm-memory-global-modal-root .yzm-task-result-compare-text {
+        height: 100%;
+        max-height: none;
     }
 
     #yzm-memory-root .yzm-shell-body {

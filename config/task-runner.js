@@ -2307,6 +2307,53 @@
         return { ...result, success: true, count: records.length, record: records[0] || null, records, hiddenPlotSummaryCount };
     }
 
+    function replaceSingleSummaryOptimizeRecord(table, record, payload, meta = {}) {
+        const primary = getPrimaryColumn(table);
+        const previousValues = record?.values && typeof record.values === 'object' ? record.values : {};
+        const inheritedTitle = String(previousValues[primary] || previousValues.总结标题 || payload?.title || '').trim();
+        const kind = payload?.kind === 'branch' ? 'branch' : 'main';
+        const floorScope = normalizeFloorScope(meta.floorScope, getRecordFloorScope(record, getCurrentFloorScope()));
+        const range = getRangeMeta(meta.range, floorScope);
+        const values = {
+            ...previousValues,
+            [primary]: inheritedTitle,
+            核心角色: kind === 'branch' ? String(payload?.character || '').trim() : '',
+            楼层数: getRangeFloorValue(range),
+            总结内容: String(payload?.summary || '').trim(),
+            未解决问题: String(payload?.unresolved || '').trim(),
+            备注: String(payload?.remark || '').trim(),
+        };
+
+        record.values = values;
+        record.floorScope = floorScope;
+        if (kind === 'branch') {
+            const segmentValues = { ...values };
+            record.values.楼层数 = '';
+            record.values.总结内容 = '';
+            record.values.未解决问题 = '';
+            record.values.备注 = '';
+            record.summarySegments = [];
+            appendSummarySegment(record, segmentValues, {
+                autoTaskType: 'optimize',
+                range,
+                floorScope,
+            });
+        } else {
+            delete record.summarySegments;
+        }
+        record.meta = {
+            ...(record.meta || {}),
+            yzmMemoryTask: {
+                kind: 'summary',
+                summaryType: 'optimize',
+                range,
+                floorScope,
+                createdAt: Date.now(),
+            },
+        };
+        return record;
+    }
+
     function commitSummaryOptimizeResult(state, result) {
         const targets = Array.isArray(result?.targets) ? result.targets : [];
         const payloads = (Array.isArray(result?.payloads) ? result.payloads : [result?.payload].filter(Boolean)).filter((payload) => payload?.summary);
@@ -2325,6 +2372,24 @@
         if (calculatedRange.error) return { ...result, success: false, error: calculatedRange.error };
         const range = calculatedRange.range;
         const floorScope = normalizeFloorScope(result?.meta?.floorScope, calculatedRange.floorScope || getCurrentFloorScope(state));
+        const sourceKind = sourceRecords.length === 1 ? getSummaryRecordKind(sourceRecords[0]) : '';
+        const payloadKind = payloads.length === 1 ? (payloads[0]?.kind === 'branch' ? 'branch' : 'main') : '';
+        if (sourceRecords.length === 1 && payloads.length === 1 && sourceKind === payloadKind) {
+            const record = replaceSingleSummaryOptimizeRecord(table, sourceRecords[0], payloads[0], {
+                range,
+                floorScope,
+            });
+            return {
+                ...result,
+                success: true,
+                count: 1,
+                record,
+                records: [record],
+                removedCount: 1,
+                range,
+                floorText: calculatedRange.floorText || result?.floorText || '',
+            };
+        }
         state.records[FIXED_SUMMARY_TABLE_ID] = records.filter((record) => !removeIds.has(String(record?.id || '')));
         const created = payloads.map((payload) => upsertSummaryRecord(state, payload, {
             autoTaskType: 'optimize',
