@@ -90,6 +90,19 @@
         约定: 'fa-solid fa-calendar-check',
     };
     const CHARACTER_PANEL_STYLES = ['yzm-panel-blue', 'yzm-panel-green', 'yzm-panel-gold', 'yzm-panel-purple'];
+    const CHARACTER_STATUS_OVERVIEW_FIELDS = ['好感度', '疲劳值'];
+    const CHARACTER_STATUS_ATTRIBUTE_FIELDS = ['力量', '敏捷', '智力', '魅力', '幸运'];
+    const CHARACTER_STATUS_FIELD_ICONS = {
+        好感度: 'fa-solid fa-heart',
+        疲劳值: 'fa-solid fa-bolt',
+        力量: 'fa-solid fa-dumbbell',
+        敏捷: 'fa-solid fa-person-running',
+        智力: 'fa-solid fa-book-open',
+        魅力: 'fa-solid fa-star',
+        幸运: 'fa-solid fa-clover',
+        奇遇: 'fa-solid fa-compass',
+        剧情规划: 'fa-solid fa-route',
+    };
     const ITEM_FIELD_ICONS = {
         物品名称: 'fa-solid fa-tag',
         物品描述: 'fa-regular fa-rectangle-list',
@@ -191,7 +204,7 @@
         item_tracking: { queue: 'itemTracking', syncFlag: 'itemTrackingVectorSynced', label: '物品追踪' },
         world_setting: { queue: 'worldSetting', syncFlag: 'worldSettingVectorSynced', label: '世界设定' },
     };
-    const DEFAULT_STATE_REVISION = 14;
+    const DEFAULT_STATE_REVISION = 15;
     const DEFAULT_TABLES = [
         {
             id: 'plot_summary',
@@ -204,6 +217,13 @@
             name: '角色档案',
             icon: 'person',
             columns: ['角色名', '年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理', '人际关系', '着装', '#待办事项', '约定'],
+        },
+        {
+            id: 'character_status',
+            name: '角色状态',
+            icon: 'status',
+            columns: ['角色名', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'],
+            characterStatusBreaks: [3, 8],
         },
         {
             id: 'item_tracking',
@@ -295,6 +315,9 @@
                     name: table.name,
                     icon: table.icon,
                     columns: [...table.columns],
+                    ...(Array.isArray(table.characterStatusBreaks)
+                        ? { characterStatusBreaks: [...table.characterStatusBreaks] }
+                        : {}),
                     hidden: false,
                 })),
                 ...customTables,
@@ -873,7 +896,7 @@
 
     function getRecordTitle(table, record) {
         const title = getRecordValue(record, getPrimaryColumn(table));
-        if (table?.id === 'character_profile' && YuzukiMemory.CharacterNameMatcher?.getDisplayName) {
+        if (['character_profile', 'character_status'].includes(table?.id) && YuzukiMemory.CharacterNameMatcher?.getDisplayName) {
             return YuzukiMemory.CharacterNameMatcher.getDisplayName(title) || '未命名';
         }
         return title || '未命名';
@@ -1141,13 +1164,13 @@
 
     function refreshPhoneWechatCharacterAvatars(root) {
         const table = getActiveTable();
-        if (!root || table?.id !== 'character_profile') return;
+        if (!root || !['character_profile', 'character_status'].includes(table?.id)) return;
         root.querySelectorAll('.yzm-primary-character-item[data-yzm-record-id]').forEach((item) => {
             const avatar = item.querySelector('.yzm-primary-character-avatar');
             const record = getRecords(table.id).find((entry) => entry.id === item.dataset.yzmRecordId);
             if (avatar && record) applyCharacterAvatarNode(avatar, table, record);
         });
-        const detailAvatar = root.querySelector('.yzm-character-view .yzm-character-avatar');
+        const detailAvatar = root.querySelector('.yzm-character-view .yzm-character-avatar, .yzm-character-status-view .yzm-character-status-avatar');
         if (detailAvatar) applyCharacterAvatarNode(detailAvatar, table, getActiveRecord(table));
     }
 
@@ -1208,6 +1231,61 @@
         return CHARACTER_FIELD_ICONS[column] || 'fa-solid fa-note-sticky';
     }
 
+    function isCharacterStatusTransactionColumn(column) {
+        return /(奇遇|剧情|事务|规划|计划|事件|线索|目标|走向)/.test(cleanColumnName(column));
+    }
+
+    function isCharacterStatusOverviewColumn(column) {
+        const name = cleanColumnName(column);
+        if (CHARACTER_STATUS_ATTRIBUTE_FIELDS.includes(name)) return false;
+        return CHARACTER_STATUS_OVERVIEW_FIELDS.includes(name)
+            || /(好感|亲密|疲劳|体力|生命|法力|魔力|理智|心情|饥饿|压力|健康|状态)/.test(name)
+            || /(度|值|率)$/.test(name);
+    }
+
+    function getCharacterStatusBreaks(table, columnCount = table?.columns?.length || 0) {
+        const breaks = Array.isArray(table?.characterStatusBreaks)
+            ? table.characterStatusBreaks.map(Number)
+            : [];
+        if (breaks.length !== 2) return null;
+        const [overviewEnd, attributeEnd] = breaks;
+        if (!Number.isInteger(overviewEnd) || !Number.isInteger(attributeEnd)) return null;
+        if (overviewEnd < 1 || attributeEnd < overviewEnd || attributeEnd > columnCount) return null;
+        return [overviewEnd, attributeEnd];
+    }
+
+    function inferCharacterStatusColumnLayout(table) {
+        const primaryColumn = getPrimaryColumn(table);
+        const columns = (table?.columns || [])
+            .map(cleanColumnName)
+            .filter((column, index, items) => column && column !== primaryColumn && items.indexOf(column) === index);
+        const transactionColumns = columns.filter(isCharacterStatusTransactionColumn);
+        const overviewColumns = columns.filter((column) => (
+            !transactionColumns.includes(column) && isCharacterStatusOverviewColumn(column)
+        ));
+        const attributeColumns = columns.filter((column) => (
+            !transactionColumns.includes(column) && !overviewColumns.includes(column)
+        ));
+        return { overviewColumns, attributeColumns, transactionColumns };
+    }
+
+    function getCharacterStatusColumnLayout(table) {
+        const definitions = (table?.columns || []).map(normalizeColumnDefinition).filter(Boolean);
+        const breaks = getCharacterStatusBreaks(table, definitions.length);
+        if (!breaks) return inferCharacterStatusColumnLayout(table);
+
+        const [overviewEnd, attributeEnd] = breaks;
+        return {
+            overviewColumns: definitions.slice(1, overviewEnd).map(cleanColumnName).filter(Boolean),
+            attributeColumns: definitions.slice(overviewEnd, attributeEnd).map(cleanColumnName).filter(Boolean),
+            transactionColumns: definitions.slice(attributeEnd).map(cleanColumnName).filter(Boolean),
+        };
+    }
+
+    function getCharacterStatusFieldIcon(column) {
+        return CHARACTER_STATUS_FIELD_ICONS[cleanColumnName(column)] || 'fa-solid fa-chart-simple';
+    }
+
     function getItemFieldIcon(column) {
         return ITEM_FIELD_ICONS[column] || 'fa-regular fa-note-sticky';
     }
@@ -1222,6 +1300,7 @@
 
     function getGenericFieldIcon(column) {
         return CHARACTER_FIELD_ICONS[column]
+            || CHARACTER_STATUS_FIELD_ICONS[column]
             || ITEM_FIELD_ICONS[column]
             || WORLD_FIELD_ICONS[column]
             || SUMMARY_FIELD_ICONS[column]
@@ -3455,6 +3534,7 @@
         tableContent.className = 'yzm-table-content-view';
         const activeTable = getActiveTable();
         tableContent.classList.toggle('yzm-character-table-content', activeTable?.id === 'character_profile');
+        tableContent.classList.toggle('yzm-character-status-table-content', activeTable?.id === 'character_status');
         tableContent.appendChild(createTableWorkspaceView(activeTable));
         const configView = createConfigWorkspaceView();
         configView.hidden = true;
@@ -3753,6 +3833,7 @@
 
         const activeTable = getActiveTable();
         tableContent.classList.toggle('yzm-character-table-content', activeTable?.id === 'character_profile');
+        tableContent.classList.toggle('yzm-character-status-table-content', activeTable?.id === 'character_status');
         tableContent.replaceChildren(createTableWorkspaceView(activeTable));
     }
 
@@ -3798,6 +3879,8 @@
             let item;
             if (table.id === 'character_profile') {
                 item = createCharacterPrimaryItem(table, record, activeRecordId === record.id);
+            } else if (table.id === 'character_status') {
+                item = createCharacterStatusPrimaryItem(table, record, activeRecordId === record.id);
             } else if (table.id === 'item_tracking') {
                 item = createItemPrimaryItem(table, record, activeRecordId === record.id);
             } else if (table.id === 'world_setting') {
@@ -5070,6 +5153,36 @@
         return item;
     }
 
+    function createCharacterStatusPrimaryItem(table, record, isActive) {
+        const item = createButton('', isActive ? 'yzm-primary-item yzm-primary-character-item yzm-primary-status-item yzm-primary-item-active' : 'yzm-primary-item yzm-primary-character-item yzm-primary-status-item');
+
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-primary-character-avatar';
+        applyCharacterAvatarNode(avatar, table, record);
+
+        const content = document.createElement('div');
+        content.className = 'yzm-primary-character-info';
+
+        const name = document.createElement('div');
+        name.className = 'yzm-primary-character-name';
+        name.textContent = getRecordTitle(table, record);
+
+        const overview = CHARACTER_STATUS_OVERVIEW_FIELDS
+            .map((field) => {
+                const value = getRecordValue(record, field).trim();
+                return value ? `${field.replace(/值$/, '')} ${value}` : '';
+            })
+            .filter(Boolean)
+            .join(' · ');
+        const meta = document.createElement('div');
+        meta.className = 'yzm-primary-character-meta';
+        meta.textContent = overview || '尚未记录状态';
+
+        content.append(name, meta);
+        item.append(avatar, content);
+        return item;
+    }
+
     function createItemPrimaryItem(table, record, isActive) {
         const item = createButton('', isActive ? 'yzm-primary-item yzm-primary-item-card yzm-primary-item-active' : 'yzm-primary-item yzm-primary-item-card');
 
@@ -5481,6 +5594,10 @@
     function createTableWorkspaceView(table) {
         if (table?.id === 'character_profile') {
             return createCharacterProfileView(table);
+        }
+
+        if (table?.id === 'character_status') {
+            return createCharacterStatusView(table);
         }
 
         if (table?.id === 'item_tracking') {
@@ -11053,6 +11170,198 @@
         return panel;
     }
 
+    function parseCharacterStatusMetric(value = '') {
+        const text = String(value || '').trim();
+        if (!text) return { text: '—', progress: null };
+
+        const ratio = text.match(/(-?\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
+        if (ratio && Number(ratio[2]) > 0) {
+            return {
+                text,
+                progress: Math.min(100, Math.max(0, (Number(ratio[1]) / Number(ratio[2])) * 100)),
+            };
+        }
+
+        const number = text.match(/-?\d+(?:\.\d+)?/);
+        return {
+            text,
+            progress: number ? Math.min(100, Math.max(0, Number(number[0]))) : null,
+        };
+    }
+
+    function getCharacterStatusTone(column, index = 0) {
+        const name = cleanColumnName(column);
+        if (name === '好感度') return 'affection';
+        if (name === '疲劳值') return 'fatigue';
+        return ['blue', 'green', 'gold', 'purple'][index % 4];
+    }
+
+    function createCharacterStatusSectionHeading(title, iconClassName) {
+        const heading = document.createElement('div');
+        heading.className = 'yzm-character-status-section-title';
+        heading.append(createIconNode(iconClassName, ''), document.createTextNode(title));
+        return heading;
+    }
+
+    function createCharacterStatusMetric(column, value, index) {
+        const metric = parseCharacterStatusMetric(value);
+        const tone = getCharacterStatusTone(column, index);
+        const row = document.createElement('div');
+        row.className = `yzm-character-status-metric yzm-character-status-tone-${tone}`;
+
+        const heading = document.createElement('div');
+        heading.className = 'yzm-character-status-metric-heading';
+        const label = document.createElement('span');
+        label.className = 'yzm-character-status-metric-label';
+        label.append(createIconNode(getCharacterStatusFieldIcon(column), ''), document.createTextNode(column));
+        const current = document.createElement('strong');
+        current.className = 'yzm-character-status-metric-value';
+        current.textContent = metric.text;
+        heading.append(label, current);
+
+        const track = document.createElement('div');
+        track.className = 'yzm-character-status-progress';
+        track.setAttribute('role', 'progressbar');
+        track.setAttribute('aria-label', column);
+        track.setAttribute('aria-valuemin', '0');
+        track.setAttribute('aria-valuemax', '100');
+        if (metric.progress !== null) track.setAttribute('aria-valuenow', String(Math.round(metric.progress)));
+        const fill = document.createElement('span');
+        fill.style.setProperty('--yzm-character-status-progress', `${metric.progress ?? 0}%`);
+        track.appendChild(fill);
+
+        row.append(heading, track);
+        return row;
+    }
+
+    function createCharacterStatusAttribute(column, value) {
+        const item = document.createElement('div');
+        item.className = 'yzm-character-status-attribute';
+        const label = document.createElement('span');
+        label.className = 'yzm-character-status-attribute-label';
+        label.append(createIconNode(getCharacterStatusFieldIcon(column), ''), document.createTextNode(column));
+        const current = document.createElement('strong');
+        current.className = value ? 'yzm-character-status-attribute-value' : 'yzm-character-status-attribute-value yzm-character-status-empty-value';
+        current.textContent = value || '—';
+        item.append(label, current);
+        return item;
+    }
+
+    function createCharacterStatusTransaction(column, value) {
+        const item = document.createElement('article');
+        item.className = 'yzm-character-status-transaction';
+        const title = document.createElement('div');
+        title.className = 'yzm-character-status-transaction-title';
+        title.append(createIconNode(getCharacterStatusFieldIcon(column), ''), document.createTextNode(column));
+        const body = document.createElement('div');
+        body.className = value ? 'yzm-character-status-transaction-body' : 'yzm-character-status-transaction-body yzm-character-status-empty-value';
+        body.textContent = value || '暂无记录';
+        item.append(title, body);
+        return item;
+    }
+
+    function createCharacterStatusView(table) {
+        const record = getActiveRecord(table);
+        const layout = getCharacterStatusColumnLayout(table);
+        const view = document.createElement('div');
+        view.className = 'yzm-character-status-view';
+        if (record?.hidden) view.classList.add('yzm-detail-view-hidden');
+        if (!record) view.classList.add('yzm-character-status-view-empty');
+
+        const header = document.createElement('header');
+        header.className = 'yzm-character-status-header';
+        const avatar = document.createElement('div');
+        avatar.className = 'yzm-character-status-avatar';
+        avatar.setAttribute('role', 'button');
+        avatar.setAttribute('tabindex', '0');
+        avatar.setAttribute('aria-label', record ? '编辑角色状态' : '新增角色状态');
+        applyCharacterAvatarNode(avatar, table, record);
+
+        const identity = document.createElement('div');
+        identity.className = 'yzm-character-status-identity';
+        const name = document.createElement('div');
+        name.className = 'yzm-character-status-name';
+        name.textContent = record ? getRecordTitle(table, record) : (table?.name || '角色状态');
+        const label = document.createElement('div');
+        label.className = 'yzm-character-status-label';
+        label.append(createTableIcon(table), document.createTextNode(record ? (table?.name || '角色状态') : '暂无记录'));
+        identity.append(name, label);
+        header.append(avatar, identity);
+
+        if (!record) {
+            const emptyState = document.createElement('section');
+            emptyState.className = 'yzm-character-status-empty-state';
+            const emptyIcon = createIconNode('fa-solid fa-user-plus', '');
+            emptyIcon.classList.add('yzm-character-status-empty-icon');
+            const emptyText = document.createElement('span');
+            emptyText.textContent = '暂无角色状态记录';
+            const addButton = document.createElement('button');
+            addButton.type = 'button';
+            addButton.className = 'yzm-character-status-empty-add';
+            addButton.title = '新增角色状态';
+            addButton.setAttribute('aria-label', '新增角色状态');
+            addButton.appendChild(createIconNode('fa-solid fa-plus', ''));
+            emptyState.append(emptyIcon, emptyText, addButton);
+            view.append(header, emptyState);
+            return view;
+        }
+
+        const overview = document.createElement('section');
+        overview.className = 'yzm-character-status-section yzm-character-status-overview';
+        overview.appendChild(createCharacterStatusSectionHeading('状态总览', 'fa-solid fa-chart-line'));
+        const overviewBody = document.createElement('div');
+        overviewBody.className = 'yzm-character-status-overview-list';
+        layout.overviewColumns.forEach((column, index) => {
+            overviewBody.appendChild(createCharacterStatusMetric(column, getRecordValue(record, column), index));
+        });
+        if (!layout.overviewColumns.length) {
+            const empty = document.createElement('div');
+            empty.className = 'yzm-character-status-section-empty';
+            empty.textContent = '暂无状态';
+            overviewBody.appendChild(empty);
+        }
+        overview.appendChild(overviewBody);
+
+        const attributes = document.createElement('section');
+        attributes.className = 'yzm-character-status-section yzm-character-status-attributes';
+        attributes.appendChild(createCharacterStatusSectionHeading('基础属性', 'fa-solid fa-chart-simple'));
+        const attributeBody = document.createElement('div');
+        attributeBody.className = 'yzm-character-status-attribute-list';
+        layout.attributeColumns.forEach((column) => {
+            attributeBody.appendChild(createCharacterStatusAttribute(column, getRecordValue(record, column)));
+        });
+        if (!layout.attributeColumns.length) {
+            const empty = document.createElement('div');
+            empty.className = 'yzm-character-status-section-empty';
+            empty.textContent = '暂无属性';
+            attributeBody.appendChild(empty);
+        }
+        attributes.appendChild(attributeBody);
+
+        const main = document.createElement('div');
+        main.className = 'yzm-character-status-main';
+        main.append(overview, attributes);
+
+        const transactions = document.createElement('section');
+        transactions.className = 'yzm-character-status-section yzm-character-status-transactions';
+        transactions.appendChild(createCharacterStatusSectionHeading('事务', 'fa-solid fa-list-check'));
+        const transactionBody = document.createElement('div');
+        transactionBody.className = 'yzm-character-status-transaction-list';
+        layout.transactionColumns.forEach((column) => {
+            transactionBody.appendChild(createCharacterStatusTransaction(column, getRecordValue(record, column)));
+        });
+        if (!layout.transactionColumns.length) {
+            const empty = document.createElement('div');
+            empty.className = 'yzm-character-status-section-empty';
+            empty.textContent = '暂无事务';
+            transactionBody.appendChild(empty);
+        }
+        transactions.appendChild(transactionBody);
+
+        view.append(header, main, transactions);
+        return view;
+    }
+
     function createItemTrackingView(table) {
         const record = getActiveRecord(table);
         const view = document.createElement('div');
@@ -12049,11 +12358,55 @@
         return field;
     }
 
-    function readStructureColumns(textarea) {
-        return String(textarea?.value || '')
+    function parseStructureColumnsText(value) {
+        return String(value || '')
             .split(/[,，\n]/)
             .map(normalizeColumnDefinition)
             .filter(Boolean);
+    }
+
+    function readStructureColumns(textarea) {
+        return parseStructureColumnsText(textarea?.value);
+    }
+
+    function formatCharacterStatusStructure(table) {
+        const definitions = (table?.columns || []).map(normalizeColumnDefinition).filter(Boolean);
+        const breaks = getCharacterStatusBreaks(table, definitions.length);
+        if (breaks) {
+            return [
+                definitions.slice(0, breaks[0]),
+                definitions.slice(breaks[0], breaks[1]),
+                definitions.slice(breaks[1]),
+            ].map((group) => group.join(', ')).join('；');
+        }
+
+        const layout = inferCharacterStatusColumnLayout(table);
+        const definitionsByName = new Map(definitions.map((column) => [cleanColumnName(column), column]));
+        const toDefinitions = (columns) => columns.map((column) => definitionsByName.get(column)).filter(Boolean);
+        return [
+            [definitions[0], ...toDefinitions(layout.overviewColumns)].filter(Boolean),
+            toDefinitions(layout.attributeColumns),
+            toDefinitions(layout.transactionColumns),
+        ].map((group) => group.join(', ')).join('；');
+    }
+
+    function readCharacterStatusStructure(textarea) {
+        const segments = String(textarea?.value || '').split(/[;；]/);
+        if (segments.length !== 3) return null;
+
+        const seen = new Set();
+        const groups = segments.map((segment) => parseStructureColumnsText(segment).filter((column) => {
+            const name = cleanColumnName(column);
+            if (!name || seen.has(name)) return false;
+            seen.add(name);
+            return true;
+        }));
+        if (!groups[0].length) return null;
+
+        return {
+            columns: groups.flat(),
+            breaks: [groups[0].length, groups[0].length + groups[1].length],
+        };
     }
 
     function openTableEditor(root, item = getActiveTableItem(root)) {
@@ -12103,7 +12456,9 @@
         } else {
             columnsInput = document.createElement('textarea');
             columnsInput.className = 'yzm-structure-columns-input';
-            columnsInput.value = table.columns.join(', ');
+            columnsInput.value = table.id === 'character_status'
+                ? formatCharacterStatusStructure(table)
+                : table.columns.join(', ');
             columnsInput.setAttribute('aria-label', '列名列表');
             columnsWrap.appendChild(columnsInput);
         }
@@ -12121,7 +12476,9 @@
 
         const hint = document.createElement('div');
         hint.className = 'yzm-structure-hint';
-        hint.textContent = '列名用逗号分隔；# 表示自动更新时追加，* 表示自动更新只在该单元格为空时写入，用户手动修改不受限制。';
+        hint.textContent = table.id === 'character_status'
+            ? '用两个分号分为状态总览；基础属性；事务，各段列名用逗号分隔。# 表示自动更新时追加，* 表示仅在单元格为空时写入。'
+            : '列名用逗号分隔；# 表示自动更新时追加，* 表示自动更新只在该单元格为空时写入，用户手动修改不受限制。';
 
         const actions = document.createElement('div');
         actions.className = 'yzm-structure-actions';
@@ -12146,6 +12503,13 @@
 
         const applyStructure = () => {
             const nextName = nameInput.value.trim() || table.name;
+            const characterStatusStructure = table.id === 'character_status'
+                ? readCharacterStatusStructure(columnsInput)
+                : null;
+            if (table.id === 'character_status' && !characterStatusStructure) {
+                window.alert('角色状态结构需要使用两个分号，依次分隔状态总览、基础属性和事务。');
+                return;
+            }
             table.name = nextName;
             table.icon = nextIcon;
             if (specialSets) {
@@ -12157,6 +12521,9 @@
                         ...ensureMemorySummaryColumns(branchColumns, 'branch'),
                     ])
                     : uniqueNormalizedColumns([...mainColumns, ...branchColumns]);
+            } else if (characterStatusStructure) {
+                table.columns = characterStatusStructure.columns;
+                table.characterStatusBreaks = characterStatusStructure.breaks;
             } else {
                 table.columns = readStructureColumns(columnsInput);
             }
@@ -13126,6 +13493,7 @@
     function getRecordEditorLabel(table) {
         if (table?.id === 'plot_summary') return '剧情摘要';
         if (table?.id === 'character_profile') return '角色';
+        if (table?.id === 'character_status') return '角色状态';
         if (table?.id === 'item_tracking') return '物品';
         if (table?.id === 'world_setting') return '设定';
         if (table?.id === 'memory_summary') return '总结';
@@ -13136,6 +13504,7 @@
         if (table?.id === 'plot_summary') return column === '主线' || column === '支线';
         if (table?.id === 'memory_summary') return ['核心角色', '总结内容', '未解决问题', '备注'].includes(cleanColumnName(column));
         if (table?.id === 'character_profile') return getCharacterDetailColumns(table).includes(cleanColumnName(column));
+        if (table?.id === 'character_status') return isCharacterStatusTransactionColumn(column);
         const name = cleanColumnName(column);
         return name !== getPrimaryColumn(table) && !CHARACTER_MAIN_FIELDS.includes(name);
     }
@@ -13660,6 +14029,16 @@
         const sidebarToggle = root.querySelector('.yzm-sidebar-toggle');
         const primaryToggle = root.querySelector('.yzm-primary-toggle');
         applyLayoutWidths(root.querySelector('.yzm-shell'));
+
+        const emptyStatusAdd = root.querySelector('.yzm-character-status-empty-add');
+        if (emptyStatusAdd && emptyStatusAdd.dataset.yzmBound !== 'true') {
+            emptyStatusAdd.dataset.yzmBound = 'true';
+            emptyStatusAdd.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openRecordEditor(root);
+            });
+        }
 
         bindColumnResizeHandle(root, sidebarToggle, {
             area: 'sidebar',
@@ -14868,7 +15247,7 @@
             });
         });
 
-        root.querySelectorAll('.yzm-character-avatar, .yzm-item-avatar, .yzm-world-avatar, .yzm-summary-avatar, .yzm-generic-table-avatar').forEach((avatar) => {
+        root.querySelectorAll('.yzm-character-avatar, .yzm-character-status-avatar, .yzm-item-avatar, .yzm-world-avatar, .yzm-summary-avatar, .yzm-generic-table-avatar').forEach((avatar) => {
             if (avatar.dataset.yzmBound === 'true') return;
             avatar.dataset.yzmBound = 'true';
             const openEditor = (event) => {

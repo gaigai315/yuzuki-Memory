@@ -2600,6 +2600,12 @@
     overflow: hidden;
 }
 
+#yzm-memory-root .yzm-table-content-view.yzm-character-status-table-content {
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
 #yzm-memory-root .yzm-config-primary-header,
 #yzm-memory-root .yzm-api-primary-header,
 #yzm-memory-root .yzm-trace-primary-header,
@@ -12360,5 +12366,447 @@
         max-width: calc(100% - 24px);
         height: calc(100% - 24px);
         max-height: calc(100% - 24px);
+    }
+}
+
+/* Character status table */
+#yzm-memory-root .yzm-character-status-view {
+    display: grid;
+    grid-template-rows: auto auto auto;
+    align-content: start;
+    gap: 16px;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    min-height: 0;
+    height: 100%;
+    padding: 18px;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-status-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    min-width: 0;
+    padding: 0 2px 16px;
+    border-bottom: 1px solid var(--yzm-divider);
+}
+
+#yzm-memory-root .yzm-character-status-avatar {
+    display: flex;
+    flex: 0 0 74px;
+    align-items: center;
+    justify-content: center;
+    width: 74px;
+    height: 74px;
+    padding: 0;
+    overflow: hidden;
+    color: var(--yzm-icon);
+    background: var(--yzm-input-bg);
+    border: 1px dashed var(--yzm-border);
+    border-radius: 50%;
+    box-sizing: border-box;
+    cursor: pointer;
+    font-size: 28px;
+    transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+#yzm-memory-root .yzm-character-status-avatar:hover,
+#yzm-memory-root .yzm-character-status-avatar:focus-visible {
+    background: var(--yzm-hover);
+    border-color: var(--yzm-icon);
+    outline: 0;
+    transform: translateY(-1px);
+}
+
+#yzm-memory-root .yzm-character-status-avatar.yzm-phone-wechat-avatar {
+    color: inherit;
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+}
+
+#yzm-memory-root .yzm-character-status-avatar.yzm-phone-wechat-avatar > *,
+#yzm-memory-root .yzm-character-status-avatar.yzm-phone-wechat-avatar img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    object-fit: cover;
+    border-radius: inherit;
+}
+
+#yzm-memory-root .yzm-character-status-identity {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-character-status-name {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--yzm-title);
+    font-size: 21px;
+    font-weight: 700;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-character-status-label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    color: var(--yzm-muted);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-character-status-label i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-character-status-main {
+    display: grid;
+    grid-template-columns: minmax(260px, 1.35fr) minmax(210px, 0.85fr);
+    align-items: start;
+    gap: 20px;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-status-section {
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-status-section-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 32px;
+    margin-bottom: 8px;
+    color: var(--yzm-title);
+    font-size: 15px;
+    font-weight: 700;
+}
+
+#yzm-memory-root .yzm-character-status-section-title i {
+    width: 18px;
+    color: var(--yzm-icon);
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-character-status-overview-list,
+#yzm-memory-root .yzm-character-status-attribute-list {
+    display: grid;
+    align-content: start;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 8px;
+}
+
+#yzm-memory-root .yzm-character-status-metric {
+    --yzm-character-status-accent: var(--yzm-selected-color);
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--yzm-border-soft);
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-status-metric:last-child {
+    border-bottom: 0;
+}
+
+#yzm-memory-root .yzm-character-status-tone-affection {
+    --yzm-character-status-accent: var(--yzm-todo-high);
+}
+
+#yzm-memory-root .yzm-character-status-tone-fatigue,
+#yzm-memory-root .yzm-character-status-tone-gold {
+    --yzm-character-status-accent: var(--yzm-todo-medium);
+}
+
+#yzm-memory-root .yzm-character-status-tone-green {
+    --yzm-character-status-accent: var(--yzm-todo-low);
+}
+
+#yzm-memory-root .yzm-character-status-tone-purple {
+    --yzm-character-status-accent: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-character-status-metric-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-character-status-metric-label,
+#yzm-memory-root .yzm-character-status-attribute-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--yzm-title);
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-character-status-metric-label i {
+    width: 18px;
+    color: var(--yzm-character-status-accent);
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-character-status-metric-value,
+#yzm-memory-root .yzm-character-status-attribute-value {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 52%;
+    color: var(--yzm-text);
+    font-size: 13px;
+    font-weight: 700;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+}
+
+#yzm-memory-root .yzm-character-status-progress {
+    width: 100%;
+    height: 7px;
+    overflow: hidden;
+    background: var(--yzm-input-bg);
+    border-radius: 4px;
+}
+
+#yzm-memory-root .yzm-character-status-progress > span {
+    display: block;
+    width: var(--yzm-character-status-progress, 0%);
+    height: 100%;
+    background: var(--yzm-character-status-accent);
+    border-radius: inherit;
+    transition: width 180ms ease;
+}
+
+#yzm-memory-root .yzm-character-status-attribute {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(44px, auto);
+    gap: 12px;
+    align-items: center;
+    min-height: 44px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--yzm-border-soft);
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-status-attribute:last-child {
+    border-bottom: 0;
+}
+
+#yzm-memory-root .yzm-character-status-attribute-label i {
+    width: 18px;
+    color: var(--yzm-icon);
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-character-status-attribute-value {
+    max-width: none;
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+    text-align: right;
+}
+
+#yzm-memory-root .yzm-character-status-view-empty {
+    grid-template-rows: auto auto;
+}
+
+#yzm-memory-root .yzm-character-status-empty-state {
+    display: grid;
+    align-content: center;
+    justify-items: center;
+    gap: 10px;
+    min-height: 150px;
+    padding: 24px 16px;
+    color: var(--yzm-muted);
+    background: var(--yzm-row-bg);
+    border: 1px dashed var(--yzm-border);
+    border-radius: 8px;
+    box-sizing: border-box;
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-character-status-empty-icon {
+    color: var(--yzm-icon);
+    font-size: 24px;
+}
+
+#yzm-memory-root .yzm-character-status-empty-add {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    color: var(--yzm-selected-color);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 50%;
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease, transform 160ms ease;
+}
+
+#yzm-memory-root .yzm-character-status-empty-add:hover,
+#yzm-memory-root .yzm-character-status-empty-add:focus-visible {
+    background: var(--yzm-hover);
+    border-color: var(--yzm-icon);
+    outline: 0;
+    transform: translateY(-1px);
+}
+
+#yzm-memory-root .yzm-character-status-transactions {
+    align-self: start;
+    padding-top: 2px;
+    border-top: 1px solid var(--yzm-border-soft);
+}
+
+#yzm-memory-root .yzm-character-status-transaction-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    min-width: 0;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-character-status-transaction {
+    min-width: 0;
+    overflow: hidden;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 8px;
+}
+
+#yzm-memory-root .yzm-character-status-transaction-title {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 38px;
+    padding: 0 12px;
+    color: var(--yzm-title);
+    background: var(--yzm-surface-strong);
+    border-bottom: 1px solid var(--yzm-border-soft);
+    box-sizing: border-box;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+#yzm-memory-root .yzm-character-status-transaction-title i {
+    color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-character-status-transaction-body {
+    min-height: 74px;
+    padding: 11px 12px;
+    color: var(--yzm-text);
+    box-sizing: border-box;
+    font-size: 13px;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+#yzm-memory-root .yzm-character-status-empty-value,
+#yzm-memory-root .yzm-character-status-section-empty {
+    color: var(--yzm-muted);
+    font-weight: 400;
+}
+
+#yzm-memory-root .yzm-character-status-section-empty {
+    min-height: 48px;
+    padding: 14px;
+    box-sizing: border-box;
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-metric-value,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-attribute-value,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-transaction-body {
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+}
+
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-avatar,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-section-title i,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-metric-label i,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-attribute-label i,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-transaction-title i {
+    color: var(--yzm-muted);
+}
+
+@media (max-width: 760px) {
+    #yzm-memory-root .yzm-character-status-view {
+        grid-template-rows: auto auto auto;
+        height: 100%;
+        min-height: 0;
+        width: calc(100% - 16px);
+        max-width: calc(100% - 16px);
+        gap: 12px;
+        padding: 10px;
+    }
+
+    #yzm-memory-root .yzm-character-status-header {
+        gap: 12px;
+        padding-bottom: 12px;
+    }
+
+    #yzm-memory-root .yzm-character-status-avatar {
+        flex-basis: 60px;
+        width: 60px;
+        height: 60px;
+        font-size: 23px;
+    }
+
+    #yzm-memory-root .yzm-character-status-name {
+        font-size: 18px;
+    }
+
+    #yzm-memory-root .yzm-character-status-main,
+    #yzm-memory-root .yzm-character-status-transaction-list {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 12px;
+    }
+
+    #yzm-memory-root .yzm-character-status-section-title {
+        min-height: 28px;
+        margin-bottom: 6px;
+        font-size: 14px;
+    }
+
+    #yzm-memory-root .yzm-character-status-metric {
+        padding: 10px 11px;
+    }
+
+    #yzm-memory-root .yzm-character-status-transaction-body {
+        min-height: 58px;
     }
 }

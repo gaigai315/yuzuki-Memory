@@ -36,6 +36,18 @@
             });
     }
 
+    function normalizeCharacterStatusBreaks(table, columns) {
+        if (table?.id !== 'character_status') return null;
+        const breaks = Array.isArray(table?.characterStatusBreaks)
+            ? table.characterStatusBreaks.map(Number)
+            : [];
+        if (breaks.length !== 2) return null;
+        const [overviewEnd, attributeEnd] = breaks;
+        if (!Number.isInteger(overviewEnd) || !Number.isInteger(attributeEnd)) return null;
+        if (overviewEnd < 1 || attributeEnd < overviewEnd || attributeEnd > columns.length) return null;
+        return [overviewEnd, attributeEnd];
+    }
+
     function sanitizeId(value, fallback = 'table') {
         const text = String(value || '').trim()
             .replace(/[^\w\u4e00-\u9fa5-]+/g, '_')
@@ -126,11 +138,15 @@
         const usedIds = new Set();
         const normalizedTables = tables.map((table, index) => {
             const id = uniqueId(table?.id || table?.name || `table_${index + 1}`, usedIds);
+            const columns = uniqueColumns(table?.columns);
+            const normalizedColumns = columns.length ? columns : ['名称', '内容'];
+            const characterStatusBreaks = normalizeCharacterStatusBreaks({ ...table, id }, normalizedColumns);
             return {
                 id,
                 name: String(table?.name || `未命名表${index + 1}`),
                 icon: String(table?.icon || (id === 'memory_summary' ? 'memory_book' : 'note')),
-                columns: uniqueColumns(table?.columns).length ? uniqueColumns(table.columns) : ['名称', '内容'],
+                columns: normalizedColumns,
+                ...(characterStatusBreaks ? { characterStatusBreaks } : {}),
                 hidden: !!table?.hidden,
             };
         });
@@ -320,6 +336,9 @@
                 name: String(table?.name || ''),
                 icon: String(table?.icon || ''),
                 columns: Array.isArray(table?.columns) ? [...table.columns] : [],
+                ...(Array.isArray(table?.characterStatusBreaks)
+                    ? { characterStatusBreaks: [...table.characterStatusBreaks] }
+                    : {}),
                 hidden: !!table?.hidden,
             })),
             records: Object.fromEntries(tables.map((table) => [

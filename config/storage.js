@@ -615,6 +615,27 @@
         return matchesDefaultShape && allRawColumnsPrefixed ? [...fallbackColumns] : rawColumns;
     }
 
+    function normalizeCharacterStatusBreaks(table, columns, fallbackTable = null) {
+        if (table?.id !== 'character_status') return null;
+        const validate = (value) => {
+            const breaks = Array.isArray(value) ? value.map(Number) : [];
+            if (breaks.length !== 2) return null;
+            const [overviewEnd, attributeEnd] = breaks;
+            if (!Number.isInteger(overviewEnd) || !Number.isInteger(attributeEnd)) return null;
+            if (overviewEnd < 1 || attributeEnd < overviewEnd || attributeEnd > columns.length) return null;
+            return [overviewEnd, attributeEnd];
+        };
+
+        const stored = validate(table?.characterStatusBreaks);
+        if (stored) return stored;
+
+        const fallbackBreaks = validate(fallbackTable?.characterStatusBreaks);
+        const fallbackColumns = Array.isArray(fallbackTable?.columns) ? fallbackTable.columns : [];
+        const matchesFallback = columns.length === fallbackColumns.length
+            && columns.every((column, index) => cleanColumnName(column) === cleanColumnName(fallbackColumns[index]));
+        return matchesFallback ? fallbackBreaks : null;
+    }
+
     function normalizeState(rawState, fallbackState) {
         const fallback = clone(fallbackState);
         if (!rawState || typeof rawState !== 'object') {
@@ -632,24 +653,43 @@
         const tables = Array.isArray(rawState.tables) && rawState.tables.length > 0
             ? rawState.tables
                 .filter((table) => table && typeof table === 'object')
-                .map((table, index) => ({
-                    id: String(table.id || `table_${index}_${Date.now()}`),
-                    name: String((String(table.id || '').startsWith('custom_') && fallback.tables?.find((entry) => entry.id === table.id)?.name) || table.name || `未命名表${index + 1}`),
-                    icon: String((String(table.id || '').startsWith('custom_') && fallback.tables?.find((entry) => entry.id === table.id)?.icon) || table.icon || 'summary'),
-                    columns: normalizeTableColumns(table, fallback, { rawDefaultRevision }),
-                    hidden: !!table.hidden,
-                }))
+                .map((table, index) => {
+                    const id = String(table.id || `table_${index}_${Date.now()}`);
+                    const fallbackTable = fallback.tables?.find((entry) => entry.id === id) || null;
+                    const columns = normalizeTableColumns(table, fallback, { rawDefaultRevision });
+                    const characterStatusBreaks = normalizeCharacterStatusBreaks(table, columns, fallbackTable);
+                    return {
+                        id,
+                        name: String((id.startsWith('custom_') && fallbackTable?.name) || table.name || `未命名表${index + 1}`),
+                        icon: String((id.startsWith('custom_') && fallbackTable?.icon) || table.icon || 'summary'),
+                        columns,
+                        ...(characterStatusBreaks ? { characterStatusBreaks } : {}),
+                        hidden: !!table.hidden,
+                    };
+                })
             : fallback.tables;
         const tableIds = new Set(tables.map((table) => table.id));
-        (Array.isArray(fallback.tables) ? fallback.tables : []).forEach((table) => {
+        const fallbackTables = Array.isArray(fallback.tables) ? fallback.tables : [];
+        fallbackTables.forEach((table, fallbackIndex) => {
             if (!table?.id || tableIds.has(table.id)) return;
-            tables.push({
+            const normalizedTable = {
                 id: String(table.id),
                 name: String(table.name || `未命名表${tables.length + 1}`),
                 icon: String(table.icon || 'summary'),
                 columns: Array.isArray(table.columns) ? [...table.columns] : ['名称', '内容'],
+                ...(Array.isArray(table.characterStatusBreaks)
+                    ? { characterStatusBreaks: [...table.characterStatusBreaks] }
+                    : {}),
                 hidden: !!table.hidden,
-            });
+            };
+            const nextDefaultTable = fallbackTables
+                .slice(fallbackIndex + 1)
+                .find((entry) => entry?.id && tableIds.has(entry.id));
+            const insertIndex = nextDefaultTable
+                ? tables.findIndex((entry) => entry.id === nextDefaultTable.id)
+                : -1;
+            if (insertIndex >= 0) tables.splice(insertIndex, 0, normalizedTable);
+            else tables.push(normalizedTable);
             tableIds.add(table.id);
         });
 

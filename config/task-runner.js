@@ -78,6 +78,18 @@
             || autoSummaryPromptOpen;
     }
 
+    function isForegroundGenerationBusy() {
+        const ctx = getContext();
+        return window.is_send_press === true
+            || window.isStreaming === true
+            || window.isGenerating === true
+            || Number(window.yzmMemoryChatRequestActiveCount || 0) > 0
+            || ctx?.is_send_press === true
+            || ctx?.isStreaming === true
+            || ctx?.isGenerating === true
+            || ctx?.generationStarted === true;
+    }
+
     function isManualTaskBusy() {
         return window.yzmMemoryManualTaskRunning === true;
     }
@@ -835,6 +847,14 @@
 
     async function generate(messages, options = {}) {
         if (!YuzukiMemory.LlmClient) return { success: false, error: 'LLM 客户端尚未加载。' };
+        if (isForegroundGenerationBusy()) {
+            return {
+                success: false,
+                error: '正文仍在生成，记忆任务暂未执行。',
+                status: 409,
+                busy: true,
+            };
+        }
         const taskOptions = {
             ...options,
             yzmMemoryTask: buildTaskRequestMeta(options),
@@ -846,6 +866,14 @@
             ? (snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset())
             : null;
         const requestMessages = await prepareTaskMessages(messages, mode, preset, taskOptions);
+        if (isForegroundGenerationBusy()) {
+            return {
+                success: false,
+                error: '正文仍在生成，记忆任务暂未执行。',
+                status: 409,
+                busy: true,
+            };
+        }
         captureTaskRequest(requestMessages, options);
         if (mode === 'custom') {
             if (!preset) return { success: false, error: '未选择可用的 LLM API 预设。' };
@@ -3190,6 +3218,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 scheduleAutoSummary(callbacks, AUTO_TASK_MESSAGE_STABLE_MS);
                 return;
             }
+            if (isForegroundGenerationBusy()) {
+                scheduleAutoSummary(callbacks, AUTO_TASK_MESSAGE_STABLE_MS);
+                return;
+            }
             if (!isLatestAssistantMessageStable()) {
                 scheduleAutoSummary(callbacks, AUTO_TASK_MESSAGE_STABLE_MS);
                 return;
@@ -3323,18 +3355,41 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         refreshAutoTaskBaseline();
         clampPointersToChatLength(getChatLength(), 'bind');
         const ctx = getContext();
-        const eventSource = ctx?.eventSource;
-        const eventTypes = ctx?.event_types;
-        if (eventSource && eventTypes) {
+        const eventSource = ctx?.eventSource || window.eventSource;
+        const eventTypes = ctx?.event_types || window.event_types || {};
+        if (eventSource && typeof eventSource.on === 'function') {
+            const bindEvents = (eventNames, handler) => {
+                [...new Set(eventNames.filter(Boolean))].forEach((eventName) => {
+                    eventSource.on(eventName, handler);
+                });
+            };
             const onCharacterRendered = () => {
                 markLatestAssistantMessageActivity();
                 armAutoTaskAfterGeneration(callbacks);
+            };
+            const onGenerationStarted = () => {
+                window.clearTimeout(autoSummaryTimer);
+                autoSummaryTimer = null;
+            };
+            const onGenerationFinished = () => {
+                markLatestAssistantMessageActivity();
+                armAutoTaskAfterGeneration(callbacks);
+                if (!autoSummaryRunning && (autoTaskArmed || autoTaskRetryPending)) {
+                    scheduleAutoSummary(callbacks, AUTO_TASK_MESSAGE_STABLE_MS);
+                }
             };
             const onMessageDeleted = (chatLength) => {
                 clampPointersToChatLength(chatLength, 'message_deleted');
                 refreshAutoTaskBaseline();
             };
             if (eventTypes.CHARACTER_MESSAGE_RENDERED) eventSource.on?.(eventTypes.CHARACTER_MESSAGE_RENDERED, onCharacterRendered);
+            bindEvents([eventTypes.GENERATION_STARTED, 'generation_started'], onGenerationStarted);
+            bindEvents([
+                eventTypes.GENERATION_ENDED,
+                eventTypes.GENERATION_STOPPED,
+                'generation_ended',
+                'generation_stopped',
+            ], onGenerationFinished);
             if (eventTypes.MESSAGE_DELETED) eventSource.on?.(eventTypes.MESSAGE_DELETED, onMessageDeleted);
         }
         window.addEventListener('yzm-memory-session-ready', () => {
