@@ -674,7 +674,7 @@
         const storage = YuzukiMemory.Storage;
         if (!injector || !storage) return chat;
 
-        if (window.isSummarizing || options.disableMemoryInjection === true) {
+        if (options.disableMemoryInjection === true) {
             return sanitizeMemoryFromChat(chat);
         }
 

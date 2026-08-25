@@ -881,10 +881,6 @@
             logVectorInfo('跳过：向量模块未加载', null, 'warn');
             return '';
         }
-        if (window.isSummarizing) {
-            logVectorInfo('跳过：当前正在总结');
-            return '';
-        }
         const settings = client.loadSettings();
         if (!settings.enabled) {
             logVectorInfo('跳过：新版向量召回未启用');
@@ -991,7 +987,6 @@
     function classifyMemoryInjectionRequest(body) {
         const phonePermissions = getPhoneMemoryPermissions(body);
         if (phonePermissions) return { allowed: true, reason: 'phone', phonePermissions };
-        if (window.isSummarizing) return { allowed: false, reason: 'memory-task', phonePermissions: null };
         if (body?.dryRun || body?.dry_run || body?.isDryRun || body?.quiet || body?.bg || body?.no_update) {
             return { allowed: false, reason: 'background-flags', phonePermissions: null };
         }

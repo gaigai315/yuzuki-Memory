@@ -60,11 +60,16 @@
     let autoTaskArmed = false;
     let autoTaskSessionId = '';
     let autoTaskBaselineChatLength = 0;
+    let autoTaskBaselineAssistantKey = '';
     let autoTaskSessionPollTimer = null;
     let autoTaskCallbacks = {};
     let autoTaskMessageSignature = '';
     let autoTaskMessageStableSince = 0;
+    let autoTaskRetryPending = false;
+    let autoTaskRetryAttempt = 0;
     const AUTO_TASK_MESSAGE_STABLE_MS = 1200;
+    const AUTO_TASK_RETRY_BASE_MS = 2500;
+    const AUTO_TASK_RETRY_MAX_MS = 30000;
 
     function isPluginTaskBusy() {
         return window.isSummarizing === true
@@ -77,6 +82,29 @@
         return window.yzmMemoryManualTaskRunning === true;
     }
 
+    function resetAutoTaskRetry() {
+        autoTaskRetryPending = false;
+        autoTaskRetryAttempt = 0;
+    }
+
+    function queueAutoTaskRetry() {
+        autoTaskRetryPending = true;
+        autoTaskRetryAttempt += 1;
+        autoTaskArmed = true;
+        return Math.min(
+            AUTO_TASK_RETRY_MAX_MS,
+            AUTO_TASK_RETRY_BASE_MS * (2 ** Math.min(autoTaskRetryAttempt - 1, 4))
+        );
+    }
+
+    function isRetryableAutoTaskFailure(failure) {
+        if (failure?.aborted === true) return false;
+        const status = Number(failure?.status ?? failure?.upstreamError?.code);
+        if ([408, 409, 425, 429, 500, 502, 503, 504].includes(status)) return true;
+        const detail = String(failure?.error?.message || failure?.error || failure?.message || '').toLowerCase();
+        return /(?:busy|concurr|parallel|already generating|generation in progress|rate.?limit|too many requests|timeout|timed out|network|fetch failed|socket|econn|gateway|temporar|正在生成|生成中|请求进行中|并发|繁忙|限流|超时|网关)/i.test(detail);
+    }
+
     function formatDisplayFloorRange(start, end) {
         const from = Math.max(0, Math.round(Number(start) || 0));
         const exclusiveEnd = Math.max(from, Math.round(Number(end) || 0));
@@ -85,11 +113,14 @@
 
     function notifyAutoTaskFailure(task = {}, error = '', callbacks = {}) {
         const taskTitle = String(task?.title || '自动记忆任务').trim();
-        const message = String(error?.message || error || '未知错误').trim();
+        const failure = error && typeof error === 'object' ? error : { error };
+        const message = String(failure?.error?.message || failure?.error || failure?.message || '未知错误').trim();
         const range = Number.isFinite(Number(task?.start)) && Number.isFinite(Number(task?.end))
             ? `（楼层 ${formatDisplayFloorRange(task.start, task.end)}）`
             : '';
-        const retryHint = task?.type === 'trace' ? '填表指针未推进，后续正文结束后会继续尝试补跑。' : '总结指针未推进，后续正文结束后会继续尝试补跑。';
+        const retryHint = isRetryableAutoTaskFailure(failure)
+            ? '指针未推进，任务已保留在后台队列并将自动重试。'
+            : (task?.type === 'trace' ? '填表指针未推进，后续正文结束后会继续尝试补跑。' : '总结指针未推进，后续正文结束后会继续尝试补跑。');
         const notification = `${taskTitle}失败${range}。${retryHint}`;
         const detail = message
             ? `${taskTitle}失败${range}：${message}\n${retryHint}`
@@ -128,7 +159,7 @@
         const range = Number.isFinite(Number(task?.start)) && Number.isFinite(Number(task?.end))
             ? `（楼层 ${formatDisplayFloorRange(task.start, task.end)}）`
             : '';
-        const detail = `${taskTitle}已开始${range}，正在请求填表 API，请等待完成后再发送正文。`;
+        const detail = `${taskTitle}已开始${range}，正在后台请求填表 API，可继续发送正文。`;
         try {
             if (typeof toastr !== 'undefined' && typeof toastr.info === 'function') {
                 toastr.info(detail, '柚月记忆', { timeOut: 5000, preventDuplicates: true });
@@ -366,7 +397,9 @@
         window.clearTimeout(autoSummaryTimer);
         autoTaskSessionId = getCurrentSessionId();
         autoTaskBaselineChatLength = getChatLength();
+        autoTaskBaselineAssistantKey = getLatestAssistantMessageKey();
         autoTaskArmed = false;
+        resetAutoTaskRetry();
         autoTaskMessageSignature = '';
         autoTaskMessageStableSince = 0;
     }
@@ -380,7 +413,9 @@
     function cancelPendingAutoTask() {
         window.clearTimeout(autoSummaryTimer);
         autoTaskArmed = false;
+        resetAutoTaskRetry();
         autoTaskBaselineChatLength = getChatLength();
+        autoTaskBaselineAssistantKey = getLatestAssistantMessageKey();
         autoTaskMessageSignature = '';
         autoTaskMessageStableSince = 0;
     }
@@ -390,6 +425,11 @@
         if (!latest) return '';
         const swipeId = Number(latest.message?.swipe_id ?? 0);
         return [getCurrentSessionId(), latest.index, swipeId, latest.text].join('\n');
+    }
+
+    function getLatestAssistantMessageKey() {
+        const latest = getLatestAssistantChatMessage();
+        return latest ? [getCurrentSessionId(), latest.index].join('\n') : '';
     }
 
     function markLatestAssistantMessageActivity() {
@@ -795,34 +835,28 @@
 
     async function generate(messages, options = {}) {
         if (!YuzukiMemory.LlmClient) return { success: false, error: 'LLM 客户端尚未加载。' };
-        const previousSummarizing = window.isSummarizing;
-        window.isSummarizing = true;
-        try {
-            const taskOptions = {
-                ...options,
-                yzmMemoryTask: buildTaskRequestMeta(options),
-                yzmMemoryInternalApi: true,
-            };
-            const snapshot = options.llmSnapshot && typeof options.llmSnapshot === 'object' ? options.llmSnapshot : null;
-            const mode = snapshot?.mode || getLlmMode();
-            const preset = mode === 'custom'
-                ? (snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset())
-                : null;
-            const requestMessages = await prepareTaskMessages(messages, mode, preset, taskOptions);
-            captureTaskRequest(requestMessages, options);
-            if (mode === 'custom') {
-                if (!preset) return { success: false, error: '未选择可用的 LLM API 预设。' };
-                const result = await YuzukiMemory.LlmClient.generateWithCustom(preset, requestMessages, { stream: preset.stream !== false, ...taskOptions });
-                return normalizeGenerationResult(result);
-            }
-            const shouldStream = options.stream !== undefined
-                ? options.stream !== false
-                : !['trace', 'traceOptimize'].includes(String(options.kind || ''));
-            const result = await YuzukiMemory.LlmClient.generateWithTavern(requestMessages, { ...taskOptions, stream: shouldStream });
+        const taskOptions = {
+            ...options,
+            yzmMemoryTask: buildTaskRequestMeta(options),
+            yzmMemoryInternalApi: true,
+        };
+        const snapshot = options.llmSnapshot && typeof options.llmSnapshot === 'object' ? options.llmSnapshot : null;
+        const mode = snapshot?.mode || getLlmMode();
+        const preset = mode === 'custom'
+            ? (snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset())
+            : null;
+        const requestMessages = await prepareTaskMessages(messages, mode, preset, taskOptions);
+        captureTaskRequest(requestMessages, options);
+        if (mode === 'custom') {
+            if (!preset) return { success: false, error: '未选择可用的 LLM API 预设。' };
+            const result = await YuzukiMemory.LlmClient.generateWithCustom(preset, requestMessages, { stream: preset.stream !== false, ...taskOptions });
             return normalizeGenerationResult(result);
-        } finally {
-            window.isSummarizing = previousSummarizing;
         }
+        const shouldStream = options.stream !== undefined
+            ? options.stream !== false
+            : !['trace', 'traceOptimize'].includes(String(options.kind || ''));
+        const result = await YuzukiMemory.LlmClient.generateWithTavern(requestMessages, { ...taskOptions, stream: shouldStream });
+        return normalizeGenerationResult(result);
     }
 
     function detectUpstreamErrorResponse(text = '') {
@@ -2914,6 +2948,25 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return null;
     }
 
+    function armExistingPendingAutoTask(callbacks = {}) {
+        if (!isAutoTaskStateReady(callbacks) || !isLatestAssistantMessage()) return false;
+        const state = callbacks.getState?.();
+        if (!state) return false;
+        const task = buildPendingAutoTask(
+            normalizePointers(state),
+            getChatLength(),
+            getAutoSummarySettings(),
+            getPluginSettings()
+        );
+        if (!task) return false;
+        autoTaskArmed = true;
+        // Existing pointer backlog must bypass the new-message baseline once.
+        autoTaskRetryPending = true;
+        markLatestAssistantMessageActivity();
+        scheduleAutoSummary(callbacks, AUTO_TASK_MESSAGE_STABLE_MS);
+        return true;
+    }
+
     async function confirmAutoTask(task, callbacks = {}) {
         if (settingsSupportsDirect(callbacks) && callbacks.confirmAutoTask) {
             return callbacks.confirmAutoTask(task);
@@ -3106,31 +3159,35 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     function scheduleAutoSummary(callbacks = {}, delayMs = AUTO_TASK_MESSAGE_STABLE_MS) {
-        if (!autoTaskArmed) return;
+        if (!autoTaskArmed && !autoTaskRetryPending) return;
         window.clearTimeout(autoSummaryTimer);
         autoSummaryTimer = window.setTimeout(async () => {
-            if (!autoTaskArmed) return;
+            if (!autoTaskArmed && !autoTaskRetryPending) return;
             if (!isAutoTaskStateReady(callbacks)) {
                 autoTaskArmed = false;
+                resetAutoTaskRetry();
                 return;
             }
             const currentSessionId = getCurrentSessionId();
             const chatLength = getChatLength();
+            const latestAssistantKey = getLatestAssistantMessageKey();
             if (!currentSessionId || currentSessionId !== autoTaskSessionId) {
                 refreshAutoTaskBaseline();
                 return;
             }
-            if (chatLength <= autoTaskBaselineChatLength) {
+            if (!autoTaskRetryPending
+                && chatLength <= autoTaskBaselineChatLength
+                && latestAssistantKey === autoTaskBaselineAssistantKey) {
                 autoTaskArmed = false;
                 autoTaskBaselineChatLength = chatLength;
                 return;
             }
             if (isManualTaskBusy()) {
-                autoTaskArmed = false;
+                scheduleAutoSummary(callbacks, AUTO_TASK_MESSAGE_STABLE_MS);
                 return;
             }
             if (isPluginTaskBusy()) {
-                autoTaskArmed = false;
+                scheduleAutoSummary(callbacks, AUTO_TASK_MESSAGE_STABLE_MS);
                 return;
             }
             if (!isLatestAssistantMessageStable()) {
@@ -3148,12 +3205,21 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             const task = buildPendingAutoTask(pointers, chatLength, settings, pluginSettings);
             if (!task) {
                 autoTaskArmed = false;
+                resetAutoTaskRetry();
                 autoTaskBaselineChatLength = chatLength;
+                autoTaskBaselineAssistantKey = latestAssistantKey;
                 return;
             }
 
+            // This run owns the current trigger. A later assistant message can arm the
+            // next run while this request remains in flight.
+            autoTaskArmed = false;
+            autoTaskBaselineChatLength = chatLength;
+            autoTaskBaselineAssistantKey = latestAssistantKey;
+            autoTaskRetryPending = false;
             autoSummaryRunning = true;
             const skippedTypes = new Set();
+            let nextScheduleDelay = AUTO_TASK_MESSAGE_STABLE_MS;
             try {
                 let activeTask = task;
                 let activeState = state;
@@ -3166,7 +3232,11 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                         : await runAutoSummaryTask(activeState, activeTask, settings, callbacks);
                     if (result?.success === false) {
                         console.warn('[yuzuki-Memory] Auto task skipped:', result.error);
-                        notifyAutoTaskFailure(activeTask, result.error, callbacks);
+                        notifyAutoTaskFailure(activeTask, result, callbacks);
+                        if (isRetryableAutoTaskFailure(result)) {
+                            nextScheduleDelay = queueAutoTaskRetry();
+                            console.info(`[yuzuki-Memory] ${activeTask.title} 已保留在后台队列，${nextScheduleDelay}ms 后重试。`);
+                        }
                         break;
                     }
                     if (result?.skipped || result?.postponed) {
@@ -3182,17 +3252,49 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                         continue;
                     }
 
+                    resetAutoTaskRetry();
                     notifyAutoTaskSuccess(activeTask, result);
-                    break;
+                    activeState = callbacks.getState?.() || activeState;
+                    const nextChatLength = getChatLength();
+                    const nextAssistantKey = getLatestAssistantMessageKey();
+                    activeTask = buildPendingAutoTask(
+                        normalizePointers(activeState),
+                        nextChatLength,
+                        settings,
+                        getPluginSettings(),
+                        { skippedTypes: [...skippedTypes] }
+                    );
+                    if (!activeTask) {
+                        autoTaskArmed = false;
+                        autoTaskBaselineChatLength = nextChatLength;
+                        autoTaskBaselineAssistantKey = nextAssistantKey;
+                        break;
+                    }
+                    if (!isLatestAssistantMessageStable() || isManualTaskBusy()) {
+                        autoTaskArmed = true;
+                        break;
+                    }
+                    // Consume any foreground trigger that arrived during the previous
+                    // request; the next queued batch now owns the latest chat state.
+                    autoTaskArmed = false;
+                    autoTaskBaselineChatLength = nextChatLength;
+                    autoTaskBaselineAssistantKey = nextAssistantKey;
                 }
             } catch (error) {
                 console.warn('[yuzuki-Memory] Auto task failed:', error);
                 notifyAutoTaskFailure(task, error, callbacks);
+                if (isRetryableAutoTaskFailure(error)) {
+                    nextScheduleDelay = queueAutoTaskRetry();
+                    console.info(`[yuzuki-Memory] ${task.title} 已保留在后台队列，${nextScheduleDelay}ms 后重试。`);
+                }
             } finally {
                 autoSummaryRunning = false;
                 autoSummaryPromptOpen = false;
-                autoTaskBaselineChatLength = getChatLength();
-                autoTaskArmed = false;
+                if (autoTaskArmed || autoTaskRetryPending) {
+                    scheduleAutoSummary(callbacks, nextScheduleDelay);
+                } else {
+                    autoTaskBaselineChatLength = getChatLength();
+                }
             }
         }, delayMs);
     }
@@ -3201,13 +3303,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         if (!isAutoTaskStateReady(callbacks)) return;
         const currentSessionId = getCurrentSessionId();
         const chatLength = getChatLength();
+        const latestAssistantKey = getLatestAssistantMessageKey();
         if (!currentSessionId) return;
         if (currentSessionId !== autoTaskSessionId) {
             refreshAutoTaskBaseline();
             return;
         }
         if (!isLatestAssistantMessage()) return;
-        if (chatLength <= autoTaskBaselineChatLength) return;
+        if (chatLength <= autoTaskBaselineChatLength && latestAssistantKey === autoTaskBaselineAssistantKey) return;
         autoTaskArmed = true;
         markLatestAssistantMessageActivity();
         scheduleAutoSummary(callbacks);
@@ -3237,6 +3340,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         window.addEventListener('yzm-memory-session-ready', () => {
             refreshAutoTaskBaseline();
             clampPointersToChatLength(getChatLength(), 'session_ready');
+            armExistingPendingAutoTask(callbacks);
         });
         autoTaskSessionPollTimer = window.setInterval(() => {
             const currentSessionId = getCurrentSessionId();
@@ -3244,6 +3348,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 refreshAutoTaskBaseline();
             }
         }, 1500);
+        armExistingPendingAutoTask(callbacks);
     }
 
     YuzukiMemory.TaskRunner = Object.assign(YuzukiMemory.TaskRunner || {}, {

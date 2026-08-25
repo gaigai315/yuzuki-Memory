@@ -11939,7 +11939,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】优化部分渲染 CSS 问题。',
+            '【优化】填表和总结现在会在后台处理，生成正文时无需等待。',
+            '【优化】连续生成多条正文时，未完成的填表和总结会自动排队补齐，不再漏掉楼层。',
+            '【修复】遇到并发冲突、限流或超时会自动重试；任务成功前不会推进指针，也不会提前隐藏楼层。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

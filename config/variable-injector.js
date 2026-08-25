@@ -1743,7 +1743,7 @@
         if (!settings.injectMemoryTable && !settings.injectVectorMemory) {
             return body;
         }
-        if (window.isSummarizing || isMemoryTaskRequest(body, options)) {
+        if (isMemoryTaskRequest(body, options)) {
             cleanupVariablesInNode(body, settings);
             removeEmptyAnchorShellMessages(body);
             return body;
