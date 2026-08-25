@@ -1809,9 +1809,23 @@
         return ranges;
     }
 
+    function getSharedBranchOptimizeCharacter(records = []) {
+        const source = Array.isArray(records) ? records.filter(Boolean) : [];
+        if (!source.length || source.some((record) => getSummaryRecordKind(record) !== 'branch')) return '';
+        const characters = source.map((record) => normalizeBranchCharacterName(
+            record?.values?.核心角色
+            || record?.values?.character
+            || record?.values?.角色名
+            || record?.values?.主视角
+        ));
+        if (characters.some((character) => !character)) return '';
+        return new Set(characters).size === 1 ? characters[0] : '';
+    }
+
     function getSummaryOptimizeRange(records = [], state = null) {
+        const sourceRecords = Array.isArray(records) ? records : [];
         const fallbackFloorScope = getCurrentFloorScope(state);
-        const recordRanges = (Array.isArray(records) ? records : []).map((record) => (
+        const recordRanges = sourceRecords.map((record) => (
             getSummaryRecordOptimizeRanges(record, fallbackFloorScope)
         ));
         const knownRanges = recordRanges.flat();
@@ -1831,7 +1845,8 @@
         const scopeIds = new Set(knownRanges
             .map((range) => normalizeFloorScope(range.floorScope, fallbackFloorScope)?.id || '')
             .filter(Boolean));
-        if (scopeIds.size > 1) {
+        const sharedBranchCharacter = getSharedBranchOptimizeCharacter(sourceRecords);
+        if (scopeIds.size > 1 && !sharedBranchCharacter) {
             return {
                 range: null,
                 floorScope: null,
@@ -1842,7 +1857,9 @@
         }
         const start = Math.min(...knownRanges.map((range) => range.start));
         const end = Math.max(...knownRanges.map((range) => range.end));
-        const floorScope = normalizeFloorScope(knownRanges[0]?.floorScope, fallbackFloorScope);
+        const floorScope = scopeIds.size > 1
+            ? normalizeFloorScope(fallbackFloorScope, knownRanges[knownRanges.length - 1]?.floorScope)
+            : normalizeFloorScope(knownRanges[0]?.floorScope, fallbackFloorScope);
         return {
             range: getRangeMeta({ start, end: end + 1, floorScope }, floorScope),
             floorScope,

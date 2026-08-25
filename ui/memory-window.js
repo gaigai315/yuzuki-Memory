@@ -3311,6 +3311,8 @@
     function setTheme(shell, theme, options = {}) {
         const nextTheme = theme === 'dark' ? 'dark' : 'light';
         shell.dataset.yzmTheme = nextTheme;
+        const globalModalHost = document.getElementById(GLOBAL_MODAL_ROOT_ID);
+        if (globalModalHost) globalModalHost.dataset.yzmTheme = nextTheme;
         updateThemeButton(shell.querySelector('.yzm-theme-button'), nextTheme);
         if (!options.skipSave) saveTheme(nextTheme);
     }
@@ -5902,14 +5904,19 @@
         const list = document.createElement('div');
         list.className = 'yzm-summary-optimize-target-list yzm-summary-optimize-dialog-list';
 
-        const renderList = () => {
+        const syncSelectedCount = () => {
             const candidates = getSummaryOptimizeCandidateRecords(dialogTarget);
             const availableIds = new Set(candidates.map(({ record }) => record.id).filter(Boolean));
             selectedIds = new Set([...selectedIds].filter((id) => availableIds.has(id)));
-            list.replaceChildren();
             count.textContent = candidates.length
                 ? `已选择 ${[...selectedIds].filter((id) => availableIds.has(id)).length} / ${candidates.length} 条${dialogTarget === initialTarget ? '' : ''}`
                 : '当前分类没有可优化的总结内容';
+            return candidates;
+        };
+
+        const renderList = () => {
+            const candidates = syncSelectedCount();
+            list.replaceChildren();
             if (!candidates.length) {
                 const empty = document.createElement('div');
                 empty.className = 'yzm-summary-optimize-empty';
@@ -5954,7 +5961,9 @@
             if (!id) return;
             if (input.checked) selectedIds.add(id);
             else selectedIds.delete(id);
-            renderList();
+            input.closest('.yzm-summary-optimize-target-row')
+                ?.classList.toggle('yzm-summary-optimize-target-row-active', input.checked);
+            syncSelectedCount();
         });
         close.onclick = closeModal;
         cancel.onclick = closeModal;
@@ -5969,7 +5978,7 @@
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
         renderList();
-        confirm.focus();
+        confirm.focus({ preventScroll: true });
     }
 
     function createSummaryOptimizeTargetDialogRow(table, record, index, checked) {
@@ -11878,10 +11887,10 @@
             host = document.createElement('div');
             host.id = GLOBAL_MODAL_ROOT_ID;
             host.className = 'yzm-global-modal-root';
-            const shell = memoryRoot?.querySelector?.('.yzm-shell');
-            if (shell?.dataset?.yzmTheme) host.dataset.yzmTheme = shell.dataset.yzmTheme;
             document.body.appendChild(host);
         }
+        const shellTheme = memoryRoot?.querySelector?.('.yzm-shell')?.dataset?.yzmTheme || getSavedTheme();
+        host.dataset.yzmTheme = shellTheme === 'dark' ? 'dark' : 'light';
         bindPluginTextControlIsolation(host);
         return host;
     }
@@ -11930,8 +11939,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】优化世界书勾选逻辑，支持按条目选择需要注入任务的世界书内容。',
-            '【优化】优化总结优化命名问题，单条总结优化时继承原总结标题。',
+            '【优化】优化部分渲染 CSS 问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

@@ -3144,9 +3144,17 @@
     font-size: 12px;
 }
 
-#yzm-memory-root .yzm-summary-optimize-target-dialog {
+#yzm-memory-root .yzm-structure-dialog.yzm-summary-optimize-target-dialog {
     width: min(640px, calc(100vw - 28px));
-    max-height: min(78vh, 720px);
+    height: min(84vh, 780px, 100%);
+    max-height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-summary-optimize-target-dialog > .yzm-structure-header,
+#yzm-memory-root .yzm-summary-optimize-target-dialog > .yzm-summary-optimize-dialog-actions {
+    flex: 0 0 auto;
 }
 
 #yzm-memory-root .yzm-summary-optimize-dialog-title {
@@ -3165,12 +3173,17 @@
 
 #yzm-memory-root .yzm-summary-optimize-dialog-body {
     display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    flex: 1 1 auto;
     gap: 12px;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
 }
 
-#yzm-memory-root .yzm-summary-optimize-dialog-list {
-    max-height: min(48vh, 390px);
+#yzm-memory-root .yzm-summary-optimize-target-dialog .yzm-summary-optimize-dialog-list {
+    min-height: 0;
+    max-height: none;
     padding-right: 2px;
 }
 
@@ -7790,9 +7803,9 @@
     max-height: 52vh;
     padding: 10px;
     overflow: auto;
-    color: inherit;
-    background: var(--yzm-input-bg);
-    border: 1px solid var(--yzm-border);
+    color: var(--yzm-text) !important;
+    background: var(--yzm-input-bg) !important;
+    border: 1px solid var(--yzm-border) !important;
     border-radius: 9px;
     box-sizing: border-box;
     font: inherit;
