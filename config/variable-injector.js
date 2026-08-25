@@ -14,7 +14,7 @@
     const CHARACTER_PROFILE_TABLE_ID = 'character_profile';
     const ITEM_TRACKING_TABLE_ID = 'item_tracking';
     const WORLD_SETTING_TABLE_ID = 'world_setting';
-    const DEFAULT_STATE_REVISION = 15;
+    const DEFAULT_STATE_REVISION = 16;
     const MEMORY_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY|user|char)\s*\}\}/gi;
     const ANCHOR_VARIABLE_PATTERN = /^\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT|VECTOR_MEMORY)\s*\}\}$/i;
     const STRUCTURED_VARIABLE_PATTERN = /\{\{\s*(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS|BRANCH_SUMMARY_NAMES|MEMORY_SUMMARY(?:\s*_[^{}]+)?|MEMORY_TABLE(?:\s*_[^{}]+)?|MEMORY|MEMORY_PROMPT)\s*\}\}/gi;
@@ -69,7 +69,8 @@
             id: 'character_status',
             name: '角色状态',
             icon: 'status',
-            columns: ['角色名', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'],
+            columns: ['角色名', '住址', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'],
+            characterStatusBreaks: [2, 4, 9],
         },
         {
             id: 'item_tracking',
@@ -155,6 +156,9 @@
                     name: table.name,
                     icon: table.icon,
                     columns: [...table.columns],
+                    ...(Array.isArray(table.characterStatusBreaks)
+                        ? { characterStatusBreaks: [...table.characterStatusBreaks] }
+                        : {}),
                     hidden: false,
                 })),
                 ...customTables,

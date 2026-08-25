@@ -41,11 +41,12 @@
         const breaks = Array.isArray(table?.characterStatusBreaks)
             ? table.characterStatusBreaks.map(Number)
             : [];
-        if (breaks.length !== 2) return null;
-        const [overviewEnd, attributeEnd] = breaks;
-        if (!Number.isInteger(overviewEnd) || !Number.isInteger(attributeEnd)) return null;
-        if (overviewEnd < 1 || attributeEnd < overviewEnd || attributeEnd > columns.length) return null;
-        return [overviewEnd, attributeEnd];
+        const normalized = breaks.length === 2 ? [1, ...breaks] : breaks;
+        if (normalized.length !== 3) return null;
+        const [headerEnd, overviewEnd, attributeEnd] = normalized;
+        if (![headerEnd, overviewEnd, attributeEnd].every(Number.isInteger)) return null;
+        if (headerEnd < 1 || overviewEnd < headerEnd || attributeEnd < overviewEnd || attributeEnd > columns.length) return null;
+        return [headerEnd, overviewEnd, attributeEnd];
     }
 
     function sanitizeId(value, fallback = 'table') {

@@ -596,6 +596,12 @@
 
         const fallbackColumns = Array.isArray(fallbackTable.columns) ? fallbackTable.columns : [];
         if (String(table?.id || '').startsWith('custom_') && fallbackColumns.length) return [...fallbackColumns];
+        const legacyCharacterStatusColumns = ['角色名', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'];
+        const usesLegacyCharacterStatusDefault = table?.id === 'character_status'
+            && Number(options.rawDefaultRevision || 1) < 16
+            && rawColumns.length === legacyCharacterStatusColumns.length
+            && rawColumns.every((column, index) => column === legacyCharacterStatusColumns[index]);
+        if (usesLegacyCharacterStatusDefault) return [...fallbackColumns];
         const rawNames = rawColumns.map(cleanColumnName);
         const fallbackNames = fallbackColumns.map(cleanColumnName);
         const matchesDefaultShape = rawNames.length === fallbackNames.length
@@ -619,20 +625,32 @@
         if (table?.id !== 'character_status') return null;
         const validate = (value) => {
             const breaks = Array.isArray(value) ? value.map(Number) : [];
-            if (breaks.length !== 2) return null;
-            const [overviewEnd, attributeEnd] = breaks;
-            if (!Number.isInteger(overviewEnd) || !Number.isInteger(attributeEnd)) return null;
-            if (overviewEnd < 1 || attributeEnd < overviewEnd || attributeEnd > columns.length) return null;
-            return [overviewEnd, attributeEnd];
+            if (breaks.length !== 3) return null;
+            const [headerEnd, overviewEnd, attributeEnd] = breaks;
+            if (![headerEnd, overviewEnd, attributeEnd].every(Number.isInteger)) return null;
+            if (headerEnd < 1 || overviewEnd < headerEnd || attributeEnd < overviewEnd || attributeEnd > columns.length) return null;
+            return [headerEnd, overviewEnd, attributeEnd];
         };
-
-        const stored = validate(table?.characterStatusBreaks);
-        if (stored) return stored;
-
         const fallbackBreaks = validate(fallbackTable?.characterStatusBreaks);
         const fallbackColumns = Array.isArray(fallbackTable?.columns) ? fallbackTable.columns : [];
         const matchesFallback = columns.length === fallbackColumns.length
             && columns.every((column, index) => cleanColumnName(column) === cleanColumnName(fallbackColumns[index]));
+        const stored = validate(table?.characterStatusBreaks);
+        if (stored) return stored;
+
+        const legacyBreaks = Array.isArray(table?.characterStatusBreaks)
+            ? table.characterStatusBreaks.map(Number)
+            : [];
+        if (legacyBreaks.length === 2) {
+            const [overviewEnd, attributeEnd] = legacyBreaks;
+            const validLegacy = [overviewEnd, attributeEnd].every(Number.isInteger)
+                && overviewEnd >= 1
+                && attributeEnd >= overviewEnd
+                && attributeEnd <= columns.length;
+            if (validLegacy) return matchesFallback && fallbackBreaks
+                ? fallbackBreaks
+                : [1, overviewEnd, attributeEnd];
+        }
         return matchesFallback ? fallbackBreaks : null;
     }
 

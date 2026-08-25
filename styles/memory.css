@@ -12459,17 +12459,39 @@
     white-space: nowrap;
 }
 
-#yzm-memory-root .yzm-character-status-label {
+#yzm-memory-root .yzm-character-status-header-fields {
     display: flex;
     align-items: center;
-    gap: 7px;
+    flex-wrap: wrap;
+    gap: 6px 18px;
     min-width: 0;
-    color: var(--yzm-muted);
-    font-size: 13px;
+    max-width: 100%;
 }
 
-#yzm-memory-root .yzm-character-status-label i {
-    color: var(--yzm-icon);
+#yzm-memory-root .yzm-character-status-header-field {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+    max-width: 100%;
+}
+
+#yzm-memory-root .yzm-character-status-header-field-label {
+    flex: 0 0 auto;
+    color: var(--yzm-muted);
+    font-size: 12px;
+}
+
+#yzm-memory-root .yzm-character-status-header-field-value {
+    min-width: 0;
+    max-width: 360px;
+    overflow: hidden;
+    color: var(--yzm-text);
+    font-size: 12px;
+    font-weight: 400;
+    overflow-wrap: anywhere;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 #yzm-memory-root .yzm-character-status-main {
@@ -12750,6 +12772,7 @@
 
 #yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-metric-value,
 #yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-attribute-value,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-header-field-value,
 #yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-transaction-body {
     text-decoration: line-through;
     text-decoration-thickness: 1px;
@@ -12788,6 +12811,14 @@
 
     #yzm-memory-root .yzm-character-status-name {
         font-size: 18px;
+    }
+
+    #yzm-memory-root .yzm-character-status-header-fields {
+        gap: 4px 12px;
+    }
+
+    #yzm-memory-root .yzm-character-status-header-field-value {
+        max-width: min(220px, 54vw);
     }
 
     #yzm-memory-root .yzm-character-status-main,

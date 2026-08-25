@@ -93,6 +93,7 @@
     const CHARACTER_STATUS_OVERVIEW_FIELDS = ['好感度', '疲劳值'];
     const CHARACTER_STATUS_ATTRIBUTE_FIELDS = ['力量', '敏捷', '智力', '魅力', '幸运'];
     const CHARACTER_STATUS_FIELD_ICONS = {
+        住址: 'fa-solid fa-location-dot',
         好感度: 'fa-solid fa-heart',
         疲劳值: 'fa-solid fa-bolt',
         力量: 'fa-solid fa-dumbbell',
@@ -204,7 +205,7 @@
         item_tracking: { queue: 'itemTracking', syncFlag: 'itemTrackingVectorSynced', label: '物品追踪' },
         world_setting: { queue: 'worldSetting', syncFlag: 'worldSettingVectorSynced', label: '世界设定' },
     };
-    const DEFAULT_STATE_REVISION = 15;
+    const DEFAULT_STATE_REVISION = 16;
     const DEFAULT_TABLES = [
         {
             id: 'plot_summary',
@@ -222,8 +223,8 @@
             id: 'character_status',
             name: '角色状态',
             icon: 'status',
-            columns: ['角色名', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'],
-            characterStatusBreaks: [3, 8],
+            columns: ['角色名', '住址', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'],
+            characterStatusBreaks: [2, 4, 9],
         },
         {
             id: 'item_tracking',
@@ -1235,6 +1236,10 @@
         return /(奇遇|剧情|事务|规划|计划|事件|线索|目标|走向)/.test(cleanColumnName(column));
     }
 
+    function isCharacterStatusHeaderColumn(column) {
+        return /(住址|地址|住所|居所|驻地)/.test(cleanColumnName(column));
+    }
+
     function isCharacterStatusOverviewColumn(column) {
         const name = cleanColumnName(column);
         if (CHARACTER_STATUS_ATTRIBUTE_FIELDS.includes(name)) return false;
@@ -1247,11 +1252,12 @@
         const breaks = Array.isArray(table?.characterStatusBreaks)
             ? table.characterStatusBreaks.map(Number)
             : [];
-        if (breaks.length !== 2) return null;
-        const [overviewEnd, attributeEnd] = breaks;
-        if (!Number.isInteger(overviewEnd) || !Number.isInteger(attributeEnd)) return null;
-        if (overviewEnd < 1 || attributeEnd < overviewEnd || attributeEnd > columnCount) return null;
-        return [overviewEnd, attributeEnd];
+        const normalized = breaks.length === 2 ? [1, ...breaks] : breaks;
+        if (normalized.length !== 3) return null;
+        const [headerEnd, overviewEnd, attributeEnd] = normalized;
+        if (![headerEnd, overviewEnd, attributeEnd].every(Number.isInteger)) return null;
+        if (headerEnd < 1 || overviewEnd < headerEnd || attributeEnd < overviewEnd || attributeEnd > columnCount) return null;
+        return [headerEnd, overviewEnd, attributeEnd];
     }
 
     function inferCharacterStatusColumnLayout(table) {
@@ -1259,14 +1265,17 @@
         const columns = (table?.columns || [])
             .map(cleanColumnName)
             .filter((column, index, items) => column && column !== primaryColumn && items.indexOf(column) === index);
-        const transactionColumns = columns.filter(isCharacterStatusTransactionColumn);
+        const headerColumns = columns.filter(isCharacterStatusHeaderColumn).slice(0, 3);
+        const transactionColumns = columns.filter((column) => (
+            !headerColumns.includes(column) && isCharacterStatusTransactionColumn(column)
+        ));
         const overviewColumns = columns.filter((column) => (
-            !transactionColumns.includes(column) && isCharacterStatusOverviewColumn(column)
+            !headerColumns.includes(column) && !transactionColumns.includes(column) && isCharacterStatusOverviewColumn(column)
         ));
         const attributeColumns = columns.filter((column) => (
-            !transactionColumns.includes(column) && !overviewColumns.includes(column)
+            !headerColumns.includes(column) && !transactionColumns.includes(column) && !overviewColumns.includes(column)
         ));
-        return { overviewColumns, attributeColumns, transactionColumns };
+        return { headerColumns, overviewColumns, attributeColumns, transactionColumns };
     }
 
     function getCharacterStatusColumnLayout(table) {
@@ -1274,9 +1283,10 @@
         const breaks = getCharacterStatusBreaks(table, definitions.length);
         if (!breaks) return inferCharacterStatusColumnLayout(table);
 
-        const [overviewEnd, attributeEnd] = breaks;
+        const [headerEnd, overviewEnd, attributeEnd] = breaks;
         return {
-            overviewColumns: definitions.slice(1, overviewEnd).map(cleanColumnName).filter(Boolean),
+            headerColumns: definitions.slice(1, headerEnd).map(cleanColumnName).filter(Boolean).slice(0, 3),
+            overviewColumns: definitions.slice(headerEnd, overviewEnd).map(cleanColumnName).filter(Boolean),
             attributeColumns: definitions.slice(overviewEnd, attributeEnd).map(cleanColumnName).filter(Boolean),
             transactionColumns: definitions.slice(attributeEnd).map(cleanColumnName).filter(Boolean),
         };
@@ -11260,6 +11270,21 @@
         return item;
     }
 
+    function createCharacterStatusHeaderField(column, value) {
+        const item = document.createElement('span');
+        item.className = 'yzm-character-status-header-field';
+        const label = document.createElement('span');
+        label.className = 'yzm-character-status-header-field-label';
+        label.textContent = column;
+        const current = document.createElement('strong');
+        current.className = value
+            ? 'yzm-character-status-header-field-value'
+            : 'yzm-character-status-header-field-value yzm-character-status-empty-value';
+        current.textContent = value || '—';
+        item.append(label, current);
+        return item;
+    }
+
     function createCharacterStatusView(table) {
         const record = getActiveRecord(table);
         const layout = getCharacterStatusColumnLayout(table);
@@ -11282,10 +11307,15 @@
         const name = document.createElement('div');
         name.className = 'yzm-character-status-name';
         name.textContent = record ? getRecordTitle(table, record) : (table?.name || '角色状态');
-        const label = document.createElement('div');
-        label.className = 'yzm-character-status-label';
-        label.append(createTableIcon(table), document.createTextNode(record ? (table?.name || '角色状态') : '暂无记录'));
-        identity.append(name, label);
+        identity.appendChild(name);
+        if (record && layout.headerColumns.length) {
+            const fields = document.createElement('div');
+            fields.className = 'yzm-character-status-header-fields';
+            layout.headerColumns.slice(0, 3).forEach((column) => {
+                fields.appendChild(createCharacterStatusHeaderField(column, getRecordValue(record, column)));
+            });
+            identity.appendChild(fields);
+        }
         header.append(avatar, identity);
 
         if (!record) {
@@ -12376,7 +12406,8 @@
             return [
                 definitions.slice(0, breaks[0]),
                 definitions.slice(breaks[0], breaks[1]),
-                definitions.slice(breaks[1]),
+                definitions.slice(breaks[1], breaks[2]),
+                definitions.slice(breaks[2]),
             ].map((group) => group.join(', ')).join('；');
         }
 
@@ -12384,7 +12415,8 @@
         const definitionsByName = new Map(definitions.map((column) => [cleanColumnName(column), column]));
         const toDefinitions = (columns) => columns.map((column) => definitionsByName.get(column)).filter(Boolean);
         return [
-            [definitions[0], ...toDefinitions(layout.overviewColumns)].filter(Boolean),
+            [definitions[0], ...toDefinitions(layout.headerColumns)].filter(Boolean),
+            toDefinitions(layout.overviewColumns),
             toDefinitions(layout.attributeColumns),
             toDefinitions(layout.transactionColumns),
         ].map((group) => group.join(', ')).join('；');
@@ -12392,7 +12424,7 @@
 
     function readCharacterStatusStructure(textarea) {
         const segments = String(textarea?.value || '').split(/[;；]/);
-        if (segments.length !== 3) return null;
+        if (segments.length !== 4) return null;
 
         const seen = new Set();
         const groups = segments.map((segment) => parseStructureColumnsText(segment).filter((column) => {
@@ -12405,7 +12437,11 @@
 
         return {
             columns: groups.flat(),
-            breaks: [groups[0].length, groups[0].length + groups[1].length],
+            breaks: [
+                groups[0].length,
+                groups[0].length + groups[1].length,
+                groups[0].length + groups[1].length + groups[2].length,
+            ],
         };
     }
 
@@ -12477,7 +12513,7 @@
         const hint = document.createElement('div');
         hint.className = 'yzm-structure-hint';
         hint.textContent = table.id === 'character_status'
-            ? '用两个分号分为状态总览；基础属性；事务，各段列名用逗号分隔。# 表示自动更新时追加，* 表示仅在单元格为空时写入。'
+            ? '用三个分号分为头部信息；状态总览；基础属性；事务。头部信息最多显示三个字段，各段列名用逗号分隔。# 表示自动更新时追加，* 表示仅在单元格为空时写入。'
             : '列名用逗号分隔；# 表示自动更新时追加，* 表示自动更新只在该单元格为空时写入，用户手动修改不受限制。';
 
         const actions = document.createElement('div');
@@ -12507,7 +12543,7 @@
                 ? readCharacterStatusStructure(columnsInput)
                 : null;
             if (table.id === 'character_status' && !characterStatusStructure) {
-                window.alert('角色状态结构需要使用两个分号，依次分隔状态总览、基础属性和事务。');
+                window.alert('角色状态结构需要使用三个分号，依次分隔头部信息、状态总览、基础属性和事务。');
                 return;
             }
             table.name = nextName;
