@@ -67,6 +67,10 @@
     let autoTaskMessageStableSince = 0;
     let autoTaskRetryPending = false;
     let autoTaskRetryAttempt = 0;
+    let foregroundGenerationActive = false;
+    let autoTaskAbortController = null;
+    let autoTaskRequestPromise = null;
+    let autoTaskInterruptedByForeground = false;
     const AUTO_TASK_MESSAGE_STABLE_MS = 1200;
     const AUTO_TASK_RETRY_BASE_MS = 2500;
     const AUTO_TASK_RETRY_MAX_MS = 30000;
@@ -80,14 +84,44 @@
 
     function isForegroundGenerationBusy() {
         const ctx = getContext();
-        return window.is_send_press === true
+        const streamingProcessor = ctx?.streamingProcessor;
+        const contextGenerating = typeof ctx?.isGenerating === 'function'
+            ? ctx.isGenerating() === true
+            : ctx?.isGenerating === true;
+        const windowGenerating = typeof window.isGenerating === 'function'
+            ? window.isGenerating() === true
+            : window.isGenerating === true;
+        const requestState = YuzukiMemory.RequestProbe?.getChatRequestState?.();
+        return foregroundGenerationActive
+            || requestState?.foregroundGenerationActive === true
+            || window.is_send_press === true
             || window.isStreaming === true
-            || window.isGenerating === true
+            || windowGenerating
             || Number(window.yzmMemoryChatRequestActiveCount || 0) > 0
             || ctx?.is_send_press === true
             || ctx?.isStreaming === true
-            || ctx?.isGenerating === true
-            || ctx?.generationStarted === true;
+            || contextGenerating
+            || ctx?.generationStarted === true
+            || Boolean(streamingProcessor && streamingProcessor.isFinished !== true && streamingProcessor.isStopped !== true)
+            || (typeof document !== 'undefined' && document.body?.dataset?.generating === 'true');
+    }
+
+    function isForegroundGenerationEvent(type, options, dryRun) {
+        const isDryRun = dryRun === true
+            || options?.dry_run === true
+            || options?.dryRun === true
+            || options?.isDryRun === true;
+        return !isDryRun && String(type || 'normal').trim().toLowerCase() !== 'quiet';
+    }
+
+    async function trackAutoTaskRequest(requestPromise, options = {}) {
+        if (!options.autoTaskType) return requestPromise;
+        autoTaskRequestPromise = requestPromise;
+        try {
+            return await requestPromise;
+        } finally {
+            if (autoTaskRequestPromise === requestPromise) autoTaskRequestPromise = null;
+        }
     }
 
     function isManualTaskBusy() {
@@ -877,13 +911,19 @@
         captureTaskRequest(requestMessages, options);
         if (mode === 'custom') {
             if (!preset) return { success: false, error: '未选择可用的 LLM API 预设。' };
-            const result = await YuzukiMemory.LlmClient.generateWithCustom(preset, requestMessages, { stream: preset.stream !== false, ...taskOptions });
+            const result = await trackAutoTaskRequest(
+                YuzukiMemory.LlmClient.generateWithCustom(preset, requestMessages, { stream: preset.stream !== false, ...taskOptions }),
+                taskOptions
+            );
             return normalizeGenerationResult(result);
         }
         const shouldStream = options.stream !== undefined
             ? options.stream !== false
             : !['trace', 'traceOptimize'].includes(String(options.kind || ''));
-        const result = await YuzukiMemory.LlmClient.generateWithTavern(requestMessages, { ...taskOptions, stream: shouldStream });
+        const result = await trackAutoTaskRequest(
+            YuzukiMemory.LlmClient.generateWithTavern(requestMessages, { ...taskOptions, stream: shouldStream }),
+            taskOptions
+        );
         return normalizeGenerationResult(result);
     }
 
@@ -2681,6 +2721,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
         const response = await generate(built.messages, { ...options, kind: 'trace' });
         if (!response.success) return response;
+        if (options.signal?.aborted) return { success: false, error: '已中断发送', aborted: true };
         const parsed = filterTraceResultByTarget(state, parseTraceResponse(response.text), options);
         const result = {
             success: true,
@@ -2703,6 +2744,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
         const response = await generate(built.messages, { ...options, kind: 'summary' });
         if (!response.success) return response;
+        if (options.signal?.aborted) return { success: false, error: '已中断发送', aborted: true };
         const validatedResponse = validateSummaryGenerationResponse(response);
         if (!validatedResponse.success) return validatedResponse;
         const payloads = parseSummaryResponse(validatedResponse.text);
@@ -3022,7 +3064,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             || confirmation.action === 'cancel';
     }
 
-    async function runAutoSummaryTask(state, task, settings, callbacks = {}) {
+    async function runAutoSummaryTask(state, task, settings, callbacks = {}, executionOptions = {}) {
         if (task.type === 'history') {
             const existingRecords = findExistingHistorySummaryRecords(state, { start: task.start, end: task.end });
             const existingRecord = existingRecords[0] || null;
@@ -3071,6 +3113,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             silent: settings.autoSave,
             previewOnly: !settings.autoSave,
             autoTaskType: task.type,
+            signal: executionOptions.signal,
         });
         if (!result.success) return result;
 
@@ -3144,7 +3187,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return committed;
     }
 
-    async function runAutoTraceTask(state, task, callbacks = {}) {
+    async function runAutoTraceTask(state, task, callbacks = {}, executionOptions = {}) {
         const pluginSettings = getPluginSettings();
 
         const autoSave = pluginSettings.traceRunMode === 'silent';
@@ -3165,6 +3208,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             silent: autoSave,
             previewOnly: !autoSave,
             autoTaskType: 'trace',
+            signal: executionOptions.signal,
         });
         if (!result.success) return { ...result, range: result.range || { start: task.start, end: task.end } };
 
@@ -3249,6 +3293,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             autoTaskBaselineChatLength = chatLength;
             autoTaskBaselineAssistantKey = latestAssistantKey;
             autoTaskRetryPending = false;
+            autoTaskInterruptedByForeground = false;
+            autoTaskAbortController = new AbortController();
             autoSummaryRunning = true;
             const skippedTypes = new Set();
             let nextScheduleDelay = AUTO_TASK_MESSAGE_STABLE_MS;
@@ -3260,8 +3306,15 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                         ? pluginSettings.traceRunMode !== 'silent'
                         : (!settings.directTrigger || !settings.autoSave);
                     const result = activeTask.type === 'trace'
-                        ? await runAutoTraceTask(activeState, activeTask, callbacks)
-                        : await runAutoSummaryTask(activeState, activeTask, settings, callbacks);
+                        ? await runAutoTraceTask(activeState, activeTask, callbacks, { signal: autoTaskAbortController.signal })
+                        : await runAutoSummaryTask(activeState, activeTask, settings, callbacks, { signal: autoTaskAbortController.signal });
+                    if (autoTaskInterruptedByForeground) {
+                        autoTaskArmed = true;
+                        autoTaskRetryPending = true;
+                        nextScheduleDelay = AUTO_TASK_MESSAGE_STABLE_MS;
+                        console.info(`[yuzuki-Memory] ${activeTask.title} 已为正文生成让路，正文结束后重新执行。`);
+                        break;
+                    }
                     if (result?.success === false) {
                         console.warn('[yuzuki-Memory] Auto task skipped:', result.error);
                         notifyAutoTaskFailure(activeTask, result, callbacks);
@@ -3313,13 +3366,23 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                     autoTaskBaselineAssistantKey = nextAssistantKey;
                 }
             } catch (error) {
-                console.warn('[yuzuki-Memory] Auto task failed:', error);
-                notifyAutoTaskFailure(task, error, callbacks);
-                if (isRetryableAutoTaskFailure(error)) {
-                    nextScheduleDelay = queueAutoTaskRetry();
-                    console.info(`[yuzuki-Memory] ${task.title} 已保留在后台队列，${nextScheduleDelay}ms 后重试。`);
+                if (autoTaskInterruptedByForeground || autoTaskAbortController?.signal?.aborted) {
+                    autoTaskArmed = true;
+                    autoTaskRetryPending = true;
+                    nextScheduleDelay = AUTO_TASK_MESSAGE_STABLE_MS;
+                    console.info(`[yuzuki-Memory] ${task.title} 已中止并为正文生成让路，正文结束后重新执行。`);
+                } else {
+                    console.warn('[yuzuki-Memory] Auto task failed:', error);
+                    notifyAutoTaskFailure(task, error, callbacks);
+                    if (isRetryableAutoTaskFailure(error)) {
+                        nextScheduleDelay = queueAutoTaskRetry();
+                        console.info(`[yuzuki-Memory] ${task.title} 已保留在后台队列，${nextScheduleDelay}ms 后重试。`);
+                    }
                 }
             } finally {
+                autoTaskAbortController = null;
+                autoTaskRequestPromise = null;
+                autoTaskInterruptedByForeground = false;
                 autoSummaryRunning = false;
                 autoSummaryPromptOpen = false;
                 if (autoTaskArmed || autoTaskRetryPending) {
@@ -3367,11 +3430,22 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 markLatestAssistantMessageActivity();
                 armAutoTaskAfterGeneration(callbacks);
             };
-            const onGenerationStarted = () => {
+            const onGenerationStarted = (type, options, dryRun) => {
+                if (!isForegroundGenerationEvent(type, options, dryRun)) return undefined;
+                foregroundGenerationActive = true;
                 window.clearTimeout(autoSummaryTimer);
                 autoSummaryTimer = null;
+                const activeRequest = autoTaskRequestPromise;
+                if (autoSummaryRunning) {
+                    autoTaskInterruptedByForeground = true;
+                    autoTaskArmed = true;
+                    autoTaskRetryPending = true;
+                    autoTaskAbortController?.abort?.('Foreground generation started');
+                }
+                return activeRequest?.then?.(() => undefined, () => undefined);
             };
             const onGenerationFinished = () => {
+                foregroundGenerationActive = false;
                 markLatestAssistantMessageActivity();
                 armAutoTaskAfterGeneration(callbacks);
                 if (!autoSummaryRunning && (autoTaskArmed || autoTaskRetryPending)) {

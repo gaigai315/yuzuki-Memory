@@ -145,7 +145,8 @@
     }
 
     function isDryRunGenerationEvent(args = []) {
-        return args.some((arg) => arg?.dry_run === true || arg?.dryRun === true || arg?.isDryRun === true);
+        return args[2] === true
+            || args.some((arg) => arg?.dry_run === true || arg?.dryRun === true || arg?.isDryRun === true);
     }
 
     function markJsGenerationStarted(generationId) {
@@ -1750,6 +1751,7 @@
         getChatRequestState: () => ({
             activeCount: activeChatRequestCount,
             lastFinishedAt: lastChatRequestFinishedAt,
+            foregroundGenerationActive,
         }),
     });
 
