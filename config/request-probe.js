@@ -1101,6 +1101,7 @@
         };
         if (preview) {
             lastPreviewRequestData = requestData;
+            window.dispatchEvent(new CustomEvent('yzm-memory-request-probe-updated', { detail: requestData }));
             console.info('[yuzuki-Memory] preview request captured; last real API request is unchanged.', {
                 url,
                 messages: requestData.messages.length,
@@ -1115,7 +1116,7 @@
     }
 
     function captureFromPromptReady(input, source = 'prompt-ready') {
-        if (isPromptReadyDryRun(input) || isDryRunGenerationActive()) return input;
+        if (isPromptReadyDryRun(input)) return input;
         const resolved = resolvePromptReadyChat(input);
         if (!Array.isArray(resolved.chat) || !resolved.chat.length) return input;
         const body = {
@@ -1734,6 +1735,12 @@
         return copyRequestDataForRead(lastPreviewRequestData);
     }
 
+    function getLatestRequestData() {
+        const realTimestamp = Number(lastRequestData?.timestamp || 0);
+        const previewTimestamp = Number(lastPreviewRequestData?.timestamp || 0);
+        return copyRequestDataForRead(previewTimestamp > realTimestamp ? lastPreviewRequestData : lastRequestData);
+    }
+
     YuzukiMemory.RequestProbe = Object.assign(YuzukiMemory.RequestProbe || {}, {
         installed: false,
         captureFromBody,
@@ -1748,6 +1755,7 @@
         processFetchArgs,
         getLastRequestData,
         getLastPreviewRequestData,
+        getLatestRequestData,
         getChatRequestState: () => ({
             activeCount: activeChatRequestCount,
             lastFinishedAt: lastChatRequestFinishedAt,

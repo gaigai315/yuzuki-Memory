@@ -11,9 +11,11 @@
     const LLM_API_PRESETS_STORAGE_KEY = 'yzm_memory_global_llm_api_presets';
     const LLM_API_MODE_STORAGE_KEY = 'yzm_memory_global_llm_api_mode';
     const LLM_API_ACTIVE_PRESET_STORAGE_KEY = 'yzm_memory_global_llm_api_active_preset';
+    const LLM_API_TASK_ROUTES_STORAGE_KEY = 'yzm_memory_global_llm_api_task_routes';
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
+    const CHARACTER_STATUS_PROMPTS_STORAGE_KEY = 'yzm_memory_global_character_status_prompts';
     const AUTO_SUMMARY_SETTINGS_STORAGE_KEY = 'yzm_memory_global_auto_summary_settings';
     const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
@@ -769,6 +771,7 @@
         const names = getRuntimeNames();
         const suppressMemoryTables = options.suppressMemoryTables === true;
         const suppressMemoryData = suppressMemoryTables || options.suppressMemoryData === true;
+        const allowCharacterStatusTable = options.allowCharacterStatusTable === true;
         const targetTable = getOptionTargetTable(state, options);
         const targetTableText = targetTable ? tablesToReferenceText(state, { ...options, tableId: targetTable.id }) : '';
         return String(text || '')
@@ -776,7 +779,12 @@
             .replace(/\{\{char\}\}/g, names.char)
             .replace(/\{\{BRANCH_SUMMARY_NAMES\}\}/gi, () => buildBranchSummaryNamesText(state))
             .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS)\}\}/gi, () => suppressMemoryTables ? '' : buildDatabaseSchemaText(state, options))
-            .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName) || ''))
+            .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => {
+                const requestedTable = findTargetTable(state, tableName);
+                if (suppressMemoryData && (!allowCharacterStatusTable || requestedTable?.id !== 'character_status')) return '';
+                return YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName)
+                    || (requestedTable ? tablesToReferenceText(state, { ...options, tableId: requestedTable.id }) : '');
+            })
             .replace(/\{\{MEMORY_SUMMARY_(.+?)\}\}/gi, (_match, summaryKey) => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSpecificSummaryText?.(state, summaryKey) || ''))
             .replace(/\{\{MEMORY_TABLE\}\}/gi, () => suppressMemoryData ? '' : (targetTableText || YuzukiMemory.VariableInjector?.buildAllTablesText?.(state) || tablesToReferenceText(state, options)))
             .replace(/\{\{MEMORY_SUMMARY\}\}/gi, () => suppressMemoryData ? '' : (YuzukiMemory.VariableInjector?.buildSummaryText?.(state) || ''))
@@ -830,24 +838,59 @@
             || { prompts: YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.({ prompts: {} }) || {} };
     }
 
+    function getCharacterStatusPromptFromState(state) {
+        const selectedId = String(state?.characterStatusPromptId || '').trim();
+        if (!selectedId) return '';
+        const stored = parseJsonStorage(CHARACTER_STATUS_PROMPTS_STORAGE_KEY, []);
+        const prompts = YuzukiMemory.PromptLibrary?.mergeCharacterStatusPrompts?.(stored)
+            || (Array.isArray(stored) ? stored : []);
+        const selected = prompts.find((prompt) => String(prompt?.id || '').trim() === selectedId);
+        return String(selected?.prompt ?? selected?.content ?? selected?.text ?? '').trim();
+    }
+
     function getLlmMode() {
         const mode = YuzukiMemory.GlobalSettings?.get?.(LLM_API_MODE_STORAGE_KEY, null)
             ?? localStorage.getItem(LLM_API_MODE_STORAGE_KEY);
         return mode === 'custom' ? 'custom' : 'tavern';
     }
 
-    function getActiveLlmPreset() {
+    function getLlmPresets() {
         const presets = parseJsonStorage(LLM_API_PRESETS_STORAGE_KEY, []);
-        if (!Array.isArray(presets) || !presets.length) return null;
+        return Array.isArray(presets) ? presets : [];
+    }
+
+    function getActiveLlmPreset() {
+        const presets = getLlmPresets();
+        if (!presets.length) return null;
         const activeId = String(YuzukiMemory.GlobalSettings?.get?.(LLM_API_ACTIVE_PRESET_STORAGE_KEY, '')
             ?? localStorage.getItem(LLM_API_ACTIVE_PRESET_STORAGE_KEY)
             ?? '');
         return presets.find((preset) => preset.id === activeId) || presets[0] || null;
     }
 
-    function createLlmRequestSnapshot() {
+    function getTaskLlmRouteKind(kind = '') {
+        const normalized = String(kind || '').trim();
+        if (normalized === 'trace' || normalized === 'traceOptimize') return 'trace';
+        if (normalized === 'summary' || normalized === 'summaryOptimize') return 'summary';
+        return '';
+    }
+
+    function getTaskLlmPreset(kind = '') {
+        const routeKind = getTaskLlmRouteKind(kind);
+        const routes = parseJsonStorage(LLM_API_TASK_ROUTES_STORAGE_KEY, {});
+        const routedPresetId = routeKind && routes && typeof routes === 'object'
+            ? String(routes[routeKind] || '').trim()
+            : '';
+        if (routedPresetId) {
+            const routedPreset = getLlmPresets().find((preset) => String(preset?.id || '') === routedPresetId);
+            if (routedPreset) return routedPreset;
+        }
+        return getActiveLlmPreset();
+    }
+
+    function createLlmRequestSnapshot(kind = '') {
         const mode = getLlmMode();
-        const preset = mode === 'custom' ? getActiveLlmPreset() : null;
+        const preset = mode === 'custom' ? getTaskLlmPreset(kind) : null;
         return {
             mode,
             preset: preset ? JSON.parse(JSON.stringify(preset)) : null,
@@ -869,7 +912,9 @@
         if (!YuzukiMemory.RequestProbe?.captureFromBody) return;
         const snapshot = options.llmSnapshot && typeof options.llmSnapshot === 'object' ? options.llmSnapshot : null;
         const mode = snapshot?.mode || getLlmMode();
-        const preset = mode === 'custom' ? (snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset()) : null;
+        const preset = mode === 'custom'
+            ? (snapshot && 'preset' in snapshot ? snapshot.preset : getTaskLlmPreset(options.kind))
+            : null;
         const body = {
             model: mode === 'custom' ? String(preset?.model || '') : 'SillyTavern',
             messages,
@@ -897,7 +942,7 @@
         const snapshot = options.llmSnapshot && typeof options.llmSnapshot === 'object' ? options.llmSnapshot : null;
         const mode = snapshot?.mode || getLlmMode();
         const preset = mode === 'custom'
-            ? (snapshot && 'preset' in snapshot ? snapshot.preset : getActiveLlmPreset())
+            ? (snapshot && 'preset' in snapshot ? snapshot.preset : getTaskLlmPreset(options.kind))
             : null;
         const requestMessages = await prepareTaskMessages(messages, mode, preset, taskOptions);
         if (isForegroundGenerationBusy()) {
@@ -2654,12 +2699,19 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     async function buildTraceMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
+        const settings = getPluginSettings();
         const taskPromptOptions = {
             ...options,
             suppressMemoryData: true,
         };
         const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, taskPromptOptions);
         const tracePrompt = resolveTaskPromptVariables(getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options), state, taskPromptOptions);
+        const characterStatusPrompt = settings.enableFilling !== false && settings.fillMode === 'batch'
+            ? resolveTaskPromptVariables(getCharacterStatusPromptFromState(state), state, {
+                ...taskPromptOptions,
+                allowCharacterStatusTable: true,
+            })
+            : '';
         const targetRestriction = buildTraceTargetRestrictionText(state, options);
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
         const messages = normalizeTaskMessages([
@@ -2669,8 +2721,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             { role: 'system', content: buildTaskRangeText(range, 'trace') },
             ...range.messages,
             { role: 'system', content: tracePrompt },
+            characterStatusPrompt ? { role: 'system', content: `【角色状态专用提示词】\n${characterStatusPrompt}` } : null,
             targetRestriction ? { role: 'system', content: targetRestriction } : null,
-            { role: 'user', content: '请立即根据以上待追溯聊天内容和批量追溯填表提示词执行任务。' },
+            { role: 'user', content: '请立即根据以上待填表聊天内容和填表提示词执行任务。' },
         ]);
         return { messages, range };
     }

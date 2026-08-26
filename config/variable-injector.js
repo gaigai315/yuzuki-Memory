@@ -5,6 +5,7 @@
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
+    const CHARACTER_STATUS_PROMPTS_STORAGE_KEY = 'yzm_memory_global_character_status_prompts';
     const TIMED_PROMPT_SETTINGS_STORAGE_KEY = 'yzm_memory_global_timed_prompt_injection';
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const GLOBAL_CUSTOM_TABLES_STORAGE_KEY = 'yzm_memory_global_custom_tables';
@@ -314,6 +315,21 @@
             enabled: raw.enabled === true,
             rules: rawRules.map(normalizeTimedPromptRule).filter((rule) => rule.content || rule.name),
         };
+    }
+
+    function getCharacterStatusPromptFromState(state) {
+        const selectedId = String(state?.characterStatusPromptId || '').trim();
+        if (!selectedId) return '';
+        try {
+            const stored = YuzukiMemory.GlobalSettings?.get?.(CHARACTER_STATUS_PROMPTS_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(CHARACTER_STATUS_PROMPTS_STORAGE_KEY) || '[]');
+            const prompts = YuzukiMemory.PromptLibrary?.mergeCharacterStatusPrompts?.(stored)
+                || (Array.isArray(stored) ? stored : []);
+            const selected = prompts.find((prompt) => String(prompt?.id || '').trim() === selectedId);
+            return String(selected?.prompt ?? selected?.content ?? selected?.text ?? '').trim();
+        } catch (_error) {
+            return '';
+        }
     }
 
     function getTimedPromptInjection() {
@@ -845,7 +861,11 @@
         const scheme = getActivePromptScheme(state);
         const prompts = YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.(scheme || { prompts: {} }) || scheme?.prompts || {};
         const tracePrompt = prompts.traceRealtime || prompts.trace;
-        return resolvePromptTemplateVariables(compactLines([tracePrompt]), state);
+        const characterStatusPrompt = getCharacterStatusPromptFromState(state);
+        return resolvePromptTemplateVariables(compactLines([
+            tracePrompt,
+            characterStatusPrompt ? `【角色状态专用提示词】\n${characterStatusPrompt}` : '',
+        ]), state);
     }
 
     function buildMemoryText(state = getCurrentState()) {

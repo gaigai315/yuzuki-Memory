@@ -12,6 +12,17 @@
     const DEFAULT_SCHEME_NAME = 'yuzuki_默认提示词（不含剧情摘要）';
     const BLANK_TRACE_SCHEME_ID = 'yuzuki_default_prompt_blank_trace_v1';
     const BLANK_TRACE_SCHEME_NAME = 'yuzuki_默认提示词';
+    const DEFAULT_CHARACTER_STATUS_PROMPT_ID = 'yuzuki_default_character_status_prompt_v1';
+    const DEFAULT_CHARACTER_STATUS_PROMPT_NAME = 'yuzuki_默认角色状态提示词';
+    const DEFAULT_CHARACTER_STATUS_PROMPT = `【角色状态更新规则】
+1.可和其他表格同步更新在一个<Memory>内包裹。
+2.仅更新需要攻略的对象，其他NPC或{{user}}无需更新
+3.更新的数值均在0-100内。严禁数值大范围增加或减少。根据剧情进行增减。输出更新后的最终数值，禁止使用+1、-1这类变动量
+<Memory><!--
+#角色状态
+[角色姓名] | 好感度：11| 疲劳值：11;
+[角色姓名] | 好感度：2| 疲劳值：3;
+--></Memory>`;
     const CHARACTER_NAME_CONSISTENCY_RULE = `在处理角色档案和姓名时，你必须绝对遵守以下一致性原则，不得有任何变通：
 姓名主键：新增角色时必须使用唯一且最完整的全名。已有角色名若包含“|”，各段都是同一角色的等价姓名，第一段是主姓名；使用其中任一完整姓名更新时都视为同一角色，严禁拆成多条档案。
 格式锁定：注意中外文译名的标点符号。包含间隔号的必须保留（如 A·B 不能写成 AB）。
@@ -623,6 +634,31 @@ ${MEMORY_FORMAT_EXAMPLE_BODY}
         };
     }
 
+    function getDefaultCharacterStatusPrompts() {
+        return [{
+            id: DEFAULT_CHARACTER_STATUS_PROMPT_ID,
+            name: DEFAULT_CHARACTER_STATUS_PROMPT_NAME,
+            prompt: DEFAULT_CHARACTER_STATUS_PROMPT,
+            builtin: true,
+        }];
+    }
+
+    function mergeCharacterStatusPrompts(customPrompts = []) {
+        const seen = new Set();
+        return [...getDefaultCharacterStatusPrompts(), ...(Array.isArray(customPrompts) ? customPrompts : [])]
+            .map((entry) => entry && typeof entry === 'object' ? {
+                id: String(entry.id || '').trim(),
+                name: String(entry.name || '').trim(),
+                prompt: String(entry.prompt ?? entry.content ?? entry.text ?? ''),
+                builtin: entry.builtin === true,
+            } : null)
+            .filter((entry) => {
+                if (!entry?.id || !entry.name || seen.has(entry.id)) return false;
+                seen.add(entry.id);
+                return true;
+            });
+    }
+
     YuzukiMemory.PromptLibrary = Object.assign(YuzukiMemory.PromptLibrary || {}, {
         load,
         get,
@@ -632,5 +668,7 @@ ${MEMORY_FORMAT_EXAMPLE_BODY}
         getDefaultSchemeId: () => DEFAULT_SCHEME_ID,
         parsePromptText,
         mergeSchemePrompts,
+        getDefaultCharacterStatusPrompts,
+        mergeCharacterStatusPrompts,
     });
 })();

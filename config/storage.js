@@ -764,6 +764,7 @@
             activeRecordIds,
             records,
             promptPresetId: String(rawState.promptPresetId || fallback.promptPresetId || ''),
+            characterStatusPromptId: String(rawState.characterStatusPromptId ?? fallback.characterStatusPromptId ?? ''),
             settings: Object.assign({}, fallback.settings || {}, rawState.settings || {}),
         };
     }

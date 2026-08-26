@@ -23,10 +23,12 @@
     const LLM_API_PRESETS_STORAGE_KEY = 'yzm_memory_global_llm_api_presets';
     const LLM_API_MODE_STORAGE_KEY = 'yzm_memory_global_llm_api_mode';
     const LLM_API_ACTIVE_PRESET_STORAGE_KEY = 'yzm_memory_global_llm_api_active_preset';
+    const LLM_API_TASK_ROUTES_STORAGE_KEY = 'yzm_memory_global_llm_api_task_routes';
     const UPDATE_NOTICE_VERSION_STORAGE_KEY = 'yzm_memory_seen_update_version';
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
+    const CHARACTER_STATUS_PROMPTS_STORAGE_KEY = 'yzm_memory_global_character_status_prompts';
     const GLOBAL_CUSTOM_TABLES_STORAGE_KEY = 'yzm_memory_global_custom_tables';
     const GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY = 'yzm_memory_global_deleted_custom_table_ids';
     const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
@@ -148,7 +150,8 @@
     const PROMPT_SCHEME_SECTIONS = [
         { id: 'info', label: '方案信息', icon: 'fa-regular fa-clipboard' },
         { id: 'historian', label: '史官破限', icon: 'fa-regular fa-clipboard' },
-        { id: 'trace', label: '追溯提示词', icon: 'fa-regular fa-clipboard' },
+        { id: 'trace', label: '填表提示词', icon: 'fa-regular fa-clipboard' },
+        { id: 'characterStatus', label: '角色状态提示词', icon: 'fa-regular fa-clipboard' },
         { id: 'summary', label: '总结提示词', icon: 'fa-regular fa-clipboard' },
         { id: 'timedPrompt', label: '定时注入提示词', icon: 'fa-regular fa-clock' },
     ];
@@ -290,6 +293,7 @@
     let activeSummaryToolSectionId = 'manual';
     let activePromptSchemeSectionId = 'info';
     let activePromptSchemeDraft = null;
+    let activeCharacterStatusPromptDraft = null;
     let activeTimedPromptInjectionDraft = null;
     let activePlotSummaryKind = 'main';
     let plotSummaryRepairSessionId = null;
@@ -352,6 +356,7 @@
                 ],
             },
             promptPresetId: '',
+            characterStatusPromptId: '',
             settings: {},
         };
     }
@@ -1723,6 +1728,36 @@
         return normalized;
     }
 
+    function getLlmApiTaskRoutes() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(LLM_API_TASK_ROUTES_STORAGE_KEY, {})
+                ?? JSON.parse(localStorage.getItem(LLM_API_TASK_ROUTES_STORAGE_KEY) || '{}');
+            return raw && typeof raw === 'object' && !Array.isArray(raw)
+                ? {
+                    trace: String(raw.trace || '').trim(),
+                    summary: String(raw.summary || '').trim(),
+                }
+                : { trace: '', summary: '' };
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load LLM API task routes.', error);
+            return { trace: '', summary: '' };
+        }
+    }
+
+    function saveLlmApiTaskRoutes(routes = {}) {
+        const presetIds = new Set(getLlmApiPresets().map((preset) => preset.id));
+        const normalized = {
+            trace: presetIds.has(String(routes.trace || '').trim()) ? String(routes.trace || '').trim() : '',
+            summary: presetIds.has(String(routes.summary || '').trim()) ? String(routes.summary || '').trim() : '',
+        };
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(LLM_API_TASK_ROUTES_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(LLM_API_TASK_ROUTES_STORAGE_KEY, JSON.stringify(normalized));
+        }
+        return normalized;
+    }
+
     function getResolvedActiveLlmApiPreset() {
         const presets = getLlmApiPresets();
         if (!presets.length) return null;
@@ -1883,6 +1918,83 @@
             localStorage.setItem(PROMPT_SCHEMES_STORAGE_KEY, JSON.stringify(normalized));
         }
         return normalized;
+    }
+
+    function createCharacterStatusPromptId() {
+        return `character_status_prompt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function normalizeCharacterStatusPrompt(rawPrompt, index = 0) {
+        if (!rawPrompt || typeof rawPrompt !== 'object') return null;
+        return {
+            id: String(rawPrompt.id || createCharacterStatusPromptId()),
+            name: String(rawPrompt.name || `角色状态提示词 ${String(index + 1).padStart(2, '0')}`).trim(),
+            prompt: String(rawPrompt.prompt ?? rawPrompt.content ?? rawPrompt.text ?? ''),
+            builtin: rawPrompt.builtin === true,
+        };
+    }
+
+    function getCharacterStatusPrompts() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(CHARACTER_STATUS_PROMPTS_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(CHARACTER_STATUS_PROMPTS_STORAGE_KEY) || '[]');
+            const source = YuzukiMemory.PromptLibrary?.mergeCharacterStatusPrompts?.(raw)
+                || (Array.isArray(raw) ? raw : []);
+            const seen = new Set();
+            return source.map(normalizeCharacterStatusPrompt).filter((prompt) => {
+                if (!prompt || !prompt.id || seen.has(prompt.id)) return false;
+                seen.add(prompt.id);
+                return true;
+            });
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load character status prompts.', error);
+            return [];
+        }
+    }
+
+    function saveCharacterStatusPrompts(prompts) {
+        const builtinIds = new Set((YuzukiMemory.PromptLibrary?.getDefaultCharacterStatusPrompts?.() || [])
+            .map((prompt) => String(prompt?.id || '').trim())
+            .filter(Boolean));
+        const seen = new Set();
+        const normalized = (Array.isArray(prompts) ? prompts : [])
+            .map(normalizeCharacterStatusPrompt)
+            .filter((prompt) => {
+                if (!prompt || !prompt.id || prompt.builtin || builtinIds.has(prompt.id) || seen.has(prompt.id)) return false;
+                seen.add(prompt.id);
+                return true;
+            });
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(CHARACTER_STATUS_PROMPTS_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(CHARACTER_STATUS_PROMPTS_STORAGE_KEY, JSON.stringify(normalized));
+        }
+        return normalized;
+    }
+
+    function getCurrentCharacterStatusPromptId() {
+        const selectedId = String(getState().characterStatusPromptId || '').trim();
+        if (!selectedId) return '';
+        return getCharacterStatusPrompts().some((prompt) => prompt.id === selectedId) ? selectedId : '';
+    }
+
+    function getActiveCharacterStatusPromptDraft() {
+        const selectedId = getCurrentCharacterStatusPromptId();
+        if (!selectedId) {
+            activeCharacterStatusPromptDraft = null;
+            return null;
+        }
+        if (!activeCharacterStatusPromptDraft || activeCharacterStatusPromptDraft.id !== selectedId) {
+            const prompt = getCharacterStatusPrompts().find((entry) => entry.id === selectedId);
+            activeCharacterStatusPromptDraft = prompt ? { ...prompt } : null;
+        }
+        return activeCharacterStatusPromptDraft;
+    }
+
+    function updateActiveCharacterStatusPromptField(field, value) {
+        const draft = getActiveCharacterStatusPromptDraft();
+        if (!draft || !['name', 'prompt'].includes(field)) return;
+        draft[field] = String(value ?? '');
     }
 
     function getCurrentCharacterPromptKeys() {
@@ -7037,7 +7149,7 @@
                 const batchText = batches.length > 1 ? `，共 ${batches.length} 批` : '';
                 showTaskToast(`${getTaskActionLabel(action)}已开始（${rangeText}${batchText}），正在请求 API。`, 'info');
             }
-            const llmSnapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.() || null;
+            const llmSnapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.(action) || null;
             const results = [];
             for (let index = 0; index < batches.length; index += 1) {
                 if (taskRunnerStopRequested) break;
@@ -7284,6 +7396,7 @@
     function createPromptSchemePanel(section) {
         if (section.id === 'info') return createPromptSchemeInfoPanel(section);
         if (section.id === 'historian') return createHistorianPromptSchemePanel(section);
+        if (section.id === 'characterStatus') return createCharacterStatusPromptPanel(section);
         if (section.id === 'timedPrompt') return createTimedPromptSchemePanel(section);
 
         const panel = document.createElement('section');
@@ -7384,6 +7497,88 @@
         editorCard.append(cardHeader, hint, textarea, counter);
 
         panel.append(header, createPromptSchemeCurrentCard(), editorCard);
+        return panel;
+    }
+
+    function createCharacterStatusPromptPanel(section) {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-scheme-panel yzm-character-status-prompt-panel';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-scheme-header';
+        const title = document.createElement('div');
+        title.className = 'yzm-scheme-title';
+        title.append(createIconNode(section.icon, ''), document.createTextNode(section.label));
+        const desc = document.createElement('div');
+        desc.className = 'yzm-scheme-desc';
+        desc.textContent = getPromptSchemeDescription(section.id);
+        header.append(title, desc);
+
+        const prompts = getCharacterStatusPrompts();
+        const selectedId = getCurrentCharacterStatusPromptId();
+        const draft = getActiveCharacterStatusPromptDraft();
+        const options = [
+            { label: prompts.length ? '不使用角色状态提示词' : '暂无角色状态提示词', value: '' },
+            ...prompts.map((prompt) => ({ label: prompt.name, value: prompt.id })),
+        ];
+        const selectWrap = createApiSelect(selectedId, options, 'characterStatusPrompt');
+        const select = selectWrap.querySelector('.yzm-api-select');
+        if (select) {
+            select.dataset.yzmCharacterStatusPromptSelect = 'true';
+            select.setAttribute('aria-label', '当前会话角色状态提示词');
+        }
+
+        const selectionHint = document.createElement('div');
+        selectionHint.className = 'yzm-scheme-editor-hint';
+        selectionHint.textContent = '提示词列表全局共享，但当前选择只保存到本聊天；为空时不会附加角色状态提示词。';
+        const selectionActions = createApiActions([
+            ['新增', 'fa-solid fa-plus', 'yzm-api-button-primary', 'newCharacterStatusPrompt'],
+            ['保存', 'fa-regular fa-floppy-disk', '', 'saveCharacterStatusPrompt'],
+            ['删除', 'fa-regular fa-trash-can', 'yzm-api-button-danger', 'deleteCharacterStatusPrompt'],
+        ]);
+        selectionActions.querySelectorAll('[data-yzm-api-action]').forEach((button) => {
+            button.dataset.yzmCharacterStatusPromptAction = button.dataset.yzmApiAction;
+        });
+        if (!draft || draft.builtin) {
+            selectionActions.querySelector('[data-yzm-character-status-prompt-action="saveCharacterStatusPrompt"]')?.setAttribute('disabled', 'true');
+            selectionActions.querySelector('[data-yzm-character-status-prompt-action="deleteCharacterStatusPrompt"]')?.setAttribute('disabled', 'true');
+        }
+        const selectionCard = createApiCard('当前会话', 'fa-solid fa-comments', [
+            createApiField('角色状态提示词', selectWrap),
+            selectionHint,
+            selectionActions,
+        ]);
+
+        panel.append(header, selectionCard);
+        if (draft) {
+            const editorCard = document.createElement('section');
+            editorCard.className = 'yzm-config-card yzm-scheme-editor-card yzm-character-status-prompt-editor-card';
+            const cardHeader = document.createElement('div');
+            cardHeader.className = 'yzm-scheme-card-header';
+            const cardTitle = document.createElement('div');
+            cardTitle.className = 'yzm-config-card-title yzm-scheme-card-title';
+            cardTitle.append(createIconNode('fa-regular fa-pen-to-square', ''), document.createTextNode('编辑角色状态提示词'));
+            cardHeader.appendChild(cardTitle);
+
+            const nameInputWrap = createApiInput('输入提示词名称');
+            const nameInput = nameInputWrap.querySelector('.yzm-api-input');
+            if (nameInput) {
+                nameInput.value = draft.name || '';
+                nameInput.dataset.yzmCharacterStatusPromptField = 'name';
+            }
+            const textarea = document.createElement('textarea');
+            textarea.className = 'yzm-scheme-textarea yzm-character-status-prompt-textarea';
+            textarea.placeholder = '填写角色状态提示词...';
+            textarea.value = draft.prompt || '';
+            textarea.spellcheck = false;
+            textarea.dataset.yzmCharacterStatusPromptField = 'prompt';
+            editorCard.append(
+                cardHeader,
+                createApiField('提示词名称', nameInputWrap),
+                createApiField('提示词内容', textarea),
+            );
+            panel.appendChild(editorCard);
+        }
         return panel;
     }
 
@@ -7950,6 +8145,79 @@
         }, 1200);
     }
 
+    function applyCharacterStatusPromptSelection(root, promptId) {
+        const selectedId = String(promptId || '').trim();
+        const prompt = getCharacterStatusPrompts().find((entry) => entry.id === selectedId);
+        getState().characterStatusPromptId = prompt ? prompt.id : '';
+        activeCharacterStatusPromptDraft = prompt ? { ...prompt } : null;
+        saveState();
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function startNewCharacterStatusPrompt(root) {
+        const name = String(window.prompt('请输入角色状态提示词名称：', '') || '').trim();
+        if (!name) return;
+        const prompt = {
+            id: createCharacterStatusPromptId(),
+            name,
+            prompt: '',
+        };
+        const prompts = saveCharacterStatusPrompts([...getCharacterStatusPrompts(), prompt]);
+        const saved = prompts.find((entry) => entry.id === prompt.id) || prompt;
+        getState().characterStatusPromptId = saved.id;
+        activeCharacterStatusPromptDraft = { ...saved };
+        saveState();
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function saveActiveCharacterStatusPrompt(root) {
+        const draft = getActiveCharacterStatusPromptDraft();
+        if (!draft) {
+            window.alert('请先新增或选择一套角色状态提示词。');
+            return;
+        }
+        if (draft.builtin) {
+            window.alert('内置默认角色状态提示词不能修改。');
+            return;
+        }
+        const name = String(draft.name || '').trim();
+        if (!name) {
+            window.alert('请填写角色状态提示词名称。');
+            return;
+        }
+        const prompts = getCharacterStatusPrompts();
+        const index = prompts.findIndex((entry) => entry.id === draft.id);
+        const nextPrompt = {
+            id: draft.id || createCharacterStatusPromptId(),
+            name,
+            prompt: String(draft.prompt || ''),
+        };
+        if (index >= 0) prompts[index] = nextPrompt;
+        else prompts.push(nextPrompt);
+        const saved = saveCharacterStatusPrompts(prompts).find((entry) => entry.id === nextPrompt.id) || nextPrompt;
+        getState().characterStatusPromptId = saved.id;
+        activeCharacterStatusPromptDraft = { ...saved };
+        saveState();
+        renderPromptSchemeWorkspace(root);
+        showTaskToast('角色状态提示词已保存。', 'success');
+    }
+
+    function deleteActiveCharacterStatusPrompt(root) {
+        const draft = getActiveCharacterStatusPromptDraft();
+        if (!draft) return;
+        if (draft.builtin) {
+            window.alert('内置默认角色状态提示词不能删除。');
+            return;
+        }
+        if (!window.confirm(`确定删除角色状态提示词「${draft.name}」吗？`)) return;
+        saveCharacterStatusPrompts(getCharacterStatusPrompts().filter((entry) => entry.id !== draft.id));
+        getState().characterStatusPromptId = '';
+        activeCharacterStatusPromptDraft = null;
+        saveState();
+        renderPromptSchemeWorkspace(root);
+        showTaskToast('角色状态提示词已删除。', 'success');
+    }
+
     function deleteActivePromptScheme(root) {
         const draft = getActivePromptSchemeDraft();
         if (draft.builtin) {
@@ -8168,7 +8436,8 @@
         if (sectionId === 'info') return '管理记忆方案的基础信息、自动加载与导入导出。';
         if (sectionId === 'historian') return '控制史官视角、叙事边界和破限输出规则。';
         if (sectionId === 'timedPrompt') return '按设定楼层间隔，在用户发送消息时自动隐式注入修正提示词。';
-        if (sectionId === 'trace') return '控制追溯填表与追溯优化的提示词。';
+        if (sectionId === 'trace') return '控制实时/批量填表与填表优化的提示词。';
+        if (sectionId === 'characterStatus') return '为不同角色卡准备独立的角色状态提示词；当前会话只使用当前选择。';
         return '控制手动/自动总结与总结优化的提示词。';
     }
 
@@ -8176,8 +8445,8 @@
         if (fieldId === 'historian') return '史官破限（System Pre-Prompt）';
         if (fieldId === 'traceRealtime') return '实时填表提示词';
         if (fieldId === 'traceBatch') return '批量填表提示词';
-        if (fieldId === 'trace') return '追溯填表提示词';
-        if (fieldId === 'traceOptimize') return '追溯优化提示词';
+        if (fieldId === 'trace') return '填表提示词';
+        if (fieldId === 'traceOptimize') return '填表优化提示词';
         if (fieldId === 'summary') return '总结提示词';
         return '总结优化提示词';
     }
@@ -8186,8 +8455,8 @@
         if (sectionId === 'historian') return '填写史官破限提示词...';
         if (sectionId === 'traceRealtime') return '填写实时填表提示词...';
         if (sectionId === 'traceBatch') return '填写批量填表提示词...';
-        if (sectionId === 'trace') return '填写追溯填表提示词...';
-        if (sectionId === 'traceOptimize') return '填写追溯优化提示词...';
+        if (sectionId === 'trace') return '填写填表提示词...';
+        if (sectionId === 'traceOptimize') return '填写填表优化提示词...';
         if (sectionId === 'summary') return '填写总结提示词...';
         return '填写总结优化提示词...';
     }
@@ -8224,7 +8493,7 @@
         const fetchModelButton = createApiMiniButton('拉取模型列表', 'fa-solid fa-cloud-arrow-down');
         fetchModelButton.dataset.yzmApiAction = 'fetchLlmModels';
         const panel = document.createElement('section');
-        panel.className = 'yzm-api-panel';
+        panel.className = 'yzm-api-panel yzm-llm-api-panel';
         panel.append(
             createApiCard('API 模式', 'fa-solid fa-route', [
                 createApiChoiceGroup([
@@ -8235,11 +8504,17 @@
             createApiCard('预设管理', 'fa-regular fa-bookmark', [
                 createApiField('选择预设', createLlmApiPresetSelect()),
                 createApiActions([
-                    ['新增预设', 'fa-solid fa-plus', '', 'newLlmPreset'],
-                    ['保存预设', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveLlmPreset'],
-                    ['删除预设', 'fa-regular fa-trash-can', 'yzm-api-button-danger', 'deleteLlmPreset'],
+                    ['新增', 'fa-solid fa-plus', '', 'newLlmPreset'],
+                    ['保存', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveLlmPreset'],
+                    ['删除', 'fa-regular fa-trash-can', 'yzm-api-button-danger', 'deleteLlmPreset'],
                 ]),
             ]),
+            createApiCard('任务 API 绑定', 'fa-solid fa-link', [
+                createApiGrid([
+                    createApiField('填表', createLlmApiTaskRouteSelect('trace')),
+                    createApiField('总结', createLlmApiTaskRouteSelect('summary')),
+                ]),
+            ], '', createApiTitleNote('绑定后，该用途的手动、自动与优化任务统一使用所选预设；未绑定时跟随当前预设。')),
             createApiCard('连接配置', 'fa-solid fa-link', [
                 createApiGrid([
                     createApiField('服务商', createApiSelect('', [{ label: '选择服务商', value: '' }, ...getLlmProviderOptions()], 'provider')),
@@ -8472,6 +8747,21 @@
         const presets = getLlmApiPresets();
         const wrap = createApiSelect('', [{ label: presets.length ? '选择预设' : '暂无预设', value: '' }, ...presets.map((preset) => ({ label: preset.name, value: preset.id }))]);
         wrap.querySelector('.yzm-api-select')?.setAttribute('data-yzm-llm-preset-select', 'true');
+        return wrap;
+    }
+
+    function createLlmApiTaskRouteSelect(routeKind) {
+        const presets = getLlmApiPresets();
+        const routes = getLlmApiTaskRoutes();
+        const wrap = createApiSelect(routes[routeKind] || '', [
+            { label: '跟随当前预设', value: '' },
+            ...presets.map((preset) => ({ label: preset.name, value: preset.id })),
+        ]);
+        const select = wrap.querySelector('.yzm-api-select');
+        if (select) {
+            select.dataset.yzmLlmTaskRoute = routeKind;
+            select.setAttribute('aria-label', routeKind === 'summary' ? '总结 API 预设' : '填表 API 预设');
+        }
         return wrap;
     }
 
@@ -8833,6 +9123,27 @@
             select.appendChild(option);
         });
         select.value = presets.some((preset) => preset.id === activePresetId) ? activePresetId : '';
+        refreshLlmApiTaskRouteSelects(root);
+    }
+
+    function refreshLlmApiTaskRouteSelects(root) {
+        const presets = getLlmApiPresets();
+        const presetIds = new Set(presets.map((preset) => preset.id));
+        const routes = getLlmApiTaskRoutes();
+        root.querySelectorAll('.yzm-api-view [data-yzm-llm-task-route]').forEach((select) => {
+            const routeKind = select.dataset.yzmLlmTaskRoute;
+            const placeholder = document.createElement('option');
+            placeholder.textContent = '跟随当前预设';
+            placeholder.value = '';
+            select.replaceChildren(placeholder);
+            presets.forEach((preset) => {
+                const option = document.createElement('option');
+                option.textContent = preset.name;
+                option.value = preset.id;
+                select.appendChild(option);
+            });
+            select.value = presetIds.has(routes[routeKind]) ? routes[routeKind] : '';
+        });
     }
 
     function startNewLlmApiPreset(root) {
@@ -8947,6 +9258,7 @@
         const presetId = select?.value || '';
         if (!presetId) return;
         const presets = saveLlmApiPresets(getLlmApiPresets().filter((preset) => preset.id !== presetId));
+        saveLlmApiTaskRoutes(getLlmApiTaskRoutes());
         const nextPreset = presets[0] || createEmptyLlmApiPreset();
         refreshLlmApiPresetSelect(root, nextPreset.id || '');
         saveActiveLlmApiPresetId(nextPreset.id || '');
@@ -9273,7 +9585,10 @@
     }
 
     function getRequestProbeData() {
-        return YuzukiMemory.RequestProbe?.getLastRequestData?.() || null;
+        return YuzukiMemory.RequestProbe?.getLatestRequestData?.()
+            || YuzukiMemory.RequestProbe?.getLastRequestData?.()
+            || YuzukiMemory.RequestProbe?.getLastPreviewRequestData?.()
+            || null;
     }
 
     function formatRequestProbeTime(timestamp) {
@@ -12281,6 +12596,7 @@
             '【优化】填表和总结现在会在后台处理，生成正文时无需等待。',
             '【优化】连续生成多条正文时，未完成的填表和总结会自动排队补齐，不再漏掉楼层。',
             '【修复】遇到并发冲突、限流或超时会自动重试；任务成功前不会推进指针，也不会提前隐藏楼层。',
+            '【新增】填表与总结支持跟随绑定的 API，分别使用对应的预设执行任务。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -14765,6 +15081,7 @@
                 const timedPromptEdit = target?.closest('[data-yzm-timed-prompt-edit]');
                 const timedPromptDelete = target?.closest('[data-yzm-timed-prompt-delete]');
                 const timedPromptSave = target?.closest('[data-yzm-timed-prompt-save]');
+                const characterStatusPromptAction = target?.closest('[data-yzm-character-status-prompt-action]');
                 if (schemeIoAction) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -14779,6 +15096,15 @@
                     event.stopPropagation();
                     const isOn = toggleConfigSwitch(autoLoadToggle);
                     togglePromptSchemeAutoLoad(root, isOn);
+                    return;
+                }
+                if (characterStatusPromptAction) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const action = characterStatusPromptAction.dataset.yzmCharacterStatusPromptAction || '';
+                    if (action === 'newCharacterStatusPrompt') startNewCharacterStatusPrompt(root);
+                    if (action === 'saveCharacterStatusPrompt') saveActiveCharacterStatusPrompt(root);
+                    if (action === 'deleteCharacterStatusPrompt') deleteActiveCharacterStatusPrompt(root);
                     return;
                 }
                 if (timedPromptToggle) {
@@ -14863,6 +15189,13 @@
             });
             schemeView.addEventListener('input', (event) => {
                 const target = event.target;
+                if (target?.matches?.('[data-yzm-character-status-prompt-field]')) {
+                    updateActiveCharacterStatusPromptField(
+                        target.dataset.yzmCharacterStatusPromptField || '',
+                        target.value,
+                    );
+                    return;
+                }
                 if (target?.matches?.('[data-yzm-timed-prompt-field]')) {
                     updateTimedPromptRuleField(
                         target.dataset.yzmTimedPromptRuleId || '',
@@ -14878,6 +15211,10 @@
             });
             schemeView.addEventListener('change', (event) => {
                 const target = event.target;
+                if (target?.matches?.('[data-yzm-character-status-prompt-select]')) {
+                    applyCharacterStatusPromptSelection(root, target.value);
+                    return;
+                }
                 if (!target?.matches?.('[data-yzm-scheme-select]')) return;
                 applyPromptSchemeSelection(root, target.value);
             });
@@ -14956,6 +15293,12 @@
             });
             apiView.addEventListener('change', (event) => {
                 const target = event.target;
+                if (target?.matches?.('[data-yzm-llm-task-route]')) {
+                    const routeKind = target.dataset.yzmLlmTaskRoute;
+                    const routes = getLlmApiTaskRoutes();
+                    saveLlmApiTaskRoutes({ ...routes, [routeKind]: target.value || '' });
+                    return;
+                }
                 if (target?.matches?.('[data-yzm-vector-search-setting]')) {
                     normalizeVectorSearchInput(target);
                     return;
@@ -15455,6 +15798,7 @@
         }
 
         memoryState = prepareLoadedState(createDefaultState());
+        activeCharacterStatusPromptDraft = null;
         refreshActiveWorkspace(root);
 
         window.setTimeout(() => {
@@ -15494,6 +15838,7 @@
         }
         loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
         memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
+        activeCharacterStatusPromptDraft = null;
         sessionStateReady = Boolean(loadedSessionId);
         applyResolvedPromptSchemeToState({ save: false });
         refreshActiveWorkspace(root);

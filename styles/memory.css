@@ -2806,6 +2806,147 @@
     min-width: 0;
 }
 
+#yzm-memory-root .yzm-llm-api-panel {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:first-child,
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:last-child {
+    grid-column: 1 / -1;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) {
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 10px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:first-child {
+    padding: 0 2px 2px;
+    background: transparent;
+    border-color: transparent;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-card-title {
+    gap: 5px;
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-title-note {
+    font-size: 9px;
+    line-height: 1.25;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-choice-group,
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-grid {
+    gap: 6px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel .yzm-api-choice {
+    min-height: 54px;
+    padding: 9px 10px;
+    border-radius: 8px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel .yzm-api-choice-text {
+    gap: 3px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel .yzm-api-choice-text strong {
+    font-size: 11px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel .yzm-api-choice-text small {
+    font-size: 10px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:first-child .yzm-api-choice-text small {
+    font-size: 10px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-choice-text small,
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-field-label {
+    font-size: 9px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-field {
+    gap: 3px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-input,
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-select {
+    min-height: 28px;
+    padding: 0 8px;
+    border-radius: 7px;
+    font-size: 10px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-select {
+    padding-right: 28px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-card-title {
+    grid-column: 1 / -1;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-field {
+    grid-column: 1 / -1;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-actions {
+    grid-column: 1 / -1;
+    justify-content: flex-end;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-mini-button,
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-button {
+    min-height: 26px;
+    padding: 0 7px;
+    border-radius: 7px;
+    font-size: 10px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-actions {
+    gap: 4px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-field {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-field .yzm-api-field-label {
+    width: 2em;
+    min-width: 2em;
+    color: var(--yzm-muted);
+    line-height: 1.2;
+    text-align: center;
+    white-space: normal;
+    word-break: break-all;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    align-items: stretch;
+    justify-content: initial;
+}
+
+#yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-actions .yzm-api-button {
+    width: 100%;
+    min-width: 0;
+    padding-right: 4px;
+    padding-left: 4px;
+}
+
 #yzm-memory-root .yzm-trace-panel {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -10298,10 +10439,46 @@
         gap: 6px;
     }
 
+    #yzm-memory-root .yzm-llm-api-panel {
+        grid-template-columns: 1fr;
+        gap: 6px;
+    }
+
+    #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:first-child,
+    #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:last-child {
+        grid-column: auto;
+    }
+
+    #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-card-title {
+        grid-column: auto;
+    }
+
+    #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-field {
+        grid-template-columns: 1fr;
+        gap: 3px;
+    }
+
+    #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:nth-child(2) > .yzm-api-field .yzm-api-field-label {
+        width: auto;
+        min-width: 0;
+        text-align: left;
+        white-space: nowrap;
+        word-break: normal;
+    }
+
     #yzm-memory-root .yzm-api-choice {
         min-height: 42px;
         padding: 6px 7px;
         border-radius: 8px;
+    }
+
+    #yzm-memory-root .yzm-llm-api-panel .yzm-api-choice {
+        min-height: 48px;
+        padding: 8px 9px;
     }
 
     #yzm-memory-root .yzm-api-choice-text strong {
@@ -10802,8 +10979,22 @@
         border-radius: 9px;
     }
 
+    #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) {
+        padding: 6px;
+        border-radius: 9px;
+    }
+
+    #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:first-child {
+        padding: 0 2px 2px;
+    }
+
     #yzm-memory-root .yzm-config-card-title,
     #yzm-memory-root .yzm-api-card-title {
+        gap: 5px;
+        font-size: 11px;
+    }
+
+    #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:not(:last-child) .yzm-api-card-title {
         gap: 5px;
         font-size: 11px;
     }
