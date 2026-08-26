@@ -226,7 +226,7 @@
             id: 'character_status',
             name: '角色状态',
             icon: 'status',
-            columns: ['角色名', '住址', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'],
+            columns: ['角色名', '住址', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇'],
             characterStatusBreaks: [2, 4, 9],
         },
         {
@@ -1284,6 +1284,8 @@
     }
 
     function getCharacterStatusColumnLayout(table) {
+        const sharedLayout = YuzukiMemory.CharacterStatus?.getColumnLayout?.(table);
+        if (sharedLayout) return sharedLayout;
         const definitions = (table?.columns || []).map(normalizeColumnDefinition).filter(Boolean);
         const breaks = getCharacterStatusBreaks(table, definitions.length);
         if (!breaks) return inferCharacterStatusColumnLayout(table);
@@ -1930,6 +1932,7 @@
             id: String(rawPrompt.id || createCharacterStatusPromptId()),
             name: String(rawPrompt.name || `角色状态提示词 ${String(index + 1).padStart(2, '0')}`).trim(),
             prompt: String(rawPrompt.prompt ?? rawPrompt.content ?? rawPrompt.text ?? ''),
+            growthPrompt: String(rawPrompt.growthPrompt ?? rawPrompt.characterGrowthPrompt ?? rawPrompt.taskPrompt ?? ''),
             builtin: rawPrompt.builtin === true,
         };
     }
@@ -1993,7 +1996,7 @@
 
     function updateActiveCharacterStatusPromptField(field, value) {
         const draft = getActiveCharacterStatusPromptDraft();
-        if (!draft || !['name', 'prompt'].includes(field)) return;
+        if (!draft || !['name', 'prompt', 'growthPrompt'].includes(field)) return;
         draft[field] = String(value ?? '');
     }
 
@@ -6775,6 +6778,223 @@
         });
     }
 
+    function openCharacterGrowthTaskDialog(root, result) {
+        return new Promise((resolve) => {
+            const modalHost = getGlobalModalHost(root);
+            removeGlobalModal(root, '.yzm-character-growth-modal');
+
+            const overlay = document.createElement('div');
+            overlay.className = 'yzm-structure-modal yzm-character-growth-modal';
+            const dialog = document.createElement('section');
+            dialog.className = 'yzm-structure-dialog yzm-character-growth-dialog';
+            dialog.setAttribute('aria-label', '选择属性成长任务');
+
+            const header = document.createElement('div');
+            header.className = 'yzm-structure-header';
+            const title = document.createElement('strong');
+            title.className = 'yzm-structure-title';
+            title.textContent = `${result.characterName || '角色'}的成长任务`;
+            const close = document.createElement('button');
+            close.type = 'button';
+            close.className = 'yzm-structure-close';
+            close.setAttribute('aria-label', '关闭成长任务');
+            close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+            header.append(title, close);
+
+            const meta = document.createElement('div');
+            meta.className = 'yzm-character-growth-meta';
+            meta.textContent = result?.meta?.profileFound
+                ? '已结合当前剧情、角色状态和角色档案生成。'
+                : '已结合当前剧情和角色状态生成。';
+
+            const selectAllLabel = document.createElement('label');
+            selectAllLabel.className = 'yzm-character-growth-select-all';
+            const selectAll = document.createElement('input');
+            selectAll.type = 'checkbox';
+            selectAll.className = 'yzm-character-growth-checkbox';
+            const selectAllText = document.createElement('span');
+            selectAllText.textContent = '全选';
+            selectAllLabel.append(selectAll, selectAllText);
+
+            const list = document.createElement('div');
+            list.className = 'yzm-character-growth-list';
+            (Array.isArray(result?.tasks) ? result.tasks : []).forEach((task) => {
+                const item = document.createElement('label');
+                item.className = 'yzm-character-growth-task';
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.className = 'yzm-character-growth-checkbox';
+                checkbox.value = task.id;
+                checkbox.dataset.yzmCharacterGrowthTask = 'true';
+
+                const content = document.createElement('span');
+                content.className = 'yzm-character-growth-task-content';
+                const taskHeader = document.createElement('span');
+                taskHeader.className = 'yzm-character-growth-task-header';
+                const taskTitle = document.createElement('strong');
+                taskTitle.className = 'yzm-character-growth-task-title';
+                taskTitle.textContent = task.title;
+                const target = document.createElement('span');
+                target.className = 'yzm-character-growth-target';
+                target.textContent = task.targetColumn;
+                taskHeader.append(taskTitle, target);
+
+                const description = document.createElement('span');
+                description.className = 'yzm-character-growth-description';
+                description.textContent = task.description;
+                const footer = document.createElement('span');
+                footer.className = 'yzm-character-growth-task-footer';
+                const completion = document.createElement('span');
+                completion.textContent = task.completion ? `完成条件：${task.completion}` : '完成条件：按剧情达成任务目标';
+                const reward = document.createElement('strong');
+                reward.className = 'yzm-character-growth-reward';
+                reward.textContent = `${task.attribute} +${task.increase}`;
+                footer.append(completion, reward);
+                content.append(taskHeader, description, footer);
+                item.append(checkbox, content);
+                list.appendChild(item);
+            });
+
+            const actions = document.createElement('div');
+            actions.className = 'yzm-structure-actions yzm-character-growth-actions';
+            const confirm = createIconButton('接取所选任务', 'fa-solid fa-check', 'yzm-add-table-confirm yzm-character-growth-confirm');
+            confirm.disabled = true;
+            actions.appendChild(confirm);
+            dialog.append(header, meta, selectAllLabel, list, actions);
+            overlay.appendChild(dialog);
+            modalHost.appendChild(overlay);
+
+            let settled = false;
+            const taskCheckboxes = () => [...list.querySelectorAll('[data-yzm-character-growth-task]')];
+            const updateSelection = () => {
+                const checkboxes = taskCheckboxes();
+                const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
+                confirm.disabled = selectedCount === 0;
+                selectAll.checked = !!checkboxes.length && selectedCount === checkboxes.length;
+                selectAll.indeterminate = selectedCount > 0 && selectedCount < checkboxes.length;
+            };
+            const closeWith = (value) => {
+                if (settled) return;
+                settled = true;
+                removePluginElement(overlay);
+                document.removeEventListener('keydown', handleKeydown, true);
+                resolve(value);
+            };
+            const handleKeydown = (event) => {
+                if (event.key !== 'Escape') return;
+                event.preventDefault();
+                closeWith({ cancelled: true, selectedTaskIds: [] });
+            };
+            selectAll.addEventListener('change', () => {
+                taskCheckboxes().forEach((checkbox) => { checkbox.checked = selectAll.checked; });
+                updateSelection();
+            });
+            list.addEventListener('change', updateSelection);
+            close.onclick = () => closeWith({ cancelled: true, selectedTaskIds: [] });
+            confirm.onclick = () => closeWith({
+                cancelled: false,
+                selectedTaskIds: taskCheckboxes().filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.value),
+            });
+            dialog.addEventListener('click', (event) => event.stopPropagation());
+            document.addEventListener('keydown', handleKeydown, true);
+        });
+    }
+
+    async function runCharacterGrowthTaskFlow(root, table, record, button) {
+        if (!YuzukiMemory.TaskRunner?.runCharacterGrowthTasks) {
+            showTaskToast('属性成长任务模块尚未加载。', 'error');
+            return;
+        }
+        if (taskRunnerBusy || window.yzmMemoryManualTaskRunning === true) {
+            showTaskToast('当前已有记忆任务正在执行，请等待完成后再生成。', 'warning');
+            return;
+        }
+        const icon = button?.querySelector('i');
+        const originalIconClass = icon?.className || 'fa-solid fa-robot';
+        if (button) button.disabled = true;
+        if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
+        taskRunnerBusy = true;
+        window.yzmMemoryManualTaskRunning = true;
+        YuzukiMemory.TaskRunner.cancelPendingAutoTask?.();
+        let result;
+        try {
+            result = await YuzukiMemory.TaskRunner.runCharacterGrowthTasks(getState(), {
+                recordId: record?.id,
+                llmSnapshot: YuzukiMemory.TaskRunner.createLlmRequestSnapshot?.('characterGrowth') || null,
+            });
+        } catch (error) {
+            console.error('[yuzuki-Memory] Failed to generate character growth tasks.', error);
+            result = { success: false, error: error?.message || String(error) };
+        } finally {
+            taskRunnerBusy = false;
+            window.yzmMemoryManualTaskRunning = false;
+            if (button?.isConnected) button.disabled = false;
+            if (icon?.isConnected) icon.className = originalIconClass;
+        }
+        if (!result?.success) {
+            showTaskToast(result?.error || '属性成长任务生成失败。', 'error');
+            return;
+        }
+
+        const selection = await openCharacterGrowthTaskDialog(root, result);
+        if (selection?.cancelled) return;
+        const committed = YuzukiMemory.TaskRunner.commitCharacterGrowthTasks(
+            getState(),
+            result,
+            selection?.selectedTaskIds || [],
+        );
+        if (!committed?.success) {
+            showTaskToast(committed?.error || '成长任务写入失败。', 'error');
+            return;
+        }
+        if (!persistStateOrReload(root, '当前会话尚未就绪，成长任务未保存。', {
+            tableId: table.id,
+            recordId: record.id,
+            values: committed.record?.values || {},
+        })) return;
+        renderWorkspaceList(root);
+        renderTableWorkspace(root);
+        bindPanelInteractions(root);
+        showTaskToast(`已接取 ${committed.count} 个属性成长任务。`, 'success');
+    }
+
+    function completeCharacterGrowthTaskFlow(root, table, record, column, taskText) {
+        const characterStatus = YuzukiMemory.CharacterStatus;
+        const reward = characterStatus?.parseGrowthTaskReward?.(table, taskText);
+        if (!reward || !characterStatus?.completeGrowthTask) {
+            showTaskToast('该任务没有可识别的基础属性奖励。', 'error');
+            return;
+        }
+        const confirmed = window.confirm(
+            `确认完成“${reward.title}”？\n\n基础属性“${reward.attribute}”将增加 ${reward.increase} 点，并从“${column}”中清除此任务。`,
+        );
+        if (!confirmed) return;
+
+        const completed = characterStatus.completeGrowthTask(getState(), {
+            tableId: table?.id,
+            recordId: record?.id,
+            column,
+            taskText,
+        });
+        if (!completed?.success) {
+            showTaskToast(completed?.error || '成长任务结算失败。', 'error');
+            return;
+        }
+        if (!persistStateOrReload(root, '当前会话尚未就绪，任务奖励未保存。', {
+            tableId: table.id,
+            recordId: record.id,
+            values: completed.record?.values || {},
+        })) return;
+
+        renderWorkspaceList(root);
+        renderTableWorkspace(root);
+        bindPanelInteractions(root);
+        showTaskToast(
+            `已完成“${completed.title}”：${completed.attribute} ${completed.previousValue} → ${completed.nextValue}，任务已清理。`,
+            'success',
+        );
+    }
+
     function openAutoTaskConfirmDialog(root, task) {
         return new Promise((resolve) => {
             const modalHost = getGlobalModalHost(root);
@@ -7583,6 +7803,30 @@
                 createApiField('提示词内容', textarea),
             );
             panel.appendChild(editorCard);
+
+            const growthEditorCard = document.createElement('section');
+            growthEditorCard.className = 'yzm-config-card yzm-scheme-editor-card yzm-character-growth-prompt-editor-card';
+            growthEditorCard.dataset.yzmSchemeEditorCard = 'true';
+            const growthCardHeader = document.createElement('div');
+            growthCardHeader.className = 'yzm-scheme-card-header';
+            const growthCardTitle = document.createElement('div');
+            growthCardTitle.className = 'yzm-config-card-title yzm-scheme-card-title';
+            growthCardTitle.append(createIconNode('fa-solid fa-robot', ''), document.createTextNode('属性成长任务提示词'));
+            growthCardHeader.append(growthCardTitle, createSchemeExpandButton());
+
+            const growthTextarea = document.createElement('textarea');
+            growthTextarea.className = 'yzm-scheme-textarea yzm-character-growth-prompt-textarea';
+            growthTextarea.placeholder = '填写属性成长任务提示词...';
+            growthTextarea.value = draft.growthPrompt || '';
+            growthTextarea.spellcheck = false;
+            growthTextarea.readOnly = draft.builtin === true;
+            growthTextarea.dataset.yzmCharacterStatusPromptField = 'growthPrompt';
+            growthTextarea.dataset.yzmSchemeTitle = '编辑属性成长任务提示词';
+            growthEditorCard.append(
+                growthCardHeader,
+                createApiField('提示词内容', growthTextarea),
+            );
+            panel.appendChild(growthEditorCard);
         }
         return panel;
     }
@@ -8166,6 +8410,7 @@
             id: createCharacterStatusPromptId(),
             name,
             prompt: '',
+            growthPrompt: '',
         };
         const prompts = saveCharacterStatusPrompts([...getCharacterStatusPrompts(), prompt]);
         const saved = prompts.find((entry) => entry.id === prompt.id) || prompt;
@@ -8196,6 +8441,7 @@
             id: draft.id || createCharacterStatusPromptId(),
             name,
             prompt: String(draft.prompt || ''),
+            growthPrompt: String(draft.growthPrompt || ''),
         };
         if (index >= 0) prompts[index] = nextPrompt;
         else prompts.push(nextPrompt);
@@ -8442,7 +8688,7 @@
         if (sectionId === 'historian') return '控制史官视角、叙事边界和破限输出规则。';
         if (sectionId === 'timedPrompt') return '按设定楼层间隔，在用户发送消息时自动隐式注入修正提示词。';
         if (sectionId === 'trace') return '控制实时/批量填表与填表优化的提示词。';
-        if (sectionId === 'characterStatus') return '为不同角色卡准备独立的角色状态提示词；当前会话只使用当前选择。';
+        if (sectionId === 'characterStatus') return '管理角色状态更新与属性成长任务提示词；当前会话只使用当前选择。';
         return '控制手动/自动总结与总结优化的提示词。';
     }
 
@@ -11577,17 +11823,111 @@
         return item;
     }
 
-    function createCharacterStatusTransaction(column, value) {
-        const item = document.createElement('article');
-        item.className = 'yzm-character-status-transaction';
-        const title = document.createElement('div');
-        title.className = 'yzm-character-status-transaction-title';
-        title.append(createIconNode(getCharacterStatusFieldIcon(column), ''), document.createTextNode(column));
-        const body = document.createElement('div');
-        body.className = value ? 'yzm-character-status-transaction-body' : 'yzm-character-status-transaction-body yzm-character-status-empty-value';
-        body.textContent = value || '暂无记录';
-        item.append(title, body);
-        return item;
+    function getCharacterStatusTransactionTone(column) {
+        if (/奇遇/.test(String(column || ''))) return 'adventure';
+        if (/(剧情|规划)/.test(String(column || ''))) return 'plot';
+        return 'neutral';
+    }
+
+    function createCharacterStatusTransactionCard(table, record, transaction) {
+        const growthTask = transaction.growthTask;
+        const tone = getCharacterStatusTransactionTone(transaction.column);
+        const card = document.createElement('article');
+        card.className = `yzm-character-status-task-card yzm-character-status-task-tone-${tone}`;
+
+        const header = document.createElement('div');
+        header.className = 'yzm-character-status-task-header';
+        const kind = document.createElement('span');
+        kind.className = 'yzm-character-status-task-kind';
+        kind.append(
+            createIconNode(getCharacterStatusFieldIcon(transaction.column), ''),
+            document.createTextNode(transaction.column),
+        );
+        const title = document.createElement('strong');
+        title.className = 'yzm-character-status-task-title';
+        title.textContent = transaction.title;
+        title.title = transaction.title;
+        header.append(kind, title);
+
+        const description = document.createElement('p');
+        description.className = 'yzm-character-status-task-description';
+        description.textContent = transaction.description;
+        description.title = transaction.description;
+        card.append(header, description);
+
+        if (growthTask) {
+            const meta = document.createElement('div');
+            meta.className = 'yzm-character-status-task-meta';
+            const reward = document.createElement('span');
+            reward.className = 'yzm-character-status-task-reward';
+            reward.append(
+                createIconNode('fa-solid fa-gem', ''),
+                document.createTextNode(`奖励：${growthTask.attribute} +${growthTask.increase}`),
+            );
+            const status = document.createElement('span');
+            status.className = 'yzm-character-status-task-state';
+            status.textContent = '待完成';
+            meta.append(reward, status);
+            card.appendChild(meta);
+        }
+
+        const detailsAreLong = transaction.description.length > 72 || String(growthTask?.completion || '').length > 30;
+        const footer = document.createElement('div');
+        footer.className = 'yzm-character-status-task-footer';
+        const goal = document.createElement('span');
+        goal.className = 'yzm-character-status-task-goal';
+        if (growthTask?.completion) {
+            goal.append(
+                createIconNode('fa-solid fa-bullseye', ''),
+                document.createTextNode(`目标：${growthTask.completion}`),
+            );
+            goal.title = `目标：${growthTask.completion}`;
+        } else {
+            goal.textContent = growthTask ? '目标：按剧情达成任务内容' : transaction.column;
+        }
+
+        const actions = document.createElement('span');
+        actions.className = 'yzm-character-status-task-actions';
+        if (detailsAreLong) {
+            const detailsButton = document.createElement('button');
+            detailsButton.type = 'button';
+            detailsButton.className = 'yzm-character-status-task-details';
+            detailsButton.setAttribute('aria-expanded', 'false');
+            detailsButton.innerHTML = '<span>查看详情</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i>';
+            detailsButton.addEventListener('click', () => {
+                const expanded = card.classList.toggle('yzm-character-status-task-expanded');
+                detailsButton.setAttribute('aria-expanded', String(expanded));
+                detailsButton.querySelector('span').textContent = expanded ? '收起详情' : '查看详情';
+                detailsButton.querySelector('i').className = expanded
+                    ? 'fa-solid fa-chevron-up'
+                    : 'fa-solid fa-chevron-down';
+            });
+            actions.appendChild(detailsButton);
+        }
+        if (growthTask) {
+            const completeButton = document.createElement('button');
+            completeButton.type = 'button';
+            completeButton.className = 'yzm-character-status-complete-task';
+            completeButton.title = `完成任务并领取 ${growthTask.attribute} +${growthTask.increase}`;
+            completeButton.setAttribute('aria-label', completeButton.title);
+            completeButton.innerHTML = '<i class="fa-solid fa-check" aria-hidden="true"></i><span>完成</span>';
+            completeButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const root = document.getElementById(ROOT_ID);
+                if (root) completeCharacterGrowthTaskFlow(
+                    root,
+                    table,
+                    record,
+                    transaction.column,
+                    transaction.text,
+                );
+            });
+            actions.appendChild(completeButton);
+        }
+        footer.append(goal, actions);
+        card.appendChild(footer);
+        return card;
     }
 
     function createCharacterStatusHeaderField(column, value) {
@@ -11694,16 +12034,35 @@
 
         const transactions = document.createElement('section');
         transactions.className = 'yzm-character-status-section yzm-character-status-transactions';
-        transactions.appendChild(createCharacterStatusSectionHeading('事务', 'fa-solid fa-list-check'));
-        const transactionBody = document.createElement('div');
-        transactionBody.className = 'yzm-character-status-transaction-list';
-        layout.transactionColumns.forEach((column) => {
-            transactionBody.appendChild(createCharacterStatusTransaction(column, getRecordValue(record, column)));
+        const transactionItems = YuzukiMemory.CharacterStatus?.getTransactionItems?.(table, record) || [];
+        const transactionHeading = createCharacterStatusSectionHeading('进行中', 'fa-solid fa-list-check');
+        const transactionCount = document.createElement('span');
+        transactionCount.className = 'yzm-character-status-transaction-count';
+        transactionCount.textContent = String(transactionItems.length);
+        transactionCount.setAttribute('aria-label', `${transactionItems.length} 个进行中事务`);
+        const growthTaskButton = document.createElement('button');
+        growthTaskButton.type = 'button';
+        growthTaskButton.className = 'yzm-character-growth-trigger';
+        growthTaskButton.title = '生成属性成长任务';
+        growthTaskButton.setAttribute('aria-label', '生成属性成长任务');
+        growthTaskButton.appendChild(createIconNode('fa-solid fa-robot', ''));
+        growthTaskButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const root = document.getElementById(ROOT_ID);
+            if (root) runCharacterGrowthTaskFlow(root, table, record, growthTaskButton);
         });
-        if (!layout.transactionColumns.length) {
+        transactionHeading.append(transactionCount, growthTaskButton);
+        transactions.appendChild(transactionHeading);
+        const transactionBody = document.createElement('div');
+        transactionBody.className = 'yzm-character-status-task-list';
+        transactionItems.forEach((transaction) => {
+            transactionBody.appendChild(createCharacterStatusTransactionCard(table, record, transaction));
+        });
+        if (!transactionItems.length) {
             const empty = document.createElement('div');
-            empty.className = 'yzm-character-status-section-empty';
-            empty.textContent = '暂无事务';
+            empty.className = 'yzm-character-status-section-empty yzm-character-status-task-empty';
+            empty.textContent = '暂无进行中的事务';
             transactionBody.appendChild(empty);
         }
         transactions.appendChild(transactionBody);
@@ -12598,11 +12957,11 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
+            '【新增】新增完整的角色状态与属性成长系统：默认角色状态表按头部信息、状态总览、基础属性和事务分组，默认事务字段仅含“奇遇”，用户可根据角色卡自行新增或调整事务字段；角色状态会完整注入上下文，但 AI 自动填表只更新“状态总览”。事务中的机器人可结合酒馆角色/用户资料、同名角色档案、当前状态、记忆总结和全部未隐藏正文生成成长任务，支持多选接取并写入实际可用的事务字段，以“进行中”任务卡片展示；用户可把独立的完成判定提示词放入世界书并自行调整位置，正文回传角色任务完成标签后，插件自动领取基础属性奖励、清理对应任务并用横幅通知，也可手动完成结算；角色状态及成长任务提示词可按角色卡单独配置。',
+            '【新增】填表与总结支持跟随绑定的 API，分别使用对应的预设执行任务。',
             '【优化】填表和总结现在会在后台处理，生成正文时无需等待。',
             '【优化】连续生成多条正文时，未完成的填表和总结会自动排队补齐，不再漏掉楼层。',
             '【修复】遇到并发冲突、限流或超时会自动重试；任务成功前不会推进指针，也不会提前隐藏楼层。',
-            '【新增】填表与总结支持跟随绑定的 API，分别使用对应的预设执行任务。',
-            '【新增】新增默认角色状态表格；角色状态提示词请根据自己的角色卡自行新增。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -15866,6 +16225,23 @@
         window.addEventListener('yzm-memory-state-updated', reloadStateFromStorage);
     }
 
+    function bindCharacterGrowthCompletionListener() {
+        const previousHandler = window.yzmCharacterGrowthCompletionHandler;
+        if (typeof previousHandler === 'function') {
+            window.removeEventListener('yzm-character-growth-tasks-completed', previousHandler);
+        }
+        window.yzmCharacterGrowthCompletionHandler = (event) => {
+            const completions = Array.isArray(event?.detail?.completions) ? event.detail.completions : [];
+            completions.forEach((completion) => {
+                showTaskToast(
+                    `${completion.characterName || '角色'}已完成“${completion.title || '成长任务'}”：${completion.attribute} +${completion.increase}，任务已清理。`,
+                    'success',
+                );
+            });
+        };
+        window.addEventListener('yzm-character-growth-tasks-completed', window.yzmCharacterGrowthCompletionHandler);
+    }
+
     function scheduleSessionWorkspaceRefresh(root, sessionId) {
         [650, 1300].forEach((delay) => {
             window.setTimeout(() => {
@@ -16046,6 +16422,7 @@
         });
         bindChatContextRefresh();
         bindMemoryStateUpdateListener();
+        bindCharacterGrowthCompletionListener();
         startManagedVectorBookNameSync();
         getVectorStore()?.whenReady?.().then(() => {
             const root = document.getElementById(ROOT_ID);

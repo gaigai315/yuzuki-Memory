@@ -10,7 +10,7 @@ import { extension_settings } from '../../../extensions.js';
     'use strict';
 
     const NAMESPACE = 'YuzukiMemory';
-    const VERSION = '0.8.1';
+    const VERSION = '0.8.5';
     const baseUrl = new URL('./', import.meta.url).href;
 
     const MODULES = [
@@ -18,6 +18,7 @@ import { extension_settings } from '../../../extensions.js';
         'config/timed-prompt-settings.js',
         'config/storage.js',
         'config/character-name-matcher.js',
+        'config/character-status.js',
         'config/character-graph.js',
         'config/memory-io.js',
         'config/plot-summary.js',

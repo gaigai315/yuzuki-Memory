@@ -20,6 +20,8 @@
     const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
     const FIXED_SUMMARY_TABLE_ID = 'memory_summary';
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
+    const CHARACTER_PROFILE_TABLE_ID = 'character_profile';
+    const CHARACTER_STATUS_TABLE_ID = 'character_status';
     const AI_TAG_DIAGNOSTIC_PROMPT = `你是一个剧情记录系统的标签过滤专家。你的任务是分析 AI 的回复文本，制定最优的标签过滤方案（黑名单或白名单）。
 
 【系统过滤机制说明】
@@ -524,8 +526,13 @@
         return role === 'user' || role === 'assistant';
     }
 
-    function shouldSkipTaskRangeMessage(message) {
+    function shouldSkipTaskRangeMessage(message, options = {}) {
         if (!message || isPluginMessage(message)) return true;
+        if (options.excludeHiddenFloors === true
+            && isDialogueFloorMessage(message)
+            && (message.is_yzm_hidden_floor === true || message.is_system === true)) {
+            return true;
+        }
         const role = String(message.role || '').toLowerCase();
         if (role !== 'system') return false;
         return !isDialogueFloorMessage(message);
@@ -543,7 +550,7 @@
         const messages = [];
 
         chat.slice(from, to).forEach((message, offset) => {
-            if (shouldSkipTaskRangeMessage(message)) return;
+            if (shouldSkipTaskRangeMessage(message, options)) return;
             let content = stripImages(stripMemoryTags(getChatText(message)));
             content = filterContentByTags(content, tagPreset);
             if (!content.trim()) return;
@@ -722,7 +729,12 @@
                 if (table.id === PLOT_SUMMARY_TABLE_ID) {
                     return '#剧情摘要：包含 #主线摘要：摘要名称，日期，摘要内容；#支线摘要：日期，摘要内容';
                 }
-                const columns = (table.columns || []).map(cleanColumnName).filter(Boolean);
+                const columns = (table.id === CHARACTER_STATUS_TABLE_ID
+                    ? YuzukiMemory.CharacterStatus?.getAiUpdateColumns?.(table)
+                    : (table.columns || []))
+                    ?.map(cleanColumnName)
+                    .filter(Boolean)
+                    || [];
                 const fields = columns.map((column, index) => {
                     if (index !== 0) return column;
                     return table.id === 'character_profile'
@@ -838,14 +850,23 @@
             || { prompts: YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.({ prompts: {} }) || {} };
     }
 
-    function getCharacterStatusPromptFromState(state) {
+    function getCharacterStatusPromptEntryFromState(state) {
         const selectedId = String(state?.characterStatusPromptId || '').trim();
-        if (!selectedId) return '';
+        if (!selectedId) return null;
         const stored = parseJsonStorage(CHARACTER_STATUS_PROMPTS_STORAGE_KEY, []);
         const prompts = YuzukiMemory.PromptLibrary?.mergeCharacterStatusPrompts?.(stored)
             || (Array.isArray(stored) ? stored : []);
-        const selected = prompts.find((prompt) => String(prompt?.id || '').trim() === selectedId);
+        return prompts.find((prompt) => String(prompt?.id || '').trim() === selectedId) || null;
+    }
+
+    function getCharacterStatusPromptFromState(state) {
+        const selected = getCharacterStatusPromptEntryFromState(state);
         return String(selected?.prompt ?? selected?.content ?? selected?.text ?? '').trim();
+    }
+
+    function getCharacterGrowthPromptFromState(state) {
+        const selected = getCharacterStatusPromptEntryFromState(state);
+        return String(selected?.growthPrompt ?? selected?.characterGrowthPrompt ?? selected?.taskPrompt ?? '').trim();
     }
 
     function getLlmMode() {
@@ -871,6 +892,7 @@
     function getTaskLlmRouteKind(kind = '') {
         const normalized = String(kind || '').trim();
         if (normalized === 'trace' || normalized === 'traceOptimize') return 'trace';
+        if (normalized === 'characterGrowth') return 'trace';
         if (normalized === 'summary' || normalized === 'summaryOptimize') return 'summary';
         return '';
     }
@@ -1508,14 +1530,18 @@
         state.records[table.id] = Array.isArray(state.records[table.id]) ? state.records[table.id] : [];
         const records = state.records[table.id];
         const primary = getPrimaryColumn(table);
+        const sourceValues = YuzukiMemory.CharacterStatus?.filterAiUpdateValues?.(table, values) || values;
         const normalizedValues = Object.fromEntries((table.columns || []).map((column) => {
             const name = cleanColumnName(column);
-            return [name, String(values[name] ?? values[column] ?? values[name.toLowerCase()] ?? '')];
+            return [name, String(sourceValues[name] ?? sourceValues[column] ?? sourceValues[name.toLowerCase()] ?? '')];
         }));
         if (table.id === 'character_profile' && normalizedValues['待办事项']) {
             normalizedValues['待办事项'] = YuzukiMemory.TodoManager?.fillMissingTodoDates?.(
                 normalizedValues['待办事项'],
                 options.storyTime
+            ) || normalizedValues['待办事项'];
+            normalizedValues['待办事项'] = YuzukiMemory.TodoManager?.dedupeTodoText?.(
+                normalizedValues['待办事项']
             ) || normalizedValues['待办事项'];
         }
         const primaryValue = String(normalizedValues[primary] || values[primary] || values.name || values.title || '').trim();
@@ -2769,6 +2795,220 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         };
     }
 
+    function formatCharacterTaskRecord(table, record) {
+        if (!table || !record) return '';
+        const values = record.values && typeof record.values === 'object' ? record.values : {};
+        return (table.columns || []).map((column) => {
+            const name = cleanColumnName(column);
+            const value = String(values[name] ?? values[column] ?? '').trim();
+            return value ? `${name}：${value}` : '';
+        }).filter(Boolean).join('\n');
+    }
+
+    function findCharacterProfileRecord(state, characterName) {
+        const table = stateTables(state).find((entry) => entry.id === CHARACTER_PROFILE_TABLE_ID);
+        if (!table) return { table: null, record: null };
+        const records = stateRecords(state, table.id).filter((record) => record && !record.hidden);
+        const primary = getPrimaryColumn(table);
+        const record = YuzukiMemory.CharacterNameMatcher?.findMatchingRecord
+            ? YuzukiMemory.CharacterNameMatcher.findMatchingRecord(records, primary, characterName)
+            : records.find((entry) => recordTitle(table, entry) === characterName);
+        return { table, record: record || null };
+    }
+
+    function findCharacterTaskColumn(columns, value) {
+        const source = String(value || '').trim();
+        if (!source) return '';
+        const normalize = YuzukiMemory.CharacterStatus?.normalizeColumnKey
+            || ((column) => cleanColumnName(column).normalize('NFKC').replace(/\s+/g, '').toLowerCase());
+        const key = normalize(source);
+        return columns.find((column) => normalize(column) === key)
+            || columns.find((column) => key.includes(normalize(column)) || normalize(column).includes(key))
+            || '';
+    }
+
+    function resolveCharacterTaskTarget(task, transactionColumns) {
+        const source = String(task?.target ?? task?.destination ?? task?.type ?? task?.category ?? task?.['写入位置'] ?? '').trim();
+        const exact = findCharacterTaskColumn(transactionColumns, source);
+        if (exact) return exact;
+        if (/奇遇|adventure|encounter/i.test(source)) {
+            return transactionColumns.find((column) => /奇遇/.test(column)) || transactionColumns[0] || '';
+        }
+        if (/剧情|规划|plot|story/i.test(source)) {
+            return transactionColumns.find((column) => /(剧情|规划)/.test(column)) || transactionColumns[0] || '';
+        }
+        return transactionColumns[0] || '';
+    }
+
+    function resolveCharacterTaskAttribute(task, attributeColumns) {
+        const source = [
+            task?.attribute,
+            task?.stat,
+            task?.ability,
+            task?.['基础属性'],
+            task?.reward,
+            task?.['奖励'],
+        ].map((value) => String(value ?? '').trim()).filter(Boolean).join(' ');
+        return findCharacterTaskColumn(attributeColumns, source)
+            || attributeColumns.find((column) => source.includes(column))
+            || '';
+    }
+
+    function normalizeCharacterTaskIncrease(task) {
+        const source = task?.increase ?? task?.amount ?? task?.value ?? task?.rewardValue ?? task?.['提升值'] ?? task?.reward ?? task?.['奖励'];
+        const match = String(source ?? '').match(/-?\d+/);
+        const value = match ? Number(match[0]) : 1;
+        return Math.min(3, Math.max(1, Math.round(Number.isFinite(value) ? value : 1)));
+    }
+
+    function normalizeCharacterGrowthTasks(text, attributeColumns = [], transactionColumns = []) {
+        const blocks = parseJsonBlocks(text);
+        const sourceTasks = blocks.flatMap((block) => {
+            if (Array.isArray(block)) return block;
+            if (Array.isArray(block?.tasks)) return block.tasks;
+            if (Array.isArray(block?.missions)) return block.missions;
+            if (Array.isArray(block?.['任务'])) return block['任务'];
+            return [];
+        });
+        const seen = new Set();
+        return sourceTasks.map((task, index) => {
+            if (!task || typeof task !== 'object') return null;
+            const attribute = resolveCharacterTaskAttribute(task, attributeColumns);
+            const targetColumn = resolveCharacterTaskTarget(task, transactionColumns);
+            if (!attribute || !targetColumn) return null;
+            const title = String(task.title ?? task.name ?? task['标题'] ?? `成长任务 ${index + 1}`).trim();
+            const description = String(task.description ?? task.content ?? task.detail ?? task['任务内容'] ?? title).trim();
+            const completion = String(task.completion ?? task.condition ?? task.goal ?? task['完成条件'] ?? '').trim();
+            const increase = normalizeCharacterTaskIncrease(task);
+            const duplicateKey = [targetColumn, title, attribute, increase].join('|');
+            if (!title || !description || seen.has(duplicateKey)) return null;
+            seen.add(duplicateKey);
+            return {
+                id: `character_growth_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
+                title,
+                targetColumn,
+                description,
+                completion,
+                attribute,
+                increase,
+            };
+        }).filter(Boolean);
+    }
+
+    function formatCharacterGrowthTaskText(task) {
+        const inlineText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+        const parts = [
+            inlineText(task?.description),
+            task?.completion ? `完成条件：${inlineText(task.completion)}` : '',
+            task?.attribute ? `奖励：${inlineText(task.attribute)} +${Math.max(1, Number(task.increase) || 1)}` : '',
+        ].filter(Boolean);
+        return `〔${inlineText(task?.title || '成长任务')}〕${parts.join('；')}`;
+    }
+
+    async function runCharacterGrowthTasks(state, options = {}) {
+        const table = stateTables(state).find((entry) => entry.id === CHARACTER_STATUS_TABLE_ID);
+        const recordId = String(options.recordId || '').trim();
+        const record = stateRecords(state, CHARACTER_STATUS_TABLE_ID).find((entry) => String(entry?.id || '') === recordId);
+        if (!table || !record) return { success: false, error: '未找到当前角色状态记录。' };
+
+        const layout = YuzukiMemory.CharacterStatus?.getColumnLayout?.(table);
+        const attributeColumns = Array.isArray(layout?.attributeColumns) ? layout.attributeColumns : [];
+        const transactionColumns = Array.isArray(layout?.transactionColumns) ? layout.transactionColumns : [];
+        if (!attributeColumns.length) return { success: false, error: '当前角色状态表没有可用的基础属性列。' };
+        if (!transactionColumns.length) return { success: false, error: '当前角色状态表没有可写入的事务列。' };
+
+        const prompt = resolveTaskPromptVariables(getCharacterGrowthPromptFromState(state), state, {
+            ...options,
+            suppressMemoryTables: true,
+            suppressMemoryData: true,
+        });
+        if (!prompt) return { success: false, error: '请先在“角色状态提示词”页面选择并保存属性成长任务提示词。' };
+
+        const primary = getPrimaryColumn(table);
+        const characterName = String(record?.values?.[primary] || '').trim();
+        if (!characterName) return { success: false, error: '当前角色状态记录缺少角色名。' };
+        const profile = findCharacterProfileRecord(state, characterName);
+        const chatEnd = getChatLength();
+        const visibleChat = chatMessagesFromRange(0, chatEnd, { excludeHiddenFloors: true });
+        const summaryText = YuzukiMemory.VariableInjector?.buildSummaryText?.(state) || '';
+        const statusText = formatCharacterTaskRecord(table, record);
+        const profileText = profile.record ? formatCharacterTaskRecord(profile.table, profile.record) : '';
+        const taskBoundary = compactLines([
+            '【本次任务生成边界】',
+            `角色：${characterName}`,
+            `可奖励的基础属性：${attributeColumns.join('、')}`,
+            `可写入的事务列：${transactionColumns.join('、')}`,
+            '不得返回以上列表之外的属性或事务列。不得直接修改角色属性数值。',
+        ]);
+        const messages = normalizeTaskMessages([
+            { role: 'system', content: prompt },
+            { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
+            profileText ? { role: 'system', content: `【当前角色档案】\n${profileText}` } : null,
+            { role: 'system', content: `【当前角色状态】\n${statusText}` },
+            summaryText ? { role: 'system', content: `【记忆总结】\n${summaryText}` } : null,
+            ...visibleChat.messages,
+            { role: 'system', content: taskBoundary },
+            { role: 'user', content: `请为 ${characterName} 生成可选的属性成长任务，并严格按指定 JSON 格式回复。` },
+        ]);
+        const response = await generate(messages, { ...options, kind: 'characterGrowth', stream: false });
+        if (!response.success) return response;
+        if (options.signal?.aborted) return { success: false, error: '已中断发送', aborted: true };
+        const tasks = normalizeCharacterGrowthTasks(response.text, attributeColumns, transactionColumns);
+        if (!tasks.length) {
+            return {
+                success: false,
+                error: '模型结果中没有可用的属性成长任务，请检查属性成长任务提示词的 JSON 格式。',
+                text: response.text,
+            };
+        }
+        return {
+            success: true,
+            kind: 'characterGrowth',
+            characterName,
+            tasks,
+            text: response.text,
+            meta: {
+                tableId: table.id,
+                recordId: record.id,
+                sessionId: String(state?.sessionId || getCurrentSessionId() || ''),
+                profileFound: !!profile.record,
+                chatRange: { start: visibleChat.start, end: visibleChat.end },
+                visibleFloorCount: visibleChat.messages.length,
+            },
+        };
+    }
+
+    function commitCharacterGrowthTasks(state, result, selectedTaskIds = []) {
+        const selectedIds = new Set((Array.isArray(selectedTaskIds) ? selectedTaskIds : []).map(String));
+        if (!selectedIds.size) return { success: false, error: '请至少选择一个成长任务。' };
+        const resultSessionId = String(result?.meta?.sessionId || '');
+        const currentSessionId = String(state?.sessionId || getCurrentSessionId() || '');
+        if (resultSessionId && currentSessionId && resultSessionId !== currentSessionId) {
+            return { success: false, error: '当前聊天已切换，请在目标聊天中重新生成任务。' };
+        }
+        const table = stateTables(state).find((entry) => entry.id === String(result?.meta?.tableId || CHARACTER_STATUS_TABLE_ID));
+        const record = stateRecords(state, table?.id).find((entry) => String(entry?.id || '') === String(result?.meta?.recordId || ''));
+        if (!table || !record) return { success: false, error: '角色状态记录已变化，请重新生成任务。' };
+        const transactionColumns = YuzukiMemory.CharacterStatus?.getColumnLayout?.(table)?.transactionColumns || [];
+        const selectedTasks = (Array.isArray(result?.tasks) ? result.tasks : []).filter((task) => selectedIds.has(String(task?.id || '')));
+        if (!selectedTasks.length) return { success: false, error: '没有找到所选成长任务。' };
+
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        let count = 0;
+        selectedTasks.forEach((task) => {
+            const targetColumn = findCharacterTaskColumn(transactionColumns, task?.targetColumn);
+            if (!targetColumn) return;
+            const taskText = formatCharacterGrowthTaskText(task);
+            const current = String(record.values[targetColumn] || '').trim();
+            const existingLines = current.split(/\n+/).map((line) => line.trim()).filter(Boolean);
+            if (existingLines.includes(taskText)) return;
+            record.values[targetColumn] = [current, taskText].filter(Boolean).join('\n');
+            count += 1;
+        });
+        if (!count) return { success: false, error: '所选任务已存在于事务中。' };
+        return { success: true, count, record, tasks: selectedTasks };
+    }
+
     async function runTrace(state, options = {}) {
         const built = await buildTraceMessages(state, options);
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
@@ -3539,6 +3779,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         runSummary,
         runTraceOptimize,
         runSummaryOptimize,
+        runCharacterGrowthTasks,
+        commitCharacterGrowthTasks,
         runTagDiagnostic,
         commitTraceResult,
         commitSummaryResult,

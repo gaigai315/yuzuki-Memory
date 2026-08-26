@@ -17,12 +17,25 @@
     const DEFAULT_CHARACTER_STATUS_PROMPT = `【角色状态更新规则】
 1.可和其他表格同步更新在一个<Memory>内包裹。
 2.仅更新需要攻略的对象，其他NPC或{{user}}无需更新
-3.更新的数值均在0-100内。严禁数值大范围增加或减少。根据剧情进行增减。输出更新后的最终数值，禁止使用+1、-1这类变动量
+3.只允许更新角色状态表“状态总览”分组中的字段，禁止更新头部信息、基础属性和事务分组。
+4.更新的数值均在0-100内。严禁数值大范围增加或减少。根据剧情进行增减。输出更新后的最终数值，禁止使用+1、-1这类变动量
 <Memory><!--
 #角色状态
 [角色姓名] | 好感度：11| 疲劳值：11;
 [角色姓名] | 好感度：2| 疲劳值：3;
 --></Memory>`;
+    const DEFAULT_CHARACTER_GROWTH_TASK_PROMPT = `你是角色属性成长任务设计助手。请根据提供的剧情、角色状态和角色档案，设计 3-6 个可由用户决定是否接取的成长任务。
+
+规则：
+1. 每个任务只能奖励一个当前角色状态表中真实存在的基础属性；不得直接修改属性数值。
+2. 任务必须与现有剧情、角色身份、能力和处境相符，不得编造互相冲突的设定。
+3. target 只能填写插件本次提供的真实事务列名。默认结构仅有“奇遇”；若用户自定义了事务字段，必须从提供的实际列名中选择。
+4. 未提供自定义事务字段时，所有任务的 target 均填写“奇遇”；存在自定义事务字段时，根据任务内容选择最合适的实际列名。
+5. increase 必须是 1-3 的整数，并与任务难度相称。
+6. 只输出 JSON，不要解释，不要 Markdown。
+
+输出格式：
+{"tasks":[{"title":"任务标题","target":"奇遇","description":"任务内容","completion":"明确完成条件","attribute":"基础属性名","increase":1}]}`;
     const CHARACTER_NAME_CONSISTENCY_RULE = `在处理角色档案和姓名时，你必须绝对遵守以下一致性原则，不得有任何变通：
 姓名主键：新增角色时必须使用唯一且最完整的全名。已有角色名若包含“|”，各段都是同一角色的等价姓名，第一段是主姓名；使用其中任一完整姓名更新时都视为同一角色，严禁拆成多条档案。
 格式锁定：注意中外文译名的标点符号。包含间隔号的必须保留（如 A·B 不能写成 AB）。
@@ -35,7 +48,8 @@
 ② 基础显示必须维持2-4条。待办事项必须在剧情中展现处理的具体过程和进展，严禁围绕 {{user}} 生成，在正文中，自然描述处理事务的过程，不能仅仅是"他开始工作了"。
 ③ 每天凌晨刷新，当天规划一整天日程。前日未完成事项在当日继承。
 ④ 输出格式必须严格为：待办事项：〔1〕YYYY-MM-DD HH:mm·A与B约定在某地做某事（中）。每条必须包含序号、完整年月日、时间、事项和优先级；多条之间只用半角分号“;”分隔；优先级只能填写(高)、(中)、(低)，严禁输出“高优先”等其他写法。
-⑤ 每条待办事项中的 x年x月x日 和 HH:mm 均不得遗漏。`;
+⑤ 每条待办事项中的 x年x月x日 和 HH:mm 均不得遗漏。
+⑥ 同一角色中，完整年月日和时分完全相同的待办只能保留一条；即使事项文字表述不同，也不得重复输出。只有时间不同才可新增。`;
     const MEMORY_FORMAT_EXAMPLE_BODY = `#角色档案
 [角色全名]|年龄：具体年龄|性别：性别|身份：当前社会身份/职业身份|性格：性格关键词|当前位置：城市·区域·建筑·内部位置·姿态|周围角色：同场角色A、同场角色B|生理：当前生理状态|人际关系：{目标角色}：〔关系〕 · 〔情感〕|着装：衣物/随身物|待办事项：〔1〕YYYY-MM-DD HH:mm·A与B约定在某地做某事（中）
 #物品
@@ -639,6 +653,7 @@ ${MEMORY_FORMAT_EXAMPLE_BODY}
             id: DEFAULT_CHARACTER_STATUS_PROMPT_ID,
             name: DEFAULT_CHARACTER_STATUS_PROMPT_NAME,
             prompt: DEFAULT_CHARACTER_STATUS_PROMPT,
+            growthPrompt: DEFAULT_CHARACTER_GROWTH_TASK_PROMPT,
             builtin: true,
         }];
     }
@@ -650,6 +665,7 @@ ${MEMORY_FORMAT_EXAMPLE_BODY}
                 id: String(entry.id || '').trim(),
                 name: String(entry.name || '').trim(),
                 prompt: String(entry.prompt ?? entry.content ?? entry.text ?? ''),
+                growthPrompt: String(entry.growthPrompt ?? entry.characterGrowthPrompt ?? entry.taskPrompt ?? DEFAULT_CHARACTER_GROWTH_TASK_PROMPT),
                 builtin: entry.builtin === true,
             } : null)
             .filter((entry) => {

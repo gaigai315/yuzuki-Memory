@@ -252,30 +252,59 @@
     }
 
     function getTodoIdentity(item = {}) {
+        const parts = item?.dateTimeParts;
+        if (parts && isValidDateTimeParts(
+            Number(parts.year),
+            Number(parts.month),
+            Number(parts.day),
+            Number(parts.hour),
+            Number(parts.minute)
+        )) {
+            return `datetime:${Number(parts.year)}-${Number(parts.month)}-${Number(parts.day)} ${Number(parts.hour)}:${Number(parts.minute)}`;
+        }
         const dateTime = String(item.dateTime || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
         const text = String(item.text || item.rawContent || '').normalize('NFKC').replace(/\s+/g, '').trim().toLowerCase();
-        return `${dateTime}|${text}`;
+        return `content:${dateTime}|${text}`;
+    }
+
+    function mergeUniqueTodoItems(...groups) {
+        const merged = [];
+        const identities = new Set();
+        groups.flat().forEach((item) => {
+            if (!item) return;
+            const identity = getTodoIdentity(item);
+            if (!identity || identity === 'content:|') return;
+            if (identities.has(identity)) return;
+            identities.add(identity);
+            merged.push(item);
+        });
+        return merged;
+    }
+
+    function dedupeTodoText(text = '') {
+        const items = parseTodoItems(text);
+        if (!items.length) return String(text || '').trim();
+        return serializeTodoItems(mergeUniqueTodoItems(items));
+    }
+
+    function getTodoDeduplicationResult(text = '') {
+        const items = parseTodoItems(text);
+        const kept = mergeUniqueTodoItems(items);
+        const duplicateCount = Math.max(0, items.length - kept.length);
+        return {
+            changed: duplicateCount > 0,
+            duplicateCount,
+            kept,
+            value: duplicateCount > 0 ? serializeTodoItems(kept) : String(text || ''),
+        };
     }
 
     function mergeTodoTexts(current = '', next = '') {
         const currentItems = parseTodoItems(current);
         const nextItems = parseTodoItems(next);
-        if (!currentItems.length) return serializeTodoItems(nextItems) || String(next || '').trim();
-        if (!nextItems.length) return serializeTodoItems(currentItems) || String(current || '').trim();
-
-        const merged = [...currentItems];
-        const indexes = new Map(merged.map((item, index) => [getTodoIdentity(item), index]));
-        nextItems.forEach((item) => {
-            const identity = getTodoIdentity(item);
-            if (!identity || identity === '|') return;
-            if (indexes.has(identity)) {
-                merged[indexes.get(identity)] = item;
-                return;
-            }
-            indexes.set(identity, merged.length);
-            merged.push(item);
-        });
-        return serializeTodoItems(merged);
+        const merged = mergeUniqueTodoItems(currentItems, nextItems);
+        if (merged.length) return serializeTodoItems(merged);
+        return [String(current || '').trim(), String(next || '').trim()].find(Boolean) || '';
     }
 
     function parseStoryTimeText(text = '') {
@@ -417,17 +446,17 @@
     }
 
     function cleanupExpiredTodos(options = {}) {
-        if (cleaning || YuzukiMemory.Storage?.isSessionSwitching?.()) return { changed: false, removedCount: 0 };
-        const storyTime = options.storyTime || getCurrentStoryTime();
-        if (!storyTime || !Number.isFinite(storyTime.ordinalMinutes)) {
-            return { changed: false, removedCount: 0, reason: 'missing_story_time' };
+        if (cleaning || YuzukiMemory.Storage?.isSessionSwitching?.()) {
+            return { changed: false, removedCount: 0, duplicateCount: 0 };
         }
+        const storyTime = options.storyTime || getCurrentStoryTime();
+        const canPruneExpired = !!storyTime && Number.isFinite(storyTime.ordinalMinutes);
 
         const storage = YuzukiMemory.Storage;
         const createDefaultState = YuzukiMemory.MemoryTagParser?.createDefaultState;
         const sessionId = storage?.getCurrentSessionId?.();
         if (!storage?.loadState || !storage?.saveState || !createDefaultState || !sessionId) {
-            return { changed: false, removedCount: 0, reason: 'not_ready' };
+            return { changed: false, removedCount: 0, duplicateCount: 0, reason: 'not_ready' };
         }
 
         cleaning = true;
@@ -438,40 +467,66 @@
                 ? state.records[CHARACTER_TABLE_ID]
                 : [];
             let removedCount = 0;
+            let duplicateCount = 0;
             const changedRecordIds = [];
 
             records.forEach((record) => {
                 const values = record?.values && typeof record.values === 'object' ? record.values : null;
                 if (!values) return;
-                const result = pruneTodoText(values[TODO_FIELD_NAME], storyTime.ordinalMinutes);
-                if (!result.changed) return;
-                values[TODO_FIELD_NAME] = result.value;
-                removedCount += result.removed.length;
+                const deduplication = getTodoDeduplicationResult(values[TODO_FIELD_NAME]);
+                let nextValue = deduplication.value;
+                let recordChanged = deduplication.changed;
+                duplicateCount += deduplication.duplicateCount;
+
+                if (canPruneExpired) {
+                    const expiry = pruneTodoText(nextValue, storyTime.ordinalMinutes);
+                    if (expiry.changed) {
+                        nextValue = expiry.value;
+                        removedCount += expiry.removed.length;
+                        recordChanged = true;
+                    }
+                }
+                if (!recordChanged) return;
+                values[TODO_FIELD_NAME] = nextValue;
                 changedRecordIds.push(String(record.id || values['角色名'] || ''));
             });
 
-            if (!removedCount) return { changed: false, removedCount: 0, storyTime };
+            if (!removedCount && !duplicateCount) {
+                return {
+                    changed: false,
+                    removedCount: 0,
+                    duplicateCount: 0,
+                    storyTime,
+                    ...(!canPruneExpired ? { reason: 'missing_story_time' } : {}),
+                };
+            }
             const saved = storage.saveState(state, fallback, sessionId, {
                 force: true,
                 immediate: true,
                 saveOrigin: 'auto',
             });
-            if (!saved) return { changed: false, removedCount: 0, reason: 'save_failed', storyTime };
+            if (!saved) {
+                return { changed: false, removedCount: 0, duplicateCount: 0, reason: 'save_failed', storyTime };
+            }
 
             YuzukiMemory.BranchSnapshot?.captureCurrentStateSnapshot?.(state, { sessionId });
             window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
                 detail: {
                     source: 'todo-manager',
                     removedCount,
+                    duplicateCount,
                     changedRecordIds,
-                    storyTime: { date: storyTime.date, time: storyTime.time, source: storyTime.source },
+                    ...(storyTime ? {
+                        storyTime: { date: storyTime.date, time: storyTime.time, source: storyTime.source },
+                    } : {}),
                 },
             }));
-            console.info('[yuzuki-Memory Todo] expired todos removed', {
+            console.info('[yuzuki-Memory Todo] todo maintenance applied', {
                 removedCount,
-                storyTime: `${storyTime.date} ${storyTime.time}`,
+                duplicateCount,
+                storyTime: storyTime ? `${storyTime.date} ${storyTime.time}` : '',
             });
-            return { changed: true, removedCount, changedRecordIds, storyTime };
+            return { changed: true, removedCount, duplicateCount, changedRecordIds, storyTime };
         } finally {
             cleaning = false;
         }
@@ -525,6 +580,7 @@
         parseTodoItems,
         serializeTodoItems,
         fillMissingTodoDates,
+        dedupeTodoText,
         mergeTodoTexts,
         parseStoryTimeText,
         getStoryTimeForFloor,

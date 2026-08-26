@@ -70,7 +70,7 @@
             id: 'character_status',
             name: '角色状态',
             icon: 'status',
-            columns: ['角色名', '住址', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'],
+            columns: ['角色名', '住址', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇'],
             characterStatusBreaks: [2, 4, 9],
         },
         {
@@ -619,9 +619,12 @@
             if (table.id === 'plot_summary') {
                 return '#剧情摘要：包含 #主线摘要/#支线摘要；格式为 [x年x月x日,08:00-09:15]|内容:事件;[09:25-12:15]|内容:同一天后续事件；同一天只在第一段写日期，跨天再写完整日期';
             }
-            const columns = (Array.isArray(table.columns) ? table.columns : [])
-                .map(cleanColumnName)
-                .filter(Boolean);
+            const columns = (table.id === 'character_status'
+                ? YuzukiMemory.CharacterStatus?.getAiUpdateColumns?.(table)
+                : (Array.isArray(table.columns) ? table.columns : []))
+                ?.map(cleanColumnName)
+                .filter(Boolean)
+                || [];
             if (!columns.length) return `#${table.name}：包含`;
             const primary = columns[0];
             const fields = columns.map((column, index) => {

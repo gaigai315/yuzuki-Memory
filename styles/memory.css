@@ -8015,6 +8015,163 @@
     flex-wrap: wrap;
 }
 
+#yzm-memory-root .yzm-character-growth-dialog,
+#yzm-memory-global-modal-root .yzm-character-growth-dialog {
+    width: min(720px, 100%);
+    max-height: min(84vh, 760px);
+    min-height: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-character-growth-meta,
+#yzm-memory-global-modal-root .yzm-character-growth-meta {
+    flex: 0 0 auto;
+    color: var(--yzm-muted);
+    font-size: 13px;
+    line-height: 1.5;
+}
+
+#yzm-memory-root .yzm-character-growth-select-all,
+#yzm-memory-global-modal-root .yzm-character-growth-select-all {
+    display: inline-flex;
+    align-items: center;
+    align-self: flex-start;
+    gap: 8px;
+    min-height: 32px;
+    color: var(--yzm-text);
+    cursor: pointer;
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-character-growth-checkbox,
+#yzm-memory-global-modal-root .yzm-character-growth-checkbox {
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+    margin: 0;
+    accent-color: var(--yzm-selected-color);
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-character-growth-list,
+#yzm-memory-global-modal-root .yzm-character-growth-list {
+    display: grid;
+    flex: 1 1 auto;
+    gap: 9px;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+}
+
+#yzm-memory-root .yzm-character-growth-task,
+#yzm-memory-global-modal-root .yzm-character-growth-task {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr);
+    align-items: start;
+    gap: 11px;
+    min-width: 0;
+    padding: 12px;
+    color: var(--yzm-text);
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 8px;
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: background 160ms ease, border-color 160ms ease;
+}
+
+#yzm-memory-root .yzm-character-growth-task:hover,
+#yzm-memory-root .yzm-character-growth-task:focus-within,
+#yzm-memory-global-modal-root .yzm-character-growth-task:hover,
+#yzm-memory-global-modal-root .yzm-character-growth-task:focus-within {
+    background: var(--yzm-hover);
+    border-color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-character-growth-task-content,
+#yzm-memory-global-modal-root .yzm-character-growth-task-content {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-character-growth-task-header,
+#yzm-memory-global-modal-root .yzm-character-growth-task-header,
+#yzm-memory-root .yzm-character-growth-task-footer,
+#yzm-memory-global-modal-root .yzm-character-growth-task-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-character-growth-task-title,
+#yzm-memory-global-modal-root .yzm-character-growth-task-title {
+    min-width: 0;
+    color: var(--yzm-title);
+    font-size: 14px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-character-growth-target,
+#yzm-memory-global-modal-root .yzm-character-growth-target {
+    flex: 0 0 auto;
+    padding: 2px 7px;
+    color: var(--yzm-selected-color);
+    background: var(--yzm-surface-strong);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 7px;
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+#yzm-memory-root .yzm-character-growth-description,
+#yzm-memory-global-modal-root .yzm-character-growth-description {
+    color: var(--yzm-text);
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-character-growth-task-footer,
+#yzm-memory-global-modal-root .yzm-character-growth-task-footer {
+    align-items: flex-end;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+#yzm-memory-root .yzm-character-growth-task-footer > span,
+#yzm-memory-global-modal-root .yzm-character-growth-task-footer > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-character-growth-reward,
+#yzm-memory-global-modal-root .yzm-character-growth-reward {
+    flex: 0 0 auto;
+    color: var(--yzm-selected-color);
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-character-growth-actions,
+#yzm-memory-global-modal-root .yzm-character-growth-actions {
+    display: flex;
+    flex: 0 0 auto;
+    justify-content: flex-end;
+}
+
+#yzm-memory-root .yzm-character-growth-confirm:disabled,
+#yzm-memory-global-modal-root .yzm-character-growth-confirm:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
 #yzm-memory-root .yzm-structure-name-input,
 #yzm-memory-root .yzm-structure-columns-input {
     width: 100%;
@@ -12720,6 +12877,43 @@
     text-align: center;
 }
 
+#yzm-memory-root .yzm-character-growth-trigger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 28px;
+    width: 28px;
+    height: 28px;
+    margin-left: 2px;
+    padding: 0;
+    color: var(--yzm-icon);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 7px;
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+#yzm-memory-root .yzm-character-growth-trigger i {
+    width: auto;
+    color: inherit;
+    font-size: 13px;
+}
+
+#yzm-memory-root .yzm-character-growth-trigger:hover,
+#yzm-memory-root .yzm-character-growth-trigger:focus-visible {
+    color: var(--yzm-selected-color);
+    background: var(--yzm-hover);
+    border-color: var(--yzm-icon);
+    outline: 0;
+}
+
+#yzm-memory-root .yzm-character-growth-trigger:disabled {
+    cursor: wait;
+    opacity: 0.65;
+}
+
 #yzm-memory-root .yzm-character-status-overview-list,
 #yzm-memory-root .yzm-character-status-attribute-list {
     display: grid;
@@ -12900,9 +13094,23 @@
     border-top: 1px solid var(--yzm-border-soft);
 }
 
-#yzm-memory-root .yzm-character-status-transaction-list {
+#yzm-memory-root .yzm-character-status-transaction-count {
+    min-width: 22px;
+    margin-left: auto;
+    padding: 2px 7px;
+    color: var(--yzm-icon);
+    background: var(--yzm-input-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 999px;
+    box-sizing: border-box;
+    font-size: 11px;
+    line-height: 1.35;
+    text-align: center;
+}
+
+#yzm-memory-root .yzm-character-status-task-list {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 290px), 1fr));
     gap: 12px;
     min-width: 0;
     width: 100%;
@@ -12910,42 +13118,210 @@
     box-sizing: border-box;
 }
 
-#yzm-memory-root .yzm-character-status-transaction {
+#yzm-memory-root .yzm-character-status-task-card {
+    --yzm-character-status-task-accent: var(--yzm-icon);
+    display: grid;
+    align-content: start;
+    gap: 9px;
     min-width: 0;
-    overflow: hidden;
-    background: var(--yzm-row-bg);
+    padding: 11px 12px;
+    overflow: clip;
+    color: var(--yzm-text);
+    background: var(--yzm-surface);
     border: 1px solid var(--yzm-border);
     border-radius: 8px;
+    box-sizing: border-box;
 }
 
-#yzm-memory-root .yzm-character-status-transaction-title {
+#yzm-memory-root .yzm-character-status-task-tone-adventure {
+    --yzm-character-status-task-accent: var(--yzm-selected-color);
+}
+
+#yzm-memory-root .yzm-character-status-task-tone-plot {
+    --yzm-character-status-task-accent: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-character-status-task-tone-neutral {
+    --yzm-character-status-task-accent: var(--yzm-todo-low);
+}
+
+#yzm-memory-root .yzm-character-status-task-header {
     display: flex;
     align-items: center;
     gap: 8px;
-    min-height: 38px;
-    padding: 0 12px;
-    color: var(--yzm-title);
-    background: var(--yzm-surface-strong);
-    border-bottom: 1px solid var(--yzm-border-soft);
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-character-status-task-kind {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    flex: 0 0 auto;
+    max-width: 42%;
+    padding: 3px 7px;
+    overflow: hidden;
+    color: var(--yzm-character-status-task-accent);
+    background: color-mix(in srgb, var(--yzm-character-status-task-accent) 11%, transparent);
+    border: 1px solid color-mix(in srgb, var(--yzm-character-status-task-accent) 28%, transparent);
+    border-radius: 6px;
     box-sizing: border-box;
+    font-size: 11px;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-character-status-task-kind i {
+    flex: 0 0 auto;
+    color: inherit;
+    font-size: 10px;
+}
+
+#yzm-memory-root .yzm-character-status-task-title {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--yzm-title);
     font-size: 13px;
     font-weight: 700;
+    line-height: 1.35;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-#yzm-memory-root .yzm-character-status-transaction-title i {
-    color: var(--yzm-icon);
-}
-
-#yzm-memory-root .yzm-character-status-transaction-body {
-    min-height: 74px;
-    padding: 11px 12px;
+#yzm-memory-root .yzm-character-status-task-description {
+    display: -webkit-box;
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
     color: var(--yzm-text);
-    box-sizing: border-box;
     font-size: 13px;
-    line-height: 1.6;
+    line-height: 1.5;
     overflow-wrap: anywhere;
-    white-space: pre-wrap;
     word-break: break-word;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+#yzm-memory-root .yzm-character-status-task-meta,
+#yzm-memory-root .yzm-character-status-task-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-character-status-task-meta {
+    padding-bottom: 8px;
+    color: var(--yzm-muted);
+    border-bottom: 1px solid var(--yzm-border-soft);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-character-status-task-reward,
+#yzm-memory-root .yzm-character-status-task-goal {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-character-status-task-reward {
+    color: var(--yzm-title);
+    font-weight: 600;
+}
+
+#yzm-memory-root .yzm-character-status-task-reward i,
+#yzm-memory-root .yzm-character-status-task-goal i {
+    flex: 0 0 auto;
+    color: var(--yzm-character-status-task-accent);
+    font-size: 10px;
+}
+
+#yzm-memory-root .yzm-character-status-task-state {
+    flex: 0 0 auto;
+    color: var(--yzm-muted);
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-character-status-task-goal {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-character-status-task-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex: 0 0 auto;
+}
+
+#yzm-memory-root .yzm-character-status-task-details,
+#yzm-memory-root .yzm-character-status-complete-task {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    min-height: 28px;
+    padding: 0 8px;
+    color: var(--yzm-icon);
+    background: var(--yzm-surface);
+    border: 1px solid var(--yzm-border);
+    border-radius: 7px;
+    box-sizing: border-box;
+    cursor: pointer;
+    transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
+}
+
+#yzm-memory-root .yzm-character-status-task-details:hover,
+#yzm-memory-root .yzm-character-status-task-details:focus-visible,
+#yzm-memory-root .yzm-character-status-complete-task:hover,
+#yzm-memory-root .yzm-character-status-complete-task:focus-visible {
+    color: var(--yzm-selected-color);
+    background: var(--yzm-hover);
+    border-color: var(--yzm-icon);
+    outline: 0;
+}
+
+#yzm-memory-root .yzm-character-status-task-details span,
+#yzm-memory-root .yzm-character-status-complete-task span {
+    color: inherit;
+    font-size: 11px;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-character-status-task-details i,
+#yzm-memory-root .yzm-character-status-complete-task i {
+    color: inherit;
+    font-size: 10px;
+}
+
+#yzm-memory-root .yzm-character-status-task-expanded .yzm-character-status-task-description {
+    display: block;
+    overflow: visible;
+}
+
+#yzm-memory-root .yzm-character-status-task-expanded .yzm-character-status-task-goal {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+}
+
+#yzm-memory-root .yzm-character-status-task-empty {
+    grid-column: 1 / -1;
+    background: var(--yzm-row-bg);
+    border: 1px dashed var(--yzm-border);
+    border-radius: 8px;
 }
 
 #yzm-memory-root .yzm-character-status-empty-value,
@@ -12964,7 +13340,10 @@
 #yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-metric-value,
 #yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-attribute-value,
 #yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-header-field-value,
-#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-transaction-body {
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-task-title,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-task-description,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-task-meta,
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-task-goal {
     text-decoration: line-through;
     text-decoration-thickness: 1px;
 }
@@ -12973,7 +13352,7 @@
 #yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-section-title i,
 #yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-metric-label i,
 #yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-attribute-label i,
-#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-transaction-title i {
+#yzm-memory-root .yzm-detail-view-hidden .yzm-character-status-task-card i {
     color: var(--yzm-muted);
 }
 
@@ -13013,7 +13392,7 @@
     }
 
     #yzm-memory-root .yzm-character-status-main,
-    #yzm-memory-root .yzm-character-status-transaction-list {
+    #yzm-memory-root .yzm-character-status-task-list {
         grid-template-columns: minmax(0, 1fr);
         gap: 12px;
     }
@@ -13028,7 +13407,12 @@
         padding: 10px 11px;
     }
 
-    #yzm-memory-root .yzm-character-status-transaction-body {
-        min-height: 58px;
+    #yzm-memory-root .yzm-character-status-task-footer {
+        align-items: flex-start;
+        flex-wrap: wrap;
+    }
+
+    #yzm-memory-root .yzm-character-status-task-actions {
+        margin-left: auto;
     }
 }

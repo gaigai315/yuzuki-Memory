@@ -1,7 +1,7 @@
 // ============================================================================
 // yuzuki-Memory memory tag parser.
-// Parses <Memory><!-- #表名 [主键]|字段：内容 --></Memory> from assistant
-// replies and applies updates to plugin-owned memory tables.
+// Parses memory updates and character-task completion tags from assistant
+// replies, then applies both through one atomic state save.
 // ============================================================================
 (function () {
     'use strict';
@@ -24,7 +24,7 @@
     const DEFAULT_TABLES = [
         { id: 'plot_summary', name: '剧情摘要', icon: 'timeline', columns: ['#主线', '#支线'] },
         { id: 'character_profile', name: '角色档案', icon: 'person', columns: ['角色名', '年龄', '性别', '身份', '性格', '当前位置', '周围角色', '生理', '人际关系', '着装', '#待办事项', '约定'] },
-        { id: 'character_status', name: '角色状态', icon: 'status', columns: ['角色名', '住址', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'], characterStatusBreaks: [2, 4, 9] },
+        { id: 'character_status', name: '角色状态', icon: 'status', columns: ['角色名', '住址', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇'], characterStatusBreaks: [2, 4, 9] },
         { id: 'item_tracking', name: '物品追踪', icon: 'item', columns: ['物品名称', '物品描述', '物品位置', '持有者', '状态', '备注'] },
         { id: 'world_setting', name: '世界设定', icon: 'world', columns: ['设定名', '类型', '详细说明', '影响范围'] },
         { id: 'memory_summary', name: '记忆总结', icon: 'memory_book', columns: ['总结标题', '核心角色', '楼层数', '总结内容', '未解决问题', '备注'] },
@@ -683,7 +683,10 @@
         const primaryName = getPrimaryColumnName(table);
         const primaryValue = String(row.primaryValue || '').trim();
         if (!primaryValue) return false;
-        const validUpdates = Object.entries(row.values || {})
+        const rowValues = YuzukiMemory.CharacterStatus?.filterAiUpdateValues?.(table, row.values || {})
+            || row.values
+            || {};
+        const validUpdates = Object.entries(rowValues)
             .map(([field, value]) => {
                 const column = findColumn(table, field);
                 if (!column) return null;
@@ -715,7 +718,8 @@
             if (isFillOnceColumn(column) && currentValue) return;
             const shouldAppend = isAppendColumn(column);
             if (table.id === 'character_profile' && columnName === '待办事项') {
-                const todoValue = YuzukiMemory.TodoManager?.fillMissingTodoDates?.(value, options.storyTime) || value;
+                const datedTodoValue = YuzukiMemory.TodoManager?.fillMissingTodoDates?.(value, options.storyTime) || value;
+                const todoValue = YuzukiMemory.TodoManager?.dedupeTodoText?.(datedTodoValue) || datedTodoValue;
                 record.values[columnName] = shouldAppend
                     ? (YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[columnName], todoValue)
                         || appendCellValue(record.values[columnName], todoValue))
@@ -745,14 +749,18 @@
 
     function applyMemoryText(text, options = {}) {
         const rows = extractMemoryRows(text);
+        const growthCompletionUpdates = YuzukiMemory.CharacterStatus?.parseGrowthTaskCompletionTags?.(text) || [];
         const hasMemoryTag = MEMORY_TAG_PATTERN.test(String(text || ''));
         MEMORY_TAG_PATTERN.lastIndex = 0;
-        if (!rows.length || applying) {
+        const hasGrowthCompletionTag = /<角色任务完成>[\s\S]*?<\/角色任务完成>/i.test(String(text || ''));
+        if ((!rows.length && !growthCompletionUpdates.length) || applying) {
             console.info('[yuzuki-Memory Realtime] apply skipped', {
                 floor: options.floor,
                 textLength: String(text || '').length,
                 hasMemoryTag,
+                hasGrowthCompletionTag,
                 rows: rows.length,
+                growthCompletionUpdates: growthCompletionUpdates.length,
                 applying,
             });
             return { success: false, count: 0 };
@@ -769,9 +777,10 @@
             || YuzukiMemory.TodoManager?.getStoryTimeForFloor?.(floor, { chat })
             || YuzukiMemory.TodoManager?.getStoryTimeForRange?.({ start: 0, end: floor + 1 }, { chat })
             || null;
-        const replacedPlotItems = removeRealtimePlotItemsForRange(state, range, floorScope);
+        const replacedPlotItems = rows.length ? removeRealtimePlotItemsForRange(state, range, floorScope) : 0;
         YuzukiMemory.BranchSnapshot?.captureBaseSnapshotBeforeMessage?.(floor, { state });
         let count = 0;
+        let growthCompletionResult = { completions: [], ignored: [] };
         applying = true;
         try {
             count = applyRowsToState(state, rows, {
@@ -781,7 +790,16 @@
                 floorScope,
                 storyTime,
             });
-            if (count || replacedPlotItems) {
+            if (growthCompletionUpdates.length) {
+                growthCompletionResult = YuzukiMemory.CharacterStatus?.applyGrowthTaskCompletionUpdates?.(
+                    state,
+                    growthCompletionUpdates,
+                ) || growthCompletionResult;
+            }
+            const growthCompletions = Array.isArray(growthCompletionResult.completions)
+                ? growthCompletionResult.completions
+                : [];
+            if (count || replacedPlotItems || growthCompletions.length) {
                 const saved = YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, {
                     allowDuringSwitch: true,
                     force: true,
@@ -793,6 +811,8 @@
                     rows: rows.length,
                     applied: count,
                     replacedPlotItems,
+                    growthCompletions: growthCompletions.length,
+                    ignoredGrowthCompletions: growthCompletionResult.ignored?.length || 0,
                     saved: !!saved,
                     stateCounts: getRecordCounts(state),
                     storedCounts: getRecordCounts(storedState),
@@ -802,22 +822,41 @@
                         floor,
                         rows: rows.length,
                         applied: count,
+                        growthCompletions: growthCompletions.length,
                     });
-                    return { success: false, count: 0, saveFailed: true };
+                    return { success: false, count: 0, growthCompletions: [], saveFailed: true };
                 }
                 YuzukiMemory.BranchSnapshot?.captureMessageSnapshot?.(floor, { state });
                 if (options.dispatch !== false) {
                     window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
-                        detail: { source: 'memory-tag-parser', count, replacedPlotItems },
+                        detail: {
+                            source: 'memory-tag-parser',
+                            count,
+                            replacedPlotItems,
+                            growthCompletionCount: growthCompletions.length,
+                        },
                     }));
+                    if (growthCompletions.length) {
+                        window.dispatchEvent(new CustomEvent('yzm-character-growth-tasks-completed', {
+                            detail: { floor, completions: growthCompletions },
+                        }));
+                    }
                 }
             } else {
                 console.info('[yuzuki-Memory Realtime] parsed rows but nothing applied', {
                     floor,
                     rows: rows.length,
+                    growthCompletionUpdates: growthCompletionUpdates.length,
+                    ignoredGrowthCompletions: growthCompletionResult.ignored?.length || 0,
                 });
             }
-            return { success: count > 0 || replacedPlotItems > 0, count, replacedPlotItems };
+            return {
+                success: count > 0 || replacedPlotItems > 0 || growthCompletions.length > 0,
+                count,
+                replacedPlotItems,
+                growthCompletions,
+                ignoredGrowthCompletions: growthCompletionResult.ignored || [],
+            };
         } finally {
             applying = false;
         }
