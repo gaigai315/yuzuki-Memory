@@ -7553,25 +7553,30 @@
         if (draft) {
             const editorCard = document.createElement('section');
             editorCard.className = 'yzm-config-card yzm-scheme-editor-card yzm-character-status-prompt-editor-card';
+            editorCard.dataset.yzmSchemeEditorCard = 'true';
             const cardHeader = document.createElement('div');
             cardHeader.className = 'yzm-scheme-card-header';
             const cardTitle = document.createElement('div');
             cardTitle.className = 'yzm-config-card-title yzm-scheme-card-title';
             cardTitle.append(createIconNode('fa-regular fa-pen-to-square', ''), document.createTextNode('编辑角色状态提示词'));
-            cardHeader.appendChild(cardTitle);
+            const expand = createSchemeExpandButton();
+            cardHeader.append(cardTitle, expand);
 
             const nameInputWrap = createApiInput('输入提示词名称');
             const nameInput = nameInputWrap.querySelector('.yzm-api-input');
             if (nameInput) {
                 nameInput.value = draft.name || '';
                 nameInput.dataset.yzmCharacterStatusPromptField = 'name';
+                nameInput.readOnly = draft.builtin === true;
             }
             const textarea = document.createElement('textarea');
             textarea.className = 'yzm-scheme-textarea yzm-character-status-prompt-textarea';
             textarea.placeholder = '填写角色状态提示词...';
             textarea.value = draft.prompt || '';
             textarea.spellcheck = false;
+            textarea.readOnly = draft.builtin === true;
             textarea.dataset.yzmCharacterStatusPromptField = 'prompt';
+            textarea.dataset.yzmSchemeTitle = '编辑角色状态提示词';
             editorCard.append(
                 cardHeader,
                 createApiField('提示词名称', nameInputWrap),
@@ -12597,6 +12602,7 @@
             '【优化】连续生成多条正文时，未完成的填表和总结会自动排队补齐，不再漏掉楼层。',
             '【修复】遇到并发冲突、限流或超时会自动重试；任务成功前不会推进指针，也不会提前隐藏楼层。',
             '【新增】填表与总结支持跟随绑定的 API，分别使用对应的预设执行任务。',
+            '【新增】新增默认角色状态表格；角色状态提示词请根据自己的角色卡自行新增。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -13704,6 +13710,7 @@
         textarea.value = sourceTextarea.value || '';
         textarea.placeholder = sourceTextarea.placeholder || '';
         textarea.spellcheck = false;
+        textarea.readOnly = sourceTextarea.readOnly === true;
 
         const footer = document.createElement('div');
         footer.className = 'yzm-scheme-modal-footer';
@@ -13715,6 +13722,10 @@
         updateCounter();
         const cancel = createButton('取消', 'yzm-api-button');
         const apply = createIconButton('应用到当前框', 'fa-regular fa-circle-check', 'yzm-api-button yzm-api-button-primary');
+        if (textarea.readOnly) {
+            cancel.textContent = '关闭';
+            apply.hidden = true;
+        }
         footer.append(counter, cancel, apply);
 
         dialog.append(header, textarea, footer);
