@@ -3719,6 +3719,25 @@
         return window.matchMedia?.('(max-width: 760px) and (pointer: coarse)').matches;
     }
 
+    function isTauriTavernIosRuntime() {
+        const isTauriRuntime = window.__TAURI_RUNNING__ === true
+            || window.__TAURI_INTERNALS__ !== undefined
+            || typeof window.__TAURI__?.core?.invoke === 'function';
+        const isTauriTavernRuntime = window.__TAURITAVERN__ !== undefined
+            || window.__TAURITAVERN_MAIN_READY__ !== undefined;
+        if (!isTauriRuntime || !isTauriTavernRuntime) return false;
+
+        const userAgent = String(navigator.userAgent || '');
+        const platform = String(navigator.platform || '');
+        return /iphone|ipad|ipod/i.test(userAgent)
+            || /iphone|ipad|ipod/i.test(platform)
+            || (platform === 'MacIntel' && Number(navigator.maxTouchPoints) > 1);
+    }
+
+    function applyHostCompatibilityClasses(root) {
+        root.classList.toggle('yzm-tauritavern-ios', isTauriTavernIosRuntime());
+    }
+
     function setMobileDetailOpen(root, isOpen) {
         root.querySelector('.yzm-shell')?.classList.toggle('yzm-mobile-detail-open', isOpen);
         if (isMobileLayout()) root.querySelector('.yzm-workspace')?.classList.toggle('yzm-primary-collapsed', isOpen);
@@ -16103,11 +16122,15 @@
 
     function ensureRoot() {
         let root = document.getElementById(ROOT_ID);
-        if (root) return root;
+        if (root) {
+            applyHostCompatibilityClasses(root);
+            return root;
+        }
 
         root = document.createElement('div');
         root.id = ROOT_ID;
         root.className = 'yzm-root';
+        applyHostCompatibilityClasses(root);
 
         const shell = document.createElement('section');
         shell.className = 'yzm-shell';

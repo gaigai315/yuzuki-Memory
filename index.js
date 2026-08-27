@@ -10,7 +10,7 @@ import { extension_settings } from '../../../extensions.js';
     'use strict';
 
     const NAMESPACE = 'YuzukiMemory';
-    const VERSION = '0.8.5';
+    const VERSION = '0.8.2';
     const baseUrl = new URL('./', import.meta.url).href;
 
     const MODULES = [

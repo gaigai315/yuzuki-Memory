@@ -9021,6 +9021,22 @@
         transform: none;
     }
 
+    #yzm-memory-root.yzm-tauritavern-ios {
+        --yzm-host-safe-top: max(var(--tt-inset-top, env(safe-area-inset-top, 0px)), 0px);
+        --yzm-host-safe-right: max(var(--tt-inset-right, env(safe-area-inset-right, 0px)), 0px);
+        --yzm-host-safe-bottom: max(var(--tt-inset-bottom, env(safe-area-inset-bottom, 0px)), 0px);
+        --yzm-host-safe-left: max(var(--tt-inset-left, env(safe-area-inset-left, 0px)), 0px);
+    }
+
+    #yzm-memory-root.yzm-tauritavern-ios .yzm-shell {
+        top: calc(6px + var(--yzm-host-safe-top));
+        right: calc(6px + var(--yzm-host-safe-right));
+        bottom: calc(6px + var(--yzm-host-safe-bottom));
+        left: calc(6px + var(--yzm-host-safe-left));
+        width: auto;
+        height: auto;
+    }
+
     #yzm-memory-root .yzm-shell-bar {
         flex-wrap: nowrap;
         gap: 2px;
