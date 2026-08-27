@@ -4506,7 +4506,7 @@
         );
         info.append(title, metrics);
 
-        const more = createVectorMoreMenu();
+        const more = createVectorMoreMenu(true);
         hero.append(cover, info, more);
         return hero;
     }
@@ -4530,20 +4530,21 @@
         return metric;
     }
 
-    function createVectorMoreMenu() {
+    function createVectorMoreMenu(hasCurrentBook = false) {
         const wrap = document.createElement('div');
         wrap.className = 'yzm-vector-more';
         const button = createIconButton('更多', 'fa-solid fa-ellipsis-vertical', 'yzm-vector-more-button');
         const menu = document.createElement('div');
         menu.className = 'yzm-vector-more-menu';
         menu.hidden = true;
+        const exportCurrentButton = createVectorActionButton('export-current-book', '导出当前书籍备份', 'fa-solid fa-file-export');
+        exportCurrentButton.disabled = !hasCurrentBook;
         menu.append(
             createVectorActionButton('new-book', '新建空白书', 'fa-solid fa-plus'),
             createVectorActionButton('import-book', '导入新书（TXT）', 'fa-solid fa-file-import'),
-            createVectorActionButton('sync-summary', '同步总结到书架', 'fa-solid fa-rotate'),
-            createVectorActionButton('vectorize-current-book', '向量化当前书', 'fa-solid fa-wand-magic-sparkles'),
-            createVectorActionButton('import-backup', '导入书馆备份', 'fa-solid fa-box-archive'),
-            createVectorActionButton('export-backup', '导出书馆备份', 'fa-solid fa-upload'),
+            createVectorActionButton('import-backup', '导入书籍', 'fa-solid fa-box-archive'),
+            exportCurrentButton,
+            createVectorActionButton('export-backup', '导出全部书籍备份', 'fa-solid fa-upload'),
             createVectorActionButton('clear-all', '清空全部书籍', 'fa-solid fa-trash-can', true)
         );
         button.addEventListener('click', (event) => {
@@ -5203,18 +5204,6 @@
 
         if (action === 'export-current-book') {
             if (store.selectedBookId) store.downloadBackup([store.selectedBookId]);
-            return;
-        }
-
-        if (action === 'sync-summary') {
-            const shouldVectorize = getAutoSummarySettings().autoVectorizeAfterHistory === true;
-            const result = await syncSummaryToVectorBook({ vectorize: shouldVectorize, hideAfterSync: shouldVectorize });
-            if (!result.success) {
-                window.alert(result.error || '同步失败');
-                return;
-            }
-            vectorUiState.segmentPage = 1;
-            refreshVectorAfterAction(root);
             return;
         }
 

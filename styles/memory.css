@@ -1512,7 +1512,7 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(128px, 1fr));
     gap: 8px;
-    width: 292px;
+    width: 308px;
     padding: 10px;
     background: var(--yzm-surface-strong);
     border: 1px solid var(--yzm-border);
@@ -1543,6 +1543,11 @@
 
 #yzm-memory-root .yzm-vector-more-item i {
     color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-vector-more-item:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
 }
 
 #yzm-memory-root .yzm-vector-more-danger,
