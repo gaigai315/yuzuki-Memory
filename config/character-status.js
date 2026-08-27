@@ -77,7 +77,7 @@
         }
         // This limits schema/writeback only; character-status records stay fully injected as context.
         const layout = getColumnLayout(table);
-        return [layout.primaryColumn, ...layout.overviewColumns].filter(Boolean);
+        return [layout.primaryColumn, ...layout.headerColumns, ...layout.overviewColumns].filter(Boolean);
     }
 
     function filterAiUpdateValues(table, values = {}) {
