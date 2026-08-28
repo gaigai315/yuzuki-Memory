@@ -75,6 +75,23 @@
             || ctx?.generationStarted === true;
     }
 
+    function hasActivePendingEntry(entries) {
+        const sessionId = getSessionId() || 'default';
+        const prefix = `${sessionId}:`;
+        const now = Date.now();
+        for (const [key, expiresAt] of entries.entries()) {
+            if (key.startsWith(prefix) && Number.isFinite(expiresAt) && expiresAt > now) return true;
+        }
+        return false;
+    }
+
+    function isBranchMutationActive() {
+        return isGenerationBusy()
+            || hasActivePendingEntry(pendingRequestRollbackFloors)
+            || hasActivePendingEntry(pendingApplyRollbackFloors)
+            || hasActivePendingEntry(pendingSwipeModeFloors);
+    }
+
     function getFallbackState() {
         return YuzukiMemory.VariableInjector?.createDefaultState?.()
             || YuzukiMemory.MemoryTagParser?.createDefaultState?.()
@@ -868,7 +885,7 @@
         if (bound) return;
         const ctx = getContext();
         const eventSource = ctx?.eventSource || window.eventSource;
-        const eventTypes = ctx?.event_types || window.event_types;
+        const eventTypes = ctx?.eventTypes || ctx?.event_types || window.event_types;
         if (!eventSource || typeof eventSource.on !== 'function' || !eventTypes) {
             window.clearTimeout(bindRetryTimer);
             bindRetryTimer = window.setTimeout(bind, 1000);
@@ -901,6 +918,8 @@
     YuzukiMemory.BranchSnapshot = Object.assign(YuzukiMemory.BranchSnapshot || {}, {
         bind,
         isRealtimeEnabled,
+        isGenerationBusy,
+        isBranchMutationActive,
         saveSnapshot,
         captureBaseSnapshotBeforeMessage,
         captureMessageSnapshot,

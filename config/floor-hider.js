@@ -378,7 +378,7 @@
         if (YuzukiMemory.FloorHider?.preGenerationHooksInstallId === INSTALL_ID) return true;
         const context = getContext() || {};
         const eventSource = context.eventSource || window.eventSource;
-        const eventTypes = context.event_types || window.event_types || {};
+        const eventTypes = context.eventTypes || context.event_types || window.event_types || {};
         if (!eventSource || typeof eventSource.on !== 'function') {
             if (!hookRetryTimer) {
                 hookRetryTimer = window.setTimeout(() => {

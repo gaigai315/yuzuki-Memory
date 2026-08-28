@@ -766,6 +766,7 @@
             return { success: false, count: 0 };
         }
         const state = YuzukiMemory.Storage?.loadState?.(createDefaultState()) || createDefaultState();
+        const recordsBeforeApply = YuzukiMemory.FloorLedger?.cloneManagedRecords?.(state) || null;
         const chat = getContext()?.chat;
         const floor = Number.isFinite(Number(options.floor))
             ? Math.round(Number(options.floor))
@@ -800,10 +801,20 @@
                 ? growthCompletionResult.completions
                 : [];
             if (count || replacedPlotItems || growthCompletions.length) {
+                const ledgerTransaction = YuzukiMemory.FloorLedger?.recordAppliedDelta?.({
+                    state,
+                    floor,
+                    message: Array.isArray(chat) ? chat[floor] : null,
+                    rows,
+                    growthCompletionUpdates,
+                    beforeRecords: recordsBeforeApply,
+                    floorScope,
+                    storyTime,
+                }) || null;
                 const saved = YuzukiMemory.Storage?.saveState?.(state, createDefaultState(), undefined, {
                     allowDuringSwitch: true,
                     force: true,
-                    saveOrigin: 'auto',
+                    saveOrigin: 'realtime-floor',
                 });
                 const storedState = YuzukiMemory.Storage?.loadState?.(createDefaultState());
                 console.info('[yuzuki-Memory Realtime] memory rows applied', {
@@ -818,6 +829,7 @@
                     storedCounts: getRecordCounts(storedState),
                 });
                 if (!saved) {
+                    ledgerTransaction?.rollback?.();
                     console.warn('[yuzuki-Memory Realtime] save failed after applying memory rows', {
                         floor,
                         rows: rows.length,
@@ -826,6 +838,7 @@
                     });
                     return { success: false, count: 0, growthCompletions: [], saveFailed: true };
                 }
+                ledgerTransaction?.commit?.();
                 YuzukiMemory.BranchSnapshot?.captureMessageSnapshot?.(floor, { state });
                 if (options.dispatch !== false) {
                     window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
@@ -967,8 +980,8 @@
         }
         const processedDifferentBranch = !consumedSwipeMode && options.force !== true && hasProcessedDifferentBranch(target, message);
         if (!consumedSwipeMode && !processedDifferentBranch && shouldSkipMessage(target, message, options)) return;
-        const consumedSwipeRollback = consumedSwipeMode
-            || YuzukiMemory.BranchSnapshot?.consumeApplyRollbackFloor?.(target) === true;
+        const consumedApplyRollback = YuzukiMemory.BranchSnapshot?.consumeApplyRollbackFloor?.(target) === true;
+        const consumedSwipeRollback = consumedSwipeMode || consumedApplyRollback;
         const shouldRollbackBeforeApply = options.rollbackBeforeApply === true || consumedSwipeRollback || processedDifferentBranch;
         if (shouldRollbackBeforeApply && YuzukiMemory.BranchSnapshot?.isRealtimeEnabled?.()) {
             YuzukiMemory.BranchSnapshot?.rollbackBeforeMessage?.(target, {
@@ -1015,7 +1028,7 @@
         if (bound) return;
         const ctx = getContext();
         const eventSource = ctx?.eventSource || window.eventSource;
-        const eventTypes = ctx?.event_types || window.event_types;
+        const eventTypes = ctx?.eventTypes || ctx?.event_types || window.event_types;
         if (!eventSource || typeof eventSource.on !== 'function' || !eventTypes) {
             window.clearTimeout(bindRetryTimer);
             bindRetryTimer = window.setTimeout(bind, 1000);

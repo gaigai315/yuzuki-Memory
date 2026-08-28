@@ -544,7 +544,7 @@
         if (bound) return;
         const context = getContext();
         const eventSource = context?.eventSource || window.eventSource;
-        const eventTypes = context?.event_types || window.event_types;
+        const eventTypes = context?.eventTypes || context?.event_types || window.event_types;
         if (!eventSource || typeof eventSource.on !== 'function' || !eventTypes) {
             window.clearTimeout(bindRetryTimer);
             bindRetryTimer = window.setTimeout(bind, 1000);

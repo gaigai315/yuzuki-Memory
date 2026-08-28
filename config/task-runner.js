@@ -3712,7 +3712,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         clampPointersToChatLength(getChatLength(), 'bind');
         const ctx = getContext();
         const eventSource = ctx?.eventSource || window.eventSource;
-        const eventTypes = ctx?.event_types || window.event_types || {};
+        const eventTypes = ctx?.eventTypes || ctx?.event_types || window.event_types || {};
         if (eventSource && typeof eventSource.on === 'function') {
             const bindEvents = (eventNames, handler) => {
                 [...new Set(eventNames.filter(Boolean))].forEach((eventName) => {

@@ -763,6 +763,9 @@
             activeTableId,
             activeRecordIds,
             records,
+            floorLedger: rawState.floorLedger && typeof rawState.floorLedger === 'object'
+                ? clone(rawState.floorLedger)
+                : null,
             promptPresetId: String(rawState.promptPresetId || fallback.promptPresetId || ''),
             characterStatusPromptId: String(rawState.characterStatusPromptId ?? fallback.characterStatusPromptId ?? ''),
             settings: Object.assign({}, fallback.settings || {}, rawState.settings || {}),
@@ -897,7 +900,7 @@
 
         const context = getContext();
         const eventSource = context?.eventSource || window.eventSource;
-        const eventTypes = context?.event_types || window.event_types;
+        const eventTypes = context?.eventTypes || context?.event_types || window.event_types;
         if (eventSource && eventTypes?.CHAT_CHANGED && typeof eventSource.on === 'function') {
             eventSource.on(eventTypes.CHAT_CHANGED, () => window.setTimeout(handleChange, 0));
         }

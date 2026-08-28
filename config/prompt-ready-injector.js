@@ -1066,7 +1066,7 @@
 
         const context = getContext() || {};
         const eventSource = context.eventSource || window.eventSource;
-        const eventTypes = context.event_types || window.event_types;
+        const eventTypes = context.eventTypes || context.event_types || window.event_types;
         const eventName = eventTypes?.CHAT_COMPLETION_PROMPT_READY;
         if (previous.installedEventId !== INSTALL_ID && eventSource && typeof eventSource.on === 'function' && eventName) {
             eventSource.on(eventName, handlePromptReadyEvent);

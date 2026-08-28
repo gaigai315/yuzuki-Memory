@@ -2998,6 +2998,7 @@
             const nextState = memoryIo.importIntoState(getState(), raw);
             const stats = memoryIo.getStats?.(nextState) || {};
             memoryState = prepareLoadedState(nextState);
+            YuzukiMemory.FloorLedger?.rebaseState?.(memoryState, { reason: 'import' });
             loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
             if (!saveState({ force: true, immediate: true })) {
                 memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
@@ -3068,6 +3069,8 @@
         } else {
             return false;
         }
+
+        YuzukiMemory.FloorLedger?.rebaseState?.(state, { reason: `clear-table:${mode}` });
 
         const saved = saveState({ force: true });
         if (!saved) {
@@ -12965,11 +12968,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【新增】新增完整的角色状态与属性成长系统：默认角色状态表按头部信息、状态总览、基础属性和事务分组，默认事务字段仅含“奇遇”，用户可根据角色卡自行新增或调整事务字段；角色状态会完整注入上下文，AI 自动填表可更新“头部信息”和“状态总览”，基础属性与事务仍受保护。事务中的机器人可结合酒馆角色/用户资料、同名角色档案、当前状态、记忆总结和全部未隐藏正文生成成长任务，支持多选接取并写入实际可用的事务字段，以“进行中”任务卡片展示；用户可把独立的完成判定提示词放入世界书并自行调整位置，正文回传角色任务完成标签后，插件自动领取基础属性奖励、清理对应任务并用横幅通知，也可手动完成结算；角色状态及成长任务提示词可按角色卡单独配置。',
-            '【新增】填表与总结支持跟随绑定的 API，分别使用对应的预设执行任务。',
-            '【优化】填表和总结现在会在后台处理，生成正文时无需等待。',
-            '【优化】连续生成多条正文时，未完成的填表和总结会自动排队补齐，不再漏掉楼层。',
-            '【修复】遇到并发冲突、限流或超时会自动重试；任务成功前不会推进指针，也不会提前隐藏楼层。',
+            '【新增】实时填表支持删除楼层恢复旧记录。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -16268,7 +16267,7 @@
         if (chatContextRefreshBound) return;
         const context = getContext();
         const eventSource = context?.eventSource || window.eventSource;
-        const eventTypes = context?.event_types || window.event_types;
+        const eventTypes = context?.eventTypes || context?.event_types || window.event_types;
         if (!eventSource || !eventTypes || typeof eventSource.on !== 'function') return;
         if (!eventTypes.CHAT_CHANGED && !eventTypes.MESSAGE_DELETED) return;
 
@@ -16297,6 +16296,17 @@
         const root = ensureRoot();
         const shell = root.querySelector('.yzm-shell');
         if (!shell) return;
+        const opening = forceOpen || shell.hidden;
+        if (opening) {
+            const result = YuzukiMemory.FloorLedger?.reconcileNow?.({
+                reason: 'memory_window_open',
+                force: true,
+            });
+            if (result?.reason === 'busy' || result?.reason === 'branch_busy' || result?.reason === 'save_failed') {
+                YuzukiMemory.FloorLedger?.scheduleReconcile?.('memory_window_open', 300, { force: true });
+            }
+            reloadStateFromStorage();
+        }
         shell.hidden = forceOpen ? false : !shell.hidden;
         updateFloatingIconVisibility();
         if (!shell.hidden) maybeShowUpdateNotice(root);

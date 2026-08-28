@@ -179,7 +179,7 @@
         if (generationEventsBound) return;
         const context = getContext();
         const eventSource = context?.eventSource || window.eventSource;
-        const eventTypes = context?.event_types || window.event_types;
+        const eventTypes = context?.eventTypes || context?.event_types || window.event_types;
         if (!eventSource || typeof eventSource.on !== 'function') return;
         const startedEvent = eventTypes?.GENERATION_STARTED || 'generation_started';
         const stoppedEvent = eventTypes?.GENERATION_STOPPED || 'generation_stopped';
