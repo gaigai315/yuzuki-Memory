@@ -293,46 +293,73 @@
         return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     }
 
+    function createTagBoundaryPatterns(tag) {
+        const value = String(tag || '').trim();
+        if (!value) return null;
+        if (value.startsWith('!--')) {
+            return { opening: '<!--', closing: '-->' };
+        }
+        if (value.startsWith('[') && value.endsWith(']')) {
+            const inner = escapeRegExp(value.slice(1, -1));
+            return {
+                opening: `\\[${inner}(?:\\s+[^\\]]*)?\\]`,
+                closing: `\\[\\/${inner}\\s*\\]`,
+            };
+        }
+        const safe = escapeRegExp(value);
+        return {
+            opening: `<${safe}(?:\\s+[^>]*)?>`,
+            closing: `<\\/\\s*${safe}\\s*>`,
+        };
+    }
+
     function filterContentByTags(content, preset = getActiveTagPreset()) {
         if (!content || !preset) return String(content || '');
         let result = String(content || '');
+        const whitelist = normalizeTagList(preset.whitelist);
+        const protectedOpenings = whitelist
+            .map(createTagBoundaryPatterns)
+            .filter(Boolean)
+            .map((boundaries) => new RegExp(boundaries.opening, 'i'));
         normalizeTagList(preset.blacklist).forEach((tag) => {
-            let re;
-            if (tag.startsWith('!--')) {
-                re = new RegExp(`<!--[\\s\\S]*?-->`, 'gi');
-            } else if (tag.startsWith('[') && tag.endsWith(']')) {
-                const inner = escapeRegExp(tag.slice(1, -1));
-                re = new RegExp(`\\[${inner}(?:\\s+[^\\]]*)?\\][\\s\\S]*?\\[\\/${inner}\\s*\\]`, 'gi');
-            } else {
-                const safe = escapeRegExp(tag);
-                re = new RegExp(`<${safe}(?:\\s+[^>]*)?>[\\s\\S]*?<\\/${safe}\\s*>`, 'gi');
-            }
+            const boundaries = createTagBoundaryPatterns(tag);
+            if (!boundaries) return;
+            const paired = new RegExp(`${boundaries.opening}[\\s\\S]*?${boundaries.closing}`, 'gi');
             let previous = '';
             let guard = 0;
             while (previous !== result && guard < 50) {
                 previous = result;
-                result = result.replace(re, '');
+                result = result.replace(paired, '');
                 guard += 1;
             }
+
+            // A lone closing tag terminates a hidden prefix; a lone opening tag starts a hidden suffix.
+            const closingPrefix = result.match(new RegExp(`^[\\s\\S]*?${boundaries.closing}`, 'i'));
+            if (closingPrefix) {
+                const containsProtectedOpening = protectedOpenings.some((opening) => opening.test(closingPrefix[0]));
+                result = containsProtectedOpening
+                    ? result.replace(new RegExp(boundaries.closing, 'i'), '')
+                    : result.slice(closingPrefix[0].length);
+            }
+            result = result.replace(new RegExp(`${boundaries.opening}[\\s\\S]*$`, 'i'), '');
         });
 
-        const whitelist = normalizeTagList(preset.whitelist);
         if (whitelist.length) {
             const extracted = [];
             whitelist.forEach((tag) => {
-                let re;
-                if (tag.startsWith('!--')) {
-                    re = /<!--([\s\S]*?)-->/gi;
-                } else if (tag.startsWith('[') && tag.endsWith(']')) {
-                    const inner = escapeRegExp(tag.slice(1, -1));
-                    re = new RegExp(`\\[${inner}(?:\\s+[^\\]]*)?\\]([\\s\\S]*?)(?:\\[\\/${inner}\\s*\\]|$)`, 'gi');
-                } else {
-                    const safe = escapeRegExp(tag);
-                    re = new RegExp(`<${safe}(?:\\s+[^>]*)?>([\\s\\S]*?)(?:<\\/${safe}\\s*>|$)`, 'gi');
-                }
+                const boundaries = createTagBoundaryPatterns(tag);
+                if (!boundaries) return;
+                const re = new RegExp(`${boundaries.opening}([\\s\\S]*?)(?:${boundaries.closing}|$)`, 'gi');
+                let foundOpening = false;
                 let match;
                 while ((match = re.exec(result)) !== null) {
+                    foundOpening = true;
                     const text = String(match[1] || '').trim();
+                    if (text) extracted.push(text);
+                }
+                if (!foundOpening) {
+                    const closingOnly = result.match(new RegExp(`^([\\s\\S]*?)${boundaries.closing}`, 'i'));
+                    const text = String(closingOnly?.[1] || '').trim();
                     if (text) extracted.push(text);
                 }
             });
