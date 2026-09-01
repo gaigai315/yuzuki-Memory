@@ -10872,7 +10872,7 @@
         card.className = 'yzm-config-card yzm-auto-summary-vector-card';
         const title = document.createElement('div');
         title.className = 'yzm-auto-summary-section-title';
-        title.append(createIconNode('fa-solid fa-diagram-project', ''), document.createTextNode('向量化联动'));
+        title.append(createIconNode('fa-solid fa-diagram-project', ''), document.createTextNode('总结联动'));
         const row = document.createElement('div');
         row.className = 'yzm-auto-summary-vector-row';
         const text = document.createElement('div');
@@ -12968,7 +12968,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【新增】实时填表支持删除楼层恢复旧记录。',
+            '【修复】修复首次创建总结世界书后，后续小总结和大总结无法持续覆盖同步的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

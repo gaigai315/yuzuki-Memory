@@ -202,19 +202,6 @@
         }
     }
 
-    function uploadWorldInfoFile(name, data) {
-        const input = document.querySelector('#world_import_file');
-        if (!input || typeof File === 'undefined' || typeof DataTransfer === 'undefined') {
-            throw new Error('世界书保存失败，且未找到酒馆世界书导入控件。');
-        }
-        const file = new File([JSON.stringify(data)], `${name}.json`, { type: 'application/json' });
-        const transfer = new DataTransfer();
-        transfer.items.add(file);
-        input.files = transfer.files;
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-        return { ok: true, mode: 'upload' };
-    }
-
     function normalizeSummaryWorldbookEntries(summaryEntries = []) {
         const entries = {};
         (Array.isArray(summaryEntries) ? summaryEntries : [])
@@ -267,11 +254,41 @@
             this._cacheAt = 0;
             this._worldInfoModulePromise = null;
             this._stContextModulePromise = null;
+            this._syncedSummaryWorldbookNames = new Set();
         }
 
         getSummaryWorldbookName(sessionId = '', displayName = '') {
             const base = sanitizeWorldbookName(sessionId || displayName || 'default');
             return `${SUMMARY_WORLDBOOK_PREFIX}${base}`;
+        }
+
+        _hasSummaryWorldbook(name, worldModule = null) {
+            const cleanName = safeString(name);
+            if (!cleanName) return false;
+            if (this._syncedSummaryWorldbookNames.has(cleanName)) return true;
+
+            const worldNames = uniqueStrings([
+                ...(Array.isArray(worldModule?.world_names) ? worldModule.world_names : []),
+                ...this._getWorldNamesFromWindow(),
+            ]);
+            if (worldNames.includes(cleanName)) return true;
+
+            const roots = [worldModule?.world_info, window.world_info];
+            return roots.some((root) => {
+                if (!root || typeof root !== 'object') return false;
+                if (root[cleanName]) return true;
+                const books = Array.isArray(root) ? root : Object.values(root);
+                return books.some((book) => safeString(book?.name) === cleanName);
+            });
+        }
+
+        async _saveSummaryWorldbook(name, data, worldModule = null) {
+            if (typeof worldModule?.saveWorldInfo === 'function') {
+                await worldModule.saveWorldInfo(name, data, true);
+                return 'frontend';
+            }
+            await postWorldInfoEdit(name, data);
+            return 'api';
         }
 
         async syncSummaryEntriesToWorldbook(summaryEntries = [], sessionId = '', displayName = '', options = {}) {
@@ -281,21 +298,18 @@
 
             const name = safeString(options.name) || this.getSummaryWorldbookName(sessionId, displayName);
             const data = { name, entries };
-            const bookExists = !!(window.world_info && typeof window.world_info === 'object' && window.world_info[name]);
-            let mode = bookExists ? 'update' : 'create';
-            if (bookExists) {
-                await postWorldInfoEdit(name, data);
-            } else {
+            const worldModule = await this._loadWorldInfoModule();
+            const bookExists = this._hasSummaryWorldbook(name, worldModule);
+            const transport = await this._saveSummaryWorldbook(name, data, worldModule);
+
+            this._syncedSummaryWorldbookNames.add(name);
+            if (!bookExists && typeof worldModule?.updateWorldInfoList === 'function') {
                 try {
-                    uploadWorldInfoFile(name, data);
-                    mode = 'upload';
-                } catch (uploadError) {
-                    console.warn('[yuzuki-Memory Worldbook] 世界书导入控件不可用，改用 API 创建:', uploadError);
-                    await postWorldInfoEdit(name, data);
-                    mode = 'edit';
+                    await worldModule.updateWorldInfoList();
+                } catch (error) {
+                    console.warn('[yuzuki-Memory Worldbook] 世界书已创建，但刷新酒馆世界书列表失败:', error);
                 }
             }
-
             if (window.world_info && typeof window.world_info === 'object') {
                 window.world_info[name] = {
                     ...(window.world_info[name] || {}),
@@ -305,7 +319,7 @@
             }
             this._cache = null;
             this._cacheAt = 0;
-            return { success: true, count, name, mode };
+            return { success: true, count, name, mode: bookExists ? 'update' : 'create', transport };
         }
 
         _getContext() {
