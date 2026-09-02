@@ -47,6 +47,7 @@
             this.storageBookName = STORAGE_BOOK_NAME;
             this.storageMigrationPending = false;
             this.isLoaded = false;
+            this.hideObserver = null;
             this.helperApiShieldTimer = null;
             this.vectorCache = new Map();
             this.encodedVectorCache = new WeakMap();
@@ -907,7 +908,8 @@
         }
 
         isStorageBookName(value) {
-            return STORAGE_BOOK_NAMES.includes(String(value || '').trim());
+            const normalized = String(value || '').trim().replace(/\.json$/i, '');
+            return STORAGE_BOOK_NAMES.includes(normalized);
         }
 
         filterStorageBookNames(value) {
@@ -968,7 +970,7 @@
             if (!document.getElementById('yzm-hide-vector-library')) {
                 const style = document.createElement('style');
                 style.id = 'yzm-hide-vector-library';
-                style.textContent = STORAGE_BOOK_NAMES.map((name) => `
+                style.textContent = STORAGE_BOOK_NAMES.flatMap((name) => [name, `${name}.json`]).map((name) => `
                     option[value="${name}"],
                     li[data-value="${name}"],
                     [data-name="${name}"],
@@ -978,6 +980,45 @@
                 `).join('\n');
                 document.head.appendChild(style);
             }
+
+            const selector = [
+                'option',
+                'li[data-value]',
+                '.select2-results__option',
+                '.world_info_entry',
+                '[data-name]',
+                '[data-uid]',
+            ].join(', ');
+            const hideNode = (node) => {
+                if (!node?.matches?.(selector)) return;
+                const candidates = [
+                    node.value,
+                    node.getAttribute?.('value'),
+                    node.getAttribute?.('data-value'),
+                    node.getAttribute?.('data-name'),
+                    node.getAttribute?.('data-uid'),
+                    node.title,
+                ];
+                if (node.matches('option, li[data-value], .select2-results__option, .world_info_entry')) {
+                    candidates.push(node.textContent);
+                }
+                if (!candidates.some((value) => this.isStorageBookName(value))) return;
+                node.hidden = true;
+                node.style?.setProperty?.('display', 'none', 'important');
+            };
+            const hideMatches = (root = document) => {
+                hideNode(root);
+                root?.querySelectorAll?.(selector).forEach(hideNode);
+            };
+
+            hideMatches();
+            if (this.hideObserver || !document.body || typeof MutationObserver !== 'function') return;
+            this.hideObserver = new MutationObserver((mutations) => {
+                mutations.forEach((mutation) => {
+                    mutation.addedNodes?.forEach?.((node) => hideMatches(node));
+                });
+            });
+            this.hideObserver.observe(document.body, { childList: true, subtree: true });
         }
 
         getActiveBooks() {

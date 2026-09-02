@@ -1389,23 +1389,15 @@
         };
     }
 
-    function getScopedSummaryContent(record) {
-        const recordFloorScope = getRecordFloorScope(record);
+    function getSummarySyncContent(record) {
         const segments = getSummarySegments(record);
         if (segments.length) {
-            return segments.map((segment) => {
-                if (!String(segment.summary || '').trim()) return '';
-                const floorReference = formatScopedFloorText(segment.floor, segment.floorScope || recordFloorScope);
-                const sourceLabel = segment.floor ? `【来源楼层：${floorReference}楼】` : `【来源：${floorReference}】`;
-                return [floorReference ? sourceLabel : '', segment.summary].filter(Boolean).join('\n');
-            }).filter(Boolean).join('\n\n');
+            return segments
+                .map((segment) => String(segment.summary || '').trim())
+                .filter(Boolean)
+                .join('\n\n');
         }
-        const content = getSummaryValue(record, ['总结内容']);
-        if (!content) return '';
-        const floor = getSummaryValue(record, ['楼层数', '楼层范围', '楼层']);
-        const floorReference = formatScopedFloorText(floor, recordFloorScope);
-        const sourceLabel = floor ? `【来源楼层：${floorReference}楼】` : `【来源：${floorReference}】`;
-        return [floorReference ? sourceLabel : '', content].filter(Boolean).join('\n');
+        return getSummaryValue(record, ['总结内容']);
     }
 
     function getSummaryVectorChunks() {
@@ -1413,7 +1405,7 @@
         if (!table) return [];
         return getRecords(table.id).map((record) => {
             const title = getSummaryValue(record, ['总结标题', '标题']);
-            const content = getScopedSummaryContent(record);
+            const content = getSummarySyncContent(record);
             const remark = getSummaryValue(record, ['备注']);
             return [title, content, remark].filter(Boolean).join('\n');
         }).filter(Boolean);
@@ -1424,7 +1416,7 @@
         if (!table) return [];
         return getRecords(table.id).map((record, index) => {
             const title = getSummaryValue(record, ['总结标题', '标题']) || `记忆总结 ${index + 1}`;
-            const content = getScopedSummaryContent(record);
+            const content = getSummarySyncContent(record);
             const remark = getSummaryValue(record, ['备注']);
             const core = getSummaryValue(record, ['核心角色', '角色名', '主视角']);
             const unresolved = getSummaryValue(record, ['未解决问题']);
