@@ -460,7 +460,8 @@
 
     function renderTodoSection(character) {
         const { section, body } = createDetailSection('待办事项', 'fa-regular fa-square-check');
-        const todoItems = YuzukiMemory.TodoManager?.parseTodoItems?.(character?.todoText) || [];
+        const parsedTodoItems = YuzukiMemory.TodoManager?.parseTodoItems?.(character?.todoText) || [];
+        const todoItems = YuzukiMemory.TodoManager?.sortTodoItemsChronologically?.(parsedTodoItems) || parsedTodoItems;
         const badge = createTextElement('span', 'yzm-character-graph-section-badge', `${todoItems.length} 项`);
         section.querySelector('.yzm-character-graph-detail-heading').appendChild(badge);
         if (!todoItems.length) {

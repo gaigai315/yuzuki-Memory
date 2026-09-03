@@ -140,7 +140,7 @@
             .split(/\n+/)
             .map((entry) => entry.trim())
             .filter(Boolean)
-            .map((entry) => {
+            .map((entry, sourceIndex) => {
                 let content = entry.replace(new RegExp(`^${TODO_MARKER_SOURCE}\\s*`), '').trim();
                 const priorityMatch = content.match(/[（(]\s*(高|中|低)(?:优先级|优先)?\s*[）)]\s*$/);
                 const priority = priorityMatch?.[1] || '';
@@ -159,6 +159,7 @@
                             dateTime: `${dateText} ${timeText}`,
                             priority,
                             rawContent,
+                            sourceIndex,
                             dateTimeParts: parts,
                             ordinalMinutes: toOrdinalMinutes(parts),
                             ordinalDay: toOrdinalDay(parts),
@@ -177,6 +178,7 @@
                             dateTime: dateText,
                             priority,
                             rawContent,
+                            sourceIndex,
                             dateParts,
                             ordinalMinutes: null,
                             ordinalDay,
@@ -184,9 +186,25 @@
                     }
                 }
 
-                return { text: content, dateTime: '', priority, rawContent, ordinalMinutes: null, ordinalDay: null };
+                return { text: content, dateTime: '', priority, rawContent, sourceIndex, ordinalMinutes: null, ordinalDay: null };
             })
             .filter((item) => item.text || item.dateTime || item.rawContent);
+    }
+
+    function getTodoSortValue(item = {}) {
+        if (Number.isFinite(item.ordinalMinutes)) return item.ordinalMinutes;
+        if (Number.isFinite(item.ordinalDay)) return item.ordinalDay * 1440;
+        return Number.POSITIVE_INFINITY;
+    }
+
+    function sortTodoItemsChronologically(items = []) {
+        return (Array.isArray(items) ? items : [])
+            .map((item, index) => ({ item, index }))
+            .sort((left, right) => (
+                getTodoSortValue(left.item) - getTodoSortValue(right.item)
+                || left.index - right.index
+            ))
+            .map(({ item }) => item);
     }
 
     function serializeTodoItems(items = []) {
@@ -197,6 +215,99 @@
             })
             .filter(Boolean)
             .join(';');
+    }
+
+    function normalizeTodoDateTimeInput(value = '') {
+        const source = String(value || '').trim();
+        if (!source) return { value: '', parts: null };
+        const match = source.match(new RegExp(`^(${TODO_DATE_SOURCE})\\s*(\\d{1,2}[:：]\\d{2})$`));
+        if (!match) {
+            const dateParts = parseDateParts(source);
+            return dateParts ? { value: source.replace(/\s+/g, ''), parts: dateParts } : null;
+        }
+
+        const dateText = match[1].replace(/\s+/g, '');
+        const timeText = match[2].replace('：', ':');
+        const parts = parseDateTimeParts(dateText, timeText);
+        if (!parts) return null;
+        return {
+            value: `${dateText} ${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`,
+            parts,
+        };
+    }
+
+    function formatTodoRawContent(item = {}) {
+        const dateTime = normalizeTodoDateTimeInput(item.dateTime);
+        if (!dateTime) return { error: 'invalid_datetime', value: '' };
+
+        const text = String(item.text || '').trim();
+        if (!text) return { error: 'empty_text', value: '' };
+
+        const priority = ['高', '中', '低'].includes(String(item.priority || '').trim())
+            ? String(item.priority).trim()
+            : '';
+        return {
+            error: '',
+            value: `${dateTime.value ? `${dateTime.value}·` : ''}${text}${priority ? `(${priority})` : ''}`,
+        };
+    }
+
+    function updateTodoItemAt(text = '', sourceIndex, updates = {}) {
+        const items = parseTodoItems(text);
+        const index = Number(sourceIndex);
+        if (!Number.isInteger(index) || index < 0 || index >= items.length) {
+            return { changed: false, error: 'not_found', value: String(text || ''), item: null };
+        }
+
+        const current = items[index];
+        const formatted = formatTodoRawContent({
+            dateTime: Object.prototype.hasOwnProperty.call(updates, 'dateTime') ? updates.dateTime : current.dateTime,
+            text: Object.prototype.hasOwnProperty.call(updates, 'text') ? updates.text : current.text,
+            priority: Object.prototype.hasOwnProperty.call(updates, 'priority') ? updates.priority : current.priority,
+        });
+        if (formatted.error) {
+            return { changed: false, error: formatted.error, value: String(text || ''), item: current };
+        }
+
+        if (formatted.value === current.rawContent) {
+            return { changed: false, error: '', value: String(text || ''), item: current };
+        }
+
+        const nextItem = parseTodoItems(`〔1〕${formatted.value}`)[0];
+        if (!nextItem) {
+            return { changed: false, error: 'invalid_item', value: String(text || ''), item: current };
+        }
+        const nextIdentity = getTodoIdentity(nextItem);
+        const duplicatesExisting = items.some((candidate, candidateIndex) => (
+            candidateIndex !== index && getTodoIdentity(candidate) === nextIdentity
+        ));
+        if (duplicatesExisting) {
+            return { changed: false, error: 'duplicate', value: String(text || ''), item: current };
+        }
+        nextItem.sourceIndex = index;
+        items[index] = nextItem;
+        return {
+            changed: true,
+            error: '',
+            value: serializeTodoItems(items),
+            item: nextItem,
+        };
+    }
+
+    function deleteTodoItemAt(text = '', sourceIndex) {
+        const items = parseTodoItems(text);
+        const index = Number(sourceIndex);
+        if (!Number.isInteger(index) || index < 0 || index >= items.length) {
+            return { changed: false, error: 'not_found', value: String(text || ''), removed: null };
+        }
+
+        const [removed] = items.splice(index, 1);
+        return {
+            changed: true,
+            error: '',
+            value: serializeTodoItems(items),
+            removed,
+        };
     }
 
     function fillMissingTodoDates(text = '', storyTime = null) {
@@ -578,7 +689,10 @@
         EXPIRY_DELAY_MINUTES,
         bind,
         parseTodoItems,
+        sortTodoItemsChronologically,
         serializeTodoItems,
+        updateTodoItemAt,
+        deleteTodoItemAt,
         fillMissingTodoDates,
         dedupeTodoText,
         mergeTodoTexts,

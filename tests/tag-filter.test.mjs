@@ -58,3 +58,121 @@ test('closing-only blacklist keeps an earlier whitelisted block available for ex
         '剧情正文',
     );
 });
+
+test('manual and automatic trace inject populated non-summary tables without plot summary content', async () => {
+    const capturedRequests = [];
+    const taskSandbox = {
+        console,
+        localStorage: { getItem: () => null },
+        SillyTavern: {
+            getContext: () => ({
+                characterId: 0,
+                characters: [{ name: '测试角色' }],
+                name1: '测试用户',
+                name2: '测试角色',
+                chatMetadata: { file_name: 'batch-context-test' },
+                chat: [
+                    { is_user: true, name: '测试用户', mes: '进入新的地点。' },
+                    { is_user: false, name: '测试角色', mes: '把旧钥匙交给测试用户。' },
+                ],
+            }),
+        },
+        window: {
+            YuzukiMemory: {
+                GlobalSettings: {
+                    get: (key, fallback) => {
+                        if (key === 'yzm_memory_global_plugin_settings') return { enableFilling: true, fillMode: 'batch' };
+                        if (key === 'yzm_memory_global_prompt_scheme_active') return 'test-default';
+                        if (key === 'yzm_memory_global_character_status_prompts') {
+                            return [{ id: 'status-prompt', prompt: 'STATUS_RULE\n{{MEMORY_TABLE_character_status}}' }];
+                        }
+                        return fallback;
+                    },
+                },
+                PromptLibrary: {
+                    getDefaultSchemes: () => [{
+                        id: 'test-default',
+                        prompts: {
+                            historian: '',
+                            traceBatch: 'TRACE_PROMPT_MARKER\n{{TABLE_DEFINITIONS}}',
+                        },
+                    }],
+                    mergeSchemePrompts: (scheme) => scheme.prompts || {},
+                },
+                LlmClient: {
+                    getTavernStatus: async () => ({}),
+                    supportsAssistantPrefill: () => false,
+                    generateWithTavern: async (messages) => {
+                        capturedRequests.push(messages);
+                        return {
+                            success: true,
+                            text: '{"records":[{"table":"角色档案","values":{"角色名":"测试角色","当前位置":"新地点"}}]}',
+                        };
+                    },
+                },
+            },
+        },
+    };
+    vm.createContext(taskSandbox);
+    vm.runInContext(source, taskSandbox, { filename: 'task-runner-batch-context.js' });
+
+    const state = {
+        characterStatusPromptId: 'status-prompt',
+        settings: { autoVectorizeTables: { character_profile: true } },
+        tables: [
+            { id: 'plot_summary', name: '剧情摘要', columns: ['#主线', '#支线'] },
+            { id: 'character_profile', name: '角色档案', columns: ['角色名', '当前位置'] },
+            { id: 'character_status', name: '角色状态', columns: ['角色名', '体力'] },
+            { id: 'item_tracking', name: '物品追踪', columns: ['物品名称', '持有者'] },
+            { id: 'world_setting', name: '世界设定', columns: ['设定名称', '说明'] },
+            { id: 'memory_summary', name: '记忆总结', columns: ['总结标题', '总结内容'] },
+        ],
+        records: {
+            plot_summary: [{ values: { 主线: 'PLOT_CONTENT_MUST_NOT_APPEAR', 支线: '' } }],
+            character_profile: [{
+                autoVectorResident: false,
+                values: { 角色名: '测试角色', 当前位置: '旧地点' },
+            }],
+            character_status: [{ values: { 角色名: '测试角色', 体力: '10' } }],
+            item_tracking: [{ values: { 物品名称: '旧钥匙', 持有者: '测试角色' } }],
+            world_setting: [],
+            memory_summary: [{ values: { 总结标题: '主线总结', 总结内容: 'SUMMARY_CONTENT_MUST_NOT_APPEAR' } }],
+        },
+    };
+
+    const manualResult = await taskSandbox.window.YuzukiMemory.TaskRunner.runTrace(state, {
+        start: 0,
+        end: 2,
+        includeWorldbook: false,
+        previewOnly: true,
+    });
+    const automaticResult = await taskSandbox.window.YuzukiMemory.TaskRunner.runTrace(state, {
+        start: 0,
+        end: 2,
+        includeWorldbook: false,
+        previewOnly: true,
+        autoTaskType: 'trace',
+    });
+
+    assert.equal(manualResult.success, true);
+    assert.equal(automaticResult.success, true);
+    assert.equal(capturedRequests.length, 2);
+    capturedRequests.forEach((capturedMessages, index) => {
+        const mode = index === 0 ? '手动追溯' : '自动批量';
+        const messageContents = capturedMessages.map((message) => String(message.content || ''));
+        const characterIndex = messageContents.findIndex((content) => content.includes('当前位置: 旧地点'));
+        const itemIndex = messageContents.findIndex((content) => content.includes('物品名称: 旧钥匙'));
+        const firstChatIndex = messageContents.findIndex((content) => content.startsWith('[楼层 0]'));
+        const lastChatIndex = messageContents.findIndex((content) => content.startsWith('[楼层 1]'));
+        const tracePromptIndex = messageContents.findIndex((content) => content.includes('TRACE_PROMPT_MARKER'));
+
+        assert.ok(characterIndex >= 0, `${mode}应注入自动向量化表的现有记录`);
+        assert.ok(itemIndex >= 0, `${mode}应注入有数据的普通表`);
+        assert.ok(characterIndex < firstChatIndex && itemIndex < firstChatIndex, `${mode}的现有表格应位于聊天记录之前`);
+        assert.ok(tracePromptIndex > lastChatIndex, `${mode}的填表提示词应位于聊天记录之后`);
+        assert.equal(messageContents.join('\n').match(/体力: 10/g)?.length, 1, `${mode}的角色状态当前内容只应注入一次`);
+        assert.equal(messageContents.some((content) => content.includes('PLOT_CONTENT_MUST_NOT_APPEAR')), false);
+        assert.equal(messageContents.some((content) => content.includes('SUMMARY_CONTENT_MUST_NOT_APPEAR')), false);
+        assert.equal(messageContents.some((content) => content.includes('【当前世界状态参考—世界设定】')), false);
+    });
+});

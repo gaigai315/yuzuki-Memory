@@ -697,8 +697,9 @@
         return enabled && record?.autoVectorResident !== true;
     }
 
-    function recordToText(state, table, record) {
-        if (!table || !record || record.hidden || isRecordAutoVectorized(state, table, record)) return '';
+    function recordToText(state, table, record, options = {}) {
+        if (!table || !record || record.hidden) return '';
+        if (options.includeAutoVectorizedRecords !== true && isRecordAutoVectorized(state, table, record)) return '';
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const body = (table.columns || [])
             .map((column) => {
@@ -738,11 +739,53 @@
             .filter((table) => !table.hidden && table.id !== FIXED_SUMMARY_TABLE_ID)
             .filter((table) => !options.tableId || table.id === options.tableId)
             .map((table) => {
-                const rows = stateRecords(state, table.id).map((record) => recordToText(state, table, record)).filter(Boolean);
+                const rows = stateRecords(state, table.id).map((record) => recordToText(state, table, record, options)).filter(Boolean);
                 return compactLines([`【当前世界状态参考—${table.name}】`, rows.length ? rows.join('\n') : '（当前暂无数据）']);
             })
             .filter(Boolean)
             .join('\n\n');
+    }
+
+    function buildTraceReferenceMessages(state) {
+        const tableMessages = stateTables(state)
+            .filter((table) => table && !table.hidden)
+            .filter((table) => table.id !== FIXED_SUMMARY_TABLE_ID && table.id !== PLOT_SUMMARY_TABLE_ID)
+            .filter((table) => String(table.name || '').trim() !== '剧情摘要')
+            .map((table) => {
+                const rows = stateRecords(state, table.id)
+                    .map((record) => recordToText(state, table, record, { includeAutoVectorizedRecords: true }))
+                    .filter(Boolean);
+                if (!rows.length) return null;
+                return {
+                    role: 'system',
+                    content: compactLines([
+                        `【当前世界状态参考—${table.name}】`,
+                        '（本次追溯聊天发生前的已保存状态，仅用于对齐主键、核对已有值和判断变化）',
+                        rows.join('\n'),
+                    ]),
+                    name: `SYSTEM (${table.name})`,
+                    isGaigaiData: true,
+                    yzmMemoryInjectionType: 'trace-table',
+                    yzmMemoryTableId: table.id,
+                };
+            })
+            .filter(Boolean);
+        if (!tableMessages.length) return [];
+        return [
+            {
+                role: 'system',
+                content: compactLines([
+                    '【追溯填表现有表格基线】',
+                    '以下各表是本次选中聊天发生前已经保存的状态。必须先与后续聊天内容对比，只输出本次所选楼层明确新增、改变或补全的字段。',
+                    '未发生变化的旧内容不得重复输出；同一实体必须沿用已有主键，不得因别名、状态或描述变化新增重复记录。',
+                    '剧情摘要与记忆总结不会作为现有内容注入；剧情摘要只能依据本次所选聊天记录输出新增内容。',
+                ]),
+                name: 'SYSTEM (追溯填表现有表格基线)',
+                isGaigaiData: true,
+                yzmMemoryInjectionType: 'trace-baseline',
+            },
+            ...tableMessages,
+        ];
     }
 
     function buildDatabaseSchemaText(state, options = {}) {
@@ -810,7 +853,6 @@
         const names = getRuntimeNames();
         const suppressMemoryTables = options.suppressMemoryTables === true;
         const suppressMemoryData = suppressMemoryTables || options.suppressMemoryData === true;
-        const allowCharacterStatusTable = options.allowCharacterStatusTable === true;
         const targetTable = getOptionTargetTable(state, options);
         const targetTableText = targetTable ? tablesToReferenceText(state, { ...options, tableId: targetTable.id }) : '';
         return String(text || '')
@@ -820,7 +862,7 @@
             .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS)\}\}/gi, () => suppressMemoryTables ? '' : buildDatabaseSchemaText(state, options))
             .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => {
                 const requestedTable = findTargetTable(state, tableName);
-                if (suppressMemoryData && (!allowCharacterStatusTable || requestedTable?.id !== 'character_status')) return '';
+                if (suppressMemoryData) return '';
                 return YuzukiMemory.VariableInjector?.buildSpecificTableText?.(state, tableName)
                     || (requestedTable ? tablesToReferenceText(state, { ...options, tableId: requestedTable.id }) : '');
             })
@@ -2760,10 +2802,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, taskPromptOptions);
         const tracePrompt = resolveTaskPromptVariables(getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options), state, taskPromptOptions);
         const characterStatusPrompt = settings.enableFilling !== false && settings.fillMode === 'batch'
-            ? resolveTaskPromptVariables(getCharacterStatusPromptFromState(state), state, {
-                ...taskPromptOptions,
-                allowCharacterStatusTable: true,
-            })
+            ? resolveTaskPromptVariables(getCharacterStatusPromptFromState(state), state, taskPromptOptions)
             : '';
         const targetRestriction = buildTraceTargetRestrictionText(state, options);
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
@@ -2771,6 +2810,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText() },
             worldbookMessage,
+            ...buildTraceReferenceMessages(state),
             { role: 'system', content: buildTaskRangeText(range, 'trace') },
             ...range.messages,
             { role: 'system', content: tracePrompt },

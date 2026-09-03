@@ -6561,7 +6561,7 @@
     --yzm-todo-item-bg: var(--yzm-row-bg);
     --yzm-todo-item-border: var(--yzm-border-soft);
     display: grid;
-    grid-template-columns: 14px minmax(0, 1fr) auto;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
     gap: 8px;
     align-items: start;
     min-width: 0;
@@ -6593,13 +6593,29 @@
 }
 
 #yzm-memory-root .yzm-character-todo-marker {
-    width: 12px;
-    height: 12px;
-    margin-top: 4px;
+    width: 16px;
+    height: 16px;
+    margin-top: 2px;
+    padding: 0;
+    color: var(--yzm-todo-accent);
     background: transparent;
     border: 1px solid var(--yzm-todo-accent);
     border-radius: 50%;
     box-sizing: border-box;
+    cursor: pointer;
+    outline: 0;
+    appearance: none;
+    -webkit-appearance: none;
+    touch-action: manipulation;
+}
+
+#yzm-memory-root .yzm-character-todo-marker:hover {
+    background: var(--yzm-surface);
+    box-shadow: inset 0 0 0 3px var(--yzm-todo-item-bg);
+}
+
+#yzm-memory-root .yzm-character-todo-marker:focus-visible {
+    box-shadow: 0 0 0 2px var(--yzm-bg), 0 0 0 4px var(--yzm-selected-color);
 }
 
 #yzm-memory-root .yzm-character-todo-main {
@@ -8853,6 +8869,29 @@
 #yzm-memory-root .yzm-record-actions {
     display: flex;
     justify-content: flex-end;
+}
+
+#yzm-memory-root .yzm-character-todo-dialog {
+    width: min(440px, 100%);
+}
+
+#yzm-memory-root .yzm-character-todo-fields {
+    grid-template-columns: minmax(0, 1fr) minmax(110px, 0.42fr);
+}
+
+#yzm-memory-root .yzm-character-todo-priority-select {
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-character-todo-editor-actions {
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+#yzm-memory-root .yzm-character-todo-delete {
+    flex: 0 1 auto;
+    min-width: 0;
 }
 
 #yzm-memory-root .yzm-plot-editor-actions {

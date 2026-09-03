@@ -11604,7 +11604,17 @@
         right.className = 'yzm-character-side';
         const detailColumns = getCharacterDetailColumns(table);
         right.append(...detailColumns.map((column, index) => (
-            createCharacterPanel(column, getCharacterFieldIcon(column), CHARACTER_PANEL_STYLES[index % CHARACTER_PANEL_STYLES.length], getRecordValue(record, column))
+            createCharacterPanel(
+                column,
+                getCharacterFieldIcon(column),
+                CHARACTER_PANEL_STYLES[index % CHARACTER_PANEL_STYLES.length],
+                getRecordValue(record, column),
+                {
+                    tableId: table.id,
+                    recordId: record?.id || '',
+                    fieldName: cleanColumnName(column),
+                }
+            )
         )));
 
         view.append(left, right);
@@ -11663,25 +11673,27 @@
             .split(/\n+/)
             .map((entry) => entry.trim())
             .filter(Boolean)
-            .map((entry) => {
+            .map((entry, sourceIndex) => {
                 let content = entry.replace(/^(?:[（(〔\[]\s*\d+\s*[）)〕\]]|\d+\s*[）)〕\].、])\s*/, '').trim();
                 const priorityMatch = content.match(/[（(]\s*(高|中|低)(?:优先级)?\s*[）)]\s*$/);
                 const priority = priorityMatch?.[1] || '';
                 if (priorityMatch) content = content.slice(0, priorityMatch.index).trim();
 
                 const detailMatch = content.match(/^((?:\d{2,4}年)?\d{1,2}月\d{1,2}日)\s*(\d{1,2}:\d{2})\s*[·・•:：]\s*(.+)$/);
-                if (!detailMatch) return { text: content, dateTime: '', priority };
+                if (!detailMatch) return { text: content, dateTime: '', priority, rawContent: content, sourceIndex };
 
                 return {
                     text: detailMatch[3].trim(),
                     dateTime: `${detailMatch[1]} ${detailMatch[2]}`,
                     priority,
+                    rawContent: entry.replace(/^(?:[（(〔\[]\s*\d+\s*[）)〕\]]|\d+\s*[）)〕\].、])\s*/, '').trim(),
+                    sourceIndex,
                 };
             })
             .filter((item) => item.text || item.dateTime);
     }
 
-    function createCharacterTodoItem(item) {
+    function createCharacterTodoItem(item, options = {}) {
         const priorityNames = { 高: 'high', 中: 'medium', 低: 'low' };
         const row = document.createElement('div');
         row.className = 'yzm-character-todo-item';
@@ -11689,9 +11701,15 @@
             row.dataset.yzmPriority = priorityNames[item.priority];
         }
 
-        const marker = document.createElement('span');
+        const marker = document.createElement('button');
+        marker.type = 'button';
         marker.className = 'yzm-character-todo-marker';
-        marker.setAttribute('aria-hidden', 'true');
+        marker.setAttribute('aria-label', `编辑待办事项：${item.text || item.rawContent || '未命名事项'}`);
+        marker.title = '编辑或删除这条待办事项';
+        marker.dataset.yzmTodoSourceIndex = String(item.sourceIndex ?? '');
+        marker.dataset.yzmTodoTableId = options.tableId || '';
+        marker.dataset.yzmTodoRecordId = options.recordId || '';
+        marker.dataset.yzmTodoFieldName = options.fieldName || '待办事项';
 
         const main = document.createElement('div');
         main.className = 'yzm-character-todo-main';
@@ -11720,19 +11738,21 @@
         return row;
     }
 
-    function renderCharacterPanelBody(body, title, text = '') {
+    function renderCharacterPanelBody(body, title, text = '', options = {}) {
         if (title !== '待办事项') {
             body.textContent = formatCharacterPanelText(title, text);
             return;
         }
 
         body.classList.add('yzm-character-todo-list');
-        parseCharacterTodoItems(text).forEach((item) => {
-            body.appendChild(createCharacterTodoItem(item));
+        const parsedItems = parseCharacterTodoItems(text);
+        const todoItems = YuzukiMemory.TodoManager?.sortTodoItemsChronologically?.(parsedItems) || parsedItems;
+        todoItems.forEach((item) => {
+            body.appendChild(createCharacterTodoItem(item, options));
         });
     }
 
-    function createCharacterPanel(title, iconClassName, colorClassName, text = '') {
+    function createCharacterPanel(title, iconClassName, colorClassName, text = '', options = {}) {
         const panel = document.createElement('article');
         panel.className = `yzm-character-panel ${colorClassName}`;
         if (title === '待办事项') panel.classList.add('yzm-character-todo-panel');
@@ -11743,7 +11763,7 @@
 
         const body = document.createElement('div');
         body.className = 'yzm-character-panel-body';
-        renderCharacterPanelBody(body, title, text);
+        renderCharacterPanelBody(body, title, text, options);
 
         panel.append(header, body);
         return panel;
@@ -12960,7 +12980,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复首次创建总结世界书后，后续小总结和大总结无法持续覆盖同步的问题。',
+            '【优化】优化批量填表逻辑，注入当前除剧情摘要表格的其他表格数据作为初始数据内容。',
+            '【优化】待办事项按剧情时间排序，并支持点击圆点编辑或删除单条待办。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -14133,6 +14154,154 @@
 
         field.append(text, input);
         return field;
+    }
+
+    function createCharacterTodoPriorityField(priority = '') {
+        const field = document.createElement('label');
+        field.className = 'yzm-record-field';
+
+        const label = document.createElement('span');
+        label.className = 'yzm-record-field-label';
+        label.textContent = '优先级';
+
+        const select = document.createElement('select');
+        select.className = 'yzm-record-input yzm-character-todo-priority-select';
+        select.dataset.yzmTodoPriority = 'true';
+        [
+            ['', '无'],
+            ['高', '高'],
+            ['中', '中'],
+            ['低', '低'],
+        ].forEach(([value, text]) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = text;
+            option.selected = value === priority;
+            select.appendChild(option);
+        });
+
+        field.append(label, select);
+        return field;
+    }
+
+    function openCharacterTodoEditor(root, options = {}) {
+        const table = getTables().find((entry) => entry.id === options.tableId);
+        const record = table ? getRecords(table.id).find((entry) => entry.id === options.recordId) : null;
+        const fieldName = cleanColumnName(options.fieldName || '待办事项');
+        const sourceIndex = Number.parseInt(options.sourceIndex, 10);
+        const currentValue = record ? getRecordValue(record, fieldName) : '';
+        const items = YuzukiMemory.TodoManager?.parseTodoItems?.(currentValue) || [];
+        const item = Number.isInteger(sourceIndex) ? items[sourceIndex] : null;
+        if (table?.id !== 'character_profile' || !record || !item) return;
+
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-record-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-record-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-record-dialog yzm-character-todo-dialog';
+        dialog.setAttribute('aria-label', '编辑待办事项');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = '编辑待办事项';
+
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭待办事项编辑');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+        const fields = document.createElement('div');
+        fields.className = 'yzm-record-fields yzm-character-todo-fields';
+        fields.append(
+            createRecordInput('日期时间', item.dateTime, false, { placeholder: 'YYYY-MM-DD HH:mm' }),
+            createCharacterTodoPriorityField(item.priority),
+            createRecordInput('待办内容', item.text || item.rawContent, true, { placeholder: '填写待办事项内容' })
+        );
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-record-actions yzm-character-todo-editor-actions';
+        const deleteCurrent = createIconButton('删除', 'fa-regular fa-trash-can', 'yzm-api-button yzm-api-button-danger yzm-character-todo-delete');
+        const save = createButton('保存', 'yzm-add-table-confirm yzm-record-save');
+        actions.append(deleteCurrent, save);
+
+        header.append(title, close);
+        dialog.append(header, fields, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => removePluginElement(overlay);
+        const persistTodoChange = (nextValue, failureMessage) => {
+            record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            record.values[fieldName] = nextValue;
+            setActiveRecordId(table.id, record.id);
+            if (!persistStateOrReload(root, failureMessage, {
+                tableId: table.id,
+                recordId: record.id,
+                values: { [fieldName]: nextValue },
+            })) return false;
+            renderTableWorkspace(root);
+            bindPanelInteractions(root);
+            closeModal();
+            return true;
+        };
+
+        close.onclick = closeModal;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+
+        deleteCurrent.addEventListener('click', () => {
+            if (!window.confirm('确定删除这条待办事项吗？')) return;
+            const result = YuzukiMemory.TodoManager?.deleteTodoItemAt?.(currentValue, sourceIndex);
+            if (!result?.changed) {
+                window.alert('未找到对应的待办事项，请刷新后重试。');
+                return;
+            }
+            persistTodoChange(result.value, '当前会话尚未就绪，待办事项未删除。');
+        });
+
+        save.addEventListener('click', () => {
+            const dateTime = fields.querySelector('[data-yzm-record-field="日期时间"]')?.value || '';
+            const text = fields.querySelector('[data-yzm-record-field="待办内容"]')?.value || '';
+            const priority = fields.querySelector('[data-yzm-todo-priority]')?.value || '';
+            const result = YuzukiMemory.TodoManager?.updateTodoItemAt?.(currentValue, sourceIndex, {
+                dateTime,
+                text,
+                priority,
+            });
+            if (!result) return;
+            if (result.error === 'invalid_datetime') {
+                window.alert('日期时间格式无效，请填写 YYYY-MM-DD HH:mm、仅填写完整日期，或留空。');
+                return;
+            }
+            if (result.error === 'empty_text') {
+                window.alert('待办内容不能为空。');
+                return;
+            }
+            if (result.error === 'duplicate') {
+                window.alert('该日期时间已有待办事项，请调整时间后再保存。');
+                return;
+            }
+            if (result.error) {
+                window.alert('未找到对应的待办事项，请刷新后重试。');
+                return;
+            }
+            if (!result.changed) {
+                closeModal();
+                return;
+            }
+            persistTodoChange(result.value, '当前会话尚未就绪，待办事项未保存。');
+        });
+
+        fields.querySelector('[data-yzm-record-field="待办内容"]')?.focus();
     }
 
     function createSummarySegmentEditorBlock(segment = {}, index = 0) {
@@ -15951,6 +16120,21 @@
                 openTableEditor(root);
             });
         }
+
+        root.querySelectorAll('.yzm-character-todo-marker[data-yzm-todo-source-index]').forEach((button) => {
+            if (button.dataset.yzmBound === 'true') return;
+            button.dataset.yzmBound = 'true';
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                openCharacterTodoEditor(root, {
+                    tableId: button.dataset.yzmTodoTableId,
+                    recordId: button.dataset.yzmTodoRecordId,
+                    fieldName: button.dataset.yzmTodoFieldName,
+                    sourceIndex: button.dataset.yzmTodoSourceIndex,
+                });
+            });
+        });
 
         root.querySelectorAll('.yzm-summary-timeline-dot-editable').forEach((button) => {
             if (button.dataset.yzmBound === 'true') return;
