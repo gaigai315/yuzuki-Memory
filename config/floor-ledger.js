@@ -14,6 +14,13 @@
     const RECONCILE_RETRY_MS = 800;
     const CHAT_MONITOR_MS = 1000;
     const MAX_SAVE_RETRIES = 4;
+    const RECORD_POLICY_FIELDS = Object.freeze([
+        'hidden',
+        'autoVectorResident',
+        'characterVectorSynced',
+        'itemTrackingVectorSynced',
+        'worldSettingVectorSynced',
+    ]);
     let bound = false;
     let guardsBound = false;
     let bindRetryTimer = null;
@@ -431,6 +438,27 @@
         return [...keys].some((key) => String(left?.[key] ?? '') !== String(right?.[key] ?? ''));
     }
 
+    function recordPolicyDiffers(left, right) {
+        return RECORD_POLICY_FIELDS.some((field) => {
+            const leftHasField = Object.prototype.hasOwnProperty.call(left || {}, field);
+            const rightHasField = Object.prototype.hasOwnProperty.call(right || {}, field);
+            return leftHasField !== rightHasField
+                || (leftHasField && !Object.is(left[field], right[field]));
+        });
+    }
+
+    function applyRecordPolicyOverlay(currentRecord, expectedRecord, rebuiltRecord) {
+        RECORD_POLICY_FIELDS.forEach((field) => {
+            const currentHasField = Object.prototype.hasOwnProperty.call(currentRecord || {}, field);
+            const expectedHasField = Object.prototype.hasOwnProperty.call(expectedRecord || {}, field);
+            const isOverride = currentHasField !== expectedHasField
+                || (currentHasField && !Object.is(currentRecord[field], expectedRecord[field]));
+            if (!isOverride) return;
+            if (currentHasField) rebuiltRecord[field] = currentRecord[field];
+            else delete rebuiltRecord[field];
+        });
+    }
+
     function alignPlotMetadata(currentRecord, rebuiltRecord) {
         if (!currentRecord || !rebuiltRecord) return;
         rebuiltRecord.plotItemMeta = rebuiltRecord.plotItemMeta && typeof rebuiltRecord.plotItemMeta === 'object'
@@ -492,9 +520,9 @@
                 }
 
                 const hasValueOverride = valuesDiffer(currentMatch.record.values, expectedRecord.values);
-                const hiddenOverride = !!currentMatch.record.hidden !== !!expectedRecord.hidden;
+                const hasPolicyOverride = recordPolicyDiffers(currentMatch.record, expectedRecord);
                 if (!rebuiltMatch.record) {
-                    if (hasValueOverride || hiddenOverride) rebuiltList.push(clone(currentMatch.record));
+                    if (hasValueOverride || hasPolicyOverride) rebuiltList.push(clone(currentMatch.record));
                     return;
                 }
 
@@ -510,7 +538,7 @@
                         rebuiltMatch.record.values[key] = String(currentMatch.record.values?.[key] ?? '');
                     }
                 });
-                if (hiddenOverride) rebuiltMatch.record.hidden = !!currentMatch.record.hidden;
+                applyRecordPolicyOverlay(currentMatch.record, expectedRecord, rebuiltMatch.record);
                 if (table.id === PLOT_TABLE_ID) alignPlotMetadata(currentMatch.record, rebuiltMatch.record);
             });
 

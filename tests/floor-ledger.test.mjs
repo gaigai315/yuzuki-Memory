@@ -180,6 +180,26 @@ test('manual cell changes survive a floor replay', () => {
     assert.equal(record.values.备注, '用户手工备注');
 });
 
+test('record vector policy survives a floor replay', () => {
+    setUpThreeFloors();
+    const currentRecord = storedState.records.characters[0];
+    currentRecord.hidden = false;
+    currentRecord.autoVectorResident = true;
+    currentRecord.characterVectorSynced = false;
+    currentRecord.itemTrackingVectorSynced = false;
+    currentRecord.worldSettingVectorSynced = false;
+    currentChat.splice(0, 1);
+
+    floorLedger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
+    const record = storedState.records.characters[0];
+
+    assert.equal(record.hidden, false);
+    assert.equal(record.autoVectorResident, true);
+    assert.equal(record.characterVectorSynced, false);
+    assert.equal(record.itemTrackingVectorSynced, false);
+    assert.equal(record.worldSettingVectorSynced, false);
+});
+
 test('a marker from another swipe is excluded until that branch is filled', () => {
     currentChat = [assistantMessage(0)];
     const state = createBaseState();

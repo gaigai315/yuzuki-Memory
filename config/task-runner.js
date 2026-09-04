@@ -3281,9 +3281,68 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             trace: Math.max(0, Math.round(Number(source.trace) || 0)),
             summary: Math.max(0, Math.round(Number(source.summary) || 0)),
             historySummary: Math.max(0, Math.round(Number(source.historySummary ?? source.bigSummary) || 0)),
+            tracePostponeUntil: Math.max(0, Math.round(Number(source.tracePostponeUntil) || 0)),
+            summaryPostponeUntil: Math.max(0, Math.round(Number(source.summaryPostponeUntil) || 0)),
+            historySummaryPostponeUntil: Math.max(0, Math.round(Number(source.historySummaryPostponeUntil) || 0)),
         };
         state.settings.manualPointers = pointers;
         return pointers;
+    }
+
+    function getAutoTaskPostponeKey(pointerKey = '') {
+        return `${String(pointerKey || '').trim()}PostponeUntil`;
+    }
+
+    function getLiveAutoTaskState(fallbackState, callbacks = {}) {
+        const currentState = callbacks.getState?.();
+        return currentState && typeof currentState === 'object' ? currentState : fallbackState;
+    }
+
+    function cloneAutoTaskState(state) {
+        try {
+            return structuredClone(state);
+        } catch (_error) {
+            return JSON.parse(JSON.stringify(state));
+        }
+    }
+
+    function restoreAutoTaskState(state, snapshot) {
+        if (!state || typeof state !== 'object' || !snapshot || typeof snapshot !== 'object') return;
+        Object.keys(state).forEach((key) => delete state[key]);
+        Object.assign(state, snapshot);
+    }
+
+    function persistAutoTaskState(state, callbacks = {}, options = {}) {
+        const saveOptions = {
+            force: true,
+            immediate: true,
+            saveOrigin: 'auto-task',
+            ...options,
+        };
+        if (typeof callbacks.saveTaskState === 'function') {
+            return callbacks.saveTaskState(state, saveOptions) !== false;
+        }
+        const currentState = callbacks.getState?.();
+        if (currentState && currentState !== state) return false;
+        if (typeof callbacks.saveState !== 'function') return false;
+        return callbacks.saveState(saveOptions) !== false;
+    }
+
+    function buildAutoTaskSaveFailure(task, stage = '保存') {
+        return {
+            success: false,
+            status: 409,
+            busy: true,
+            saveFailed: true,
+            range: { start: task.start, end: task.end },
+            error: `${task.title}${stage}失败，未标记为完成，任务将稍后重试。`,
+        };
+    }
+
+    function isAutoTaskSessionCurrent(sessionId, callbacks = {}) {
+        return Boolean(sessionId)
+            && sessionId === getCurrentSessionId()
+            && isAutoTaskStateReady(callbacks);
     }
 
     function clampPointersToChatLength(chatLength = getChatLength(), reason = 'chat_length') {
@@ -3331,6 +3390,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const interval = isHistory ? settings.historyEvery : settings.summaryEvery;
         const delay = isHistory ? settings.historyDelay : settings.summaryDelay;
         const threshold = interval + delay;
+        const postponeKey = getAutoTaskPostponeKey(pointerKey);
+        const postponeUntil = Math.max(0, Math.round(Number(pointers[postponeKey]) || 0));
+        if (chatLength < postponeUntil) return null;
         if (chatLength - lastIndex < threshold) return null;
         return {
             type,
@@ -3341,6 +3403,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             interval,
             delay,
             threshold,
+            postponeKey,
+            postponeUntil,
             start: lastIndex,
             end: Math.min(lastIndex + interval, chatLength),
         };
@@ -3352,6 +3416,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const interval = Math.max(1, Number(settings.autoTraceBatchSize ?? settings.traceBatchSize) || 40);
         const delay = Math.max(0, Number(settings.traceBatchDelay) || 0);
         const threshold = interval + delay;
+        const postponeKey = getAutoTaskPostponeKey('trace');
+        const postponeUntil = Math.max(0, Math.round(Number(pointers[postponeKey]) || 0));
+        if (chatLength < postponeUntil) return null;
         if (chatLength - lastIndex < threshold) return null;
         return {
             type: 'trace',
@@ -3362,6 +3429,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             interval,
             delay,
             threshold,
+            postponeKey,
+            postponeUntil,
             start: lastIndex,
             end: Math.min(lastIndex + interval, chatLength),
         };
@@ -3425,10 +3494,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     async function runAutoSummaryTask(state, task, settings, callbacks = {}, executionOptions = {}) {
+        const taskSessionId = getCurrentSessionId();
         if (task.type === 'history') {
             const existingRecords = findExistingHistorySummaryRecords(state, { start: task.start, end: task.end });
             const existingRecord = existingRecords[0] || null;
             if (existingRecord) {
+                const stateBeforeRepair = cloneAutoTaskState(state);
                 const cleanupCount = cleanupSmallAutoSummaries(
                     state,
                     { start: task.start, end: task.end, floorScope: existingRecord.floorScope || task.floorScope },
@@ -3437,7 +3508,11 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 const pointers = normalizePointers(state);
                 pointers.historySummary = Math.max(pointers.historySummary, task.end);
                 if (pointers.summary < pointers.historySummary) pointers.summary = pointers.historySummary;
-                callbacks.saveState?.();
+                delete pointers[task.postponeKey || getAutoTaskPostponeKey(task.pointerKey)];
+                if (!persistAutoTaskState(state, callbacks)) {
+                    restoreAutoTaskState(state, stateBeforeRepair);
+                    return buildAutoTaskSaveFailure(task, '重复记录修复保存');
+                }
                 callbacks.onUpdate?.({
                     success: true,
                     skipped: true,
@@ -3461,62 +3536,64 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const shouldRun = settings.directTrigger ? { action: 'confirm', postpone: 0 } : await confirmAutoTask(task, callbacks);
         if (shouldRun?.action !== 'confirm') return { skipped: true };
         if (Number(shouldRun.postpone) > 0) {
-            const pointers = normalizePointers(state);
-            pointers[task.pointerKey] = Math.max(0, task.currentCount - task.threshold + Math.round(Number(shouldRun.postpone) || 0));
-            callbacks.saveState?.();
-            return { postponed: true };
+            const postponeState = getLiveAutoTaskState(state, callbacks);
+            const stateBeforePostpone = cloneAutoTaskState(postponeState);
+            const pointers = normalizePointers(postponeState);
+            const postpone = Math.max(1, Math.round(Number(shouldRun.postpone) || 1));
+            const postponeKey = task.postponeKey || getAutoTaskPostponeKey(task.pointerKey);
+            pointers[postponeKey] = task.currentCount + postpone;
+            if (!persistAutoTaskState(postponeState, callbacks)) {
+                restoreAutoTaskState(postponeState, stateBeforePostpone);
+                return buildAutoTaskSaveFailure(task, '顺延状态保存');
+            }
+            return { success: true, postponed: true, postponeUntil: pointers[postponeKey] };
         }
 
         const result = await runSummary(state, {
             start: task.start,
             end: task.end,
             silent: settings.autoSave,
-            previewOnly: !settings.autoSave,
+            previewOnly: true,
             autoTaskType: task.type,
             signal: executionOptions.signal,
         });
         if (!result.success) return result;
+        if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
+            return { success: false, aborted: true, sessionChanged: true, error: `${task.title}完成时聊天已切换，结果未写入。` };
+        }
 
-        let committed = result;
+        let pendingResult = result;
         if (!settings.autoSave) {
             const confirmation = await confirmTaskResult(result, task, callbacks);
             if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
-            committed = confirmation && typeof confirmation === 'object' && 'text' in confirmation
+            pendingResult = confirmation && typeof confirmation === 'object' && 'text' in confirmation
                 ? rebuildTaskResultFromText('summary', result, confirmation.text)
                 : result;
-            if (!committed.success) return committed;
-            committed = commitSummaryResult(state, committed);
+            if (!pendingResult.success) return pendingResult;
+            if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
+                return { success: false, aborted: true, sessionChanged: true, error: `${task.title}确认时聊天已切换，结果未写入。` };
+            }
         }
 
-        const pointers = normalizePointers(state);
+        const commitState = getLiveAutoTaskState(state, callbacks);
+        const stateBeforeCommit = cloneAutoTaskState(commitState);
+        const committed = commitSummaryResult(commitState, pendingResult);
+        if (!committed.success) return committed;
+
+        const pointers = normalizePointers(commitState);
         pointers[task.pointerKey] = committed.range?.end || task.end;
         if (task.type === 'history' && pointers.summary < pointers.historySummary) pointers.summary = pointers.historySummary;
+        delete pointers[task.postponeKey || getAutoTaskPostponeKey(task.pointerKey)];
         if (task.type === 'summary' || task.type === 'history') {
             committed.hiddenPlotSummaryCount = hidePlotSummaryItemsCoveredByRange(
-                state,
+                commitState,
                 { start: task.start, end: task.end },
                 (Array.isArray(committed.records) ? committed.records : [committed.record]).map((record) => record?.id).filter(Boolean)
             );
         }
-        const savedBeforeFloorHiding = callbacks.saveState?.();
-        if (settings.hideSummaryFloors) {
-            if (savedBeforeFloorHiding === false) {
-                committed.hideResult = {
-                    success: false,
-                    skipped: true,
-                    reason: 'state_save_failed',
-                    error: '总结结果尚未落盘，已跳过自动隐藏楼层。',
-                };
-            } else {
-                committed.hideResult = await YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
-                    force: true,
-                    summaryPointer: pointers.summary,
-                });
-            }
-        }
         if (task.type === 'history') {
             committed.cleanupCount = cleanupSmallAutoSummaries(
-                state,
+                commitState,
                 {
                     start: committed.range?.start ?? task.start,
                     end: committed.range?.end ?? task.end,
@@ -3524,7 +3601,16 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 },
                 (Array.isArray(committed.records) ? committed.records : [committed.record]).map((record) => record?.id).filter(Boolean)
             );
-            callbacks.saveState?.();
+        }
+        if (!persistAutoTaskState(commitState, callbacks)) {
+            restoreAutoTaskState(commitState, stateBeforeCommit);
+            return buildAutoTaskSaveFailure(task, '结果与指针保存');
+        }
+        if (settings.hideSummaryFloors) {
+            committed.hideResult = await YuzukiMemory.FloorHider?.applySummaryPointerHiding?.({
+                force: true,
+                summaryPointer: pointers.summary,
+            });
         }
         if (settings.autoVectorizeAfterHistory === true && typeof callbacks.syncSummaryToVectorBook === 'function') {
             try {
@@ -3542,12 +3628,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 console.warn('[yuzuki-Memory] Auto summary worldbook sync failed:', error);
             }
         }
-        callbacks.saveState?.();
         callbacks.onUpdate?.(committed);
         return committed;
     }
 
     async function runAutoTraceTask(state, task, callbacks = {}, executionOptions = {}) {
+        const taskSessionId = getCurrentSessionId();
         const pluginSettings = getPluginSettings();
 
         const autoSave = pluginSettings.traceRunMode === 'silent';
@@ -3555,10 +3641,17 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             const shouldRun = await confirmAutoTask(task, callbacks);
             if (shouldRun?.action !== 'confirm') return { skipped: true };
             if (Number(shouldRun.postpone) > 0) {
-                const pointers = normalizePointers(state);
-                pointers.trace = Math.max(0, task.currentCount - task.threshold + Math.round(Number(shouldRun.postpone) || 0));
-                callbacks.saveState?.();
-                return { postponed: true };
+                const postponeState = getLiveAutoTaskState(state, callbacks);
+                const stateBeforePostpone = cloneAutoTaskState(postponeState);
+                const pointers = normalizePointers(postponeState);
+                const postpone = Math.max(1, Math.round(Number(shouldRun.postpone) || 1));
+                const postponeKey = task.postponeKey || getAutoTaskPostponeKey(task.pointerKey);
+                pointers[postponeKey] = task.currentCount + postpone;
+                if (!persistAutoTaskState(postponeState, callbacks)) {
+                    restoreAutoTaskState(postponeState, stateBeforePostpone);
+                    return buildAutoTaskSaveFailure(task, '顺延状态保存');
+                }
+                return { success: true, postponed: true, postponeUntil: pointers[postponeKey] };
             }
         }
         notifyAutoTaskStarted(task);
@@ -3566,26 +3659,39 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             start: task.start,
             end: task.end,
             silent: autoSave,
-            previewOnly: !autoSave,
+            previewOnly: true,
             autoTaskType: 'trace',
             signal: executionOptions.signal,
         });
         if (!result.success) return { ...result, range: result.range || { start: task.start, end: task.end } };
+        if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
+            return { success: false, aborted: true, sessionChanged: true, error: `${task.title}完成时聊天已切换，结果未写入。` };
+        }
 
-        let committed = result;
+        let pendingResult = result;
         if (!autoSave) {
             const confirmation = await confirmTaskResult(result, task, callbacks);
             if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
-            committed = confirmation && typeof confirmation === 'object' && 'text' in confirmation
+            pendingResult = confirmation && typeof confirmation === 'object' && 'text' in confirmation
                 ? rebuildTaskResultFromText('trace', result, confirmation.text)
                 : result;
-            if (!committed.success) return committed;
-            committed = commitTraceResult(state, committed);
+            if (!pendingResult.success) return pendingResult;
+            if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
+                return { success: false, aborted: true, sessionChanged: true, error: `${task.title}确认时聊天已切换，结果未写入。` };
+            }
         }
 
-        const pointers = normalizePointers(state);
+        const commitState = getLiveAutoTaskState(state, callbacks);
+        const stateBeforeCommit = cloneAutoTaskState(commitState);
+        const committed = commitTraceResult(commitState, pendingResult);
+        if (!committed.success) return committed;
+        const pointers = normalizePointers(commitState);
         pointers.trace = committed.range?.end || task.end;
-        callbacks.saveState?.();
+        delete pointers[task.postponeKey || getAutoTaskPostponeKey(task.pointerKey)];
+        if (!persistAutoTaskState(commitState, callbacks)) {
+            restoreAutoTaskState(commitState, stateBeforeCommit);
+            return buildAutoTaskSaveFailure(task, '结果与指针保存');
+        }
         callbacks.onUpdate?.(committed);
         return committed;
     }

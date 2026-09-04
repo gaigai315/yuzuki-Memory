@@ -10,6 +10,13 @@
     const PERSIST_PREFIX = 'yzm_memory_branch_snapshots:';
     const MAX_SNAPSHOTS = 50;
     const HIGH_FLOOR_GENESIS_GUARD = 5;
+    const RECORD_POLICY_FIELDS = Object.freeze([
+        'hidden',
+        'autoVectorResident',
+        'characterVectorSynced',
+        'itemTrackingVectorSynced',
+        'worldSettingVectorSynced',
+    ]);
     const snapshotsBySession = {};
     let snapshots = {};
     let branchSnapshots = {};
@@ -222,6 +229,60 @@
             result[table.id] = clone(Array.isArray(records[table.id]) ? records[table.id] : []);
         });
         return result;
+    }
+
+    function cleanColumnName(column) {
+        return YuzukiMemory.MemoryTagParser?.cleanColumnName?.(column)
+            || String(column || '').replace(/^#+/, '').trim();
+    }
+
+    function normalizePrimaryValue(value) {
+        return String(value || '').replace(/｜/g, '|').trim().toLowerCase();
+    }
+
+    function findCurrentRecord(records, table, sourceRecord, usedIndexes = new Set()) {
+        const list = Array.isArray(records) ? records : [];
+        const sourceId = String(sourceRecord?.id || '');
+        if (sourceId) {
+            const idIndex = list.findIndex((record, index) => (
+                !usedIndexes.has(index) && String(record?.id || '') === sourceId
+            ));
+            if (idIndex >= 0) return { record: list[idIndex], index: idIndex };
+        }
+        const primaryName = cleanColumnName(Array.isArray(table?.columns) ? table.columns[0] : '');
+        const primaryValue = normalizePrimaryValue(sourceRecord?.values?.[primaryName]);
+        if (primaryName && primaryValue) {
+            const primaryIndex = list.findIndex((record, index) => (
+                !usedIndexes.has(index)
+                && normalizePrimaryValue(record?.values?.[primaryName]) === primaryValue
+            ));
+            if (primaryIndex >= 0) return { record: list[primaryIndex], index: primaryIndex };
+        }
+        return { record: null, index: -1 };
+    }
+
+    function applyCurrentRecordPolicy(currentRecord, restoredRecord) {
+        if (!currentRecord || !restoredRecord) return restoredRecord;
+        RECORD_POLICY_FIELDS.forEach((field) => {
+            if (Object.prototype.hasOwnProperty.call(currentRecord, field)) {
+                restoredRecord[field] = currentRecord[field];
+            } else {
+                delete restoredRecord[field];
+            }
+        });
+        return restoredRecord;
+    }
+
+    function restoreTableRecordsWithCurrentPolicy(table, currentRecords, snapshotRecords) {
+        const restoredRecords = clone(Array.isArray(snapshotRecords) ? snapshotRecords : []);
+        const usedCurrent = new Set();
+        restoredRecords.forEach((restoredRecord) => {
+            const currentMatch = findCurrentRecord(currentRecords, table, restoredRecord, usedCurrent);
+            if (!currentMatch.record) return;
+            usedCurrent.add(currentMatch.index);
+            applyCurrentRecordPolicy(currentMatch.record, restoredRecord);
+        });
+        return restoredRecords;
     }
 
     function countSnapshotRecords(records = {}) {
@@ -506,7 +567,11 @@
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
         (Array.isArray(state.tables) ? state.tables : []).forEach((table) => {
             if (!table?.id || table.id === 'memory_summary') return;
-            state.records[table.id] = clone(Array.isArray(snapshot.records[table.id]) ? snapshot.records[table.id] : []);
+            state.records[table.id] = restoreTableRecordsWithCurrentPolicy(
+                table,
+                state.records[table.id],
+                snapshot.records[table.id],
+            );
         });
         if (!saveState(state, sessionId)) return false;
         const storedState = loadState(sessionId);

@@ -833,9 +833,11 @@
         const state = getState();
         state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
         const current = getManualPointerSettings();
+        const postponeKey = `${key}PostponeUntil`;
         state.settings.manualPointers = {
             ...current,
             [key]: Math.max(0, Math.round(Number(value) || 0)),
+            [postponeKey]: 0,
         };
         saveState();
         return state.settings.manualPointers;
@@ -3029,9 +3031,13 @@
         const current = getManualPointerSettings();
         state.settings.manualPointers = {
             ...current,
-            ...(options.trace ? { trace: 0 } : {}),
-            ...(options.summary ? { summary: 0 } : {}),
-            ...(options.summary ? { historySummary: 0 } : {}),
+            ...(options.trace ? { trace: 0, tracePostponeUntil: 0 } : {}),
+            ...(options.summary ? {
+                summary: 0,
+                summaryPostponeUntil: 0,
+                historySummary: 0,
+                historySummaryPostponeUntil: 0,
+            } : {}),
         };
     }
 
@@ -12980,8 +12986,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】优化批量填表逻辑，注入当前除剧情摘要表格的其他表格数据作为初始数据内容。',
-            '【优化】待办事项按剧情时间排序，并支持点击圆点编辑或删除单条待办。',
+            '【修复】修复角色记录取消自动向量化后，在重 Roll、回退或楼层重放时又恢复为自动向量化的问题。',
+            '【修复】修复自动大总结未正确落盘时同一区间被重复总结的问题，并修正顺延导致总结区间偏移及保存失败仍提示完成的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -16573,6 +16579,10 @@
         YuzukiMemory.TaskRunner?.bindAutoSummary?.({
             getState,
             saveState,
+            saveTaskState(state, options = {}) {
+                if (!state || state !== getState() || !isSessionStateReady()) return false;
+                return !!getStorage()?.saveState?.(state, createDefaultState(), loadedSessionId, options);
+            },
             isStateReady: isSessionStateReady,
             confirmAutoTask(task) {
                 const root = document.getElementById(ROOT_ID);
