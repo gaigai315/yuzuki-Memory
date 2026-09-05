@@ -15,6 +15,7 @@ function createHarness(options = {}) {
     const successToasts = [];
     const errorToasts = [];
     const promptedTasks = [];
+    const resultConfirmations = [];
     let generatedCount = 0;
     let updateCount = 0;
     let storedState = null;
@@ -96,7 +97,8 @@ function createHarness(options = {}) {
         fillMode: 'realtime',
         traceBatchEnabled: false,
     };
-    const summaryResponse = '<Memory>\n【主线总结】\n某日,10:00-10:05 [测试地点] 测试事件完成。\n</Memory>';
+    const summaryResponse = options.summaryResponse
+        || '<Memory>\n【主线总结】\n某日,10:00-10:05 [测试地点] 测试事件完成。\n</Memory>';
 
     const sandbox = {
         AbortController,
@@ -184,6 +186,29 @@ function createHarness(options = {}) {
             }
             return { action: 'confirm', postpone: 0 };
         },
+        confirmTaskResult: async (result, task, confirmationOptions) => {
+            resultConfirmations.push({
+                result: {
+                    text: String(result?.text || ''),
+                    requiresMemoryClosureConfirmation: result?.requiresMemoryClosureConfirmation === true,
+                    range: result?.range ? {
+                        start: Number(result.range.start),
+                        end: Number(result.range.end),
+                    } : null,
+                },
+                task: {
+                    title: String(task?.title || ''),
+                    type: String(task?.type || ''),
+                    start: Number(task?.start),
+                    end: Number(task?.end),
+                },
+                options: { ...(confirmationOptions || {}) },
+            });
+            if (typeof options.confirmTaskResult === 'function') {
+                return options.confirmTaskResult(result, task, confirmationOptions);
+            }
+            return { action: 'confirm', text: result.text };
+        },
         onUpdate: () => {
             updateCount += 1;
         },
@@ -197,6 +222,7 @@ function createHarness(options = {}) {
         successToasts,
         errorToasts,
         promptedTasks,
+        resultConfirmations,
         get generatedCount() {
             return generatedCount;
         },
@@ -286,4 +312,43 @@ test('postponing a history summary delays the reminder without shifting its rang
     assert.equal(harness.generatedCount, 1);
     assert.equal(pointers.historySummary, 200);
     assert.equal(pointers.historySummaryPostponeUntil, 0);
+});
+
+test('silent automatic summary with a missing Memory close waits for confirmation and cancel keeps state untouched', async () => {
+    const harness = createHarness({
+        summaryResponse: '<Memory>\n【主线总结】\n某日,10:00-10:05 [测试地点] 疑似截断内容。',
+        confirmTaskResult: () => ({ action: 'cancel', cancelled: true }),
+    });
+
+    harness.advance();
+    await harness.runNextTimer();
+
+    assert.equal(harness.generatedCount, 1);
+    assert.equal(harness.resultConfirmations.length, 1);
+    assert.equal(harness.resultConfirmations[0].options.reason, 'missing-memory-close');
+    assert.equal(harness.resultConfirmations[0].result.requiresMemoryClosureConfirmation, true);
+    assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 0);
+    assert.equal(harness.stateRef.current.records.memory_summary.length, 0);
+    assert.equal(harness.saveCalls.length, 0);
+    assert.equal(harness.successToasts.length, 0);
+    assert.equal(harness.errorToasts.length, 0);
+});
+
+test('silent automatic summary force-write repairs the edited Memory envelope and preserves its floor range', async () => {
+    const harness = createHarness({
+        summaryResponse: '<Memory>\n【主线总结】\n某日,10:00-10:05 [测试地点] 内容完整但缺少闭合标签。',
+        confirmTaskResult: (result) => ({ action: 'confirm', text: result.text }),
+    });
+
+    harness.advance();
+    await harness.runNextTimer();
+
+    const summary = harness.stateRef.current.records.memory_summary[0];
+    assert.equal(harness.resultConfirmations.length, 1);
+    assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 200);
+    assert.equal(summary.values.楼层数, '0-199');
+    assert.match(summary.values.总结内容, /内容完整但缺少闭合标签/);
+    assert.equal(harness.saveCalls.length, 1);
+    assert.equal(harness.successToasts.length, 1);
+    assert.equal(harness.errorToasts.length, 0);
 });

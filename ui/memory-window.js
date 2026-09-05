@@ -6714,6 +6714,7 @@
             const meta = document.createElement('div');
             meta.className = 'yzm-task-result-meta';
             meta.textContent = options.description || '请确认模型结果是否写入插件记忆。';
+            if (options.warning === true) meta.classList.add('yzm-task-result-meta-warning');
 
             const preview = document.createElement('textarea');
             preview.className = 'yzm-task-result-preview';
@@ -6752,6 +6753,10 @@
             const actions = document.createElement('div');
             actions.className = 'yzm-structure-actions yzm-task-result-actions';
             const confirm = createButton(options.confirmLabel || '确认写入', 'yzm-add-table-confirm');
+            const cancel = options.cancelLabel
+                ? createButton(options.cancelLabel, 'yzm-api-button')
+                : null;
+            if (cancel) actions.append(cancel);
             actions.append(confirm);
 
             const body = document.createElement('div');
@@ -6779,6 +6784,7 @@
                 event.stopImmediatePropagation?.();
             };
             close.onclick = () => closeWith({ action: 'cancel', cancelled: true });
+            if (cancel) cancel.onclick = () => closeWith({ action: 'cancel', cancelled: true });
             confirm.onclick = () => closeWith(options.readOnly === true
                 ? { action: 'confirm' }
                 : { action: 'confirm', text: editableTextarea.value });
@@ -7250,13 +7256,21 @@
         else return { success: false, error: '未知任务类型。' };
 
         if (!result?.success && String(result?.text || result?.preview || '').trim()) {
+            const needsClosureConfirmation = result?.requiresMemoryClosureConfirmation === true;
             const confirmation = await openTaskResultConfirmDialog(ensureRoot(), {
-                title: `${getTaskActionLabel(action)}结果需要修正`,
-                description: options.batchIndex
-                    ? `第 ${options.batchIndex}/${options.batchTotal} 批，楼层 ${formatTaskDisplayRange(options.start, options.end)} 没有解析到有效写入。可直接修改模型返回内容后再次确认写入。`
-                    : '模型返回内容没有解析到有效写入。可直接修改返回内容后再次确认写入。',
+                title: needsClosureConfirmation
+                    ? 'AI 返回缺少 </Memory> 闭合标签'
+                    : `${getTaskActionLabel(action)}结果需要修正`,
+                description: needsClosureConfirmation
+                    ? '检测到 AI 已返回内容，但结尾缺少 </Memory> 闭合标签。请自行检查内容是被截断，还是仅遗漏闭合标签；可直接编辑下方内容。确认完整后点击“强制写入”，否则点击“取消写入”。'
+                    : (options.batchIndex
+                        ? `第 ${options.batchIndex}/${options.batchTotal} 批，楼层 ${formatTaskDisplayRange(options.start, options.end)} 没有解析到有效写入。可直接修改模型返回内容后再次确认写入。`
+                        : '模型返回内容没有解析到有效写入。可直接修改返回内容后再次确认写入。'),
                 result,
                 compare: false,
+                warning: needsClosureConfirmation,
+                confirmLabel: needsClosureConfirmation ? '强制写入' : '确认写入',
+                cancelLabel: needsClosureConfirmation ? '取消写入' : '',
             });
             if (!confirmation || confirmation.cancelled || confirmation.action === 'cancel') {
                 taskRunnerStopRequested = true;
@@ -7264,7 +7278,9 @@
                 return { ...result, cancelled: true, error: result.error || '用户取消写入。' };
             }
             if (confirmation && typeof confirmation === 'object' && 'text' in confirmation) {
-                result = YuzukiMemory.TaskRunner.rebuildTaskResultFromText(action, result, confirmation.text);
+                result = YuzukiMemory.TaskRunner.rebuildTaskResultFromText(action, result, confirmation.text, {
+                    forceMemoryEnvelopeRepair: needsClosureConfirmation,
+                });
                 if (!result?.success) return result;
                 state = getState();
                 result = commitTaskResult(action, state, result);
@@ -12986,8 +13002,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复角色记录取消自动向量化后，在重 Roll、回退或楼层重放时又恢复为自动向量化的问题。',
-            '【修复】修复自动大总结未正确落盘时同一区间被重复总结的问题，并修正顺延导致总结区间偏移及保存失败仍提示完成的问题。',
+            '【安全确认】填表、总结及其自动任务检测到 AI 返回缺少结尾 </Memory> 闭合标签时，不再自动补全并直接写入；现在会弹出可编辑原文，供用户判断是否截断，并选择强制写入或取消写入。',
+            '【修复】修复批量删除助手楼层后，实时填表或剧情摘要内容可能残留的问题；楼层重放现在只撤回已删除楼层的贡献，同时保留手工编辑、追溯任务写回和记录向量策略。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -16589,13 +16605,22 @@
                 if (!root) return Promise.resolve({ action: 'cancel', postpone: 0 });
                 return openAutoTaskConfirmDialog(root, task);
             },
-            confirmTaskResult(result, task) {
+            confirmTaskResult(result, task, confirmationOptions = {}) {
                 const root = document.getElementById(ROOT_ID);
                 if (!root) return Promise.resolve(false);
+                const needsClosureConfirmation = result?.requiresMemoryClosureConfirmation === true
+                    || confirmationOptions.reason === 'missing-memory-close';
                 return openTaskResultConfirmDialog(root, {
-                    title: `${task?.title || '自动任务'}结果确认`,
-                    description: '完成后未启用静默保存，确认后才会写入插件记忆。可先编辑结果再写入。',
+                    title: needsClosureConfirmation
+                        ? 'AI 返回缺少 </Memory> 闭合标签'
+                        : `${task?.title || '自动任务'}结果确认`,
+                    description: needsClosureConfirmation
+                        ? '检测到 AI 已返回内容，但结尾缺少 </Memory> 闭合标签。请自行检查内容是被截断，还是仅遗漏闭合标签；可直接编辑下方内容。确认完整后点击“强制写入”，否则点击“取消写入”。'
+                        : '完成后未启用静默保存，确认后才会写入插件记忆。可先编辑结果再写入。',
                     result,
+                    warning: needsClosureConfirmation,
+                    confirmLabel: needsClosureConfirmation ? '强制写入' : '确认写入',
+                    cancelLabel: needsClosureConfirmation ? '取消写入' : '',
                 });
             },
             onAutoTaskFailure(payload = {}) {

@@ -1306,6 +1306,44 @@
         return `<Memory>\n${source}\n</Memory>`;
     }
 
+    function hasMemoryClosingTag(text = '') {
+        return /<\/Memory\s*>/i.test(String(text || ''));
+    }
+
+    function isLegacyTraceJsonResponse(text = '') {
+        const source = String(text || '').trim();
+        if (!source || /<\/?Memory(?:\s+[^>]*)?>/i.test(source)) return false;
+        try {
+            return parseJsonBlocks(source).length > 0;
+        } catch (_error) {
+            return false;
+        }
+    }
+
+    function needsMemoryClosureConfirmation(text = '', options = {}) {
+        const source = String(text || '').trim();
+        if (!source || hasMemoryClosingTag(source)) return false;
+        if (options.allowLegacyTraceJson === true && isLegacyTraceJsonResponse(source)) return false;
+        return true;
+    }
+
+    function buildMissingMemoryClosureResult(response = {}, options = {}) {
+        return {
+            ...response,
+            success: false,
+            requiresMemoryClosureConfirmation: true,
+            error: '检测到 AI 返回内容缺少结尾 </Memory> 闭合标签。请检查内容是被截断，还是仅遗漏闭合标签；确认完整后可强制写入，否则请取消写入。',
+            text: String(response?.text || ''),
+            ...(options.range ? { range: options.range } : {}),
+            ...(options.meta ? { meta: options.meta } : {}),
+        };
+    }
+
+    function validateTaskMemoryClosure(response = {}, options = {}) {
+        if (!needsMemoryClosureConfirmation(response?.text, options)) return response;
+        return buildMissingMemoryClosureResult(response, options);
+    }
+
     function previewRawModelText(text = '') {
         const source = String(text || '').trim();
         return source || '（空）';
@@ -1395,15 +1433,6 @@
         return '';
     }
 
-    function canRepairSummaryMemoryEnvelope(text = '', response = {}) {
-        const source = String(text || '').trim();
-        if (!source || /<\/Memory\s*>/i.test(source)) return false;
-        if (response?.truncated === true || /达到最大 Token 限制|finish_reason=(?:length|MAX_TOKENS)/i.test(source)) return false;
-        if (response?.streamComplete === false) return false;
-        const termination = String(response?.streamTermination || '').trim().toLowerCase();
-        return !['eof', 'length', 'max_tokens', 'max_token'].includes(termination);
-    }
-
     function normalizeCompletedSummaryMemoryEnvelope(text = '') {
         const rawSource = String(text || '');
         let source = rawSource.trim();
@@ -1445,25 +1474,30 @@
         return `<Memory>\n${body}\n</Memory>`;
     }
 
-    function normalizeSummaryMemoryEnvelope(text = '', response = {}) {
+    function normalizeSummaryMemoryEnvelope(text = '', response = {}, options = {}) {
         const source = String(text || '');
-        if (canRepairSummaryMemoryEnvelope(source, response)) return normalizeMemoryEnvelope(source);
+        if (options.forceMemoryEnvelopeRepair === true && !hasMemoryClosingTag(source)) {
+            return normalizeMemoryEnvelope(source);
+        }
         return normalizeCompletedSummaryMemoryEnvelope(source);
     }
 
-    function normalizeSummaryGenerationText(text = '', response = {}) {
+    function normalizeSummaryGenerationText(text = '', response = {}, options = {}) {
         const source = String(text || '');
-        const envelopeNormalized = normalizeSummaryMemoryEnvelope(source, response);
+        const envelopeNormalized = normalizeSummaryMemoryEnvelope(source, response, options);
         return normalizeSummarySectionHeadings(envelopeNormalized);
     }
 
-    function validateSummaryGenerationResponse(response = {}) {
+    function validateSummaryGenerationResponse(response = {}, options = {}) {
         const rawText = String(response?.text || '');
-        const normalizedText = normalizeSummaryGenerationText(rawText, response);
+        if (options.forceMemoryEnvelopeRepair !== true && needsMemoryClosureConfirmation(rawText)) {
+            return buildMissingMemoryClosureResult(response);
+        }
+        const normalizedText = normalizeSummaryGenerationText(rawText, response, options);
         const error = getSummaryResponseIntegrityError(normalizedText, response);
         if (!error) {
             if (normalizedText === rawText) return response;
-            const envelopeNormalized = normalizeSummaryMemoryEnvelope(rawText, response);
+            const envelopeNormalized = normalizeSummaryMemoryEnvelope(rawText, response, options);
             return {
                 ...response,
                 text: normalizedText,
@@ -2671,21 +2705,30 @@
         };
     }
 
-    function rebuildTaskResultFromText(action, originalResult = {}, editedText = '') {
+    function rebuildTaskResultFromText(action, originalResult = {}, editedText = '', options = {}) {
         const text = String(editedText || '').trim();
         if (!text) return { ...originalResult, success: false, error: '编辑后的结果为空。' };
+        const forceMemoryEnvelopeRepair = options.forceMemoryEnvelopeRepair === true;
         if (action === 'trace' || action === 'traceOptimize') {
-            const parsed = parseTraceResponse(text);
+            const normalizedText = forceMemoryEnvelopeRepair && needsMemoryClosureConfirmation(text, { allowLegacyTraceJson: true })
+                ? normalizeMemoryEnvelope(text)
+                : text;
+            const parsed = parseTraceResponse(normalizedText);
             return {
                 ...originalResult,
                 success: true,
+                requiresMemoryClosureConfirmation: false,
                 parsed,
                 preview: getTracePreview(parsed),
-                text,
+                text: normalizedText,
+                ...(normalizedText !== text ? { rawText: text, memoryEnvelopeRepaired: true } : {}),
             };
         }
         if (action === 'summary' || action === 'summaryOptimize') {
-            const validatedResponse = validateSummaryGenerationResponse({ success: true, text });
+            const validatedResponse = validateSummaryGenerationResponse(
+                { success: true, text },
+                { forceMemoryEnvelopeRepair },
+            );
             if (!validatedResponse.success) {
                 return {
                     ...originalResult,
@@ -2698,6 +2741,7 @@
             return {
                 ...originalResult,
                 success: true,
+                requiresMemoryClosureConfirmation: false,
                 payload: payloads[0],
                 payloads,
                 preview: payloads.map((payload) => getSummaryPreview(payload)).filter(Boolean).join('\n\n'),
@@ -3082,19 +3126,26 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const response = await generate(built.messages, { ...options, kind: 'trace' });
         if (!response.success) return response;
         if (options.signal?.aborted) return { success: false, error: '已中断发送', aborted: true };
-        const parsed = filterTraceResultByTarget(state, parseTraceResponse(response.text), options);
+        const meta = {
+            tableId: String(options.tableId || ''),
+            autoTaskType: options.autoTaskType || '',
+            floorScope: normalizeFloorScope(options.floorScope, getCurrentFloorScope(state)),
+        };
+        const validatedResponse = validateTaskMemoryClosure(response, {
+            allowLegacyTraceJson: true,
+            range: built.range,
+            meta,
+        });
+        if (!validatedResponse.success) return validatedResponse;
+        const parsed = filterTraceResultByTarget(state, parseTraceResponse(validatedResponse.text), options);
         const result = {
             success: true,
             kind: 'trace',
             parsed,
             preview: getTracePreview(parsed),
-            text: response.text,
+            text: validatedResponse.text,
             range: built.range,
-            meta: {
-                tableId: String(options.tableId || ''),
-                autoTaskType: options.autoTaskType || '',
-                floorScope: normalizeFloorScope(options.floorScope, getCurrentFloorScope(state)),
-            },
+            meta,
         };
         return options.previewOnly ? result : commitTraceResult(state, result);
     }
@@ -3105,8 +3156,13 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const response = await generate(built.messages, { ...options, kind: 'summary' });
         if (!response.success) return response;
         if (options.signal?.aborted) return { success: false, error: '已中断发送', aborted: true };
+        const meta = {
+            autoTaskType: options.autoTaskType || '',
+            range: { start: built.range.start, end: built.range.end },
+            floorScope: normalizeFloorScope(options.floorScope, getCurrentFloorScope(state)),
+        };
         const validatedResponse = validateSummaryGenerationResponse(response);
-        if (!validatedResponse.success) return validatedResponse;
+        if (!validatedResponse.success) return { ...validatedResponse, range: built.range, meta };
         const payloads = parseSummaryResponse(validatedResponse.text);
         if (!payloads.length) return { success: false, error: formatSummaryParseError('总结结果缺少可落盘的分块正文。', response.text), text: response.text };
         const result = {
@@ -3117,11 +3173,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             preview: payloads.map((payload) => getSummaryPreview(payload)).filter(Boolean).join('\n\n'),
             text: validatedResponse.text,
             range: built.range,
-            meta: {
-                autoTaskType: options.autoTaskType || '',
-                range: { start: built.range.start, end: built.range.end },
-                floorScope: normalizeFloorScope(options.floorScope, getCurrentFloorScope(state)),
-            },
+            meta,
         };
         return options.previewOnly ? result : commitSummaryResult(state, result);
     }
@@ -3147,8 +3199,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         ]);
         const response = await generate(messages, { ...options, kind: 'traceOptimize' });
         if (!response.success) return response;
-        const parsed = parseTraceResponse(response.text);
-        const result = { success: true, kind: 'trace', parsed, preview: getTracePreview(parsed), text: response.text };
+        const validatedResponse = validateTaskMemoryClosure(response, { allowLegacyTraceJson: true });
+        if (!validatedResponse.success) return validatedResponse;
+        const parsed = parseTraceResponse(validatedResponse.text);
+        const result = { success: true, kind: 'trace', parsed, preview: getTracePreview(parsed), text: validatedResponse.text };
         return options.previewOnly ? result : commitTraceResult(state, result);
     }
 
@@ -3183,8 +3237,29 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         ]);
         const response = await generate(messages, { ...options, kind: 'summaryOptimize' });
         if (!response.success) return response;
+        const targets = targetInfo.records.map((record) => ({
+            id: record.id,
+            kind: getSummaryRecordKind(record),
+            title: String(record?.values?.[getPrimaryColumn(targetInfo.table)] || record?.values?.总结标题 || '').trim(),
+            floorText: String(record?.values?.楼层数 || record?.values?.range || record?.values?.['楼层范围'] || '').trim(),
+            oldPayload: getSummaryRecordPayload(targetInfo.table, record),
+            oldText: summaryRecordToOptimizeText(targetInfo.table, record, 0),
+        }));
+        const meta = {
+            autoTaskType: '',
+            range: optimizeRange.range,
+            floorScope: optimizeRange.floorScope,
+        };
         const validatedResponse = validateSummaryGenerationResponse(response);
-        if (!validatedResponse.success) return validatedResponse;
+        if (!validatedResponse.success) {
+            return {
+                ...validatedResponse,
+                range: optimizeRange.range,
+                floorText: optimizeRange.floorText,
+                targets,
+                meta,
+            };
+        }
         const payloads = parseSummaryResponse(validatedResponse.text);
         if (!payloads.length) return { success: false, error: formatSummaryParseError('优化结果缺少可落盘的分块正文。', response.text), text: response.text };
         const result = {
@@ -3196,19 +3271,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             text: validatedResponse.text,
             range: optimizeRange.range,
             floorText: optimizeRange.floorText,
-            targets: targetInfo.records.map((record) => ({
-                id: record.id,
-                kind: getSummaryRecordKind(record),
-                title: String(record?.values?.[getPrimaryColumn(targetInfo.table)] || record?.values?.总结标题 || '').trim(),
-                floorText: String(record?.values?.楼层数 || record?.values?.range || record?.values?.['楼层范围'] || '').trim(),
-                oldPayload: getSummaryRecordPayload(targetInfo.table, record),
-                oldText: summaryRecordToOptimizeText(targetInfo.table, record, 0),
-            })),
-            meta: {
-                autoTaskType: '',
-                range: optimizeRange.range,
-                floorScope: optimizeRange.floorScope,
-            },
+            targets,
+            meta,
         };
         return options.previewOnly ? result : commitSummaryOptimizeResult(state, result);
     }
@@ -3479,9 +3543,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return callbacks && typeof callbacks.confirmAutoTask === 'function';
     }
 
-    async function confirmTaskResult(result, task, callbacks = {}) {
+    async function confirmTaskResult(result, task, callbacks = {}, options = {}) {
         if (typeof callbacks.confirmTaskResult === 'function') {
-            return callbacks.confirmTaskResult(result, task);
+            return callbacks.confirmTaskResult(result, task, options);
         }
         if (typeof window.confirm !== 'function') return true;
         return window.confirm(`${task?.title || '任务'}已生成结果，是否写入记忆？\n\n${String(result.text || result.preview || '').slice(0, 1000)}`);
@@ -3557,13 +3621,27 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             autoTaskType: task.type,
             signal: executionOptions.signal,
         });
-        if (!result.success) return result;
+        const needsClosureConfirmation = result?.requiresMemoryClosureConfirmation === true;
+        if (!result.success && !needsClosureConfirmation) return result;
         if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
             return { success: false, aborted: true, sessionChanged: true, error: `${task.title}完成时聊天已切换，结果未写入。` };
         }
 
         let pendingResult = result;
-        if (!settings.autoSave) {
+        let resultConfirmed = false;
+        if (needsClosureConfirmation) {
+            const confirmation = await confirmTaskResult(result, task, callbacks, { reason: 'missing-memory-close' });
+            if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
+            pendingResult = confirmation && typeof confirmation === 'object' && 'text' in confirmation
+                ? rebuildTaskResultFromText('summary', result, confirmation.text, { forceMemoryEnvelopeRepair: true })
+                : rebuildTaskResultFromText('summary', result, result.text, { forceMemoryEnvelopeRepair: true });
+            if (!pendingResult.success) return pendingResult;
+            resultConfirmed = true;
+            if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
+                return { success: false, aborted: true, sessionChanged: true, error: `${task.title}确认时聊天已切换，结果未写入。` };
+            }
+        }
+        if (!settings.autoSave && !resultConfirmed) {
             const confirmation = await confirmTaskResult(result, task, callbacks);
             if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
             pendingResult = confirmation && typeof confirmation === 'object' && 'text' in confirmation
@@ -3663,13 +3741,29 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             autoTaskType: 'trace',
             signal: executionOptions.signal,
         });
-        if (!result.success) return { ...result, range: result.range || { start: task.start, end: task.end } };
+        const needsClosureConfirmation = result?.requiresMemoryClosureConfirmation === true;
+        if (!result.success && !needsClosureConfirmation) {
+            return { ...result, range: result.range || { start: task.start, end: task.end } };
+        }
         if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
             return { success: false, aborted: true, sessionChanged: true, error: `${task.title}完成时聊天已切换，结果未写入。` };
         }
 
         let pendingResult = result;
-        if (!autoSave) {
+        let resultConfirmed = false;
+        if (needsClosureConfirmation) {
+            const confirmation = await confirmTaskResult(result, task, callbacks, { reason: 'missing-memory-close' });
+            if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
+            pendingResult = confirmation && typeof confirmation === 'object' && 'text' in confirmation
+                ? rebuildTaskResultFromText('trace', result, confirmation.text, { forceMemoryEnvelopeRepair: true })
+                : rebuildTaskResultFromText('trace', result, result.text, { forceMemoryEnvelopeRepair: true });
+            if (!pendingResult.success) return pendingResult;
+            resultConfirmed = true;
+            if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
+                return { success: false, aborted: true, sessionChanged: true, error: `${task.title}确认时聊天已切换，结果未写入。` };
+            }
+        }
+        if (!autoSave && !resultConfirmed) {
             const confirmation = await confirmTaskResult(result, task, callbacks);
             if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
             pendingResult = confirmation && typeof confirmation === 'object' && 'text' in confirmation

@@ -438,6 +438,95 @@
         return [...keys].some((key) => String(left?.[key] ?? '') !== String(right?.[key] ?? ''));
     }
 
+    function getTableColumn(table, name) {
+        const normalized = cleanColumnName(name);
+        return (Array.isArray(table?.columns) ? table.columns : [])
+            .find((column) => cleanColumnName(column) === normalized) || '';
+    }
+
+    function isAppendColumn(table, name) {
+        const column = String(getTableColumn(table, name) || '').trim();
+        const modifiers = column.match(/^[#*]+/)?.[0] || '';
+        return modifiers.includes('#');
+    }
+
+    function splitAppendValue(value, table) {
+        const source = String(value || '').trim();
+        if (!source) return [];
+        const separator = table?.id === PLOT_TABLE_ID ? /\r?\n+/ : /(?:\r?\n)+|；/;
+        return source.split(separator).map((item) => item.trim()).filter(Boolean);
+    }
+
+    function subtractAppendItems(source = [], remove = []) {
+        const remaining = remove.map((item) => String(item || '').trim());
+        return source.filter((item) => {
+            const key = String(item || '').trim();
+            const index = remaining.findIndex((candidate) => candidate === key);
+            if (index < 0) return true;
+            remaining.splice(index, 1);
+            return false;
+        });
+    }
+
+    function mergeAppendValue(current, expected, rebuilt, table) {
+        const currentItems = splitAppendValue(current, table);
+        const expectedItems = splitAppendValue(expected, table);
+        const rebuiltItems = splitAppendValue(rebuilt, table);
+        const externalAdditions = subtractAppendItems(currentItems, expectedItems);
+        const externalRemovals = subtractAppendItems(expectedItems, currentItems);
+        const merged = [
+            ...subtractAppendItems(rebuiltItems, externalRemovals),
+            ...externalAdditions,
+        ];
+        const useMultiline = table?.id === PLOT_TABLE_ID
+            || [current, expected, rebuilt].some((value) => /\r?\n/.test(String(value || '')));
+        return merged.join(useMultiline ? '\n' : '；');
+    }
+
+    function createExternalOverlayRecord(currentRecord, expectedRecord, table) {
+        const record = clone(currentRecord || expectedRecord || {});
+        const valueKeys = new Set([
+            ...(Array.isArray(table?.columns) ? table.columns.map(cleanColumnName) : []),
+            ...Object.keys(currentRecord?.values || {}),
+            ...Object.keys(expectedRecord?.values || {}),
+        ]);
+        record.values = Object.fromEntries([...valueKeys].map((key) => [key, '']));
+        const primaryName = getPrimaryColumnName(table);
+        if (primaryName && table?.id !== PLOT_TABLE_ID) {
+            record.values[primaryName] = String(
+                currentRecord?.values?.[primaryName]
+                ?? expectedRecord?.values?.[primaryName]
+                ?? '',
+            );
+        }
+        if (table?.id === PLOT_TABLE_ID) {
+            record.plotItemMeta = { main: [], branch: [] };
+            record.hiddenPlotItems = { main: [], branch: [] };
+        }
+        return record;
+    }
+
+    function applyRecordValueOverlay(currentRecord, expectedRecord, rebuiltRecord, table) {
+        rebuiltRecord.values = rebuiltRecord.values && typeof rebuiltRecord.values === 'object'
+            ? rebuiltRecord.values
+            : {};
+        const valueKeys = new Set([
+            ...Object.keys(expectedRecord?.values || {}),
+            ...Object.keys(currentRecord?.values || {}),
+        ]);
+        let changed = false;
+        valueKeys.forEach((key) => {
+            const currentValue = String(currentRecord?.values?.[key] ?? '');
+            const expectedValue = String(expectedRecord?.values?.[key] ?? '');
+            if (currentValue === expectedValue) return;
+            changed = true;
+            rebuiltRecord.values[key] = isAppendColumn(table, key)
+                ? mergeAppendValue(currentValue, expectedValue, rebuiltRecord.values[key], table)
+                : currentValue;
+        });
+        return changed;
+    }
+
     function recordPolicyDiffers(left, right) {
         return RECORD_POLICY_FIELDS.some((field) => {
             const leftHasField = Object.prototype.hasOwnProperty.call(left || {}, field);
@@ -522,22 +611,17 @@
                 const hasValueOverride = valuesDiffer(currentMatch.record.values, expectedRecord.values);
                 const hasPolicyOverride = recordPolicyDiffers(currentMatch.record, expectedRecord);
                 if (!rebuiltMatch.record) {
-                    if (hasValueOverride || hasPolicyOverride) rebuiltList.push(clone(currentMatch.record));
+                    if (hasValueOverride || hasPolicyOverride) {
+                        const overlayRecord = createExternalOverlayRecord(currentMatch.record, expectedRecord, table);
+                        applyRecordValueOverlay(currentMatch.record, expectedRecord, overlayRecord, table);
+                        applyRecordPolicyOverlay(currentMatch.record, expectedRecord, overlayRecord);
+                        if (table.id === PLOT_TABLE_ID) alignPlotMetadata(currentMatch.record, overlayRecord);
+                        rebuiltList.push(overlayRecord);
+                    }
                     return;
                 }
 
-                rebuiltMatch.record.values = rebuiltMatch.record.values && typeof rebuiltMatch.record.values === 'object'
-                    ? rebuiltMatch.record.values
-                    : {};
-                const valueKeys = new Set([
-                    ...Object.keys(expectedRecord.values || {}),
-                    ...Object.keys(currentMatch.record.values || {}),
-                ]);
-                valueKeys.forEach((key) => {
-                    if (String(currentMatch.record.values?.[key] ?? '') !== String(expectedRecord.values?.[key] ?? '')) {
-                        rebuiltMatch.record.values[key] = String(currentMatch.record.values?.[key] ?? '');
-                    }
-                });
+                applyRecordValueOverlay(currentMatch.record, expectedRecord, rebuiltMatch.record, table);
                 applyRecordPolicyOverlay(currentMatch.record, expectedRecord, rebuiltMatch.record);
                 if (table.id === PLOT_TABLE_ID) alignPlotMetadata(currentMatch.record, rebuiltMatch.record);
             });

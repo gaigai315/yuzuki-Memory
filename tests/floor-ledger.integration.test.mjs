@@ -119,6 +119,28 @@ function flushTimers() {
     assert.ok(guard < 20, 'scheduled work should settle');
 }
 
+function userMessage(text) {
+    return {
+        is_user: true,
+        is_system: false,
+        swipe_id: 0,
+        swipes: [],
+        extra: {},
+        mes: text,
+    };
+}
+
+function assistantMemoryMessage(text) {
+    return {
+        is_user: false,
+        is_system: false,
+        swipe_id: 0,
+        swipes: [],
+        extra: {},
+        mes: `<Memory><!--\n${text}\n--></Memory>`,
+    };
+}
+
 test('camelCase SillyTavern delete event replays state after its message disappears', () => {
     const parser = window.YuzukiMemory.MemoryTagParser;
     const ledger = window.YuzukiMemory.FloorLedger;
@@ -190,4 +212,94 @@ test('chat monitor replays state when the delete event is unavailable', () => {
 
     assert.deepEqual(storedState.records.character_profile, []);
     assert.deepEqual(storedState.floorLedger.activeEntries, []);
+});
+
+test('bulk deleting every assistant floor clears all realtime rows while user floors remain', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('第一轮'),
+        assistantMemoryMessage('#角色档案\n[爱丽丝] | 身份: 法师 | #待办事项: 调查遗迹'),
+        userMessage('第二轮'),
+        assistantMemoryMessage('#角色档案\n[爱丽丝] | 当前位置: 森林 | #待办事项: 寻找线索'),
+        userMessage('第三轮'),
+        assistantMemoryMessage('#物品追踪\n[钥匙] | 状态: 已获得 | 备注: 来自守卫'),
+        userMessage('保留到最后的用户楼层'),
+    ];
+
+    for (const floor of [1, 3, 5]) {
+        const applied = parser.applyMemoryText(chat[floor].mes, { floor, dispatch: false });
+        assert.equal(applied.success, true);
+    }
+    assert.equal(storedState.floorLedger.activeEntries.length, 3);
+
+    chat = chat.filter((message) => message.is_user === true);
+    const result = ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
+
+    assert.equal(result.changed, true);
+    assert.equal(chat.length, 4);
+    assert.deepEqual(storedState.records.character_profile, []);
+    assert.deepEqual(storedState.records.item_tracking, []);
+    assert.deepEqual(storedState.floorLedger.activeEntries, []);
+    assert.deepEqual(storedState.floorLedger.entries, {});
+});
+
+test('deleting assistant floors removes their append items but keeps later manual additions', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('开始'),
+        assistantMemoryMessage('#角色档案\n[爱丽丝] | 身份: 法师 | #待办事项: 调查遗迹'),
+        userMessage('继续'),
+        assistantMemoryMessage('#角色档案\n[爱丽丝] | 当前位置: 森林 | #待办事项: 寻找线索'),
+    ];
+
+    for (const floor of [1, 3]) {
+        const applied = parser.applyMemoryText(chat[floor].mes, { floor, dispatch: false });
+        assert.equal(applied.success, true);
+    }
+
+    const currentRecord = storedState.records.character_profile[0];
+    currentRecord.values.待办事项 = `${currentRecord.values.待办事项}；用户手工补充`;
+    currentRecord.values.约定 = '用户手工约定';
+
+    chat = chat.filter((message) => message.is_user === true);
+    ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
+
+    const rebuiltRecord = storedState.records.character_profile[0];
+    assert.equal(storedState.records.character_profile.length, 1);
+    assert.equal(rebuiltRecord.values.角色名, '爱丽丝');
+    assert.equal(rebuiltRecord.values.身份, '');
+    assert.equal(rebuiltRecord.values.当前位置, '');
+    assert.equal(rebuiltRecord.values.待办事项, '用户手工补充');
+    assert.equal(rebuiltRecord.values.约定, '用户手工约定');
+});
+
+test('plot replay removes deleted realtime lines and keeps a manually added line with metadata aligned', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('开始'),
+        assistantMemoryMessage('#主线摘要\n[2026年7月14日,18:00-19:30] | 内容: 收到温材'),
+    ];
+
+    const applied = parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false });
+    assert.equal(applied.success, true);
+    const currentRecord = storedState.records.plot_summary[0];
+    const manualLine = '2026年7月14日,20:00-20:10\t用户手工补充剧情';
+    currentRecord.values.主线 = `${currentRecord.values.主线}\n${manualLine}`;
+    currentRecord.plotItemMeta.main.push({ id: 'manual_plot', source: 'manual' });
+    currentRecord.hiddenPlotItems.main.push(true);
+
+    chat = [chat[0]];
+    ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
+
+    const rebuiltRecord = storedState.records.plot_summary[0];
+    assert.equal(storedState.records.plot_summary.length, 1);
+    assert.equal(rebuiltRecord.values.主线, manualLine);
+    assert.deepEqual(rebuiltRecord.plotItemMeta.main, [{ id: 'manual_plot', source: 'manual' }]);
+    assert.deepEqual(rebuiltRecord.hiddenPlotItems.main, [true]);
 });

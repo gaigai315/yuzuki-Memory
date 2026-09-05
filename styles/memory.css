@@ -7964,6 +7964,16 @@
     line-height: 1.5;
 }
 
+#yzm-memory-root .yzm-task-result-meta-warning,
+#yzm-memory-global-modal-root .yzm-task-result-meta-warning {
+    padding: 10px 12px;
+    color: var(--yzm-todo-medium);
+    background: var(--yzm-todo-medium-soft);
+    border: 1px solid var(--yzm-todo-medium-border);
+    border-radius: 8px;
+    font-weight: 600;
+}
+
 #yzm-memory-root .yzm-task-result-preview,
 #yzm-memory-global-modal-root .yzm-task-result-preview {
     width: 100%;

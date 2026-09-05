@@ -61,6 +61,7 @@ test('closing-only blacklist keeps an earlier whitelisted block available for ex
 
 test('manual and automatic trace inject populated non-summary tables without plot summary content', async () => {
     const capturedRequests = [];
+    let traceResponseText = '{"records":[{"table":"角色档案","values":{"角色名":"测试角色","当前位置":"新地点"}}]}';
     const taskSandbox = {
         console,
         localStorage: { getItem: () => null },
@@ -106,8 +107,20 @@ test('manual and automatic trace inject populated non-summary tables without plo
                         capturedRequests.push(messages);
                         return {
                             success: true,
-                            text: '{"records":[{"table":"角色档案","values":{"角色名":"测试角色","当前位置":"新地点"}}]}',
+                            text: traceResponseText,
                         };
+                    },
+                },
+                MemoryTagParser: {
+                    extractMemoryRows: (text) => /<Memory>[\s\S]*<\/Memory>/i.test(String(text || ''))
+                        ? [{ table: '角色档案', primaryValue: '测试角色', values: { 当前位置: '确认后的地点' } }]
+                        : [],
+                    parseMemoryText: () => [],
+                    applyRowsToState(targetState, rows) {
+                        const updates = Array.isArray(rows) ? rows : [];
+                        if (!updates.length) return 0;
+                        targetState.records.character_profile[0].values.当前位置 = updates[0].values.当前位置;
+                        return updates.length;
                     },
                 },
             },
@@ -175,4 +188,28 @@ test('manual and automatic trace inject populated non-summary tables without plo
         assert.equal(messageContents.some((content) => content.includes('SUMMARY_CONTENT_MUST_NOT_APPEAR')), false);
         assert.equal(messageContents.some((content) => content.includes('【当前世界状态参考—世界设定】')), false);
     });
+
+    traceResponseText = '<Memory><!--\n#角色档案\n[测试角色] | 当前位置: 确认后的地点\n-->';
+    const incompleteResult = await taskSandbox.window.YuzukiMemory.TaskRunner.runTrace(state, {
+        start: 0,
+        end: 2,
+        includeWorldbook: false,
+    });
+
+    assert.equal(incompleteResult.success, false);
+    assert.equal(incompleteResult.requiresMemoryClosureConfirmation, true);
+    assert.equal(state.records.character_profile[0].values.当前位置, '旧地点');
+
+    const rebuiltResult = taskSandbox.window.YuzukiMemory.TaskRunner.rebuildTaskResultFromText(
+        'trace',
+        incompleteResult,
+        incompleteResult.text,
+        { forceMemoryEnvelopeRepair: true },
+    );
+    const committedResult = taskSandbox.window.YuzukiMemory.TaskRunner.commitTraceResult(state, rebuiltResult);
+
+    assert.equal(rebuiltResult.success, true);
+    assert.match(rebuiltResult.text, /<\/Memory>$/);
+    assert.equal(committedResult.success, true);
+    assert.equal(state.records.character_profile[0].values.当前位置, '确认后的地点');
 });
