@@ -4799,7 +4799,7 @@
         const result = await store.syncSummaryToBook(getSummaryVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', getCurrentChatVectorBookName());
         if (!result.success) return result;
         const hiddenSummaryCount = options.hideAfterSync === true ? hideSummaryRecordsAfterVectorSync() : 0;
-        if (options.vectorize === true) {
+        if (options.vectorize === true && result.removed !== true && result.count > 0) {
             const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
             return { ...result, vectorized: true, vectorizeResult, hiddenSummaryCount };
         }
@@ -5082,7 +5082,7 @@
             return;
         }
 
-        const chunks = store.splitText(content, '===');
+        const chunks = await store.splitText(content, '===');
         if (!chunks.length) {
             contentInput?.focus();
             return;
@@ -13002,8 +13002,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【安全确认】填表、总结及其自动任务检测到 AI 返回缺少结尾 </Memory> 闭合标签时，不再自动补全并直接写入；现在会弹出可编辑原文，供用户判断是否截断，并选择强制写入或取消写入。',
-            '【修复】修复批量删除助手楼层后，实时填表或剧情摘要内容可能残留的问题；楼层重放现在只撤回已删除楼层的贡献，同时保留手工编辑、追溯任务写回和记录向量策略。',
+            '【优化】向量化分段改为按 Token 精确计算，长文本处理更准确。',
+            '【优化】删除已总结的楼层时，会自动删除受影响的总结并回退总结进度。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -16643,7 +16643,7 @@
             onUpdate() {
                 const root = document.getElementById(ROOT_ID);
                 if (root) {
-                    refreshAfterTask(root);
+                    refreshAfterTask(root, { persist: false });
                     if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
                 }
                 scheduleAllManagedVectorSyncs({ delay: 0 });

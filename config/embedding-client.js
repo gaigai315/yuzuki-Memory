@@ -54,6 +54,9 @@
         recallLimit: 6,
         contextDepth: 2,
     };
+    const EMBEDDING_INPUT_TOKEN_LIMIT = 8192;
+    const EMBEDDING_CHUNK_OVERLAP_TOKENS = 128;
+    let tokenCounterFallbackWarned = false;
 
     function toNumber(value, fallback, min, max, precision = null) {
         const parsed = Number.parseFloat(value);
@@ -254,11 +257,136 @@
         }
     }
 
-    async function embed(input, rawSettings = null) {
+    function getFallbackTokenCount(text) {
+        const source = String(text || '');
+        if (!source) return 0;
+        if (typeof TextEncoder === 'function') return new TextEncoder().encode(source).length;
+        try {
+            return unescape(encodeURIComponent(source)).length;
+        } catch (_error) {
+            return Array.from(source).length;
+        }
+    }
+
+    async function countTokens(text) {
+        const source = String(text || '');
+        if (!source) return 0;
+        try {
+            const context = typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
+                ? SillyTavern.getContext()
+                : null;
+            const counter = context?.getTokenCountAsync;
+            if (typeof counter === 'function') {
+                const count = Number(await counter.call(context, source));
+                if (Number.isFinite(count) && count > 0) return Math.ceil(count);
+            }
+        } catch (error) {
+            if (!tokenCounterFallbackWarned) {
+                tokenCounterFallbackWarned = true;
+                console.warn('[yuzuki-Memory Embedding] 酒馆 Token 计数不可用，改用保守 UTF-8 字节估算。', error);
+            }
+        }
+        return getFallbackTokenCount(source);
+    }
+
+    async function findFittingSlice(text, maxTokens = EMBEDDING_INPUT_TOKEN_LIMIT, keepEnd = false) {
+        const units = Array.from(String(text || ''));
+        if (!units.length) return '';
+        let low = 1;
+        let high = units.length;
+        let best = '';
+        while (low <= high) {
+            const middle = Math.floor((low + high) / 2);
+            const candidate = keepEnd
+                ? units.slice(units.length - middle).join('')
+                : units.slice(0, middle).join('');
+            const count = await countTokens(candidate);
+            if (count <= maxTokens) {
+                best = candidate;
+                low = middle + 1;
+            } else {
+                high = middle - 1;
+            }
+        }
+        return best || (keepEnd ? units[units.length - 1] : units[0]);
+    }
+
+    async function fitTextToTokenLimit(text, options = {}) {
+        const source = String(text || '').trim();
+        const maxTokens = EMBEDDING_INPUT_TOKEN_LIMIT;
+        if (!source) return { text: '', tokenCount: 0, truncated: false, maxTokens };
+        const tokenCount = await countTokens(source);
+        if (tokenCount <= maxTokens) return { text: source, tokenCount, truncated: false, maxTokens };
+        const fitted = (await findFittingSlice(source, maxTokens, options.keepEnd === true)).trim();
+        return {
+            text: fitted,
+            tokenCount: await countTokens(fitted),
+            truncated: true,
+            maxTokens,
+        };
+    }
+
+    function findNaturalSplitIndex(text) {
+        const source = String(text || '');
+        if (!source) return 0;
+        const minimum = Math.floor(source.length * 0.6);
+        const delimiters = ['\n\n', '\n', '。', '！', '？', '!', '?', '；', ';', '.', ' '];
+        let best = -1;
+        delimiters.forEach((delimiter) => {
+            const index = source.lastIndexOf(delimiter);
+            const end = index < 0 ? -1 : index + delimiter.length;
+            if (end >= minimum && end > best) best = end;
+        });
+        return best > 0 ? best : source.length;
+    }
+
+    async function splitTextToTokenLimit(text) {
+        const source = String(text || '').trim();
+        if (!source) return [];
+        if (await countTokens(source) <= EMBEDDING_INPUT_TOKEN_LIMIT) return [source];
+
+        const chunks = [];
+        let remaining = source;
+        let guard = 0;
+        while (remaining && guard < 10000) {
+            guard += 1;
+            if (await countTokens(remaining) <= EMBEDDING_INPUT_TOKEN_LIMIT) {
+                chunks.push(remaining.trim());
+                break;
+            }
+
+            const fittedPrefix = await findFittingSlice(remaining, EMBEDDING_INPUT_TOKEN_LIMIT, false);
+            const naturalBoundary = findNaturalSplitIndex(fittedPrefix);
+            const chunk = fittedPrefix.slice(0, naturalBoundary).trim();
+            if (!chunk) throw new Error('Embedding 文本按 Token 分段失败');
+            chunks.push(chunk);
+
+            const tail = remaining.slice(naturalBoundary).trimStart();
+            if (!tail) break;
+            const overlap = (await findFittingSlice(chunk, EMBEDDING_CHUNK_OVERLAP_TOKENS, true)).trim();
+            const nextRemaining = overlap ? `${overlap}\n${tail}` : tail;
+            if (!nextRemaining || nextRemaining === remaining) {
+                throw new Error('Embedding 文本按 Token 分段未能继续推进');
+            }
+            remaining = nextRemaining;
+        }
+        if (guard >= 10000) throw new Error('Embedding 文本分段数量异常');
+        return chunks.filter(Boolean);
+    }
+
+    async function embed(input, rawSettings = null, options = {}) {
         const settings = normalizeSettings(rawSettings || loadSettings());
         const isBatch = Array.isArray(input);
         const items = isBatch ? input : [input];
-        const cleanItems = items.map((item) => String(item || '').trim());
+        const fittedItems = await Promise.all(items.map((item) => (
+            fitTextToTokenLimit(item, { keepEnd: options.keepEnd === true })
+        )));
+        const cleanItems = fittedItems.map((fitted) => {
+            if (fitted.truncated) {
+                console.warn(`[yuzuki-Memory Embedding] 输入超过 ${fitted.maxTokens} Token，发送前已截断。`);
+            }
+            return fitted.text;
+        });
         if (!cleanItems.every(Boolean)) throw new Error('Embedding 文本不能为空');
         const validationError = validateSettings(settings);
         if (validationError) throw new Error(validationError);
@@ -345,6 +473,11 @@
         activateProvider,
         normalizeSettings,
         validateSettings,
+        inputTokenLimit: EMBEDDING_INPUT_TOKEN_LIMIT,
+        chunkOverlapTokens: EMBEDDING_CHUNK_OVERLAP_TOKENS,
+        countTokens,
+        fitTextToTokenLimit,
+        splitTextToTokenLimit,
         embed,
         fetchModels,
         testConnection,

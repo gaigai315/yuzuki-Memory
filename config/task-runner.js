@@ -75,7 +75,11 @@
     let autoTaskAbortController = null;
     let autoTaskRequestPromise = null;
     let autoTaskInterruptedByForeground = false;
+    let summaryDeletionSyncTimer = null;
+    let summaryDeletionSyncRevision = 0;
+    let summaryDeletionSyncRunning = false;
     const AUTO_TASK_MESSAGE_STABLE_MS = 1200;
+    const SUMMARY_DELETION_SYNC_DELAY_MS = 250;
     const AUTO_TASK_RETRY_BASE_MS = 2500;
     const AUTO_TASK_RETRY_MAX_MS = 30000;
 
@@ -2032,7 +2036,7 @@
         if (!match) return null;
         const start = Math.max(0, Math.round(Number(match[1]) || 0));
         const end = Math.max(start, Math.round(Number(match[2]) || 0));
-        return end > start ? { start, end, floorScope: getRecordFloorScope(record) } : null;
+        return { start, end: end + 1, floorScope: getRecordFloorScope(record) };
     }
 
     function parseSummaryFloorBounds(value) {
@@ -2147,7 +2151,7 @@
     function getRangeMetaFromFloorText(value, floorScope = null) {
         const match = String(value || '').match(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/);
         if (!match) return null;
-        return getRangeMeta({ start: Number(match[1]), end: Number(match[2]) }, floorScope);
+        return getRangeMeta({ start: Number(match[1]), end: Number(match[2]) + 1 }, floorScope);
     }
 
     function getSummarySegmentRange(segment, fallbackFloorScope = null) {
@@ -2159,7 +2163,61 @@
         if (!match) return null;
         const start = Math.max(0, Math.round(Number(match[1]) || 0));
         const end = Math.max(start, Math.round(Number(match[2]) || 0));
-        return end > start ? { start, end, floorScope: segmentScope } : null;
+        return { start, end: end + 1, floorScope: segmentScope };
+    }
+
+    function getExclusiveRangesFromFloorText(value, floorScope = null) {
+        const normalizedScope = normalizeFloorScope(floorScope);
+        return parseSummaryFloorBounds(value).map((range) => getRangeMeta({
+            start: range.start,
+            end: range.end + 1,
+            floorScope: normalizedScope,
+        }, normalizedScope)).filter(Boolean);
+    }
+
+    function getSummarySegmentDeletionRange(segment, fallbackFloorScope = null) {
+        const segmentScope = normalizeFloorScope(segment?.floorScope, fallbackFloorScope);
+        const storedRange = getRangeMeta(segment?.range, segmentScope);
+        if (storedRange) return storedRange;
+        return getExclusiveRangesFromFloorText(
+            segment?.floor || segment?.楼层数 || segment?.rangeLabel,
+            segmentScope
+        )[0] || null;
+    }
+
+    function getStandaloneSummaryDeletionRanges(record, fallbackFloorScope = null) {
+        const recordScope = getRecordFloorScope(record, fallbackFloorScope);
+        const task = getSummaryRecordTaskMeta(record);
+        const taskRange = getRangeMeta(task?.range, task?.floorScope || recordScope);
+        if (taskRange) return [taskRange];
+        const values = record?.values || {};
+        return getExclusiveRangesFromFloorText(
+            values.楼层数 || values.range || values['楼层范围'] || values['楼层'],
+            recordScope
+        );
+    }
+
+    function syncSummaryTaskMetaFromSegments(record) {
+        const segments = Array.isArray(record?.summarySegments) ? record.summarySegments : [];
+        const task = getSummaryRecordTaskMeta(record);
+        if (!task || !segments.length) return;
+        const fallbackScope = getRecordFloorScope(record);
+        const lastSegment = [...segments].reverse().find((segment) => (
+            getSummarySegmentDeletionRange(segment, fallbackScope)
+        ));
+        if (!lastSegment) {
+            delete record.meta.yzmMemoryTask;
+            return;
+        }
+        const floorScope = normalizeFloorScope(lastSegment.floorScope, fallbackScope);
+        record.meta.yzmMemoryTask = {
+            ...task,
+            kind: 'summary',
+            summaryType: lastSegment.summaryType || task.summaryType || 'manual',
+            range: getSummarySegmentDeletionRange(lastSegment, floorScope),
+            floorScope,
+            createdAt: Number(lastSegment.createdAt) || Number(task.createdAt) || Date.now(),
+        };
     }
 
     function isSmallSummaryRecord(record, table, task) {
@@ -3335,6 +3393,56 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return settings;
     }
 
+    async function flushSummaryDeletionSync(callbacks = autoTaskCallbacks) {
+        if (summaryDeletionSyncRunning) return;
+        summaryDeletionSyncRunning = true;
+        window.clearTimeout(summaryDeletionSyncTimer);
+        summaryDeletionSyncTimer = null;
+        try {
+            let processedRevision = -1;
+            while (processedRevision !== summaryDeletionSyncRevision) {
+                processedRevision = summaryDeletionSyncRevision;
+                const settings = getAutoSummarySettings();
+                try {
+                    let result = null;
+                    let target = '';
+                    if (settings.autoVectorizeAfterHistory === true && typeof callbacks.syncSummaryToVectorBook === 'function') {
+                        target = '向量化书库';
+                        result = await callbacks.syncSummaryToVectorBook({ vectorize: true });
+                    } else if (settings.autoSyncSummaryWorldbook === true && typeof callbacks.syncSummaryToWorldbook === 'function') {
+                        target = '世界书';
+                        result = await callbacks.syncSummaryToWorldbook();
+                    }
+                    if (result?.success === false) {
+                        console.warn(`[yuzuki-Memory] 删除总结后同步${target || '外部目标'}失败:`, result.error || result);
+                    }
+                } catch (error) {
+                    console.warn('[yuzuki-Memory] 删除总结后同步外部目标失败:', error);
+                }
+            }
+        } finally {
+            summaryDeletionSyncRunning = false;
+        }
+    }
+
+    function scheduleSummaryDeletionSync(callbacks = autoTaskCallbacks) {
+        const settings = getAutoSummarySettings();
+        const canSyncVector = settings.autoVectorizeAfterHistory === true
+            && typeof callbacks.syncSummaryToVectorBook === 'function';
+        const canSyncWorldbook = settings.autoSyncSummaryWorldbook === true
+            && typeof callbacks.syncSummaryToWorldbook === 'function';
+        if (!canSyncVector && !canSyncWorldbook) return false;
+
+        summaryDeletionSyncRevision += 1;
+        if (summaryDeletionSyncRunning) return true;
+        window.clearTimeout(summaryDeletionSyncTimer);
+        summaryDeletionSyncTimer = window.setTimeout(() => {
+            summaryDeletionSyncTimer = null;
+            void flushSummaryDeletionSync(callbacks);
+        }, SUMMARY_DELETION_SYNC_DELAY_MS);
+        return true;
+    }
+
     function normalizePointers(state) {
         state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
         const source = state.settings.manualPointers && typeof state.settings.manualPointers === 'object'
@@ -3407,6 +3515,192 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return Boolean(sessionId)
             && sessionId === getCurrentSessionId()
             && isAutoTaskStateReady(callbacks);
+    }
+
+    function isHistorySummaryType(summaryType = '') {
+        return summaryType === 'history' || summaryType === 'optimize';
+    }
+
+    function invalidateSummariesAfterChatDeletion(state, chatLength) {
+        const table = stateTables(state).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
+        const records = table ? stateRecords(state, FIXED_SUMMARY_TABLE_ID) : [];
+        const currentFloorScope = getCurrentFloorScope(state);
+        const limit = Math.max(0, Math.round(Number(chatLength) || 0));
+        const removedRanges = [];
+        let removedRecordCount = 0;
+        let removedSegmentCount = 0;
+        let removedHistorySummary = false;
+        if (!table || !records.length || !currentFloorScope) {
+            return { changed: false, removedRecordCount, removedSegmentCount, removedRanges, removedHistorySummary };
+        }
+
+        const nextRecords = records.filter((record) => {
+            const task = getSummaryRecordTaskMeta(record);
+            const recordScope = getRecordFloorScope(record, currentFloorScope);
+            if (Array.isArray(record?.summarySegments) && record.summarySegments.length) {
+                const nextSegments = [];
+                record.summarySegments.forEach((segment) => {
+                    const range = getSummarySegmentDeletionRange(segment, recordScope);
+                    const summaryType = String(segment?.summaryType || task?.summaryType || 'manual');
+                    const invalid = range
+                        && isSameFloorScope(range.floorScope, currentFloorScope)
+                        && range.end > limit;
+                    if (!invalid) {
+                        nextSegments.push(segment);
+                        return;
+                    }
+                    removedSegmentCount += 1;
+                    removedRanges.push({ ...range, summaryType });
+                    if (isHistorySummaryType(summaryType)) removedHistorySummary = true;
+                });
+                if (nextSegments.length === record.summarySegments.length) return true;
+                if (!nextSegments.length) {
+                    removedRecordCount += 1;
+                    return false;
+                }
+                record.summarySegments = nextSegments;
+                syncSummarySegmentsToValues(record);
+                syncSummaryTaskMetaFromSegments(record);
+                return true;
+            }
+
+            const ranges = getStandaloneSummaryDeletionRanges(record, recordScope);
+            const invalidRanges = ranges.filter((range) => (
+                isSameFloorScope(range.floorScope, currentFloorScope)
+                && range.end > limit
+            ));
+            if (!invalidRanges.length) return true;
+            const summaryType = String(task?.summaryType || 'manual');
+            invalidRanges.forEach((range) => removedRanges.push({ ...range, summaryType }));
+            if (isHistorySummaryType(summaryType)) removedHistorySummary = true;
+            removedRecordCount += 1;
+            return false;
+        });
+
+        if (removedRecordCount || removedSegmentCount) state.records[table.id] = nextRecords;
+        return {
+            changed: Boolean(removedRecordCount || removedSegmentCount),
+            removedRecordCount,
+            removedSegmentCount,
+            removedRanges,
+            removedHistorySummary,
+        };
+    }
+
+    function collectCurrentSummaryCoverage(state, currentFloorScope) {
+        const coverage = [];
+        stateRecords(state, FIXED_SUMMARY_TABLE_ID).forEach((record) => {
+            const task = getSummaryRecordTaskMeta(record);
+            const recordScope = getRecordFloorScope(record, currentFloorScope);
+            if (Array.isArray(record?.summarySegments) && record.summarySegments.length) {
+                record.summarySegments.forEach((segment) => {
+                    if (!String(segment?.summary || '').trim()) return;
+                    const range = getSummarySegmentDeletionRange(segment, recordScope);
+                    if (!range || !isSameFloorScope(range.floorScope, currentFloorScope)) return;
+                    coverage.push({
+                        range,
+                        summaryType: String(segment?.summaryType || task?.summaryType || 'manual'),
+                    });
+                });
+                return;
+            }
+            if (!String(record?.values?.总结内容 || record?.values?.summary || '').trim()) return;
+            getStandaloneSummaryDeletionRanges(record, recordScope).forEach((range) => {
+                if (!isSameFloorScope(range.floorScope, currentFloorScope)) return;
+                coverage.push({ range, summaryType: String(task?.summaryType || 'manual') });
+            });
+        });
+        return coverage;
+    }
+
+    function getContiguousSummaryBoundary(coverage = [], predicate = () => true) {
+        const ranges = coverage
+            .filter(predicate)
+            .map((entry) => entry?.range)
+            .filter(Boolean)
+            .sort((left, right) => left.start - right.start || left.end - right.end);
+        let boundary = 0;
+        for (const range of ranges) {
+            if (range.start > boundary) break;
+            if (range.end > boundary) boundary = range.end;
+        }
+        return boundary;
+    }
+
+    function reconcileStateAfterChatDeletion(chatLength = getChatLength()) {
+        const state = autoTaskCallbacks.getState?.();
+        if (!state) return false;
+        const stateBeforeReconcile = cloneAutoTaskState(state);
+        const limit = Math.max(0, Math.round(Number(chatLength) || 0));
+        const pointers = normalizePointers(state);
+        const previous = {
+            trace: pointers.trace,
+            summary: pointers.summary,
+            historySummary: pointers.historySummary,
+        };
+        const invalidation = invalidateSummariesAfterChatDeletion(state, limit);
+        const currentFloorScope = getCurrentFloorScope(state);
+
+        pointers.trace = Math.min(pointers.trace, limit);
+        if (invalidation.changed && currentFloorScope) {
+            const coverage = collectCurrentSummaryCoverage(state, currentFloorScope);
+            const summaryBoundary = getContiguousSummaryBoundary(coverage);
+            pointers.summary = Math.min(pointers.summary, summaryBoundary, limit);
+            if (invalidation.removedHistorySummary) {
+                const historyBoundary = getContiguousSummaryBoundary(
+                    coverage,
+                    (entry) => isHistorySummaryType(entry.summaryType)
+                );
+                pointers.historySummary = Math.min(pointers.historySummary, historyBoundary, pointers.summary, limit);
+            } else {
+                pointers.historySummary = Math.min(pointers.historySummary, pointers.summary, limit);
+            }
+        } else {
+            pointers.summary = Math.min(pointers.summary, limit);
+            pointers.historySummary = Math.min(pointers.historySummary, limit);
+        }
+
+        if (pointers.trace !== previous.trace) pointers.tracePostponeUntil = 0;
+        if (pointers.summary !== previous.summary) pointers.summaryPostponeUntil = 0;
+        if (pointers.historySummary !== previous.historySummary) pointers.historySummaryPostponeUntil = 0;
+
+        const pointerChanged = pointers.trace !== previous.trace
+            || pointers.summary !== previous.summary
+            || pointers.historySummary !== previous.historySummary;
+        const plotVisibilityChangedCount = invalidation.changed
+            ? hidePlotSummaryItemsCoveredByExistingSummaries(state)
+            : 0;
+        if (!invalidation.changed && !pointerChanged && !plotVisibilityChangedCount) return false;
+
+        const saved = persistAutoTaskState(state, autoTaskCallbacks, {
+            saveOrigin: 'message-deleted-reconcile',
+        });
+        if (!saved) {
+            restoreAutoTaskState(state, stateBeforeReconcile);
+            console.warn('[yuzuki-Memory] 删除楼层后的总结对账保存失败，已恢复原状态。');
+            return false;
+        }
+
+        const summarySyncScheduled = invalidation.changed
+            ? scheduleSummaryDeletionSync(autoTaskCallbacks)
+            : false;
+        const result = {
+            success: true,
+            reason: 'message_deleted',
+            chatLength: limit,
+            ...invalidation,
+            plotVisibilityChangedCount,
+            summarySyncScheduled,
+            previousPointers: previous,
+            pointers: {
+                trace: pointers.trace,
+                summary: pointers.summary,
+                historySummary: pointers.historySummary,
+            },
+        };
+        autoTaskCallbacks.onUpdate?.(result);
+        console.info('[yuzuki-Memory] 删除楼层后已对账总结与任务指针。', result);
+        return true;
     }
 
     function clampPointersToChatLength(chatLength = getChatLength(), reason = 'chat_length') {
@@ -4013,7 +4307,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 }
             };
             const onMessageDeleted = (chatLength) => {
-                clampPointersToChatLength(chatLength, 'message_deleted');
+                reconcileStateAfterChatDeletion(chatLength);
                 refreshAutoTaskBaseline();
             };
             if (eventTypes.CHARACTER_MESSAGE_RENDERED) eventSource.on?.(eventTypes.CHARACTER_MESSAGE_RENDERED, onCharacterRendered);
@@ -4056,6 +4350,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         createLlmRequestSnapshot,
         cleanupSmallAutoSummaries,
         hidePlotSummaryItemsCoveredByExistingSummaries,
+        invalidateSummariesAfterChatDeletion,
         bindAutoSummary,
         cancelPendingAutoTask,
     });

@@ -16,6 +16,9 @@ function createHarness(options = {}) {
     const errorToasts = [];
     const promptedTasks = [];
     const resultConfirmations = [];
+    const updatePayloads = [];
+    const vectorSyncCalls = [];
+    const worldbookSyncCalls = [];
     let generatedCount = 0;
     let updateCount = 0;
     let storedState = null;
@@ -30,7 +33,7 @@ function createHarness(options = {}) {
         }
     }
 
-    const chat = Array.from({ length: 203 }, (_entry, index) => ({
+    const chat = Array.from({ length: options.chatLength ?? 203 }, (_entry, index) => ({
         is_user: index % 2 === 1,
         name: index % 2 === 1 ? '测试用户' : '测试角色',
         mes: `第 ${index} 层内容`,
@@ -88,8 +91,8 @@ function createHarness(options = {}) {
         historyDelay: 3,
         directTrigger: options.directTrigger !== false,
         autoSave: true,
-        autoVectorizeAfterHistory: false,
-        autoSyncSummaryWorldbook: false,
+        autoVectorizeAfterHistory: options.autoVectorizeAfterHistory === true,
+        autoSyncSummaryWorldbook: options.autoSyncSummaryWorldbook === true,
         hideSummaryFloors: false,
     };
     const pluginSettings = {
@@ -209,8 +212,23 @@ function createHarness(options = {}) {
             }
             return { action: 'confirm', text: result.text };
         },
-        onUpdate: () => {
+        async syncSummaryToVectorBook(syncOptions = {}) {
+            vectorSyncCalls.push({ ...syncOptions });
+            return { success: true, count: stateRef.current.records.memory_summary.length };
+        },
+        async syncSummaryToWorldbook() {
+            worldbookSyncCalls.push({});
+            return { success: true, count: stateRef.current.records.memory_summary.length };
+        },
+        onUpdate: (payload) => {
             updateCount += 1;
+            updatePayloads.push({
+                reason: String(payload?.reason || ''),
+                removedRecordCount: Number(payload?.removedRecordCount) || 0,
+                removedSegmentCount: Number(payload?.removedSegmentCount) || 0,
+                plotVisibilityChangedCount: Number(payload?.plotVisibilityChangedCount) || 0,
+                summarySyncScheduled: payload?.summarySyncScheduled === true,
+            });
         },
     };
     sandbox.window.YuzukiMemory.TaskRunner.bindAutoSummary(callbacks);
@@ -223,6 +241,10 @@ function createHarness(options = {}) {
         errorToasts,
         promptedTasks,
         resultConfirmations,
+        updatePayloads,
+        vectorSyncCalls,
+        worldbookSyncCalls,
+        floorScope,
         get generatedCount() {
             return generatedCount;
         },
@@ -244,6 +266,37 @@ function createHarness(options = {}) {
             const [id, callback] = entry;
             timers.delete(id);
             await callback();
+        },
+    };
+}
+
+function createSummaryRecord({
+    id,
+    start,
+    end,
+    floorScope,
+    summaryType = 'summary',
+    title = '主线总结',
+    summary = '测试总结',
+}) {
+    return {
+        id,
+        floorScope,
+        values: {
+            总结标题: title,
+            核心角色: '',
+            楼层数: `${start}-${end - 1}`,
+            总结内容: summary,
+            未解决问题: '',
+            备注: '',
+        },
+        meta: {
+            yzmMemoryTask: {
+                kind: 'summary',
+                summaryType,
+                range: { start, end, floorScope },
+                floorScope,
+            },
         },
     };
 }
@@ -351,4 +404,240 @@ test('silent automatic summary force-write repairs the edited Memory envelope an
     assert.equal(harness.saveCalls.length, 1);
     assert.equal(harness.successToasts.length, 1);
     assert.equal(harness.errorToasts.length, 0);
+});
+
+test('deleting into a later manual summary removes it and restores the previous summary pointer', () => {
+    const harness = createHarness();
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'summary-0-30', start: 0, end: 30, floorScope: harness.floorScope, summaryType: 'manual' }),
+        createSummaryRecord({ id: 'summary-30-50', start: 30, end: 50, floorScope: harness.floorScope, summaryType: 'manual' }),
+    ];
+    state.settings.manualPointers.summary = 50;
+
+    harness.chat.length = 45;
+    harness.emit('message_deleted', 45);
+
+    assert.deepEqual(state.records.memory_summary.map((record) => record.id), ['summary-0-30']);
+    assert.equal(state.settings.manualPointers.summary, 30);
+    assert.equal(state.settings.manualPointers.historySummary, 0);
+    assert.equal(harness.saveCalls.length, 1);
+    assert.equal(harness.saveCalls[0].saveOptions.saveOrigin, 'message-deleted-reconcile');
+    assert.equal(harness.updateCount, 1);
+});
+
+test('deleting a summary schedules the enabled vector summary synchronization', async () => {
+    const harness = createHarness({ chatLength: 52, autoVectorizeAfterHistory: true });
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'summary-0-30', start: 0, end: 30, floorScope: harness.floorScope }),
+        createSummaryRecord({ id: 'summary-30-50', start: 30, end: 50, floorScope: harness.floorScope }),
+    ];
+    state.settings.manualPointers.summary = 50;
+
+    harness.chat.length = 45;
+    harness.emit('message_deleted', 45);
+    await harness.runNextTimer();
+
+    assert.equal(harness.vectorSyncCalls.length, 1);
+    assert.equal(harness.vectorSyncCalls[0].vectorize, true);
+    assert.equal(harness.worldbookSyncCalls.length, 0);
+    assert.equal(harness.updatePayloads[0].summarySyncScheduled, true);
+});
+
+test('deleting a summary schedules the enabled worldbook summary synchronization', async () => {
+    const harness = createHarness({ chatLength: 52, autoSyncSummaryWorldbook: true });
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'summary-0-30', start: 0, end: 30, floorScope: harness.floorScope }),
+        createSummaryRecord({ id: 'summary-30-50', start: 30, end: 50, floorScope: harness.floorScope }),
+    ];
+    state.settings.manualPointers.summary = 50;
+
+    harness.chat.length = 45;
+    harness.emit('message_deleted', 45);
+    await harness.runNextTimer();
+
+    assert.equal(harness.vectorSyncCalls.length, 0);
+    assert.equal(harness.worldbookSyncCalls.length, 1);
+    assert.equal(harness.updatePayloads[0].summarySyncScheduled, true);
+});
+
+test('deleting only floors after a completed summary keeps its record and pointer untouched', () => {
+    const harness = createHarness();
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'summary-0-21', start: 0, end: 21, floorScope: harness.floorScope }),
+    ];
+    state.settings.manualPointers.summary = 21;
+
+    harness.chat.length = 22;
+    harness.emit('message_deleted', 22);
+
+    assert.equal(state.records.memory_summary.length, 1);
+    assert.equal(state.settings.manualPointers.summary, 21);
+    assert.equal(harness.saveCalls.length, 0);
+    assert.equal(harness.updateCount, 0);
+});
+
+test('deleting into the first summary removes it and resets its pointer to zero', () => {
+    const harness = createHarness();
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'summary-0-21', start: 0, end: 21, floorScope: harness.floorScope }),
+    ];
+    state.settings.manualPointers.summary = 21;
+
+    harness.chat.length = 20;
+    harness.emit('message_deleted', 20);
+
+    assert.equal(state.records.memory_summary.length, 0);
+    assert.equal(state.settings.manualPointers.summary, 0);
+    assert.equal(harness.updatePayloads[0].removedRecordCount, 1);
+});
+
+test('legacy summary floor text treats its displayed end as an included floor', () => {
+    const harness = createHarness();
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [{
+        id: 'legacy-summary',
+        floorScope: harness.floorScope,
+        values: {
+            总结标题: '主线总结（1）',
+            楼层数: '0-20',
+            总结内容: '旧总结',
+        },
+    }];
+    state.settings.manualPointers.summary = 21;
+
+    harness.chat.length = 20;
+    harness.emit('message_deleted', 20);
+
+    assert.equal(state.records.memory_summary.length, 0);
+    assert.equal(state.settings.manualPointers.summary, 0);
+});
+
+test('failed deletion reconciliation restores summaries and pointers atomically', () => {
+    const harness = createHarness({ failSave: true });
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'summary-0-30', start: 0, end: 30, floorScope: harness.floorScope }),
+        createSummaryRecord({ id: 'summary-30-50', start: 30, end: 50, floorScope: harness.floorScope }),
+    ];
+    state.settings.manualPointers.summary = 50;
+
+    harness.chat.length = 45;
+    harness.emit('message_deleted', 45);
+
+    assert.equal(state.records.memory_summary.map((record) => record.id).join(','), 'summary-0-30,summary-30-50');
+    assert.equal(state.settings.manualPointers.summary, 50);
+    assert.equal(harness.saveCalls.length, 1);
+    assert.equal(harness.updateCount, 0);
+});
+
+test('invalidating a history summary restores both history and small-summary pointers', () => {
+    const harness = createHarness();
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'history-0-30', start: 0, end: 30, floorScope: harness.floorScope, summaryType: 'history' }),
+        createSummaryRecord({ id: 'history-30-50', start: 30, end: 50, floorScope: harness.floorScope, summaryType: 'history' }),
+    ];
+    state.settings.manualPointers.summary = 50;
+    state.settings.manualPointers.historySummary = 50;
+
+    harness.chat.length = 45;
+    harness.emit('message_deleted', 45);
+
+    assert.deepEqual(state.records.memory_summary.map((record) => record.id), ['history-0-30']);
+    assert.equal(state.settings.manualPointers.summary, 30);
+    assert.equal(state.settings.manualPointers.historySummary, 30);
+});
+
+test('summary segments are invalidated independently and refresh their record metadata', () => {
+    const harness = createHarness();
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [{
+        id: 'branch-summary',
+        floorScope: harness.floorScope,
+        values: {
+            总结标题: '支线总结（1）',
+            核心角色: '测试角色',
+            楼层数: '0-29\n30-49',
+            总结内容: '第一段\n第二段',
+            未解决问题: '',
+            备注: '',
+        },
+        summarySegments: [
+            { floor: '0-29', summary: '第一段', range: { start: 0, end: 30 }, floorScope: harness.floorScope, summaryType: 'manual' },
+            { floor: '30-49', summary: '第二段', range: { start: 30, end: 50 }, floorScope: harness.floorScope, summaryType: 'manual' },
+        ],
+        meta: {
+            yzmMemoryTask: {
+                kind: 'summary',
+                summaryType: 'manual',
+                range: { start: 30, end: 50, floorScope: harness.floorScope },
+                floorScope: harness.floorScope,
+            },
+        },
+    }];
+    state.settings.manualPointers.summary = 50;
+
+    harness.chat.length = 45;
+    harness.emit('message_deleted', 45);
+
+    const record = state.records.memory_summary[0];
+    assert.equal(record.summarySegments.length, 1);
+    assert.equal(record.values.楼层数, '0-29');
+    assert.equal(record.values.总结内容, '第一段');
+    assert.equal(record.meta.yzmMemoryTask.range.end, 30);
+    assert.equal(state.settings.manualPointers.summary, 30);
+});
+
+test('summaries from a previous floor scope are never removed by current-chat deletion', () => {
+    const harness = createHarness();
+    const state = harness.stateRef.current;
+    const previousScope = { id: 'scope:previous-chat', sessionId: 'char:test.png:previous-chat' };
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'previous-summary', start: 0, end: 100, floorScope: previousScope }),
+    ];
+
+    harness.chat.length = 20;
+    harness.emit('message_deleted', 20);
+
+    assert.equal(state.records.memory_summary.length, 1);
+    assert.equal(state.records.memory_summary[0].id, 'previous-summary');
+    assert.equal(harness.saveCalls.length, 0);
+});
+
+test('removing a covering summary unhides plot items hidden only by that summary', () => {
+    const harness = createHarness();
+    const state = harness.stateRef.current;
+    state.tables.push({ id: 'plot_summary', name: '剧情摘要', columns: ['摘要名称', '主线', '支线'] });
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'summary-0-21', start: 0, end: 21, floorScope: harness.floorScope }),
+    ];
+    state.records.plot_summary = [{
+        id: 'plot-main',
+        floorScope: harness.floorScope,
+        values: { 摘要名称: '主线摘要', 主线: '测试剧情', 支线: '' },
+        plotItemMeta: {
+            main: [{
+                sourceRange: { start: 0, end: 10, floorScope: harness.floorScope },
+                floorScope: harness.floorScope,
+                hiddenReason: 'covered_by_summary',
+                coveredBySummaryIds: ['summary-0-21'],
+            }],
+            branch: [],
+        },
+        hiddenPlotItems: { main: [true], branch: [] },
+    }];
+    state.settings.manualPointers.summary = 21;
+
+    harness.chat.length = 20;
+    harness.emit('message_deleted', 20);
+
+    const plot = state.records.plot_summary[0];
+    assert.deepEqual(plot.hiddenPlotItems.main, [false]);
+    assert.equal(plot.plotItemMeta.main[0].hiddenReason, undefined);
+    assert.equal(harness.updatePayloads[0].plotVisibilityChangedCount, 1);
 });

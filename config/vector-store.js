@@ -32,8 +32,6 @@
         BOOK_KIND_ITEM_TRACKING,
         BOOK_KIND_WORLD_SETTING,
     ];
-    const MAX_VECTOR_CHUNK_CHARS = 4000;
-    const VECTOR_CHUNK_OVERLAP_CHARS = 180;
     const MAX_VECTOR_BATCH_CHARS = 16000;
     const MAX_QUERY_VECTOR_CACHE_ENTRIES = 96;
     const HELPER_API_SHIELD_KEY = '__yzmMemoryStorageBookShield';
@@ -1125,53 +1123,28 @@
             return true;
         }
 
-        splitLongTextPart(text, maxChars = MAX_VECTOR_CHUNK_CHARS, overlapChars = VECTOR_CHUNK_OVERLAP_CHARS) {
+        async splitLongTextPart(text) {
             const source = String(text || '').trim();
             if (!source) return [];
-            if (source.length <= maxChars) return [source];
-
-            const chunks = [];
-            let current = '';
-            const paragraphs = source
-                .replace(/\r\n/g, '\n')
-                .split(/\n{2,}/)
-                .map((part) => part.trim())
-                .filter(Boolean);
-            const units = paragraphs.length > 1
-                ? paragraphs
-                : source.replace(/([。！？!?；;])/g, '$1\n').split(/\n+/).map((part) => part.trim()).filter(Boolean);
-
-            const pushCurrent = () => {
-                const value = current.trim();
-                if (value) chunks.push(value);
-                current = '';
-            };
-
-            const appendUnit = (unit) => {
-                const value = String(unit || '').trim();
-                if (!value) return;
-                if (value.length > maxChars) {
-                    pushCurrent();
-                    for (let cursor = 0; cursor < value.length; cursor += Math.max(1, maxChars - overlapChars)) {
-                        chunks.push(value.slice(cursor, cursor + maxChars).trim());
-                    }
-                    return;
-                }
-                const separator = current ? '\n\n' : '';
-                if ((current.length + separator.length + value.length) > maxChars) {
-                    pushCurrent();
-                }
-                current = current ? `${current}${separator}${value}` : value;
-            };
-
-            units.forEach(appendUnit);
-            pushCurrent();
-            return chunks.filter(Boolean);
+            const splitter = YuzukiMemory.EmbeddingClient?.splitTextToTokenLimit;
+            if (typeof splitter !== 'function') return [source];
+            return splitter(source);
         }
 
-        normalizeChunks(chunks) {
+        async normalizeChunksWithIndexMap(chunks) {
             const source = Array.isArray(chunks) ? chunks : [chunks];
-            return source.flatMap((chunk) => this.splitLongTextPart(chunk)).filter(Boolean);
+            const normalized = [];
+            const indexMap = [];
+            for (let index = 0; index < source.length; index += 1) {
+                const parts = (await this.splitLongTextPart(source[index])).filter(Boolean);
+                indexMap[index] = parts.map((_part, offset) => normalized.length + offset);
+                normalized.push(...parts);
+            }
+            return { chunks: normalized, indexMap };
+        }
+
+        async normalizeChunks(chunks) {
+            return (await this.normalizeChunksWithIndexMap(chunks)).chunks;
         }
 
         areChunksEqual(left, right) {
@@ -1200,7 +1173,7 @@
             };
         }
 
-        splitText(text, separator = DEFAULT_SEPARATOR) {
+        async splitText(text, separator = DEFAULT_SEPARATOR) {
             const source = String(text || '');
             const parts = separator === '\\n' || separator === '\n'
                 ? source.split(/\n+/)
@@ -1211,7 +1184,7 @@
         async setBookChunks(bookId, chunks) {
             const book = this.library[bookId];
             if (!book) return false;
-            const nextChunks = this.normalizeChunks(chunks);
+            const nextChunks = await this.normalizeChunks(chunks);
             if (this.areChunksEqual(book.chunks, nextChunks)) return true;
             const preserved = this.buildPreservedVectorState(book, nextChunks);
             book.chunks = nextChunks;
@@ -1223,7 +1196,7 @@
 
         async importBook(file, customName = '') {
             const text = await this.readFile(file);
-            const chunks = this.splitText(text);
+            const chunks = await this.splitText(text);
             const name = String(customName || file?.name || '未命名书籍').replace(/\.[^.]+$/, '').trim() || '未命名书籍';
             const id = this.createId();
             this.library[id] = this.normalizeBook({ name, chunks }, name);
@@ -1233,11 +1206,15 @@
         }
 
         async syncSummaryToBook(chunks, sessionId = 'default', bookName = '') {
-            const normalizedChunks = this.normalizeChunks(chunks);
-            if (!normalizedChunks.length) return { success: false, count: 0, error: '总结内容为空' };
-
+            const normalizedChunks = await this.normalizeChunks(chunks);
             const id = `yzm_summary_book_${String(sessionId || 'default').replace(/[^\w-]/g, '_')}`;
             const oldBook = this.library[id];
+            if (!normalizedChunks.length) {
+                if (!oldBook) return { success: true, bookId: id, count: 0, unchanged: true, removed: false };
+                await this.deleteBook(id);
+                return { success: true, bookId: id, count: 0, removed: true };
+            }
+
             const normalizedName = String(bookName || '').trim() || '当前会话总结';
             const oldName = String(oldBook?.name || '').trim();
             const autoName = oldBook ? oldBook.autoName !== false : true;
@@ -1356,7 +1333,7 @@
         }
 
         async syncCharacterProfilesToBook(chunks, sessionId = 'default', bookName = '') {
-            const normalizedChunks = this.normalizeChunks(chunks);
+            const normalizedChunks = await this.normalizeChunks(chunks);
             const id = this.getCharacterProfileBookId(sessionId);
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话角色档案';
@@ -1392,7 +1369,7 @@
         }
 
         async syncItemTrackingToBook(chunks, sessionId = 'default', bookName = '') {
-            const normalizedChunks = this.normalizeChunks(chunks);
+            const normalizedChunks = await this.normalizeChunks(chunks);
             const id = this.getItemTrackingBookId(sessionId);
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话物品追踪';
@@ -1428,7 +1405,7 @@
         }
 
         async syncWorldSettingsToBook(chunks, sessionId = 'default', bookName = '') {
-            const normalizedChunks = this.normalizeChunks(chunks);
+            const normalizedChunks = await this.normalizeChunks(chunks);
             const id = this.getWorldSettingBookId(sessionId);
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话世界设定';
@@ -1473,11 +1450,17 @@
             return `${source.length}_${hash.toString(36)}`;
         }
 
-        async getEmbedding(text) {
+        async getEmbedding(text, options = {}) {
             const source = String(text || '').trim();
             if (!source) throw new Error('向量化文本为空');
             const settings = YuzukiMemory.EmbeddingClient?.loadSettings?.() || {};
-            const cacheNamespace = [settings.provider, settings.baseUrl, settings.model].map((value) => String(value || '')).join('|');
+            const cacheNamespace = [
+                settings.provider,
+                settings.baseUrl,
+                settings.model,
+                YuzukiMemory.EmbeddingClient?.inputTokenLimit || 8192,
+                options.keepEnd === true ? 'tail' : 'head',
+            ].map((value) => String(value || '')).join('|');
             const cacheKey = `${cacheNamespace}|${this.hashText(source)}`;
             if (this.vectorCache.has(cacheKey)) {
                 const cached = this.vectorCache.get(cacheKey);
@@ -1486,7 +1469,7 @@
                 return cached;
             }
             if (this.pendingEmbeddings.has(cacheKey)) return this.pendingEmbeddings.get(cacheKey);
-            const request = YuzukiMemory.EmbeddingClient.embed(source);
+            const request = YuzukiMemory.EmbeddingClient.embed(source, null, { keepEnd: options.keepEnd === true });
             this.pendingEmbeddings.set(cacheKey, request);
             try {
                 const vector = await request;
@@ -1528,7 +1511,11 @@
             const book = this.getBook(bookId);
             if (!book) throw new Error('向量书不存在');
 
-            const targetChunks = new Set(this.normalizeChunks(chunks));
+            const normalizedBookChunks = await this.normalizeChunks(book.chunks);
+            if (!this.areChunksEqual(book.chunks, normalizedBookChunks)) {
+                await this.setBookChunks(bookId, normalizedBookChunks);
+            }
+            const targetChunks = new Set(await this.normalizeChunks(chunks));
             const segmentIndexes = (Array.isArray(book.chunks) ? book.chunks : [])
                 .map((chunk, index) => targetChunks.has(chunk) ? index : -1)
                 .filter((index) => index >= 0);
@@ -1567,10 +1554,10 @@
                 throw new Error('要编辑的分段不存在');
             }
 
-            const normalizedChunks = this.normalizeChunks([text]);
+            const normalizedChunks = await this.normalizeChunks([text]);
             if (!normalizedChunks.length) throw new Error('分段内容不能为空');
             if (normalizedChunks.length !== 1) {
-                throw new Error(`单个分段不能超过 ${MAX_VECTOR_CHUNK_CHARS} 字，请在整书编辑中拆分后保存`);
+                throw new Error(`单个分段不能超过 ${YuzukiMemory.EmbeddingClient?.inputTokenLimit || 8192} Token，请在整书编辑中拆分后保存`);
             }
 
             const nextText = normalizedChunks[0];
@@ -1617,14 +1604,17 @@
             const book = this.library[bookId];
             if (!book) throw new Error('向量书不存在');
             const force = options && typeof options === 'object' && options.force === true;
-            const segmentIndexes = Array.isArray(options?.segmentIndexes)
-                ? new Set(options.segmentIndexes
+            const requestedSegmentIndexes = Array.isArray(options?.segmentIndexes)
+                ? options.segmentIndexes
                     .map((index) => Number.parseInt(index, 10))
-                    .filter((index) => Number.isFinite(index) && index >= 0))
+                    .filter((index) => Number.isFinite(index) && index >= 0)
                 : null;
-            if (Array.isArray(book.chunks) && book.chunks.some((chunk) => String(chunk || '').length > MAX_VECTOR_CHUNK_CHARS)) {
-                await this.setBookChunks(bookId, book.chunks);
-            }
+            const normalization = await this.normalizeChunksWithIndexMap(book.chunks);
+            const normalizedChunks = normalization.chunks;
+            const segmentIndexes = requestedSegmentIndexes
+                ? new Set(requestedSegmentIndexes.flatMap((index) => normalization.indexMap[index] || []))
+                : null;
+            if (!this.areChunksEqual(book.chunks, normalizedChunks)) await this.setBookChunks(bookId, normalizedChunks);
             const settings = YuzukiMemory.EmbeddingClient.loadSettings();
             const previousScope = String(book.vectorScope || '');
             const vectorHashes = this.computeBookVectorHashes(book.chunks);
@@ -1861,7 +1851,7 @@
             const recallCount = rerankSettings.enabled ? targetCount * 2 : targetCount;
             const initialThreshold = rerankSettings.enabled ? 0.1 : settings.threshold;
 
-            const queryVector = await this.getEmbedding(sourceQuery.slice(-6000));
+            const queryVector = await this.getEmbedding(sourceQuery, { keepEnd: true });
             const queryDimension = this.isRuntimeVector(queryVector) ? queryVector.length : 0;
             if (!queryDimension) {
                 console.warn('[yuzuki-Memory Vector] 搜索跳过：查询向量维度为空');

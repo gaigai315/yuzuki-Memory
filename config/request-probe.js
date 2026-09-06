@@ -813,7 +813,7 @@
             collected: collected.length,
             depth,
         });
-        return collected.join('\n').slice(-6000);
+        return collected.join('\n');
     }
 
     function logVectorInfo(message, detail = null, level = 'info') {

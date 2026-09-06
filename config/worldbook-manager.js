@@ -294,12 +294,14 @@
         async syncSummaryEntriesToWorldbook(summaryEntries = [], sessionId = '', displayName = '', options = {}) {
             const entries = normalizeSummaryWorldbookEntries(summaryEntries);
             const count = Object.keys(entries).length;
-            if (!count) return { success: false, count: 0, error: '当前没有可同步的总结内容。' };
-
             const name = safeString(options.name) || this.getSummaryWorldbookName(sessionId, displayName);
-            const data = { name, entries };
             const worldModule = await this._loadWorldInfoModule();
             const bookExists = this._hasSummaryWorldbook(name, worldModule);
+            if (!count && !bookExists) {
+                return { success: true, count: 0, name, mode: 'unchanged', unchanged: true };
+            }
+
+            const data = { name, entries };
             const transport = await this._saveSummaryWorldbook(name, data, worldModule);
 
             this._syncedSummaryWorldbookNames.add(name);

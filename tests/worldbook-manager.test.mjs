@@ -108,6 +108,32 @@ test('consecutive summary syncs create once and then update through the SillyTav
     assert.equal(requests.length, 0);
 });
 
+test('empty summary synchronization clears an existing summary worldbook', async () => {
+    const { manager } = loadWorldbookManager();
+    const saves = [];
+    const worldModule = {
+        world_names: [],
+        async saveWorldInfo(name, data, immediately) {
+            saves.push({ name, data: structuredClone(data), immediately });
+        },
+        async updateWorldInfoList() {
+            this.world_names = [saves.at(-1).name];
+        },
+    };
+    manager._loadWorldInfoModule = async () => worldModule;
+
+    await manager.syncSummaryEntriesToWorldbook([
+        { title: '主线总结1', content: '即将被删除的总结' },
+    ], 'chat:clear');
+    const cleared = await manager.syncSummaryEntriesToWorldbook([], 'chat:clear');
+
+    assert.equal(cleared.success, true);
+    assert.equal(cleared.mode, 'update');
+    assert.equal(cleared.count, 0);
+    assert.equal(saves.length, 2);
+    assert.deepEqual(saves[1].data.entries, {});
+});
+
 test('summary sync falls back to worldinfo edit without a file import', async () => {
     const { manager, requests } = loadWorldbookManager();
     manager._loadWorldInfoModule = async () => null;
