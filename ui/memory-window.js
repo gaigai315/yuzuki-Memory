@@ -18,6 +18,16 @@
     const THEME_STORAGE_KEY = 'yzm_memory_theme';
     const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
     const FLOATING_POSITION_STORAGE_KEY = 'yzm_memory_global_floating_icon_position';
+    const FLOATING_ICON_DEFAULT_STYLE = 'xftb1';
+    const FLOATING_ICON_STYLES = Object.freeze([
+        { id: 'xftb1', label: '样式 1', file: 'ui/xftb1.png' },
+        { id: 'xftb2', label: '样式 2', file: 'ui/xftb2.png' },
+        { id: 'xftb3', label: '样式 3', file: 'ui/xftb3.png' },
+        { id: 'xftb4', label: '样式 4', file: 'ui/xftb4.png' },
+        { id: 'xftb5', label: '样式 5', file: 'ui/xftb5.png' },
+        { id: 'xftb6', label: '样式 6', file: 'ui/xftb6.png' },
+    ]);
+    const FLOATING_ICON_STYLE_MAP = new Map(FLOATING_ICON_STYLES.map((item) => [item.id, item]));
     const TAG_PRESETS_STORAGE_KEY = 'yzm_memory_global_tag_presets';
     const TAG_ACTIVE_PRESET_STORAGE_KEY = 'yzm_memory_global_tag_active_preset';
     const LLM_API_PRESETS_STORAGE_KEY = 'yzm_memory_global_llm_api_presets';
@@ -178,6 +188,7 @@
         keepFirstFloorVisible: false,
         includeCharacterGreetingInTasks: false,
         enableFloatingIcon: false,
+        floatingIconStyle: FLOATING_ICON_DEFAULT_STYLE,
         enableFilling: true,
         fillMode: 'realtime',
         traceBatchEnabled: true,
@@ -2260,6 +2271,11 @@
         showTimedPromptSaveFeedback(root);
     }
 
+    function normalizeFloatingIconStyle(value) {
+        const style = String(value || '').trim();
+        return FLOATING_ICON_STYLE_MAP.has(style) ? style : FLOATING_ICON_DEFAULT_STYLE;
+    }
+
     function normalizePluginSettings(rawSettings) {
         const source = rawSettings && typeof rawSettings === 'object' ? rawSettings : {};
         return {
@@ -2271,6 +2287,7 @@
             keepFirstFloorVisible: typeof source.keepFirstFloorVisible === 'boolean' ? source.keepFirstFloorVisible : DEFAULT_PLUGIN_SETTINGS.keepFirstFloorVisible,
             includeCharacterGreetingInTasks: typeof source.includeCharacterGreetingInTasks === 'boolean' ? source.includeCharacterGreetingInTasks : DEFAULT_PLUGIN_SETTINGS.includeCharacterGreetingInTasks,
             enableFloatingIcon: typeof source.enableFloatingIcon === 'boolean' ? source.enableFloatingIcon : DEFAULT_PLUGIN_SETTINGS.enableFloatingIcon,
+            floatingIconStyle: normalizeFloatingIconStyle(source.floatingIconStyle),
             enableFilling: typeof source.enableFilling === 'boolean' ? source.enableFilling : DEFAULT_PLUGIN_SETTINGS.enableFilling,
             fillMode: source.fillMode === 'batch' ? 'batch' : DEFAULT_PLUGIN_SETTINGS.fillMode,
             traceBatchEnabled: typeof source.traceBatchEnabled === 'boolean' ? source.traceBatchEnabled : DEFAULT_PLUGIN_SETTINGS.traceBatchEnabled,
@@ -2318,6 +2335,9 @@
         }
         if (key === 'enableFloatingIcon') {
             syncFloatingIcon();
+        }
+        if (key === 'floatingIconStyle') {
+            updateFloatingIconImage();
         }
         return nextSettings;
     }
@@ -2623,6 +2643,19 @@
         ensureFloatingIconVisible(button);
     }
 
+    function getFloatingIconStyleMeta(styleId = getPluginSettings().floatingIconStyle) {
+        return FLOATING_ICON_STYLE_MAP.get(normalizeFloatingIconStyle(styleId))
+            || FLOATING_ICON_STYLE_MAP.get(FLOATING_ICON_DEFAULT_STYLE);
+    }
+
+    function updateFloatingIconImage(button = document.getElementById(FLOATING_BUTTON_ID)) {
+        const image = button?.querySelector?.('.yzm-floating-button-image');
+        if (!image) return;
+        const style = getFloatingIconStyleMeta();
+        image.src = new URL(style.file, YuzukiMemory.baseUrl || './').href;
+        button.dataset.yzmFloatingCurrentStyle = style.id;
+    }
+
     function createFloatingIconButton() {
         const button = document.createElement('button');
         button.id = FLOATING_BUTTON_ID;
@@ -2633,12 +2666,12 @@
 
         const icon = document.createElement('img');
         icon.className = 'yzm-floating-button-image';
-        icon.src = new URL('ui/xftb.png', YuzukiMemory.baseUrl || './').href;
         icon.alt = '';
         icon.draggable = false;
         icon.setAttribute('aria-hidden', 'true');
 
         button.appendChild(icon);
+        updateFloatingIconImage(button);
         bindFloatingIconDrag(button);
         return button;
     }
@@ -2653,6 +2686,7 @@
         } else if (button.parentElement !== root) {
             root.appendChild(button);
         }
+        updateFloatingIconImage(button);
 
         if (!floatingResizeController) {
             floatingResizeController = new AbortController();
@@ -10359,7 +10393,7 @@
             createPluginConfigRow('注入记忆', '处理 {{MEMORY}}、{{MEMORY_TABLE_表名}}、{{MEMORY_SUMMARY_标题或序号}} 等变量，并按表/总结分消息注入。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
             createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
-            createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标，点击即可打开记忆插件。拖动后会记住位置。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon')),
+            createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标，点击即可打开记忆插件。图标样式和拖动位置都会记住。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon'), createFloatingIconStylePicker(settings.floatingIconStyle)),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
             createPluginConfigRow('首楼常驻', '开启后，酒馆第 0 楼始终保持显示；仅影响隐藏楼层，不改变填表、总结和优化任务的取材范围。', 'fa-solid fa-thumbtack', createConfigSwitch(settings.keepFirstFloorVisible, 'keepFirstFloorVisible')),
             createPluginConfigRow('任务包含角色卡开场白', '开启后，填表、总结和优化任务会额外注入角色卡的默认开场白；默认关闭，关闭时仅使用任务楼层范围内的实际聊天内容。', 'fa-solid fa-message', createConfigSwitch(settings.includeCharacterGreetingInTasks, 'includeCharacterGreetingInTasks')),
@@ -10367,6 +10401,52 @@
         );
         window.setTimeout(() => refreshTaskWorldbookList(ensureRoot()), 0);
         return card;
+    }
+
+    function createFloatingIconStylePicker(selectedStyle) {
+        const activeStyle = normalizeFloatingIconStyle(selectedStyle);
+        const picker = document.createElement('div');
+        picker.className = 'yzm-floating-icon-picker';
+        picker.setAttribute('role', 'radiogroup');
+        picker.setAttribute('aria-label', '悬浮图标样式');
+
+        const label = document.createElement('div');
+        label.className = 'yzm-floating-icon-picker-label';
+        label.textContent = '选择悬浮图标';
+
+        const grid = document.createElement('div');
+        grid.className = 'yzm-floating-icon-picker-grid';
+        FLOATING_ICON_STYLES.forEach((style) => {
+            const isActive = style.id === activeStyle;
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = isActive
+                ? 'yzm-floating-icon-option yzm-floating-icon-option-active'
+                : 'yzm-floating-icon-option';
+            button.dataset.yzmFloatingIconStyle = style.id;
+            button.setAttribute('role', 'radio');
+            button.setAttribute('aria-checked', String(isActive));
+            button.setAttribute('aria-label', style.label);
+            button.title = `选择${style.label}`;
+
+            const preview = document.createElement('span');
+            preview.className = 'yzm-floating-icon-option-preview';
+            const image = document.createElement('img');
+            image.src = new URL(style.file, YuzukiMemory.baseUrl || './').href;
+            image.alt = '';
+            image.draggable = false;
+            image.setAttribute('aria-hidden', 'true');
+            preview.appendChild(image);
+
+            const name = document.createElement('span');
+            name.className = 'yzm-floating-icon-option-name';
+            name.textContent = style.label;
+            button.append(preview, name);
+            grid.appendChild(button);
+        });
+
+        picker.append(label, grid);
+        return picker;
     }
 
     function createPluginConfigHeader() {
@@ -15926,6 +16006,20 @@
                 const updateNoticeButton = target?.closest?.('[data-yzm-action="showUpdateNotice"]');
                 const worldbookRefresh = target?.closest?.('.yzm-task-worldbook-refresh');
                 const worldbookEntryButton = target?.closest?.('.yzm-task-worldbook-entry-trigger');
+                const floatingIconOption = target?.closest?.('[data-yzm-floating-icon-style]');
+
+                if (floatingIconOption) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const nextStyle = normalizeFloatingIconStyle(floatingIconOption.dataset.yzmFloatingIconStyle);
+                    updatePluginSetting('floatingIconStyle', nextStyle);
+                    floatingIconOption.closest('.yzm-floating-icon-picker-grid')?.querySelectorAll('[data-yzm-floating-icon-style]').forEach((button) => {
+                        const isActive = button === floatingIconOption;
+                        button.classList.toggle('yzm-floating-icon-option-active', isActive);
+                        button.setAttribute('aria-checked', String(isActive));
+                    });
+                    return;
+                }
 
                 if (updateNoticeButton) {
                     event.preventDefault();
