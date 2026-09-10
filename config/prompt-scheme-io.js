@@ -3,7 +3,7 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const FORMAT = 'yuzuki-memory-prompt-schemes';
-    const VERSION = 1;
+    const VERSION = 2;
 
     function clone(value) {
         try {
@@ -21,7 +21,14 @@
             || (value.modes && typeof value.modes === 'object');
     }
 
-    function cleanScheme(scheme) {
+    function cleanPrompts(prompts, options = {}) {
+        const source = prompts && typeof prompts === 'object' ? prompts : {};
+        const cleaned = clone(source);
+        if (options.keepLegacyHistorian !== true) delete cleaned.historian;
+        return cleaned;
+    }
+
+    function cleanScheme(scheme, options = {}) {
         if (!isScheme(scheme)) throw new Error('方案数据缺少名称、ID 或提示词内容。');
         return clone({
             id: String(scheme.id || ''),
@@ -30,7 +37,7 @@
             tableVisibility: scheme.tableVisibility && typeof scheme.tableVisibility === 'object'
                 ? scheme.tableVisibility
                 : {},
-            prompts: scheme.prompts && typeof scheme.prompts === 'object' ? scheme.prompts : {},
+            prompts: cleanPrompts(scheme.prompts, options),
             modes: scheme.modes && typeof scheme.modes === 'object' ? scheme.modes : {},
         });
     }
@@ -38,7 +45,7 @@
     function createExport(schemes, kind = 'all') {
         const normalized = (Array.isArray(schemes) ? schemes : [schemes])
             .filter(Boolean)
-            .map(cleanScheme);
+            .map((scheme) => cleanScheme(scheme));
         if (!normalized.length) throw new Error('没有可导出的记忆方案。');
         const exportKind = kind === 'single' ? 'single' : 'all';
         const base = {
@@ -84,7 +91,9 @@
             throw new Error('记忆方案文件不是有效的 JSON。');
         }
         const imported = extractImport(raw);
-        const schemes = imported.schemes.filter(isScheme).map(cleanScheme);
+        const schemes = imported.schemes
+            .filter(isScheme)
+            .map((scheme) => cleanScheme(scheme, { keepLegacyHistorian: true }));
         if (!schemes.length) throw new Error('文件中没有有效的记忆方案。');
         if (schemes.length !== imported.schemes.length) {
             throw new Error('文件中存在缺少名称、ID 或提示词内容的无效方案。');

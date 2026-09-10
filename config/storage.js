@@ -747,6 +747,8 @@
         ['memory_summary', 'plot_summary'].forEach((tableId) => {
             (records[tableId] || []).forEach((record) => ensureRecordFloorScope(record, fallbackRecordScope));
         });
+        const hasLegacyHistorianPromptSelection = Object.prototype.hasOwnProperty.call(rawState, 'historianPromptId');
+        const hasLegacyHistorianPromptInitialization = Object.prototype.hasOwnProperty.call(rawState, 'historianPromptSelectionInitialized');
 
         return {
             version: VERSION,
@@ -767,6 +769,12 @@
                 ? clone(rawState.floorLedger)
                 : null,
             promptPresetId: String(rawState.promptPresetId || fallback.promptPresetId || ''),
+            ...(hasLegacyHistorianPromptSelection || hasLegacyHistorianPromptInitialization ? {
+                historianPromptId: String(rawState.historianPromptId ?? ''),
+                historianPromptSelectionInitialized: hasLegacyHistorianPromptInitialization
+                    ? rawState.historianPromptSelectionInitialized === true
+                    : hasLegacyHistorianPromptSelection,
+            } : {}),
             characterStatusPromptId: String(rawState.characterStatusPromptId ?? fallback.characterStatusPromptId ?? ''),
             settings: Object.assign({}, fallback.settings || {}, rawState.settings || {}),
         };

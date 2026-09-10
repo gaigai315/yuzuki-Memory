@@ -274,7 +274,6 @@
             id: String(rawScheme.id || ''),
             name,
             prompts: {
-                historian: String(prompts.historian || ''),
                 traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
                 traceBatch: String(prompts.traceBatch ?? ''),
                 trace: String(prompts.trace ?? prompts.traceRealtime ?? prompts.table ?? ''),

@@ -10,6 +10,7 @@
     const FLOATING_ROOT_ID = 'yzm-memory-floating-root';
     const FLOATING_BUTTON_ID = 'yzm-memory-floating-button';
     const FLOATING_LONG_PRESS_MS = 650;
+    const FLOATING_DOUBLE_TAP_MS = 360;
     const TEXT_CONTROL_SELECTOR = [
         'textarea',
         'input:not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="submit"]):not([type="reset"])',
@@ -38,6 +39,8 @@
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
+    const HISTORIAN_PROMPTS_STORAGE_KEY = 'yzm_memory_global_historian_prompts';
+    const HISTORIAN_PROMPT_ACTIVE_STORAGE_KEY = 'yzm_memory_global_historian_prompt_active';
     const CHARACTER_STATUS_PROMPTS_STORAGE_KEY = 'yzm_memory_global_character_status_prompts';
     const GLOBAL_CUSTOM_TABLES_STORAGE_KEY = 'yzm_memory_global_custom_tables';
     const GLOBAL_DELETED_CUSTOM_TABLE_IDS_STORAGE_KEY = 'yzm_memory_global_deleted_custom_table_ids';
@@ -165,7 +168,7 @@
         { id: 'summary', label: '总结提示词', icon: 'fa-regular fa-clipboard' },
         { id: 'timedPrompt', label: '定时注入提示词', icon: 'fa-regular fa-clock' },
     ];
-    const PROMPT_SCHEME_PROMPT_IDS = ['historian', 'traceRealtime', 'traceBatch', 'trace', 'traceOptimize', 'summary', 'summaryOptimize'];
+    const PROMPT_SCHEME_PROMPT_IDS = ['traceRealtime', 'traceBatch', 'trace', 'traceOptimize', 'summary', 'summaryOptimize'];
     const PROMPT_SCHEME_MODE_OPTIONS = {
         trace: [
             { id: 'realtime', label: '实时填表' },
@@ -304,6 +307,7 @@
     let activeSummaryToolSectionId = 'manual';
     let activePromptSchemeSectionId = 'info';
     let activePromptSchemeDraft = null;
+    let activeHistorianPromptDraft = null;
     let activeCharacterStatusPromptDraft = null;
     let activeTimedPromptInjectionDraft = null;
     let activePlotSummaryKind = 'main';
@@ -1806,7 +1810,6 @@
             id: '',
             name: String(name || '').trim(),
             prompts: {
-                historian: String(defaults.historian || ''),
                 traceRealtime: String(defaults.traceRealtime || defaults.trace || ''),
                 traceBatch: String(defaults.traceBatch || ''),
                 trace: String(defaults.trace || defaults.traceRealtime || ''),
@@ -1824,15 +1827,17 @@
         if (!rawScheme || typeof rawScheme !== 'object') return null;
         const name = String(rawScheme.name || '').trim();
         if (!name) return null;
+        const rawPrompts = rawScheme.prompts && typeof rawScheme.prompts === 'object' ? rawScheme.prompts : {};
+        const legacyHistorian = String(rawScheme.legacyHistorian ?? rawPrompts.historian ?? rawScheme.historian ?? '');
         const prompts = YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.(rawScheme)
-            || (rawScheme.prompts && typeof rawScheme.prompts === 'object' ? rawScheme.prompts : {});
+            || rawPrompts;
         return {
             id: String(rawScheme.id || createPromptSchemeId()),
             name,
             builtin: rawScheme.builtin === true,
+            legacyHistorian,
             tableVisibility: normalizePromptSchemeTableVisibility(rawScheme.tableVisibility),
             prompts: {
-                historian: String(prompts.historian || ''),
                 traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
                 traceBatch: String(prompts.traceBatch ?? ''),
                 trace: String(prompts.trace ?? prompts.traceRealtime ?? prompts.table ?? ''),
@@ -1919,12 +1924,212 @@
         const normalized = (Array.isArray(schemes) ? schemes : [])
             .map(normalizePromptScheme)
             .filter((scheme) => scheme && !scheme.builtin && !builtinIds.has(scheme.id));
+        const persisted = normalized.map(({ legacyHistorian: _legacyHistorian, ...scheme }) => ({
+            ...scheme,
+            prompts: Object.fromEntries(Object.entries(scheme.prompts || {}).filter(([id]) => id !== 'historian')),
+        }));
         if (YuzukiMemory.GlobalSettings?.set) {
-            YuzukiMemory.GlobalSettings.set(PROMPT_SCHEMES_STORAGE_KEY, normalized);
+            YuzukiMemory.GlobalSettings.set(PROMPT_SCHEMES_STORAGE_KEY, persisted);
         } else {
-            localStorage.setItem(PROMPT_SCHEMES_STORAGE_KEY, JSON.stringify(normalized));
+            localStorage.setItem(PROMPT_SCHEMES_STORAGE_KEY, JSON.stringify(persisted));
+        }
+        return persisted.map(normalizePromptScheme).filter(Boolean);
+    }
+
+    function createHistorianPromptId() {
+        return `historian_prompt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    }
+
+    function normalizeHistorianPrompt(rawPrompt, index = 0) {
+        if (!rawPrompt || typeof rawPrompt !== 'object') return null;
+        return {
+            id: String(rawPrompt.id || createHistorianPromptId()),
+            name: String(rawPrompt.name || `史官破限 ${String(index + 1).padStart(2, '0')}`).trim(),
+            prompt: String(rawPrompt.prompt ?? rawPrompt.content ?? rawPrompt.text ?? ''),
+            legacySchemeIds: Array.isArray(rawPrompt.legacySchemeIds)
+                ? [...new Set(rawPrompt.legacySchemeIds.map((id) => String(id || '').trim()).filter(Boolean))]
+                : [],
+            builtin: rawPrompt.builtin === true,
+        };
+    }
+
+    function getHistorianPrompts() {
+        try {
+            const raw = YuzukiMemory.GlobalSettings?.get?.(HISTORIAN_PROMPTS_STORAGE_KEY, [])
+                ?? JSON.parse(localStorage.getItem(HISTORIAN_PROMPTS_STORAGE_KEY) || '[]');
+            const source = YuzukiMemory.PromptLibrary?.mergeHistorianPrompts?.(raw)
+                || (Array.isArray(raw) ? raw : []);
+            const seen = new Set();
+            return source.map(normalizeHistorianPrompt).filter((prompt) => {
+                if (!prompt || !prompt.id || seen.has(prompt.id)) return false;
+                seen.add(prompt.id);
+                return true;
+            });
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to load historian prompts.', error);
+            return [];
+        }
+    }
+
+    function saveHistorianPrompts(prompts) {
+        const builtinIds = new Set((YuzukiMemory.PromptLibrary?.getDefaultHistorianPrompts?.() || [])
+            .map((prompt) => String(prompt?.id || '').trim())
+            .filter(Boolean));
+        const seen = new Set();
+        const normalized = (Array.isArray(prompts) ? prompts : [])
+            .map(normalizeHistorianPrompt)
+            .filter((prompt) => {
+                if (!prompt || !prompt.id || prompt.builtin || builtinIds.has(prompt.id) || seen.has(prompt.id)) return false;
+                seen.add(prompt.id);
+                return true;
+            });
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(HISTORIAN_PROMPTS_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(HISTORIAN_PROMPTS_STORAGE_KEY, JSON.stringify(normalized));
         }
         return normalized;
+    }
+
+    function getGlobalHistorianPromptSelection() {
+        if (YuzukiMemory.GlobalSettings?.get) {
+            const missingValue = '__yzm_historian_prompt_active_unset__';
+            const globalValue = YuzukiMemory.GlobalSettings.get(HISTORIAN_PROMPT_ACTIVE_STORAGE_KEY, missingValue);
+            return globalValue === missingValue
+                ? { initialized: false, id: '' }
+                : { initialized: true, id: String(globalValue ?? '').trim() };
+        }
+        try {
+            const raw = localStorage.getItem(HISTORIAN_PROMPT_ACTIVE_STORAGE_KEY);
+            if (raw === null || raw === undefined) return { initialized: false, id: '' };
+            let value = raw;
+            try {
+                value = JSON.parse(raw);
+            } catch (_error) {
+                // Accept plain-string values written by older fallback code.
+            }
+            return { initialized: true, id: String(value ?? '').trim() };
+        } catch (_error) {
+            return { initialized: false, id: '' };
+        }
+    }
+
+    function saveGlobalHistorianPromptId(promptId) {
+        const normalized = String(promptId || '').trim();
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(HISTORIAN_PROMPT_ACTIVE_STORAGE_KEY, normalized);
+        } else {
+            localStorage.setItem(HISTORIAN_PROMPT_ACTIVE_STORAGE_KEY, JSON.stringify(normalized));
+        }
+        return normalized;
+    }
+
+    function getCurrentHistorianPromptId() {
+        const selection = getGlobalHistorianPromptSelection();
+        const selectedId = selection.initialized ? selection.id : '';
+        if (!selectedId) return '';
+        return getHistorianPrompts().some((prompt) => prompt.id === selectedId) ? selectedId : '';
+    }
+
+    function getActiveHistorianPromptDraft() {
+        const selectedId = getCurrentHistorianPromptId();
+        if (!selectedId) {
+            activeHistorianPromptDraft = null;
+            return null;
+        }
+        if (!activeHistorianPromptDraft || activeHistorianPromptDraft.id !== selectedId) {
+            const prompt = getHistorianPrompts().find((entry) => entry.id === selectedId);
+            activeHistorianPromptDraft = prompt ? { ...prompt, legacySchemeIds: [...(prompt.legacySchemeIds || [])] } : null;
+        }
+        return activeHistorianPromptDraft;
+    }
+
+    function updateActiveHistorianPromptField(field, value) {
+        const draft = getActiveHistorianPromptDraft();
+        if (!draft || !['name', 'prompt'].includes(field)) return;
+        draft[field] = String(value ?? '');
+    }
+
+    function createUniqueHistorianPromptName(name, prompts, currentId = '') {
+        const base = String(name || '').trim() || '导入的史官破限';
+        const occupied = new Set((Array.isArray(prompts) ? prompts : [])
+            .filter((prompt) => prompt.id !== currentId)
+            .map((prompt) => String(prompt.name || '').trim()));
+        if (!occupied.has(base)) return base;
+        let index = 1;
+        let candidate = `${base}（迁移）`;
+        while (occupied.has(candidate)) {
+            index += 1;
+            candidate = `${base}（迁移 ${index}）`;
+        }
+        return candidate;
+    }
+
+    function migrateLegacyHistorianPromptsFromSchemes(schemes = getPromptSchemes()) {
+        const schemePromptIds = new Map();
+        const candidates = (Array.isArray(schemes) ? schemes : [])
+            .filter((scheme) => scheme && String(scheme.legacyHistorian || '').trim());
+        if (!candidates.length) return { changed: false, migratedCount: 0, schemePromptIds };
+
+        const prompts = getHistorianPrompts();
+        let changed = false;
+        candidates.forEach((scheme) => {
+            const content = String(scheme.legacyHistorian || '').trim();
+            let prompt = prompts.find((entry) => String(entry.prompt || '').trim() === content) || null;
+            if (!prompt) {
+                prompt = normalizeHistorianPrompt({
+                    id: createHistorianPromptId(),
+                    name: createUniqueHistorianPromptName(`${scheme.name || '旧方案'} · 史官破限`, prompts),
+                    prompt: content,
+                    legacySchemeIds: [scheme.id],
+                }, prompts.length);
+                prompts.push(prompt);
+                changed = true;
+            } else if (!prompt.builtin && scheme.id && !(prompt.legacySchemeIds || []).includes(scheme.id)) {
+                prompt.legacySchemeIds = [...new Set([...(prompt.legacySchemeIds || []), scheme.id])];
+                changed = true;
+            }
+            if (scheme.id && prompt?.id) schemePromptIds.set(scheme.id, prompt.id);
+        });
+        if (changed) saveHistorianPrompts(prompts);
+        return { changed, migratedCount: schemePromptIds.size, schemePromptIds };
+    }
+
+    function ensureHistorianPromptSelectionInitialized(options = {}) {
+        const state = getState();
+        const globalSelection = getGlobalHistorianPromptSelection();
+        const hasLegacySelection = Object.prototype.hasOwnProperty.call(state, 'historianPromptId');
+        const hasLegacyInitialization = Object.prototype.hasOwnProperty.call(state, 'historianPromptSelectionInitialized');
+        const legacySelectionInitialized = hasLegacyInitialization
+            ? state.historianPromptSelectionInitialized === true
+            : hasLegacySelection;
+        const prompts = getHistorianPrompts();
+        let selectedId = globalSelection.id;
+        if (!globalSelection.initialized) {
+            if (legacySelectionInitialized) {
+                const legacySelectedId = String(state.historianPromptId || '').trim();
+                selectedId = prompts.some((prompt) => prompt.id === legacySelectedId) ? legacySelectedId : '';
+            } else {
+                const candidateSchemeIds = [...new Set([
+                    String(options.legacySchemeId || '').trim(),
+                    String(state.promptPresetId || '').trim(),
+                    String(getResolvedPromptSchemeId() || '').trim(),
+                ].filter(Boolean))];
+                selectedId = candidateSchemeIds
+                    .map((schemeId) => options.schemePromptIds?.get?.(schemeId)
+                        || prompts.find((prompt) => prompt.legacySchemeIds?.includes(schemeId))?.id
+                        || '')
+                    .find(Boolean) || '';
+                if (!selectedId) {
+                    selectedId = String(YuzukiMemory.PromptLibrary?.getDefaultHistorianPromptId?.() || prompts[0]?.id || '');
+                }
+            }
+            saveGlobalHistorianPromptId(selectedId);
+        }
+        if (hasLegacySelection) delete state.historianPromptId;
+        if (hasLegacyInitialization) delete state.historianPromptSelectionInitialized;
+        activeHistorianPromptDraft = null;
+        return !globalSelection.initialized || hasLegacySelection || hasLegacyInitialization;
     }
 
     function createCharacterStatusPromptId() {
@@ -2161,15 +2366,23 @@
     }
 
     function applyResolvedPromptSchemeToState(options = {}) {
+        const state = getState();
+        const legacySchemeId = String(state.promptPresetId || '').trim();
+        const schemesBeforeMigration = getPromptSchemes();
+        const historianMigration = migrateLegacyHistorianPromptsFromSchemes(schemesBeforeMigration);
+        if (historianMigration.migratedCount) savePromptSchemes(schemesBeforeMigration);
         ensureGlobalPromptSchemeIdFromState();
         const schemeId = getResolvedPromptSchemeId();
         if (!schemeId) return;
-        const state = getState();
         if (state.promptPresetId !== schemeId) {
             state.promptPresetId = schemeId;
         }
+        const historianSelectionChanged = ensureHistorianPromptSelectionInitialized({
+            legacySchemeId,
+            schemePromptIds: historianMigration.schemePromptIds,
+        });
         const visibilityChanged = syncPromptSchemeTableVisibility(schemeId);
-        if (options.save !== false || visibilityChanged) saveState();
+        if (options.save !== false || visibilityChanged || historianSelectionChanged) saveState();
         activePromptSchemeDraft = null;
     }
 
@@ -2526,12 +2739,28 @@
         let longPressed = false;
         let longPressTimer = null;
         let graphOpenTimer = null;
+        let shellOpenTimer = null;
         let lastTapAt = 0;
 
         const cancelLongPress = () => {
             window.clearTimeout(longPressTimer);
             longPressTimer = null;
             button.classList.remove('yzm-floating-button-long-pressing');
+        };
+
+        const cancelPendingShellOpen = (resetTap = false) => {
+            window.clearTimeout(shellOpenTimer);
+            shellOpenTimer = null;
+            if (resetTap) lastTapAt = 0;
+        };
+
+        const scheduleGraphOpen = () => {
+            cancelPendingShellOpen(true);
+            window.clearTimeout(graphOpenTimer);
+            graphOpenTimer = window.setTimeout(() => {
+                graphOpenTimer = null;
+                YuzukiMemory.CharacterGraphWindow?.open?.();
+            }, 80);
         };
 
         const finish = (event, cancelled = false) => {
@@ -2548,21 +2777,27 @@
             button.classList.remove('yzm-floating-button-dragging');
 
             if (moved && !cancelled) {
+                cancelPendingShellOpen(true);
                 const rect = button.getBoundingClientRect();
                 applyFloatingIconPosition(button, rect.left, rect.top, { persist: true });
             } else if (shouldOpenGraph) {
-                window.clearTimeout(graphOpenTimer);
-                graphOpenTimer = window.setTimeout(() => {
-                    graphOpenTimer = null;
-                    YuzukiMemory.CharacterGraphWindow?.open?.();
-                }, 80);
+                scheduleGraphOpen();
             } else if (!cancelled) {
                 const now = Date.now();
-                if (now - lastTapAt > 500) {
+                if (lastTapAt > 0 && now - lastTapAt <= FLOATING_DOUBLE_TAP_MS) {
+                    scheduleGraphOpen();
+                } else {
                     lastTapAt = now;
-                    armShellOpenInteractionGuard();
-                    toggleShell(true);
+                    cancelPendingShellOpen();
+                    shellOpenTimer = window.setTimeout(() => {
+                        shellOpenTimer = null;
+                        lastTapAt = 0;
+                        armShellOpenInteractionGuard();
+                        toggleShell(true);
+                    }, FLOATING_DOUBLE_TAP_MS);
                 }
+            } else if (cancelled) {
+                cancelPendingShellOpen(true);
             }
 
             window.setTimeout(() => {
@@ -2575,6 +2810,9 @@
             if (event.button !== undefined && event.button !== 0) return;
             event.preventDefault();
             event.stopPropagation();
+            if (lastTapAt > 0 && Date.now() - lastTapAt <= FLOATING_DOUBLE_TAP_MS) {
+                cancelPendingShellOpen();
+            }
             pointerId = event.pointerId;
             startX = event.clientX;
             startY = event.clientY;
@@ -2607,6 +2845,7 @@
             if (!moved && Math.hypot(deltaX, deltaY) > 8) {
                 moved = true;
                 cancelLongPress();
+                cancelPendingShellOpen(true);
             }
             if (!moved) return;
             event.preventDefault();
@@ -2661,8 +2900,8 @@
         button.id = FLOATING_BUTTON_ID;
         button.type = 'button';
         button.className = 'yzm-floating-button';
-        button.title = '点击打开记忆，长按打开角色图谱';
-        button.setAttribute('aria-label', '点击打开记忆，长按打开角色图谱');
+        button.title = '点击打开记忆，双击或长按打开角色图谱';
+        button.setAttribute('aria-label', '点击打开记忆，双击或长按打开角色图谱');
 
         const icon = document.createElement('img');
         icon.className = 'yzm-floating-button-image';
@@ -7734,48 +7973,87 @@
         header.className = 'yzm-scheme-header';
         const title = document.createElement('div');
         title.className = 'yzm-scheme-title';
-        title.append(createIconNode('fa-solid fa-book-open', ''), document.createTextNode('记忆方案'));
+        title.append(createIconNode(section.icon, ''), document.createTextNode(section.label));
         const desc = document.createElement('div');
         desc.className = 'yzm-scheme-desc';
-        desc.textContent = '配置当前方案的史官系统提示词与破限规则。';
+        desc.textContent = getPromptSchemeDescription(section.id);
         header.append(title, desc);
 
-        const editorCard = document.createElement('section');
-        editorCard.className = 'yzm-config-card yzm-scheme-editor-card yzm-scheme-historian-card';
-        editorCard.dataset.yzmSchemeEditorCard = 'true';
-        const cardHeader = document.createElement('div');
-        cardHeader.className = 'yzm-scheme-card-header';
-        const cardTitle = document.createElement('div');
-        cardTitle.className = 'yzm-config-card-title yzm-scheme-card-title';
-        cardTitle.append(createIconNode(section.icon, ''), document.createTextNode('史官破限（System Pre-Prompt）'));
-        const info = document.createElement('span');
-        info.className = 'yzm-scheme-card-info';
-        info.title = '在主提示词前注入，用于约束叙事视角、边界和输出风格。';
-        info.appendChild(createIconNode('fa-regular fa-circle-question', ''));
-        const expand = createSchemeExpandButton();
-        cardTitle.appendChild(info);
-        cardHeader.append(cardTitle, expand);
+        const prompts = getHistorianPrompts();
+        const selectedId = getCurrentHistorianPromptId();
+        const draft = getActiveHistorianPromptDraft();
+        const options = [
+            { label: prompts.length ? '不使用史官破限' : '暂无史官破限', value: '' },
+            ...prompts.map((prompt) => ({ label: prompt.name, value: prompt.id })),
+        ];
+        const selectWrap = createApiSelect(selectedId, options, 'historianPrompt');
+        const select = selectWrap.querySelector('.yzm-api-select');
+        if (select) {
+            select.dataset.yzmHistorianPromptSelect = 'true';
+            select.setAttribute('aria-label', '当前全局史官破限');
+        }
 
-        const hint = document.createElement('div');
-        hint.className = 'yzm-scheme-editor-hint';
-        hint.textContent = '作用于系统提示词的前置段落，不会保存到角色卡或酒馆设置。';
+        const selectionHint = document.createElement('div');
+        selectionHint.className = 'yzm-scheme-editor-hint';
+        selectionHint.textContent = '破限列表和当前选择均为全局共享；切换聊天或记忆方案都不会改变这里的选择。';
+        const selectionActions = createApiActions([
+            ['新增', 'fa-solid fa-plus', 'yzm-api-button-primary', 'newHistorianPrompt'],
+            ['保存', 'fa-regular fa-floppy-disk', '', 'saveHistorianPrompt'],
+            ['删除', 'fa-regular fa-trash-can', 'yzm-api-button-danger', 'deleteHistorianPrompt'],
+        ]);
+        selectionActions.querySelectorAll('[data-yzm-api-action]').forEach((button) => {
+            button.dataset.yzmHistorianPromptAction = button.dataset.yzmApiAction;
+        });
+        if (!draft || draft.builtin) {
+            selectionActions.querySelector('[data-yzm-historian-prompt-action="saveHistorianPrompt"]')?.setAttribute('disabled', 'true');
+            selectionActions.querySelector('[data-yzm-historian-prompt-action="deleteHistorianPrompt"]')?.setAttribute('disabled', 'true');
+        }
+        const selectionCard = createApiCard('当前全局选择', 'fa-solid fa-globe', [
+            createApiField('史官破限', selectWrap),
+            selectionHint,
+            selectionActions,
+        ]);
 
-        const textarea = document.createElement('textarea');
-        textarea.className = 'yzm-scheme-textarea yzm-scheme-historian-textarea';
-        textarea.placeholder = getPromptSchemePlaceholder(section.id);
-        textarea.value = getPromptSchemeDraftValue(section.id);
-        textarea.spellcheck = false;
-        textarea.dataset.yzmSchemeField = section.id;
-        textarea.dataset.yzmSchemeTitle = '史官破限（System Pre-Prompt）';
+        panel.append(header, selectionCard);
+        if (draft) {
+            const editorCard = document.createElement('section');
+            editorCard.className = 'yzm-config-card yzm-scheme-editor-card yzm-scheme-historian-card';
+            editorCard.dataset.yzmSchemeEditorCard = 'true';
+            const cardHeader = document.createElement('div');
+            cardHeader.className = 'yzm-scheme-card-header';
+            const cardTitle = document.createElement('div');
+            cardTitle.className = 'yzm-config-card-title yzm-scheme-card-title';
+            cardTitle.append(createIconNode('fa-regular fa-pen-to-square', ''), document.createTextNode('编辑史官破限（System Pre-Prompt）'));
+            cardHeader.append(cardTitle, createSchemeExpandButton());
 
-        const counter = document.createElement('div');
-        counter.className = 'yzm-scheme-counter';
-        counter.dataset.yzmSchemeCounter = section.id;
-        counter.textContent = `字数统计：${textarea.value.length} / 50000`;
+            const nameInputWrap = createApiInput('输入破限名称');
+            const nameInput = nameInputWrap.querySelector('.yzm-api-input');
+            if (nameInput) {
+                nameInput.value = draft.name || '';
+                nameInput.dataset.yzmHistorianPromptField = 'name';
+                nameInput.readOnly = draft.builtin === true;
+            }
+            const textarea = document.createElement('textarea');
+            textarea.className = 'yzm-scheme-textarea yzm-scheme-historian-textarea';
+            textarea.placeholder = '填写史官破限提示词...';
+            textarea.value = draft.prompt || '';
+            textarea.spellcheck = false;
+            textarea.readOnly = draft.builtin === true;
+            textarea.dataset.yzmHistorianPromptField = 'prompt';
+            textarea.dataset.yzmSchemeTitle = '编辑史官破限（System Pre-Prompt）';
 
-        editorCard.append(cardHeader, hint, textarea, counter);
-
-        panel.append(header, createPromptSchemeCurrentCard(), editorCard);
+            const counter = document.createElement('div');
+            counter.className = 'yzm-scheme-counter';
+            counter.dataset.yzmHistorianPromptCounter = 'true';
+            counter.textContent = `字数统计：${textarea.value.length} / 50000`;
+            editorCard.append(
+                cardHeader,
+                createApiField('破限名称', nameInputWrap),
+                createApiField('破限内容', textarea),
+                counter,
+            );
+            panel.appendChild(editorCard);
+        }
         return panel;
     }
 
@@ -8336,6 +8614,7 @@
             normalizeScheme: normalizePromptScheme,
             createId: createPromptSchemeId,
         });
+        result.historianMigration = migrateLegacyHistorianPromptsFromSchemes(result.schemes);
         savePromptSchemes(result.schemes);
         return result;
     }
@@ -8400,6 +8679,7 @@
                     result.added ? `新增 ${result.added} 套` : '',
                     result.updated ? `更新 ${result.updated} 套` : '',
                     result.skippedBuiltin ? `跳过 ${result.skippedBuiltin} 套未修改的内置方案` : '',
+                    result.historianMigration?.migratedCount ? `迁移 ${result.historianMigration.migratedCount} 套独立破限` : '',
                 ].filter(Boolean).join('，') || '没有需要变更的方案';
                 showTaskToast(`导入完成：${summary}。`, 'success');
             } catch (error) {
@@ -8451,6 +8731,77 @@
             if (label) label.textContent = originalText;
             button.disabled = false;
         }, 1200);
+    }
+
+    function applyHistorianPromptSelection(root, promptId) {
+        const selectedId = String(promptId || '').trim();
+        const prompt = getHistorianPrompts().find((entry) => entry.id === selectedId);
+        saveGlobalHistorianPromptId(prompt ? prompt.id : '');
+        activeHistorianPromptDraft = prompt ? { ...prompt, legacySchemeIds: [...(prompt.legacySchemeIds || [])] } : null;
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function startNewHistorianPrompt(root) {
+        const name = String(window.prompt('请输入史官破限名称：', '') || '').trim();
+        if (!name) return;
+        const prompt = {
+            id: createHistorianPromptId(),
+            name,
+            prompt: '',
+            legacySchemeIds: [],
+        };
+        const prompts = saveHistorianPrompts([...getHistorianPrompts(), prompt]);
+        const saved = prompts.find((entry) => entry.id === prompt.id) || prompt;
+        saveGlobalHistorianPromptId(saved.id);
+        activeHistorianPromptDraft = { ...saved, legacySchemeIds: [...(saved.legacySchemeIds || [])] };
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function saveActiveHistorianPrompt(root) {
+        const draft = getActiveHistorianPromptDraft();
+        if (!draft) {
+            window.alert('请先新增或选择一套史官破限。');
+            return;
+        }
+        if (draft.builtin) {
+            window.alert('内置默认史官破限不能修改。');
+            return;
+        }
+        const name = String(draft.name || '').trim();
+        if (!name) {
+            window.alert('请填写史官破限名称。');
+            return;
+        }
+        const prompts = getHistorianPrompts();
+        const index = prompts.findIndex((entry) => entry.id === draft.id);
+        const nextPrompt = {
+            id: draft.id || createHistorianPromptId(),
+            name,
+            prompt: String(draft.prompt || ''),
+            legacySchemeIds: [...(draft.legacySchemeIds || [])],
+        };
+        if (index >= 0) prompts[index] = nextPrompt;
+        else prompts.push(nextPrompt);
+        const saved = saveHistorianPrompts(prompts).find((entry) => entry.id === nextPrompt.id) || nextPrompt;
+        saveGlobalHistorianPromptId(saved.id);
+        activeHistorianPromptDraft = { ...saved, legacySchemeIds: [...(saved.legacySchemeIds || [])] };
+        renderPromptSchemeWorkspace(root);
+        showTaskToast('史官破限已保存。', 'success');
+    }
+
+    function deleteActiveHistorianPrompt(root) {
+        const draft = getActiveHistorianPromptDraft();
+        if (!draft) return;
+        if (draft.builtin) {
+            window.alert('内置默认史官破限不能删除。');
+            return;
+        }
+        if (!window.confirm(`确定删除史官破限「${draft.name}」吗？`)) return;
+        saveHistorianPrompts(getHistorianPrompts().filter((entry) => entry.id !== draft.id));
+        saveGlobalHistorianPromptId('');
+        activeHistorianPromptDraft = null;
+        renderPromptSchemeWorkspace(root);
+        showTaskToast('史官破限已删除。', 'success');
     }
 
     function applyCharacterStatusPromptSelection(root, promptId) {
@@ -8744,7 +9095,7 @@
 
     function getPromptSchemeDescription(sectionId) {
         if (sectionId === 'info') return '管理记忆方案的基础信息、自动加载与导入导出。';
-        if (sectionId === 'historian') return '控制史官视角、叙事边界和破限输出规则。';
+        if (sectionId === 'historian') return '独立管理全局史官系统前置提示词；所有聊天使用同一个当前选择。';
         if (sectionId === 'timedPrompt') return '按设定楼层间隔，在用户发送消息时自动隐式注入修正提示词。';
         if (sectionId === 'trace') return '控制实时/批量填表与填表优化的提示词。';
         if (sectionId === 'characterStatus') return '管理角色状态更新与属性成长任务提示词；当前会话只使用当前选择。';
@@ -8752,7 +9103,6 @@
     }
 
     function getPromptSchemeFieldLabel(fieldId) {
-        if (fieldId === 'historian') return '史官破限（System Pre-Prompt）';
         if (fieldId === 'traceRealtime') return '实时填表提示词';
         if (fieldId === 'traceBatch') return '批量填表提示词';
         if (fieldId === 'trace') return '填表提示词';
@@ -8762,7 +9112,6 @@
     }
 
     function getPromptSchemePlaceholder(sectionId) {
-        if (sectionId === 'historian') return '填写史官破限提示词...';
         if (sectionId === 'traceRealtime') return '填写实时填表提示词...';
         if (sectionId === 'traceBatch') return '填写批量填表提示词...';
         if (sectionId === 'trace') return '填写填表提示词...';
@@ -10393,7 +10742,7 @@
             createPluginConfigRow('注入记忆', '处理 {{MEMORY}}、{{MEMORY_TABLE_表名}}、{{MEMORY_SUMMARY_标题或序号}} 等变量，并按表/总结分消息注入。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
             createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
-            createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标，点击即可打开记忆插件。图标样式和拖动位置都会记住。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon'), createFloatingIconStylePicker(settings.floatingIconStyle)),
+            createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标；单击打开记忆，双击或长按打开角色图谱。图标样式和拖动位置都会记住。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon'), createFloatingIconStylePicker(settings.floatingIconStyle)),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
             createPluginConfigRow('首楼常驻', '开启后，酒馆第 0 楼始终保持显示；仅影响隐藏楼层，不改变填表、总结和优化任务的取材范围。', 'fa-solid fa-thumbtack', createConfigSwitch(settings.keepFirstFloorVisible, 'keepFirstFloorVisible')),
             createPluginConfigRow('任务包含角色卡开场白', '开启后，填表、总结和优化任务会额外注入角色卡的默认开场白；默认关闭，关闭时仅使用任务楼层范围内的实际聊天内容。', 'fa-solid fa-message', createConfigSwitch(settings.includeCharacterGreetingInTasks, 'includeCharacterGreetingInTasks')),
@@ -13082,8 +13431,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】向量化分段改为按 Token 精确计算，长文本处理更准确。',
-            '【优化】删除已总结的楼层时，会自动删除受影响的总结并回退总结进度。',
+            '【优化】破限方案改为全局共享，并支持新增独立的破限方案。',
+            '【新增】角色图谱支持长按或双击悬浮图标进入。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -15721,6 +16070,7 @@
                 const timedPromptEdit = target?.closest('[data-yzm-timed-prompt-edit]');
                 const timedPromptDelete = target?.closest('[data-yzm-timed-prompt-delete]');
                 const timedPromptSave = target?.closest('[data-yzm-timed-prompt-save]');
+                const historianPromptAction = target?.closest('[data-yzm-historian-prompt-action]');
                 const characterStatusPromptAction = target?.closest('[data-yzm-character-status-prompt-action]');
                 if (schemeIoAction) {
                     event.preventDefault();
@@ -15736,6 +16086,15 @@
                     event.stopPropagation();
                     const isOn = toggleConfigSwitch(autoLoadToggle);
                     togglePromptSchemeAutoLoad(root, isOn);
+                    return;
+                }
+                if (historianPromptAction) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const action = historianPromptAction.dataset.yzmHistorianPromptAction || '';
+                    if (action === 'newHistorianPrompt') startNewHistorianPrompt(root);
+                    if (action === 'saveHistorianPrompt') saveActiveHistorianPrompt(root);
+                    if (action === 'deleteHistorianPrompt') deleteActiveHistorianPrompt(root);
                     return;
                 }
                 if (characterStatusPromptAction) {
@@ -15829,6 +16188,17 @@
             });
             schemeView.addEventListener('input', (event) => {
                 const target = event.target;
+                if (target?.matches?.('[data-yzm-historian-prompt-field]')) {
+                    updateActiveHistorianPromptField(
+                        target.dataset.yzmHistorianPromptField || '',
+                        target.value,
+                    );
+                    const counter = root.querySelector('[data-yzm-historian-prompt-counter]');
+                    if (counter && target.dataset.yzmHistorianPromptField === 'prompt') {
+                        counter.textContent = `字数统计：${target.value.length} / 50000`;
+                    }
+                    return;
+                }
                 if (target?.matches?.('[data-yzm-character-status-prompt-field]')) {
                     updateActiveCharacterStatusPromptField(
                         target.dataset.yzmCharacterStatusPromptField || '',
@@ -15851,6 +16221,10 @@
             });
             schemeView.addEventListener('change', (event) => {
                 const target = event.target;
+                if (target?.matches?.('[data-yzm-historian-prompt-select]')) {
+                    applyHistorianPromptSelection(root, target.value);
+                    return;
+                }
                 if (target?.matches?.('[data-yzm-character-status-prompt-select]')) {
                     applyCharacterStatusPromptSelection(root, target.value);
                     return;
@@ -16471,6 +16845,7 @@
         }
 
         memoryState = prepareLoadedState(createDefaultState());
+        activeHistorianPromptDraft = null;
         activeCharacterStatusPromptDraft = null;
         refreshActiveWorkspace(root);
 
@@ -16511,6 +16886,7 @@
         }
         loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
         memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
+        activeHistorianPromptDraft = null;
         activeCharacterStatusPromptDraft = null;
         sessionStateReady = Boolean(loadedSessionId);
         applyResolvedPromptSchemeToState({ save: false });

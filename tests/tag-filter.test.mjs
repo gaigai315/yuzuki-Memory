@@ -59,9 +59,10 @@ test('closing-only blacklist keeps an earlier whitelisted block available for ex
     );
 });
 
-test('manual and automatic trace inject populated non-summary tables without plot summary content', async () => {
+test('trace uses the global historian selection and injects populated non-summary tables', async () => {
     const capturedRequests = [];
     let traceResponseText = '{"records":[{"table":"角色档案","values":{"角色名":"测试角色","当前位置":"新地点"}}]}';
+    let activeHistorianPromptId = 'historian-prompt';
     const taskSandbox = {
         console,
         localStorage: { getItem: () => null },
@@ -84,6 +85,13 @@ test('manual and automatic trace inject populated non-summary tables without plo
                     get: (key, fallback) => {
                         if (key === 'yzm_memory_global_plugin_settings') return { enableFilling: true, fillMode: 'batch' };
                         if (key === 'yzm_memory_global_prompt_scheme_active') return 'test-default';
+                        if (key === 'yzm_memory_global_historian_prompts') {
+                            return [
+                                { id: 'default-historian', prompt: 'DEFAULT_HISTORIAN_MARKER' },
+                                { id: 'historian-prompt', prompt: 'INDEPENDENT_HISTORIAN_MARKER' },
+                            ];
+                        }
+                        if (key === 'yzm_memory_global_historian_prompt_active') return activeHistorianPromptId;
                         if (key === 'yzm_memory_global_character_status_prompts') {
                             return [{ id: 'status-prompt', prompt: 'STATUS_RULE\n{{MEMORY_TABLE_character_status}}' }];
                         }
@@ -94,11 +102,13 @@ test('manual and automatic trace inject populated non-summary tables without plo
                     getDefaultSchemes: () => [{
                         id: 'test-default',
                         prompts: {
-                            historian: '',
+                            historian: 'LEGACY_SCHEME_HISTORIAN_MUST_NOT_APPEAR',
                             traceBatch: 'TRACE_PROMPT_MARKER\n{{TABLE_DEFINITIONS}}',
                         },
                     }],
                     mergeSchemePrompts: (scheme) => scheme.prompts || {},
+                    mergeHistorianPrompts: (prompts) => prompts,
+                    getDefaultHistorianPromptId: () => 'default-historian',
                 },
                 LlmClient: {
                     getTavernStatus: async () => ({}),
@@ -130,6 +140,8 @@ test('manual and automatic trace inject populated non-summary tables without plo
     vm.runInContext(source, taskSandbox, { filename: 'task-runner-batch-context.js' });
 
     const state = {
+        historianPromptId: '',
+        historianPromptSelectionInitialized: true,
         characterStatusPromptId: 'status-prompt',
         settings: { autoVectorizeTables: { character_profile: true } },
         tables: [
@@ -170,7 +182,7 @@ test('manual and automatic trace inject populated non-summary tables without plo
     assert.equal(manualResult.success, true);
     assert.equal(automaticResult.success, true);
     assert.equal(capturedRequests.length, 2);
-    capturedRequests.forEach((capturedMessages, index) => {
+    capturedRequests.slice(0, 2).forEach((capturedMessages, index) => {
         const mode = index === 0 ? '手动追溯' : '自动批量';
         const messageContents = capturedMessages.map((message) => String(message.content || ''));
         const characterIndex = messageContents.findIndex((content) => content.includes('当前位置: 旧地点'));
@@ -183,11 +195,39 @@ test('manual and automatic trace inject populated non-summary tables without plo
         assert.ok(itemIndex >= 0, `${mode}应注入有数据的普通表`);
         assert.ok(characterIndex < firstChatIndex && itemIndex < firstChatIndex, `${mode}的现有表格应位于聊天记录之前`);
         assert.ok(tracePromptIndex > lastChatIndex, `${mode}的填表提示词应位于聊天记录之后`);
+        assert.equal(messageContents.some((content) => content.includes('INDEPENDENT_HISTORIAN_MARKER')), true, `${mode}应使用独立选择的史官破限`);
+        assert.equal(messageContents.some((content) => content.includes('LEGACY_SCHEME_HISTORIAN_MUST_NOT_APPEAR')), false, `${mode}不应继续读取记忆方案内的旧破限`);
         assert.equal(messageContents.join('\n').match(/体力: 10/g)?.length, 1, `${mode}的角色状态当前内容只应注入一次`);
         assert.equal(messageContents.some((content) => content.includes('PLOT_CONTENT_MUST_NOT_APPEAR')), false);
         assert.equal(messageContents.some((content) => content.includes('SUMMARY_CONTENT_MUST_NOT_APPEAR')), false);
         assert.equal(messageContents.some((content) => content.includes('【当前世界状态参考—世界设定】')), false);
     });
+
+    activeHistorianPromptId = '';
+    state.historianPromptId = 'historian-prompt';
+    const noHistorianResult = await taskSandbox.window.YuzukiMemory.TaskRunner.runTrace(state, {
+        start: 0,
+        end: 2,
+        includeWorldbook: false,
+        previewOnly: true,
+    });
+    const noHistorianContents = capturedRequests[2].map((message) => String(message.content || '')).join('\n');
+    assert.equal(noHistorianResult.success, true);
+    assert.equal(noHistorianContents.includes('INDEPENDENT_HISTORIAN_MARKER'), false);
+    assert.equal(noHistorianContents.includes('DEFAULT_HISTORIAN_MARKER'), false);
+    assert.equal(noHistorianContents.includes('LEGACY_SCHEME_HISTORIAN_MUST_NOT_APPEAR'), false);
+
+    activeHistorianPromptId = undefined;
+    const defaultHistorianResult = await taskSandbox.window.YuzukiMemory.TaskRunner.runTrace(state, {
+        start: 0,
+        end: 2,
+        includeWorldbook: false,
+        previewOnly: true,
+    });
+    const defaultHistorianContents = capturedRequests[3].map((message) => String(message.content || '')).join('\n');
+    assert.equal(defaultHistorianResult.success, true);
+    assert.equal(defaultHistorianContents.includes('DEFAULT_HISTORIAN_MARKER'), true);
+    assert.equal(defaultHistorianContents.includes('INDEPENDENT_HISTORIAN_MARKER'), false);
 
     traceResponseText = '<Memory><!--\n#角色档案\n[测试角色] | 当前位置: 确认后的地点\n-->';
     const incompleteResult = await taskSandbox.window.YuzukiMemory.TaskRunner.runTrace(state, {

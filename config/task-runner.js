@@ -15,6 +15,8 @@
     const PROMPT_SCHEMES_STORAGE_KEY = 'yzm_memory_global_prompt_schemes';
     const PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
     const PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_character_bindings';
+    const HISTORIAN_PROMPTS_STORAGE_KEY = 'yzm_memory_global_historian_prompts';
+    const HISTORIAN_PROMPT_ACTIVE_STORAGE_KEY = 'yzm_memory_global_historian_prompt_active';
     const CHARACTER_STATUS_PROMPTS_STORAGE_KEY = 'yzm_memory_global_character_status_prompts';
     const AUTO_SUMMARY_SETTINGS_STORAGE_KEY = 'yzm_memory_global_auto_summary_settings';
     const PLUGIN_SETTINGS_STORAGE_KEY = 'yzm_memory_global_plugin_settings';
@@ -895,12 +897,13 @@
             ...(Array.isArray(schemes) ? schemes : []),
         ].filter((scheme, index, list) => scheme && list.findIndex((entry) => entry?.id === scheme.id) === index);
         const normalized = sourceSchemes.map((scheme) => {
+            const sourcePrompts = scheme?.prompts && typeof scheme.prompts === 'object' ? scheme.prompts : {};
             const prompts = YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.(scheme)
-                || (scheme?.prompts && typeof scheme.prompts === 'object' ? scheme.prompts : {});
+                || sourcePrompts;
             return {
                 ...scheme,
+                legacyHistorian: String(scheme?.legacyHistorian ?? sourcePrompts.historian ?? scheme?.historian ?? ''),
                 prompts: {
-                    historian: String(prompts.historian || ''),
                     traceRealtime: String(prompts.traceRealtime ?? prompts.trace ?? prompts.table ?? ''),
                     traceBatch: String(prompts.traceBatch ?? ''),
                     trace: String(prompts.trace ?? prompts.traceRealtime ?? prompts.table ?? ''),
@@ -921,6 +924,23 @@
         return normalized.find((scheme) => scheme.id === activeId)
             || normalized[0]
             || { prompts: YuzukiMemory.PromptLibrary?.mergeSchemePrompts?.({ prompts: {} }) || {} };
+    }
+
+    function getActiveHistorianPrompt() {
+        try {
+            const stored = parseJsonStorage(HISTORIAN_PROMPTS_STORAGE_KEY, []);
+            const prompts = YuzukiMemory.PromptLibrary?.mergeHistorianPrompts?.(stored)
+                || (Array.isArray(stored) ? stored : []);
+            const storedSelection = parseJsonStorage(HISTORIAN_PROMPT_ACTIVE_STORAGE_KEY, undefined);
+            const selectedId = storedSelection === undefined
+                ? String(YuzukiMemory.PromptLibrary?.getDefaultHistorianPromptId?.() || prompts[0]?.id || '').trim()
+                : String(storedSelection ?? '').trim();
+            if (!selectedId) return '';
+            const selected = prompts.find((prompt) => String(prompt?.id || '').trim() === selectedId);
+            return String(selected?.prompt ?? selected?.content ?? selected?.text ?? '').trim();
+        } catch (_error) {
+            return '';
+        }
     }
 
     function getCharacterStatusPromptEntryFromState(state) {
@@ -2901,7 +2921,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             ...options,
             suppressMemoryData: true,
         };
-        const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, taskPromptOptions);
+        const historianPrompt = resolveTaskPromptVariables(getActiveHistorianPrompt(), state, taskPromptOptions);
         const tracePrompt = resolveTaskPromptVariables(getTracePromptFromScheme(scheme) || getDefaultTracePrompt(state, options), state, taskPromptOptions);
         const characterStatusPrompt = settings.enableFilling !== false && settings.fillMode === 'batch'
             ? resolveTaskPromptVariables(getCharacterStatusPromptFromState(state), state, taskPromptOptions)
@@ -2926,7 +2946,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     async function buildSummaryMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
-        const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, {
+        const historianPrompt = resolveTaskPromptVariables(getActiveHistorianPrompt(), state, {
             ...options,
             suppressMemoryTables: true,
         });
@@ -3239,7 +3259,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     async function runTraceOptimize(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const prompt = resolveTaskPromptVariables(compactLines([scheme?.prompts?.traceOptimize, getDefaultOptimizePrompt('trace')]), state, options);
-        const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, {
+        const historianPrompt = resolveTaskPromptVariables(getActiveHistorianPrompt(), state, {
             ...options,
             suppressMemoryData: true,
         });
@@ -3275,7 +3295,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             .join('\n\n');
         const note = String(options.note || '').trim();
         const scheme = getActivePromptScheme(state);
-        const historianPrompt = resolveTaskPromptVariables(scheme?.prompts?.historian || '', state, {
+        const historianPrompt = resolveTaskPromptVariables(getActiveHistorianPrompt(), state, {
             ...options,
             suppressMemoryTables: true,
         });

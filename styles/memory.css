@@ -132,6 +132,7 @@
     pointer-events: auto;
     touch-action: none;
     user-select: none;
+    -webkit-touch-callout: none;
     -webkit-user-drag: none;
     transition: opacity 160ms ease, filter 160ms ease, transform 160ms ease;
 }
@@ -170,6 +171,7 @@
     object-fit: contain;
     pointer-events: none;
     user-select: none;
+    -webkit-touch-callout: none;
     -webkit-user-drag: none;
 }
 
