@@ -4737,6 +4737,10 @@
     min-width: 0;
 }
 
+#yzm-memory-root .yzm-api-field-wide {
+    grid-column: 1 / -1;
+}
+
 #yzm-memory-root .yzm-api-field-inline {
     flex-direction: row;
     align-items: center;
@@ -4774,6 +4778,18 @@
 
 #yzm-memory-root .yzm-api-input::placeholder {
     color: var(--yzm-muted);
+}
+
+#yzm-memory-root .yzm-api-textarea {
+    min-height: 72px;
+    padding: 8px 10px;
+    overflow: auto;
+    line-height: 1.4;
+    resize: vertical;
+}
+
+#yzm-memory-root [data-yzm-open-code-warning][hidden] {
+    display: none;
 }
 
 #yzm-memory-root .yzm-api-select {

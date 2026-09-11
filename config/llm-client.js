@@ -7,11 +7,31 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const SETTINGS_CACHE_TTL = 30000;
+    const OPENCODE_GO_PROVIDER = 'opencode_go';
+    const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1';
+    const OPENCODE_SESSION_SALT_STORAGE_KEY = 'yzm_memory_opencode_session_salt';
+    const FORBIDDEN_CUSTOM_HEADERS = new Set([
+        'connection',
+        'content-length',
+        'cookie',
+        'host',
+        'proxy-authenticate',
+        'proxy-authorization',
+        'set-cookie',
+        'transfer-encoding',
+    ]);
     const PROVIDERS = {
         proxy_only: {
             label: '自定义（兼容 OpenAI）',
             placeholderUrl: '例如: http://127.0.0.1:8889/v1',
             placeholderModel: '例如: gemini-2.5-pro',
+            defaultMaxTokens: 50000,
+        },
+        [OPENCODE_GO_PROVIDER]: {
+            label: 'OpenCode Go',
+            placeholderUrl: OPENCODE_GO_BASE_URL,
+            placeholderModel: '例如: deepseek-v4-flash',
+            defaultUrl: OPENCODE_GO_BASE_URL,
             defaultMaxTokens: 50000,
         },
         openai: {
@@ -68,6 +88,7 @@
     let csrfTokenCacheTime = 0;
     let cachedTavernSettings = null;
     let tavernSettingsCacheTime = 0;
+    let cachedOpenCodeSessionSalt = '';
 
     function formatError(error, fallback = '未知错误') {
         if (error === undefined || error === null) return fallback;
@@ -190,11 +211,20 @@
         let cleaned = String(url || '').trim().replace(/\/+$/, '');
         if (!cleaned) return '';
 
-        if (provider === 'proxy_only') {
+        if (provider === 'proxy_only' && !isOfficialOpenCodeGoUrl(cleaned)) {
             return cleaned;
         }
 
         cleaned = cleaned.replace(/0\.0\.0\.0/g, '127.0.0.1');
+        if (isOfficialOpenCodeGoUrl(cleaned)) {
+            try {
+                const openCodeUrl = new URL(cleaned);
+                if (openCodeUrl.pathname.replace(/\/+$/, '').toLowerCase() === '/zen/go') {
+                    openCodeUrl.pathname = `${openCodeUrl.pathname.replace(/\/+$/, '')}/v1`;
+                    cleaned = openCodeUrl.href.replace(/\/+$/, '');
+                }
+            } catch (_error) {}
+        }
 
         if (provider !== 'gemini' && provider !== 'claude' && provider !== 'local') {
             const parts = cleaned.split('/');
@@ -214,6 +244,199 @@
         const key = String(apiKey || '').trim();
         if (!key) return '';
         return key.startsWith('Bearer ') ? key : `Bearer ${key}`;
+    }
+
+    function findHeaderKey(headers, targetName) {
+        const normalizedTarget = String(targetName || '').trim().toLowerCase();
+        return Object.keys(headers || {}).find((key) => key.toLowerCase() === normalizedTarget) || '';
+    }
+
+    function setHeader(headers, name, value, overwrite = true) {
+        const existingKey = findHeaderKey(headers, name);
+        if (existingKey && !overwrite) return;
+        headers[existingKey || name] = String(value);
+    }
+
+    function parseCustomHeaders(rawHeaders = '') {
+        if (rawHeaders === undefined || rawHeaders === null || rawHeaders === '') return {};
+        let parsed = rawHeaders;
+        if (typeof rawHeaders === 'string') {
+            const source = rawHeaders.trim();
+            if (!source) return {};
+            try {
+                parsed = JSON.parse(source);
+            } catch (error) {
+                throw new Error(`自定义请求头 JSON 格式错误：${error.message || '无法解析'}`);
+            }
+        }
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw new Error('自定义请求头必须是 JSON 对象。');
+        }
+
+        const entries = Object.entries(parsed);
+        if (entries.length > 50) throw new Error('自定义请求头最多允许 50 项。');
+        const headers = {};
+        entries.forEach(([rawName, rawValue]) => {
+            const name = String(rawName || '').trim();
+            const normalizedName = name.toLowerCase();
+            if (!name || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+                throw new Error(`请求头名称无效：${name || '（空）'}`);
+            }
+            if (FORBIDDEN_CUSTOM_HEADERS.has(normalizedName)) {
+                throw new Error(`不允许自定义请求头：${name}`);
+            }
+            if (typeof rawValue !== 'string') {
+                throw new Error(`请求头 ${name} 的值必须是字符串。`);
+            }
+            if (/\r|\n/.test(rawValue)) {
+                throw new Error(`请求头 ${name} 的值不能包含换行符。`);
+            }
+            if (rawValue.length > 4096) {
+                throw new Error(`请求头 ${name} 的值过长。`);
+            }
+            setHeader(headers, name, rawValue);
+        });
+        return headers;
+    }
+
+    function validateCustomHeaders(rawHeaders = '') {
+        try {
+            const headers = parseCustomHeaders(rawHeaders);
+            return {
+                success: true,
+                headers,
+                normalized: Object.keys(headers).length ? JSON.stringify(headers, null, 2) : '',
+            };
+        } catch (error) {
+            return { success: false, headers: {}, normalized: '', error: formatError(error, '自定义请求头无效') };
+        }
+    }
+
+    function isOfficialOpenCodeGoUrl(apiUrl = '') {
+        try {
+            const url = new URL(String(apiUrl || '').trim());
+            const path = url.pathname.replace(/\/+$/, '').toLowerCase();
+            return url.protocol === 'https:'
+                && url.hostname.toLowerCase() === 'opencode.ai'
+                && (path === '/zen/go' || path.startsWith('/zen/go/'));
+        } catch (_error) {
+            return false;
+        }
+    }
+
+    function isUnsupportedOpenCodeEndpoint(apiUrl = '') {
+        if (!isOfficialOpenCodeGoUrl(apiUrl)) return false;
+        try {
+            return /\/(?:responses|messages)\/?$/i.test(new URL(apiUrl).pathname);
+        } catch (_error) {
+            return false;
+        }
+    }
+
+    function isSupportedOpenCodeGoBaseUrl(apiUrl = '') {
+        if (!isOfficialOpenCodeGoUrl(apiUrl)) return false;
+        try {
+            const path = new URL(apiUrl).pathname.replace(/\/+$/, '').toLowerCase();
+            return path === '/zen/go/v1' || path === '/zen/go/v1/chat/completions';
+        } catch (_error) {
+            return false;
+        }
+    }
+
+    function createRandomHex(byteLength = 16) {
+        const bytes = new Uint8Array(byteLength);
+        const cryptoApi = window.crypto || globalThis.crypto;
+        if (typeof cryptoApi?.getRandomValues === 'function') {
+            cryptoApi.getRandomValues(bytes);
+        } else {
+            for (let index = 0; index < bytes.length; index += 1) {
+                bytes[index] = Math.floor(Math.random() * 256);
+            }
+        }
+        return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+    }
+
+    function getOpenCodeSessionSalt() {
+        if (cachedOpenCodeSessionSalt) return cachedOpenCodeSessionSalt;
+        try {
+            const stored = String(localStorage.getItem(OPENCODE_SESSION_SALT_STORAGE_KEY) || '').trim();
+            if (/^[a-f0-9]{32,128}$/i.test(stored)) {
+                cachedOpenCodeSessionSalt = stored.toLowerCase();
+                return cachedOpenCodeSessionSalt;
+            }
+        } catch (_error) {}
+
+        cachedOpenCodeSessionSalt = createRandomHex(24);
+        try {
+            localStorage.setItem(OPENCODE_SESSION_SALT_STORAGE_KEY, cachedOpenCodeSessionSalt);
+        } catch (_error) {}
+        return cachedOpenCodeSessionSalt;
+    }
+
+    function hashOpaqueSession(value = '') {
+        const source = String(value || '');
+        let h1 = 1779033703;
+        let h2 = 3144134277;
+        let h3 = 1013904242;
+        let h4 = 2773480762;
+        for (let index = 0; index < source.length; index += 1) {
+            const code = source.charCodeAt(index);
+            h1 = Math.imul(h1 ^ code, 597399067);
+            h2 = Math.imul(h2 ^ code, 2869860233);
+            h3 = Math.imul(h3 ^ code, 951274213);
+            h4 = Math.imul(h4 ^ code, 2716044179);
+        }
+        h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+        h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+        h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+        h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+        h1 ^= h2 ^ h3 ^ h4;
+        h2 ^= h1;
+        h3 ^= h1;
+        h4 ^= h1;
+        const hex = [h1, h2, h3, h4]
+            .map((part) => (part >>> 0).toString(16).padStart(8, '0'))
+            .join('');
+        return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    }
+
+    function getOpenCodeSessionId() {
+        const sessionIdentity = String(YuzukiMemory.Storage?.getCurrentSessionId?.() || 'no-active-chat').trim() || 'no-active-chat';
+        return hashOpaqueSession(`${getOpenCodeSessionSalt()}\u0000${sessionIdentity}`);
+    }
+
+    function resolveUpstreamHeaders(config = {}, options = {}) {
+        const headers = { 'Content-Type': 'application/json' };
+        const authHeader = createAuthHeader(config.apiKey);
+        if (options.includeAuth !== false && authHeader && !shouldUseGeminiNative(config)) {
+            setHeader(headers, 'Authorization', authHeader);
+        }
+        Object.entries(config.customHeaders || {}).forEach(([name, value]) => setHeader(headers, name, value));
+        if (isOfficialOpenCodeGoUrl(config.apiUrl || config.reverseProxy) && !findHeaderKey(headers, 'x-opencode-session')) {
+            setHeader(headers, 'x-opencode-session', getOpenCodeSessionId());
+        }
+        return headers;
+    }
+
+    function stripChatCompletionsPath(apiUrl = '') {
+        return String(apiUrl || '').trim().replace(/\/chat\/completions\/?$/i, '').replace(/\/+$/, '');
+    }
+
+    function hasHeaderText(rawHeaders = '', headerName = '') {
+        const source = String(rawHeaders || '').trim();
+        if (!source) return false;
+        const parsed = validateCustomHeaders(source);
+        if (parsed.success) return !!findHeaderKey(parsed.headers, headerName);
+        const escapedName = String(headerName || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(?:^|[\\r\\n{,])\\s*["']?${escapedName}["']?\\s*:`, 'i').test(source);
+    }
+
+    function resolveTavernCustomHeaderText(config = {}) {
+        const source = String(config.customIncludeHeaders || '').trim();
+        if (!isOfficialOpenCodeGoUrl(config.reverseProxy)) return source;
+        if (hasHeaderText(source, 'x-opencode-session')) return source;
+        const sessionHeader = `x-opencode-session: ${getOpenCodeSessionId()}`;
+        return source ? `${source}\n${sessionHeader}` : sessionHeader;
     }
 
     function isGeminiProvider(configOrProvider) {
@@ -281,6 +504,7 @@
 
     function normalizeCustomConfig(rawConfig = {}) {
         const provider = String(rawConfig.provider || '').trim();
+        const customHeadersResult = validateCustomHeaders(rawConfig.customHeaders ?? rawConfig.headers ?? '');
         return {
             provider,
             apiUrl: processApiUrl(rawConfig.baseUrl || rawConfig.apiUrl || '', provider),
@@ -289,6 +513,8 @@
             maxTokens: intFromCandidates([rawConfig.maxTokens, rawConfig.max_tokens], getProviderDefaultMaxTokens(provider)),
             temperature: numberFromCandidates([rawConfig.temperature], 1),
             stream: rawConfig.stream !== false,
+            customHeaders: customHeadersResult.headers,
+            customHeadersError: customHeadersResult.success ? '' : customHeadersResult.error,
         };
     }
 
@@ -308,7 +534,6 @@
         const provider = config.provider;
         const model = config.model;
         const apiUrl = config.apiUrl;
-        const authHeader = createAuthHeader(config.apiKey);
         const stream = options.stream ?? config.stream;
 
         if (shouldUseGeminiNative(config)) {
@@ -331,8 +556,12 @@
         let source = 'openai';
         if (provider === 'claude') source = 'claude';
         if (provider === 'proxy_only' || provider === 'local') source = 'custom';
+        const supportsCustomOpenAiProxy = provider !== 'claude' && !shouldUseGeminiNative(config);
+        if (supportsCustomOpenAiProxy && (isOfficialOpenCodeGoUrl(apiUrl) || Object.keys(config.customHeaders || {}).length)) {
+            source = 'custom';
+        }
 
-        let reverseProxy = apiUrl;
+        let reverseProxy = source === 'custom' ? stripChatCompletionsPath(apiUrl) : apiUrl;
         if (source === 'openai' && reverseProxy.endsWith('/chat/completions')) {
             reverseProxy = reverseProxy.replace(/\/chat\/completions\/?$/, '');
         }
@@ -340,7 +569,7 @@
         const payload = {
             chat_completion_source: source,
             reverse_proxy: reverseProxy,
-            custom_url: apiUrl,
+            custom_url: source === 'custom' ? reverseProxy : apiUrl,
             proxy_password: config.apiKey,
             model,
             messages,
@@ -352,11 +581,7 @@
         };
 
         if (source === 'custom') {
-            const customHeaders = {
-                'Content-Type': 'application/json',
-            };
-            if (authHeader) customHeaders.Authorization = authHeader;
-            payload.custom_include_headers = JSON.stringify(customHeaders);
+            payload.custom_include_headers = JSON.stringify(resolveUpstreamHeaders(config));
         }
 
         if (model.toLowerCase().includes('gemini')) {
@@ -374,11 +599,13 @@
         let model = '';
         let reverseProxy = '';
         let apiKey = '';
+        let customIncludeHeaders = '';
 
         if (source === 'custom') {
             model = oai.custom_model || document.getElementById('custom_model')?.value || '';
             reverseProxy = oai.custom_url || document.getElementById('custom_url')?.value || '';
             apiKey = oai.custom_key || '';
+            customIncludeHeaders = oai.custom_include_headers || document.getElementById('custom_include_headers')?.value || '';
         } else if (source === 'openrouter') {
             model = oai.openrouter_model || document.getElementById('model_openrouter')?.value || '';
             reverseProxy = 'https://openrouter.ai/api/v1';
@@ -421,7 +648,7 @@
             oai.top_p_openai,
         ]);
 
-        return { source, model, reverseProxy, apiKey, maxTokens, temperature, frequencyPenalty, presencePenalty, topP };
+        return { source, model, reverseProxy, apiKey, customIncludeHeaders, maxTokens, temperature, frequencyPenalty, presencePenalty, topP };
     }
 
     function normalizeMessages(messages) {
@@ -830,6 +1057,10 @@
                 payload.custom_url = config.reverseProxy;
             }
             if (config.apiKey) payload.proxy_password = config.apiKey;
+            if (config.source === 'custom') {
+                const customIncludeHeaders = resolveTavernCustomHeaderText(config);
+                if (customIncludeHeaders) payload.custom_include_headers = customIncludeHeaders;
+            }
 
             const send = async (forceRefresh = false) => fetch('/api/backends/chat-completions/generate', {
                 method: 'POST',
@@ -971,9 +1202,7 @@
         const requestedStream = options.stream ?? config.stream;
         const stream = options.forceNonStream === true ? false : requestedStream;
         const directUrl = resolveDirectUrl(config);
-        const headers = { 'Content-Type': 'application/json' };
-        const authHeader = createAuthHeader(config.apiKey);
-        if (authHeader && !shouldUseGeminiNative(config)) headers.Authorization = authHeader;
+        const headers = resolveUpstreamHeaders(config);
 
         const response = await fetch(directUrl, {
             method: 'POST',
@@ -1089,6 +1318,16 @@
         if (!PROVIDERS[config.provider]) return { success: false, error: '请选择 API 服务商。' };
         if (!config.apiUrl) return { success: false, error: '请填写 Base URL。' };
         if (!config.model) return { success: false, error: '请填写模型名称。' };
+        if (config.customHeadersError) return { success: false, error: config.customHeadersError };
+        if (config.provider === OPENCODE_GO_PROVIDER && !isOfficialOpenCodeGoUrl(config.apiUrl)) {
+            return { success: false, error: `OpenCode Go 类型仅支持官方地址 ${OPENCODE_GO_BASE_URL}。反向代理请改用“兼容中转/代理”并手动配置请求头。` };
+        }
+        if (isUnsupportedOpenCodeEndpoint(config.apiUrl)) {
+            return { success: false, error: `当前记忆插件仅支持 OpenCode Go 的 /chat/completions 协议。Base URL 请填写 ${OPENCODE_GO_BASE_URL}。` };
+        }
+        if (config.provider === OPENCODE_GO_PROVIDER && !isSupportedOpenCodeGoBaseUrl(config.apiUrl)) {
+            return { success: false, error: `OpenCode Go Base URL 请填写 ${OPENCODE_GO_BASE_URL}。` };
+        }
 
         const cleanMessages = normalizeMessages(messages);
         if (!cleanMessages.length) return { success: false, error: '消息数组为空' };
@@ -1108,7 +1347,9 @@
             if (result?.success) return { ...result, config };
             proxyError = result?.error || '后端代理请求失败';
         }
-        if (config.provider === 'proxy_only' || config.provider === 'compatible') {
+        if ((config.provider === 'proxy_only' || config.provider === 'compatible')
+            && !isOfficialOpenCodeGoUrl(config.apiUrl)
+            && !Object.keys(config.customHeaders || {}).length) {
             const retryUrl = config.apiUrl.includes('/v1') || config.apiUrl.includes('/chat')
                 ? config.apiUrl
                 : `${config.apiUrl.replace(/\/+$/, '')}/v1`;
@@ -1128,7 +1369,7 @@
             proxyError = `${proxyError}\n\n[降级 OpenAI 协议]\n${retryResult.error || '请求失败'}`;
         }
 
-        if (['compatible', 'openai', 'deepseek', 'siliconflow', 'gemini'].includes(config.provider)) {
+        if ([OPENCODE_GO_PROVIDER, 'compatible', 'openai', 'deepseek', 'siliconflow', 'gemini'].includes(config.provider)) {
             try {
                 const directResult = await postDirectGenerate(config, cleanMessages, options);
                 if (directResult?.success) return { ...directResult, config, fallback: 'direct' };
@@ -1210,26 +1451,38 @@
         const config = normalizeCustomConfig(rawConfig);
         if (!PROVIDERS[config.provider]) return { success: false, error: '请选择 API 服务商。' };
         if (!config.apiUrl) return { success: false, error: '请填写 Base URL。' };
+        if (config.customHeadersError) return { success: false, error: config.customHeadersError };
+        if (config.provider === OPENCODE_GO_PROVIDER && !isOfficialOpenCodeGoUrl(config.apiUrl)) {
+            return { success: false, error: `OpenCode Go 类型仅支持官方地址 ${OPENCODE_GO_BASE_URL}。反向代理请改用“兼容中转/代理”并手动配置请求头。` };
+        }
+        if (isUnsupportedOpenCodeEndpoint(config.apiUrl)) {
+            return { success: false, error: `当前记忆插件仅支持 OpenCode Go 的 /chat/completions 协议。Base URL 请填写 ${OPENCODE_GO_BASE_URL}。` };
+        }
+        if (config.provider === OPENCODE_GO_PROVIDER && !isSupportedOpenCodeGoBaseUrl(config.apiUrl)) {
+            return { success: false, error: `OpenCode Go Base URL 请填写 ${OPENCODE_GO_BASE_URL}。` };
+        }
 
         const provider = config.provider;
-        const authHeader = createAuthHeader(config.apiKey);
         const apiUrl = processApiUrl(config.apiUrl, provider, true);
         let source = 'custom';
         if (['openai', 'deepseek', 'siliconflow'].includes(provider)) source = 'openai';
         if (provider === 'claude') source = 'claude';
         if (isGeminiProvider(provider)) source = 'makersuite';
+        const supportsCustomOpenAiProxy = provider !== 'claude' && !shouldUseGeminiNative(config);
+        if (supportsCustomOpenAiProxy && (isOfficialOpenCodeGoUrl(apiUrl) || Object.keys(config.customHeaders || {}).length)) {
+            source = 'custom';
+        }
 
         const createStatusPayload = (nextSource, nextUrl) => {
+            const resolvedUrl = nextSource === 'custom' ? stripChatCompletionsPath(nextUrl) : nextUrl;
             const payload = {
                 chat_completion_source: nextSource,
-                reverse_proxy: nextUrl,
-                custom_url: nextUrl,
+                reverse_proxy: resolvedUrl,
+                custom_url: resolvedUrl,
                 proxy_password: config.apiKey,
             };
             if (nextSource === 'custom') {
-                const customHeaders = { 'Content-Type': 'application/json' };
-                if (authHeader) customHeaders.Authorization = authHeader;
-                payload.custom_include_headers = JSON.stringify(customHeaders);
+                payload.custom_include_headers = JSON.stringify(resolveUpstreamHeaders({ ...config, apiUrl: resolvedUrl }));
             }
             return payload;
         };
@@ -1259,7 +1512,10 @@
         let backendResult = await requestStatusModels(createStatusPayload(source, apiUrl));
         if (backendResult.success) return { success: true, models: backendResult.models };
 
-        if ((provider === 'proxy_only' || provider === 'compatible') && source === 'custom') {
+        if ((provider === 'proxy_only' || provider === 'compatible')
+            && source === 'custom'
+            && !isOfficialOpenCodeGoUrl(apiUrl)
+            && !Object.keys(config.customHeaders || {}).length) {
             const retryUrl = apiUrl.includes('/v1') || apiUrl.includes('/models')
                 ? apiUrl
                 : `${apiUrl.replace(/\/+$/, '')}/v1`;
@@ -1272,12 +1528,12 @@
             };
         }
 
-        const shouldTryDirect = ['proxy_only', 'compatible', 'local', 'openai', 'gemini', 'claude', 'deepseek', 'siliconflow'].includes(provider);
+        const shouldTryDirect = [OPENCODE_GO_PROVIDER, 'proxy_only', 'compatible', 'local', 'openai', 'gemini', 'claude', 'deepseek', 'siliconflow'].includes(provider);
         if (!shouldTryDirect) return { success: false, error: backendResult.error || '未解析到模型列表。' };
 
         try {
             let directUrl = apiUrl;
-            const headers = { 'Content-Type': 'application/json' };
+            const headers = resolveUpstreamHeaders(config);
             if (isGeminiProvider(provider)) {
                 const geminiBase = apiUrl.replace(/\/models\/?.*$/i, '').replace(/\/+$/, '');
                 directUrl = `${geminiBase}/models`;
@@ -1285,8 +1541,7 @@
                     directUrl += `${directUrl.includes('?') ? '&' : '?'}key=${encodeURIComponent(config.apiKey)}`;
                 }
             } else {
-                directUrl = `${apiUrl.replace(/\/+$/, '')}/models`;
-                if (authHeader) headers.Authorization = authHeader;
+                directUrl = /\/models\/?$/i.test(apiUrl) ? apiUrl : `${apiUrl.replace(/\/+$/, '')}/models`;
             }
             const directResponse = await fetch(directUrl, { method: 'GET', headers });
             const directText = await directResponse.text().catch(() => '');
@@ -1333,9 +1588,12 @@
 
     YuzukiMemory.LlmClient = Object.assign(YuzukiMemory.LlmClient || {}, {
         providers: PROVIDERS,
+        openCodeGoBaseUrl: OPENCODE_GO_BASE_URL,
         getProviderMeta,
         getProviderOptions,
         getProviderDefaultMaxTokens,
+        validateCustomHeaders,
+        isOfficialOpenCodeGoUrl,
         supportsAssistantPrefill,
         getTavernStatus,
         generateWithTavern,
