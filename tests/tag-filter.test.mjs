@@ -61,6 +61,7 @@ test('closing-only blacklist keeps an earlier whitelisted block available for ex
 
 test('trace uses the global historian selection and injects populated non-summary tables', async () => {
     const capturedRequests = [];
+    const appliedTraceOptions = [];
     let traceResponseText = '{"records":[{"table":"角色档案","values":{"角色名":"测试角色","当前位置":"新地点"}}]}';
     let activeHistorianPromptId = 'historian-prompt';
     const taskSandbox = {
@@ -126,9 +127,10 @@ test('trace uses the global historian selection and injects populated non-summar
                         ? [{ table: '角色档案', primaryValue: '测试角色', values: { 当前位置: '确认后的地点' } }]
                         : [],
                     parseMemoryText: () => [],
-                    applyRowsToState(targetState, rows) {
+                    applyRowsToState(targetState, rows, options = {}) {
                         const updates = Array.isArray(rows) ? rows : [];
                         if (!updates.length) return 0;
+                        appliedTraceOptions.push(options);
                         targetState.records.character_profile[0].values.当前位置 = updates[0].values.当前位置;
                         return updates.length;
                     },
@@ -252,4 +254,21 @@ test('trace uses the global historian selection and injects populated non-summar
     assert.match(rebuiltResult.text, /<\/Memory>$/);
     assert.equal(committedResult.success, true);
     assert.equal(state.records.character_profile[0].values.当前位置, '确认后的地点');
+    assert.equal(appliedTraceOptions.at(-1).mergeAliasDuplicates, false);
+
+    const optimizeResult = taskSandbox.window.YuzukiMemory.TaskRunner.commitTraceResult(state, {
+        success: true,
+        kind: 'trace',
+        parsed: {
+            memoryRows: [{ table: '角色档案', primaryValue: '测试角色', values: { 当前位置: '优化地点' } }],
+        },
+        meta: {
+            autoTaskType: 'traceOptimize',
+            tableId: 'character_profile',
+        },
+    });
+
+    assert.equal(optimizeResult.success, true);
+    assert.equal(appliedTraceOptions.at(-1).mergeAliasDuplicates, true);
+    assert.equal(appliedTraceOptions.at(-1).source, 'traceOptimize');
 });

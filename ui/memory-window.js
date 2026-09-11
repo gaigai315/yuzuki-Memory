@@ -917,9 +917,21 @@
         return String(record?.values?.[name] ?? record?.values?.[field] ?? '');
     }
 
+    function isAliasAwareTable(table) {
+        return YuzukiMemory.CharacterNameMatcher?.isAliasAwareTable?.(table)
+            ?? ['character_profile', 'item_tracking', 'world_setting'].includes(table?.id);
+    }
+
+    function getAliasPrimaryPlaceholder(table) {
+        if (table?.id === 'character_profile') return '主姓名|别名1|别名2';
+        if (table?.id === 'item_tracking') return '主名称|别名1|别名2';
+        if (table?.id === 'world_setting') return '主设定名|别名1|别名2';
+        return '';
+    }
+
     function getRecordTitle(table, record) {
         const title = getRecordValue(record, getPrimaryColumn(table));
-        if (['character_profile', 'character_status'].includes(table?.id) && YuzukiMemory.CharacterNameMatcher?.getDisplayName) {
+        if ((isAliasAwareTable(table) || table?.id === 'character_status') && YuzukiMemory.CharacterNameMatcher?.getDisplayName) {
             return YuzukiMemory.CharacterNameMatcher.getDisplayName(title) || '未命名';
         }
         return title || '未命名';
@@ -5967,22 +5979,22 @@
         return target;
     }
 
-    function mergeCharacterProfileIntoExisting(table, record) {
-        if (!table || table.id !== 'character_profile' || !record) return null;
+    function mergeAliasAwareRecordIntoExisting(table, record) {
+        if (!isAliasAwareTable(table) || !record) return null;
         const primary = getPrimaryColumn(table);
-        const characterName = String(record.values?.[primary] || '').trim();
-        if (!characterName) return null;
+        const entityName = String(record.values?.[primary] || '').trim();
+        if (!entityName) return null;
         const records = getRecords(table.id);
         const candidates = records.filter((entry) => entry && entry !== record);
         const target = YuzukiMemory.CharacterNameMatcher?.findMatchingRecord
-            ? YuzukiMemory.CharacterNameMatcher.findMatchingRecord(candidates, primary, characterName)
-            : candidates.find((entry) => String(entry?.values?.[primary] || '').trim() === characterName);
+            ? YuzukiMemory.CharacterNameMatcher.findMatchingRecord(candidates, primary, entityName)
+            : candidates.find((entry) => String(entry?.values?.[primary] || '').trim() === entityName);
         if (!target) return null;
 
         target.values = target.values && typeof target.values === 'object' ? target.values : {};
         target.values[primary] = YuzukiMemory.CharacterNameMatcher?.mergeNames
-            ? YuzukiMemory.CharacterNameMatcher.mergeNames(target.values[primary], characterName)
-            : characterName;
+            ? YuzukiMemory.CharacterNameMatcher.mergeNames(target.values[primary], entityName)
+            : entityName;
         (table.columns || []).forEach((column) => {
             const name = cleanColumnName(column);
             if (name === primary) return;
@@ -7457,6 +7469,10 @@
                 count: Number(result?.count) || 0,
             },
         }));
+        if (action === 'traceOptimize') {
+            (Array.isArray(result?.mergedTableIds) ? result.mergedTableIds : [])
+                .forEach((tableId) => scheduleManagedVectorTableSync(tableId, { force: true, delay: 0 }));
+        }
     }
 
     function refreshAfterTask(root, options = {}) {
@@ -13477,8 +13493,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】破限方案改为全局共享，并支持新增独立的破限方案。',
-            '【新增】角色图谱支持长按或双击悬浮图标进入。',
+            '【API兼容】已支持适配 OpenCode Go。API 服务商选择“OpenCode Go”并填写 Key，自定义请求头保持留空；依次完成“拉取模型列表”和“测试连接”后即可使用。',
+            '【优化】填表优化支持合并重复的角色档案、物品追踪和世界设定；确认优化结果后，会删除被合并的旧数据并写入新的合并记录。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -15268,8 +15284,8 @@
             const primary = getPrimaryColumn(table);
             table.columns.forEach((column) => {
                 const name = cleanColumnName(column);
-                const options = table.id === 'character_profile' && name === primary
-                    ? { placeholder: '主姓名|别名1|别名2' }
+                const options = isAliasAwareTable(table) && name === primary
+                    ? { placeholder: getAliasPrimaryPlaceholder(table) }
                     : {};
                 fields.appendChild(createRecordInput(name, getRecordValue(record, name), isRecordEditorMultilineField(table, name), options));
             });
@@ -15365,7 +15381,7 @@
             }
 
             const primary = getPrimaryColumn(table);
-            if (table.id === 'character_profile' && YuzukiMemory.CharacterNameMatcher?.formatNames) {
+            if (isAliasAwareTable(table) && YuzukiMemory.CharacterNameMatcher?.formatNames) {
                 values[primary] = YuzukiMemory.CharacterNameMatcher.formatNames(values[primary]);
             }
             if (table.id !== 'plot_summary' && !values[primary]) {
@@ -15385,7 +15401,7 @@
             if (isNewRecord) records.push(record);
             const mergedRecord = isBranchSummaryRecord
                 ? mergeBranchSummaryIntoExisting(table, record)
-                : mergeCharacterProfileIntoExisting(table, record);
+                : mergeAliasAwareRecordIntoExisting(table, record);
             if (mergedRecord) record = mergedRecord;
             setActiveRecordId(table.id, record.id);
             if (!persistStateOrReload(root, '当前会话尚未就绪，记录修改未保存。', {

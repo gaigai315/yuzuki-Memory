@@ -628,9 +628,8 @@
             const primary = columns[0];
             const fields = columns.map((column, index) => {
                 if (index !== 0) return column;
-                return table.id === CHARACTER_PROFILE_TABLE_ID
-                    ? `${column}(主键；值含“|”时各姓名均指同一角色，第一段为主姓名)`
-                    : `${column}(主键)`;
+                const primaryKeyDescription = YuzukiMemory.CharacterNameMatcher?.getPrimaryKeyDescription?.(table);
+                return primaryKeyDescription ? `${column}(${primaryKeyDescription})` : `${column}(主键)`;
             }).join(', ');
             return `#${table.name}：包含 ${fields}`;
         }).filter(Boolean);

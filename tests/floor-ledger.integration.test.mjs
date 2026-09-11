@@ -103,6 +103,8 @@ window.YuzukiMemory.Storage = {
     },
 };
 
+const matcherSource = fs.readFileSync(new URL('../config/character-name-matcher.js', import.meta.url), 'utf8');
+vm.runInThisContext(matcherSource, { filename: 'character-name-matcher.js' });
 const parserSource = fs.readFileSync(new URL('../config/memory-tag-parser.js', import.meta.url), 'utf8');
 vm.runInThisContext(parserSource, { filename: 'memory-tag-parser.js' });
 const ledgerSource = fs.readFileSync(new URL('../config/floor-ledger.js', import.meta.url), 'utf8');
@@ -140,6 +142,207 @@ function assistantMemoryMessage(text) {
         mes: `<Memory><!--\n${text}\n--></Memory>`,
     };
 }
+
+function seedRecord(state, tableId, values) {
+    const table = state.tables.find((entry) => entry.id === tableId);
+    assert.ok(table, `missing table ${tableId}`);
+    state.records[tableId] = Array.isArray(state.records[tableId]) ? state.records[tableId] : [];
+    const record = {
+        id: `${tableId}_seed_${state.records[tableId].length + 1}`,
+        hidden: false,
+        values: Object.fromEntries(table.columns.map((column) => [
+            window.YuzukiMemory.MemoryTagParser.cleanColumnName(column),
+            '',
+        ])),
+    };
+    Object.assign(record.values, values);
+    state.records[tableId].push(record);
+    return record;
+}
+
+test('alias matcher normalizes full-width separators for newly stored primary keys', () => {
+    const matcher = window.YuzukiMemory.CharacterNameMatcher;
+    const aliasMatch = { values: { 设定名: '苍穹议会|天空议会' } };
+    const primaryMatch = { values: { 设定名: '天空议会|天穹议会' } };
+
+    assert.equal(matcher.formatNames('苍穹议会｜天空议会｜苍穹议会'), '苍穹议会|天空议会');
+    assert.equal(matcher.getDisplayName('誓约之剑|银色长剑'), '誓约之剑');
+    assert.equal(
+        matcher.findMatchingRecord([aliasMatch, primaryMatch], '设定名', '天空议会'),
+        primaryMatch,
+    );
+});
+
+test('character profile aliases update one record and preserve the composite primary key', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const state = parser.createDefaultState();
+    const record = seedRecord(state, 'character_profile', {
+        角色名: '阿德里安·克罗夫特｜阿德里安',
+        身份: '商人',
+    });
+    const rows = parser.extractMemoryRows('<Memory><!--\n#角色档案\n[阿德里安] | 身份: 骑士\n--></Memory>');
+
+    assert.equal(parser.applyRowsToState(state, rows), 1);
+    assert.equal(state.records.character_profile.length, 1);
+    assert.equal(record.values.角色名, '阿德里安·克罗夫特｜阿德里安');
+    assert.equal(record.values.身份, '骑士');
+});
+
+test('item aliases update one record and preserve the composite primary key', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const state = parser.createDefaultState();
+    const record = seedRecord(state, 'item_tracking', {
+        物品名称: '誓约之剑|银色长剑',
+        状态: '完好',
+    });
+    const rows = parser.extractMemoryRows('<Memory><!--\n#物品追踪\n[银色长剑] | 状态: 损坏\n--></Memory>');
+
+    assert.equal(parser.applyRowsToState(state, rows), 1);
+    assert.equal(state.records.item_tracking.length, 1);
+    assert.equal(record.values.物品名称, '誓约之剑|银色长剑');
+    assert.equal(record.values.状态, '损坏');
+});
+
+test('world setting aliases update one record and preserve the composite primary key', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const state = parser.createDefaultState();
+    const record = seedRecord(state, 'world_setting', {
+        设定名: '苍穹议会|天空议会',
+        详细说明: '旧说明',
+    });
+    const rows = parser.extractMemoryRows('<Memory><!--\n#世界设定\n[天空议会] | 详细说明: 新说明\n--></Memory>');
+
+    assert.equal(parser.applyRowsToState(state, rows), 1);
+    assert.equal(state.records.world_setting.length, 1);
+    assert.equal(record.values.设定名, '苍穹议会|天空议会');
+    assert.equal(record.values.详细说明, '新说明');
+});
+
+test('trace optimization replaces duplicate items with one new merged record', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const state = parser.createDefaultState();
+    const first = seedRecord(state, 'item_tracking', {
+        物品名称: '黑色真皮素描本',
+        物品描述: '黑色真皮封面，边角有磨损',
+        持有者: 'yuzuki',
+        状态: '损坏',
+    });
+    const second = seedRecord(state, 'item_tracking', {
+        物品名称: '黑色皮质速写本',
+        物品位置: '书桌抽屉内',
+        状态: '完好',
+        备注: '内页记录了关键线索',
+    });
+    state.activeRecordIds.item_tracking = second.id;
+    const mergeStats = {};
+    const rows = parser.extractMemoryRows(`<Memory><!--
+#物品追踪
+[黑色素描本|黑色真皮素描本|黑色皮质速写本] | 物品描述: 黑色皮质封面的随身素描本，内页记录了关键线索 | 状态: 完好
+--></Memory>`);
+
+    assert.equal(parser.applyRowsToState(state, rows, { mergeAliasDuplicates: true, mergeStats }), 1);
+    assert.equal(state.records.item_tracking.length, 1);
+    const merged = state.records.item_tracking[0];
+    assert.notEqual(merged.id, first.id);
+    assert.notEqual(merged.id, second.id);
+    assert.equal(merged.values.物品名称, '黑色素描本|黑色真皮素描本|黑色皮质速写本');
+    assert.equal(merged.values.物品描述, '黑色皮质封面的随身素描本，内页记录了关键线索');
+    assert.equal(merged.values.物品位置, '书桌抽屉内');
+    assert.equal(merged.values.持有者, 'yuzuki');
+    assert.equal(merged.values.状态, '完好');
+    assert.equal(merged.values.备注, '内页记录了关键线索');
+    assert.equal(state.activeRecordIds.item_tracking, merged.id);
+    assert.deepEqual(mergeStats, {
+        mergedGroupCount: 1,
+        removedRecordCount: 2,
+        createdRecordCount: 1,
+        tableIds: ['item_tracking'],
+        createdRecordIds: [merged.id],
+    });
+});
+
+test('ordinary table writes never delete duplicate alias matches', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const state = parser.createDefaultState();
+    const first = seedRecord(state, 'item_tracking', { 物品名称: '旧名称A', 状态: '损坏' });
+    const second = seedRecord(state, 'item_tracking', { 物品名称: '旧名称B', 状态: '完好' });
+    const rows = parser.extractMemoryRows(`<Memory><!--
+#物品追踪
+[规范名称|旧名称A|旧名称B] | 状态: 丢失
+--></Memory>`);
+
+    assert.equal(parser.applyRowsToState(state, rows), 1);
+    assert.equal(state.records.item_tracking.length, 2);
+    assert.equal(state.records.item_tracking[0], first);
+    assert.equal(state.records.item_tracking[1], second);
+    assert.equal(first.values.物品名称, '旧名称A');
+    assert.equal(first.values.状态, '丢失');
+    assert.equal(second.values.物品名称, '旧名称B');
+    assert.equal(second.values.状态, '完好');
+});
+
+test('trace optimization merges duplicate character and world-setting records', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const cases = [
+        {
+            tableId: 'character_profile',
+            primary: '角色名',
+            oldNames: ['阿德里安', '克罗夫特先生'],
+            mergedName: '阿德里安·克罗夫特|阿德里安|克罗夫特先生',
+            updates: { 身份: '王城骑士', 当前位置: '王城·议事厅' },
+        },
+        {
+            tableId: 'world_setting',
+            primary: '设定名',
+            oldNames: ['天空议会', '天穹议会'],
+            mergedName: '苍穹议会|天空议会|天穹议会',
+            updates: { 类型: '组织', 详细说明: '统辖浮空城邦的议事组织' },
+        },
+    ];
+
+    cases.forEach(({ tableId, primary, oldNames, mergedName, updates }) => {
+        const state = parser.createDefaultState();
+        const oldRecords = oldNames.map((name, index) => seedRecord(state, tableId, {
+            [primary]: name,
+            ...Object.fromEntries(Object.entries(updates).slice(index, index + 1)),
+        }));
+        const table = state.tables.find((entry) => entry.id === tableId);
+        const fields = Object.entries(updates).map(([name, value]) => `${name}: ${value}`).join(' | ');
+        const rows = [{ table: table.name, primaryValue: mergedName, values: updates }];
+
+        assert.equal(parser.applyRowsToState(state, rows, { mergeAliasDuplicates: true }), 1);
+        assert.equal(state.records[tableId].length, 1);
+        const merged = state.records[tableId][0];
+        assert.equal(merged.values[primary], mergedName, fields);
+        oldRecords.forEach((record) => assert.notEqual(merged.id, record.id));
+        Object.entries(updates).forEach(([name, value]) => assert.equal(merged.values[name], value));
+    });
+});
+
+test('trace optimization requires multiple names and multiple matched records before deleting', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const oneMatchState = parser.createDefaultState();
+    const oneMatchRecord = seedRecord(oneMatchState, 'item_tracking', { 物品名称: '旧名称A', 状态: '损坏' });
+    const oneMatchRows = [{
+        table: '物品追踪',
+        primaryValue: '规范名称|旧名称A|不存在的旧名称',
+        values: { 状态: '完好' },
+    }];
+
+    assert.equal(parser.applyRowsToState(oneMatchState, oneMatchRows, { mergeAliasDuplicates: true }), 1);
+    assert.equal(oneMatchState.records.item_tracking.length, 1);
+    assert.equal(oneMatchState.records.item_tracking[0].id, oneMatchRecord.id);
+
+    const oneNameState = parser.createDefaultState();
+    const first = seedRecord(oneNameState, 'item_tracking', { 物品名称: '同名物品', 状态: '损坏' });
+    const second = seedRecord(oneNameState, 'item_tracking', { 物品名称: '同名物品', 状态: '完好' });
+    const oneNameRows = [{ table: '物品追踪', primaryValue: '同名物品', values: { 状态: '丢失' } }];
+
+    assert.equal(parser.applyRowsToState(oneNameState, oneNameRows, { mergeAliasDuplicates: true }), 1);
+    assert.equal(oneNameState.records.item_tracking.length, 2);
+    assert.equal(oneNameState.records.item_tracking[0].id, first.id);
+    assert.equal(oneNameState.records.item_tracking[1].id, second.id);
+});
 
 test('camelCase SillyTavern delete event replays state after its message disappears', () => {
     const parser = window.YuzukiMemory.MemoryTagParser;

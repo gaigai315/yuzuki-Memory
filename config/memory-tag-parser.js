@@ -427,6 +427,69 @@
         return `${currentText}\n${nextText}`;
     }
 
+    function trackAliasMerge(stats, table, sourceRecords, record) {
+        if (!stats || typeof stats !== 'object') return;
+        stats.mergedGroupCount = Math.max(0, Number(stats.mergedGroupCount) || 0) + 1;
+        stats.removedRecordCount = Math.max(0, Number(stats.removedRecordCount) || 0) + sourceRecords.length;
+        stats.createdRecordCount = Math.max(0, Number(stats.createdRecordCount) || 0) + 1;
+        stats.tableIds = Array.isArray(stats.tableIds) ? stats.tableIds : [];
+        if (table?.id && !stats.tableIds.includes(table.id)) stats.tableIds.push(table.id);
+        stats.createdRecordIds = Array.isArray(stats.createdRecordIds) ? stats.createdRecordIds : [];
+        if (record?.id) stats.createdRecordIds.push(record.id);
+    }
+
+    function mergeAliasDuplicateRecords(state, table, incomingPrimaryValue, options = {}) {
+        const matcher = YuzukiMemory.CharacterNameMatcher;
+        if (!state || !table || !matcher?.isAliasAwareTable?.(table) || !matcher?.findMatchingRecords) return null;
+        const incomingNames = matcher.parseNames?.(incomingPrimaryValue) || [];
+        if (incomingNames.length < 2) return null;
+
+        state.records = state.records && typeof state.records === 'object' ? state.records : {};
+        state.records[table.id] = Array.isArray(state.records[table.id]) ? state.records[table.id] : [];
+        const records = state.records[table.id];
+        const primaryName = getPrimaryColumnName(table);
+        const sourceRecords = matcher.findMatchingRecords(records, primaryName, incomingPrimaryValue);
+        if (sourceRecords.length < 2) return null;
+
+        const sourceSet = new Set(sourceRecords);
+        const sourceIndexes = records
+            .map((record, index) => sourceSet.has(record) ? index : -1)
+            .filter((index) => index >= 0);
+        const insertIndex = Math.min(...sourceIndexes);
+        const mergedValues = Object.fromEntries((table.columns || []).map((column) => [cleanColumnName(column), '']));
+        sourceRecords.forEach((sourceRecord) => {
+            (table.columns || []).forEach((column) => {
+                const name = cleanColumnName(column);
+                if (!name || name === primaryName) return;
+                const nextValue = String(sourceRecord?.values?.[name] ?? sourceRecord?.values?.[column] ?? '').trim();
+                if (!nextValue) return;
+                const currentValue = String(mergedValues[name] || '').trim();
+                if (!currentValue) {
+                    mergedValues[name] = nextValue;
+                } else if (isAppendColumn(column) && currentValue !== nextValue) {
+                    mergedValues[name] = appendCellValue(currentValue, nextValue);
+                }
+            });
+        });
+        mergedValues[primaryName] = matcher.formatNames?.(incomingPrimaryValue) || String(incomingPrimaryValue || '').trim();
+
+        const record = createRecord(table, mergedValues);
+        const sourceIds = new Set(sourceRecords.map((sourceRecord) => String(sourceRecord?.id || '')).filter(Boolean));
+        for (let index = records.length - 1; index >= 0; index -= 1) {
+            if (sourceSet.has(records[index])) records.splice(index, 1);
+        }
+        records.splice(Math.min(insertIndex, records.length), 0, record);
+
+        state.activeRecordIds = state.activeRecordIds && typeof state.activeRecordIds === 'object'
+            ? state.activeRecordIds
+            : {};
+        if (sourceIds.has(String(state.activeRecordIds[table.id] || ''))) {
+            state.activeRecordIds[table.id] = record.id;
+        }
+        trackAliasMerge(options.mergeStats, table, sourceRecords, record);
+        return { record, sourceRecords, removedCount: sourceRecords.length };
+    }
+
     function getPlotDateFromTimeText(timeText = '') {
         const normalized = String(timeText || '').trim();
         if (!normalized) return '';
@@ -697,36 +760,47 @@
             .filter(Boolean);
         if (!validUpdates.length) return false;
 
-        const characterNameMatcher = table.id === 'character_profile' ? YuzukiMemory.CharacterNameMatcher : null;
-        let record = characterNameMatcher?.findMatchingRecord
-            ? characterNameMatcher.findMatchingRecord(records, primaryName, primaryValue)
-            : records.find((entry) => String(entry?.values?.[primaryName] || '').trim() === primaryValue);
+        const aliasAware = YuzukiMemory.CharacterNameMatcher?.isAliasAwareTable
+            ? YuzukiMemory.CharacterNameMatcher.isAliasAwareTable(table)
+            : table.id === 'character_profile';
+        const primaryKeyMatcher = aliasAware ? YuzukiMemory.CharacterNameMatcher : null;
+        const mergeResult = primaryKeyMatcher && options.mergeAliasDuplicates === true
+            ? mergeAliasDuplicateRecords(state, table, primaryValue, { mergeStats: options.mergeStats })
+            : null;
+        const mergedForOptimize = !!mergeResult;
+        let record = mergeResult?.record || (primaryKeyMatcher?.findMatchingRecord
+            ? primaryKeyMatcher.findMatchingRecord(records, primaryName, primaryValue)
+            : records.find((entry) => String(entry?.values?.[primaryName] || '').trim() === primaryValue));
         if (!record) {
-            const storedPrimaryValue = characterNameMatcher?.formatNames
-                ? characterNameMatcher.formatNames(primaryValue)
+            const storedPrimaryValue = primaryKeyMatcher?.formatNames
+                ? primaryKeyMatcher.formatNames(primaryValue)
                 : primaryValue;
             record = createRecord(table, { [primaryName]: storedPrimaryValue });
             records.push(record);
         }
         record.values = record.values && typeof record.values === 'object' ? record.values : {};
-        if (!characterNameMatcher) record.values[primaryName] = primaryValue;
+        if (!primaryKeyMatcher) record.values[primaryName] = primaryValue;
 
         validUpdates.forEach(({ column, value }) => {
             const columnName = cleanColumnName(column);
-            if (characterNameMatcher && columnName === primaryName) return;
+            if (primaryKeyMatcher && columnName === primaryName) return;
             const currentValue = String(record.values[columnName] || '').trim();
-            if (isFillOnceColumn(column) && currentValue) return;
+            if (!mergedForOptimize && isFillOnceColumn(column) && currentValue) return;
             const shouldAppend = isAppendColumn(column);
             if (table.id === 'character_profile' && columnName === '待办事项') {
                 const datedTodoValue = YuzukiMemory.TodoManager?.fillMissingTodoDates?.(value, options.storyTime) || value;
                 const todoValue = YuzukiMemory.TodoManager?.dedupeTodoText?.(datedTodoValue) || datedTodoValue;
-                record.values[columnName] = shouldAppend
+                record.values[columnName] = mergedForOptimize
+                    ? todoValue
+                    : shouldAppend
                     ? (YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[columnName], todoValue)
                         || appendCellValue(record.values[columnName], todoValue))
                     : todoValue;
                 return;
             }
-            record.values[columnName] = shouldAppend ? appendCellValue(record.values[columnName], value) : value;
+            record.values[columnName] = mergedForOptimize
+                ? value
+                : (shouldAppend ? appendCellValue(record.values[columnName], value) : value);
         });
         return true;
     }
@@ -1053,6 +1127,7 @@
         processMessage,
         clearPendingMessage,
         applyRowsToState,
+        mergeAliasDuplicateRecords,
         cleanColumnName,
         isAppendColumn,
         isFillOnceColumn,

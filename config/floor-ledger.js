@@ -421,6 +421,19 @@
         const primaryName = getPrimaryColumnName(table);
         const primaryValue = normalizePrimaryValue(sourceRecord?.values?.[primaryName]);
         if (primaryName && primaryValue) {
+            const primaryKeyMatcher = YuzukiMemory.CharacterNameMatcher?.isAliasAwareTable?.(table)
+                ? YuzukiMemory.CharacterNameMatcher
+                : null;
+            if (primaryKeyMatcher?.findMatchingRecord) {
+                const availableRecords = list.filter((_record, index) => !usedIndexes.has(index));
+                const matchedRecord = primaryKeyMatcher.findMatchingRecord(
+                    availableRecords,
+                    primaryName,
+                    sourceRecord?.values?.[primaryName],
+                );
+                const matchedIndex = list.findIndex((record, index) => !usedIndexes.has(index) && record === matchedRecord);
+                if (matchedIndex >= 0) return { record: list[matchedIndex], index: matchedIndex };
+            }
             const primaryIndex = list.findIndex((record, index) => (
                 !usedIndexes.has(index)
                 && normalizePrimaryValue(record?.values?.[primaryName]) === primaryValue

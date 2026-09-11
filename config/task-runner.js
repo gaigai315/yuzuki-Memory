@@ -813,9 +813,8 @@
                     || [];
                 const fields = columns.map((column, index) => {
                     if (index !== 0) return column;
-                    return table.id === 'character_profile'
-                        ? `${column}(主键；值含“|”时各姓名均指同一角色，第一段为主姓名)`
-                        : `${column}(主键)`;
+                    const primaryKeyDescription = YuzukiMemory.CharacterNameMatcher?.getPrimaryKeyDescription?.(table);
+                    return primaryKeyDescription ? `${column}(${primaryKeyDescription})` : `${column}(主键)`;
                 }).join(', ');
                 return `#${table.name}：包含 ${fields}`;
             })
@@ -1679,26 +1678,42 @@
             .some((name) => name !== primary && String(normalizedValues[name] || '').trim());
         if (!hasValidUpdate) return null;
 
-        const characterNameMatcher = table.id === 'character_profile' ? YuzukiMemory.CharacterNameMatcher : null;
-        let record = characterNameMatcher?.findMatchingRecord
-            ? characterNameMatcher.findMatchingRecord(records, primary, normalizedValues[primary])
-            : records.find((entry) => recordTitle(table, entry) === normalizedValues[primary]);
+        const aliasAware = YuzukiMemory.CharacterNameMatcher?.isAliasAwareTable
+            ? YuzukiMemory.CharacterNameMatcher.isAliasAwareTable(table)
+            : table.id === 'character_profile';
+        const primaryKeyMatcher = aliasAware ? YuzukiMemory.CharacterNameMatcher : null;
+        const mergeResult = primaryKeyMatcher && options.mergeAliasDuplicates === true
+            ? YuzukiMemory.MemoryTagParser?.mergeAliasDuplicateRecords?.(
+                state,
+                table,
+                normalizedValues[primary],
+                { mergeStats: options.mergeStats },
+            )
+            : null;
+        const mergedForOptimize = !!mergeResult;
+        let record = mergeResult?.record || (primaryKeyMatcher?.findMatchingRecord
+            ? primaryKeyMatcher.findMatchingRecord(records, primary, normalizedValues[primary])
+            : records.find((entry) => recordTitle(table, entry) === normalizedValues[primary]));
         if (!record) {
-            if (characterNameMatcher?.formatNames) {
-                normalizedValues[primary] = characterNameMatcher.formatNames(normalizedValues[primary]);
+            if (primaryKeyMatcher?.formatNames) {
+                normalizedValues[primary] = primaryKeyMatcher.formatNames(normalizedValues[primary]);
             }
             record = createRecord(table, normalizedValues);
             records.push(record);
         } else {
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
-            if (!characterNameMatcher) record.values[primary] = normalizedValues[primary];
+            if (!primaryKeyMatcher) record.values[primary] = normalizedValues[primary];
             (table.columns || []).forEach((column) => {
                 const name = cleanColumnName(column);
                 if (name === primary) return;
                 const nextValue = String(normalizedValues[name] || '').trim();
                 if (!nextValue) return;
                 const currentValue = String(record.values[name] || '').trim();
-                if (isFillOnceColumn(column) && currentValue) return;
+                if (!mergedForOptimize && isFillOnceColumn(column) && currentValue) return;
+                if (mergedForOptimize) {
+                    record.values[name] = nextValue;
+                    return;
+                }
                 if (isAppendColumn(column) && table.id === 'character_profile' && name === '待办事项') {
                     record.values[name] = YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[name], nextValue)
                         || [String(record.values[name] || '').trim(), nextValue].filter(Boolean).join('；');
@@ -2620,6 +2635,8 @@
                 range: options.range,
                 floorScope: options.floorScope || getCurrentFloorScope(state),
                 storyTime,
+                mergeAliasDuplicates: options.mergeAliasDuplicates === true,
+                mergeStats: options.mergeStats,
             });
         }
         const rows = normalizeTaskRows(resultRows)
@@ -2645,17 +2662,31 @@
                 count += 1;
                 return;
             }
-            if (upsertRecord(state, table, row.values, { storyTime })) count += 1;
+            if (upsertRecord(state, table, row.values, {
+                storyTime,
+                mergeAliasDuplicates: options.mergeAliasDuplicates === true,
+                mergeStats: options.mergeStats,
+            })) count += 1;
         });
         return count;
     }
 
     function commitTraceResult(state, result) {
+        const source = result?.meta?.autoTaskType || 'trace';
+        const mergeStats = {
+            mergedGroupCount: 0,
+            removedRecordCount: 0,
+            createdRecordCount: 0,
+            tableIds: [],
+            createdRecordIds: [],
+        };
         const count = applyTraceResult(state, result?.parsed, {
-            source: result?.meta?.autoTaskType || 'trace',
+            source,
             range: result?.range,
             floorScope: result?.meta?.floorScope || getCurrentFloorScope(state),
             tableId: result?.meta?.tableId || result?.tableId || '',
+            mergeAliasDuplicates: source === 'traceOptimize',
+            mergeStats,
         });
         if (!count) {
             return {
@@ -2666,7 +2697,17 @@
             };
         }
         const hiddenPlotSummaryCount = hidePlotSummaryItemsCoveredByExistingSummaries(state);
-        return { ...result, success: true, count, hiddenPlotSummaryCount };
+        return {
+            ...result,
+            success: true,
+            count,
+            hiddenPlotSummaryCount,
+            mergedGroupCount: mergeStats.mergedGroupCount,
+            removedRecordCount: mergeStats.removedRecordCount,
+            createdRecordCount: mergeStats.createdRecordCount,
+            mergedTableIds: mergeStats.tableIds,
+            mergedRecordIds: mergeStats.createdRecordIds,
+        };
     }
 
     function commitSummaryResult(state, result) {
@@ -2883,7 +2924,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 5. 支线分块标题必须是【支线总结：角色名】，且只能填写一个具体角色名；不要写组织名、势力名、事件名、分类名或多个角色名。
 6. 分块正文必须是最终可直接落盘的内容。楼层范围由插件本地绑定，不要输出或猜测楼层范围。`;
         }
-        return `你是记忆表格优化助手。请整理现有表格内容，合并重复、修正冲突。只输出 JSON，格式同追溯任务。`;
+        return `你是记忆表格优化助手。请整理现有表格内容，合并重复、修正冲突。
+只输出 <Memory>...</Memory>，不要解释，不要 Markdown 或 JSON。
+普通更新只输出变化字段；角色档案、物品追踪、世界设定需要合并多条重复记录时，必须输出完整最终记录，并将主键写成[规范主名|待删除旧名称A|待删除旧名称B]。每个待删除旧名称必须逐字来自待优化表格，且至少对应两条旧记录；相似但独立的实体严禁合并。`;
     }
 
     function getSummaryOptimizeResponseFormatPrompt() {
@@ -3277,10 +3320,22 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         ]);
         const response = await generate(messages, { ...options, kind: 'traceOptimize' });
         if (!response.success) return response;
-        const validatedResponse = validateTaskMemoryClosure(response, { allowLegacyTraceJson: true });
+        const meta = {
+            tableId: String(options.tableId || ''),
+            autoTaskType: 'traceOptimize',
+            floorScope: normalizeFloorScope(options.floorScope, getCurrentFloorScope(state)),
+        };
+        const validatedResponse = validateTaskMemoryClosure(response, { allowLegacyTraceJson: true, meta });
         if (!validatedResponse.success) return validatedResponse;
-        const parsed = parseTraceResponse(validatedResponse.text);
-        const result = { success: true, kind: 'trace', parsed, preview: getTracePreview(parsed), text: validatedResponse.text };
+        const parsed = filterTraceResultByTarget(state, parseTraceResponse(validatedResponse.text), options);
+        const result = {
+            success: true,
+            kind: 'trace',
+            parsed,
+            preview: getTracePreview(parsed),
+            text: validatedResponse.text,
+            meta,
+        };
         return options.previewOnly ? result : commitTraceResult(state, result);
     }
 
