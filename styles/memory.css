@@ -10090,13 +10090,21 @@
     }
 
     #yzm-memory-root .yzm-plot-card {
-        grid-template-columns: 16px minmax(66px, 78px) minmax(0, 1fr);
-        gap: 4px;
+        grid-template-columns: 16px minmax(0, 1fr) auto;
+        grid-template-areas:
+            "marker time status"
+            "marker content content";
+        column-gap: 6px;
+        row-gap: 4px;
+        align-items: flex-start;
         width: 100%;
         max-width: 100%;
     }
 
     #yzm-memory-root .yzm-plot-marker {
+        grid-area: marker;
+        align-self: stretch;
+        align-items: center;
         width: 16px;
         padding-top: 0;
     }
@@ -10108,16 +10116,25 @@
     }
 
     #yzm-memory-root .yzm-plot-status {
-        grid-column: 2 / -1;
-        justify-self: start;
+        grid-area: status;
+        align-self: center;
+        justify-self: end;
         padding: 2px 5px;
         font-size: 8px;
     }
 
     #yzm-memory-root .yzm-plot-card-time {
+        grid-area: time;
+        justify-self: start;
+        max-width: 100%;
         min-height: 21px;
         padding: 2px 5px;
         font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-plot-card-content {
+        grid-area: content;
+        width: 100%;
     }
 
     #yzm-memory-root .yzm-plot-card-text {
@@ -10252,8 +10269,9 @@
     }
 
     #yzm-memory-root .yzm-shell.yzm-mobile-detail-open .yzm-plot-card {
-        grid-template-columns: 17px minmax(72px, 86px) minmax(0, 1fr);
-        gap: 6px;
+        grid-template-columns: 17px minmax(0, 1fr) auto;
+        column-gap: 7px;
+        row-gap: 4px;
         align-items: flex-start;
     }
 
