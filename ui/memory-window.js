@@ -1665,12 +1665,15 @@
         if (!rawPreset || typeof rawPreset !== 'object') return null;
         const name = String(rawPreset.name || '').trim();
         if (!name) return null;
-        const rawCustomHeaders = rawPreset.customHeaders ?? rawPreset.headers ?? '';
+        const provider = String(rawPreset.provider || '');
+        const rawCustomHeaders = provider === 'opencode_go'
+            ? (rawPreset.customHeaders ?? rawPreset.headers ?? '')
+            : '';
         return {
             id: String(rawPreset.id || createLlmApiPresetId()),
             name,
             mode: rawPreset.mode === 'custom' ? 'custom' : 'tavern',
-            provider: String(rawPreset.provider || ''),
+            provider,
             baseUrl: String(rawPreset.baseUrl || ''),
             apiKey: String(rawPreset.apiKey || ''),
             model: String(rawPreset.model || ''),
@@ -9157,6 +9160,9 @@
         const openCodeWarning = createApiInlineWarning('OpenCode Go 主要面向编码代理；记忆任务仅适配 /chat/completions 模型，其他协议模型暂不支持。');
         openCodeWarning.dataset.yzmOpenCodeWarning = 'true';
         openCodeWarning.hidden = true;
+        const customHeadersField = createApiField('自定义请求头（JSON）', createApiTextarea('{"Header-Name":"value"}', 'customHeaders'), 'yzm-api-field-wide');
+        customHeadersField.dataset.yzmOpenCodeHeadersField = 'true';
+        customHeadersField.hidden = true;
         const panel = document.createElement('section');
         panel.className = 'yzm-api-panel yzm-llm-api-panel';
         panel.append(
@@ -9187,7 +9193,7 @@
                     createApiField('API Key', createApiInput('sk-...', 'password', true, '', 'apiKey')),
                     createApiField('模型名称', createApiInlineControl(createApiInput('输入模型名称', 'text', false, '', 'model'), fetchModelButton)),
                     createApiField('Max Tokens', createApiInput('输入 Max Tokens', 'number', false, '', 'maxTokens')),
-                    createApiField('自定义请求头（JSON）', createApiTextarea('{"Header-Name":"value"}', 'customHeaders'), 'yzm-api-field-wide'),
+                    customHeadersField,
                 ]),
                 openCodeWarning,
                 createApiConnectionFooter(createApiField('流式响应', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
@@ -9690,13 +9696,17 @@
 
     function syncLlmProviderPlaceholders(root) {
         const provider = getApiFieldValue(root, 'provider');
+        const isOpenCodeGo = provider === 'opencode_go';
         const meta = YuzukiMemory.LlmClient?.getProviderMeta?.(provider);
         const baseUrlInput = getApiFieldInput(root, 'baseUrl');
         const modelInput = getApiFieldInput(root, 'model');
         if (baseUrlInput) baseUrlInput.placeholder = meta?.placeholderUrl || '输入 Base URL';
         if (modelInput) modelInput.placeholder = meta?.placeholderModel || '输入模型名称';
         const openCodeWarning = root.querySelector('.yzm-api-view [data-yzm-open-code-warning]');
-        if (openCodeWarning) openCodeWarning.hidden = provider !== 'opencode_go';
+        if (openCodeWarning) openCodeWarning.hidden = !isOpenCodeGo;
+        const customHeadersField = root.querySelector('.yzm-api-view [data-yzm-open-code-headers-field]');
+        if (customHeadersField) customHeadersField.hidden = !isOpenCodeGo;
+        if (!isOpenCodeGo) setApiFieldValue(root, 'customHeaders', '');
     }
 
     function syncLlmProviderDefaults(root, options = {}) {
@@ -9757,17 +9767,18 @@
     function readLlmApiForm(root) {
         const select = getLlmApiPresetSelect(root);
         const selectedPreset = getLlmApiPresets().find((entry) => entry.id === (select?.value || ''));
+        const provider = getApiFieldValue(root, 'provider');
         return {
             id: select?.value || '',
             name: selectedPreset?.name || '',
             mode: getGlobalLlmApiMode(),
-            provider: getApiFieldValue(root, 'provider'),
+            provider,
             baseUrl: getApiFieldValue(root, 'baseUrl'),
             apiKey: getApiFieldValue(root, 'apiKey'),
             model: getApiFieldValue(root, 'model'),
             maxTokens: getApiFieldValue(root, 'maxTokens'),
             stream: root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch')?.classList.contains('yzm-config-switch-on'),
-            customHeaders: getApiFieldValue(root, 'customHeaders'),
+            customHeaders: provider === 'opencode_go' ? getApiFieldValue(root, 'customHeaders') : '',
         };
     }
 
@@ -9779,7 +9790,7 @@
         setApiFieldValue(root, 'apiKey', nextPreset.apiKey);
         setApiFieldValue(root, 'model', nextPreset.model);
         setApiFieldValue(root, 'maxTokens', nextPreset.maxTokens || (nextPreset.provider ? getDefaultLlmMaxTokens(nextPreset.provider) : ''));
-        setApiFieldValue(root, 'customHeaders', nextPreset.customHeaders);
+        setApiFieldValue(root, 'customHeaders', nextPreset.provider === 'opencode_go' ? nextPreset.customHeaders : '');
         const streamSwitch = root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch');
         if (streamSwitch) {
             streamSwitch.classList.toggle('yzm-config-switch-on', !!nextPreset.stream);
