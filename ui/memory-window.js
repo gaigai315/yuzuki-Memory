@@ -13493,8 +13493,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【API兼容】已支持适配 OpenCode Go。API 服务商选择“OpenCode Go”并填写 Key，自定义请求头保持留空；依次完成“拉取模型列表”和“测试连接”后即可使用。',
-            '【优化】填表优化支持合并重复的角色档案、物品追踪和世界设定；确认优化结果后，会删除被合并的旧数据并写入新的合并记录。',
+            '【修复】修复任务世界书读取逻辑。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

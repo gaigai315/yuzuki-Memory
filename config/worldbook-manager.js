@@ -97,7 +97,9 @@
         if (!data) return null;
         if (Array.isArray(data)) return { entries: data };
         if (data.entries) return data;
+        if (data.character_book?.entries) return data.character_book;
         if (data.data?.entries) return data.data;
+        if (data.data?.character_book?.entries) return data.data.character_book;
         if (data.worldInfo?.entries) return data.worldInfo;
         if (data.worldInfoData?.entries) return data.worldInfoData;
         if (data.world_info?.entries) return data.world_info;
@@ -252,6 +254,7 @@
         constructor() {
             this._cache = null;
             this._cacheAt = 0;
+            this._cacheContextKey = '';
             this._worldInfoModulePromise = null;
             this._stContextModulePromise = null;
             this._syncedSummaryWorldbookNames = new Set();
@@ -321,6 +324,7 @@
             }
             this._cache = null;
             this._cacheAt = 0;
+            this._cacheContextKey = '';
             return { success: true, count, name, mode: bookExists ? 'update' : 'create', transport };
         }
 
@@ -334,6 +338,63 @@
             if (Array.isArray(window.world_names)) return window.world_names;
             if (Array.isArray(window.worldNames)) return window.worldNames;
             return [];
+        }
+
+        _getCurrentCharacters() {
+            const context = this._getContext();
+            const characters = Array.isArray(context?.characters) ? context.characters : [];
+            if (!characters.length) return [];
+
+            if (context?.groupId) {
+                const group = (Array.isArray(context.groups) ? context.groups : [])
+                    .find((item) => String(item?.id) === String(context.groupId));
+                const memberIds = new Set((Array.isArray(group?.members) ? group.members : [])
+                    .map((member) => safeString(typeof member === 'object' ? (member.avatar || member.name || member.id) : member))
+                    .filter(Boolean));
+                const disabledIds = new Set((Array.isArray(group?.disabled_members) ? group.disabled_members : [])
+                    .map((member) => safeString(typeof member === 'object' ? (member.avatar || member.name || member.id) : member))
+                    .filter(Boolean));
+                return characters.filter((character) => {
+                    const aliases = uniqueStrings([character?.avatar, character?.name, character?.data?.name]);
+                    return aliases.some((alias) => memberIds.has(alias)) && !aliases.some((alias) => disabledIds.has(alias));
+                });
+            }
+
+            const character = characters[context?.characterId];
+            return character ? [character] : [];
+        }
+
+        _getEmbeddedCharacterWorldBooks() {
+            return this._getCurrentCharacters().map((character, index) => {
+                const characterBook = character?.data?.character_book || character?.character_book;
+                if (!hasWorldEntries(characterBook?.entries)) return null;
+                const characterName = safeString(character?.name || character?.data?.name) || `角色${index + 1}`;
+                const name = safeString(characterBook?.name) || `${characterName}'s Lorebook`;
+                const characterKey = safeString(character?.avatar || character?.data?.avatar || characterName);
+                const id = `character:${characterKey}:${name}`;
+                return createWorldBook(name, index, {
+                    id,
+                    source: 'character',
+                    sourceLabel: '角色卡内嵌世界书',
+                    embeddedWorldInfo: characterBook,
+                    embeddedCharacterNames: [characterName],
+                    legacyIds: [id, `embedded:${characterKey}`, `world:${name}`],
+                });
+            }).filter(Boolean);
+        }
+
+        _getWorldbookCacheContextKey() {
+            const context = this._getContext();
+            const scope = context?.groupId ? `group:${context.groupId}` : `character:${context?.characterId ?? ''}`;
+            const characters = this._getCurrentCharacters().map((character) => {
+                const characterBook = character?.data?.character_book || character?.character_book;
+                return [
+                    safeString(character?.avatar || character?.data?.avatar || character?.name),
+                    safeString(characterBook?.name),
+                    getRawEntries(characterBook?.entries).length,
+                ].join(':');
+            }).sort();
+            return `${scope}|${characters.join('|')}`;
         }
 
         async _loadWorldInfoModule() {
@@ -360,7 +421,19 @@
             if (!cleanName) return;
             if (uniqueNames.has(cleanName)) {
                 const existing = list.find((book) => book.name === cleanName);
-                if (existing && Array.isArray(extra.legacyIds)) existing.legacyIds = uniqueStrings([...(existing.legacyIds || []), ...extra.legacyIds]);
+                if (existing) {
+                    if (Array.isArray(extra.legacyIds)) existing.legacyIds = uniqueStrings([...(existing.legacyIds || []), ...extra.legacyIds]);
+                    if (extra.embeddedWorldInfo && !existing.embeddedWorldInfo) existing.embeddedWorldInfo = extra.embeddedWorldInfo;
+                    if (Array.isArray(extra.embeddedCharacterNames)) {
+                        existing.embeddedCharacterNames = uniqueStrings([
+                            ...(existing.embeddedCharacterNames || []),
+                            ...extra.embeddedCharacterNames,
+                        ]);
+                    }
+                    if (existing.source === 'world' && existing.embeddedWorldInfo) {
+                        existing.sourceLabel = '酒馆世界书 / 角色卡内嵌';
+                    }
+                }
                 return;
             }
             list.push(createWorldBook(cleanName, index, extra));
@@ -401,6 +474,9 @@
             } catch (error) {
                 console.warn('[yuzuki-Memory Worldbook] 从 DOM 提取世界书失败:', error);
             }
+            this._getEmbeddedCharacterWorldBooks().forEach((book) => {
+                this._appendWorldBook(allBooks, uniqueNames, book.name, allBooks.length, book);
+            });
             return allBooks;
         }
 
@@ -421,18 +497,32 @@
             if (moduleContext) candidates.push(moduleContext);
             const windowContext = this._getContext();
             if (windowContext) candidates.push(windowContext);
-            return candidates.find((context) => typeof context?.getWorldInfo === 'function') || candidates.find(Boolean) || null;
+            return candidates.find((context) => (
+                typeof context?.loadWorldInfo === 'function'
+                || typeof context?.getWorldInfo === 'function'
+            )) || candidates.find(Boolean) || null;
         }
 
-        _extractWorldInfoModuleData(worldModule) {
+        _extractWorldInfoModuleData(worldModule, name = '') {
             const worldInfo = worldModule?.world_info || window.world_info;
-            return normalizeWorldInfoData(
-                worldModule?.worldInfoData
-                || worldModule?.world_info_data
-                || worldInfo?.worldInfoData
-                || worldInfo?.world_info
-                || worldInfo
-            );
+            const caches = [worldModule?.worldInfoCache, worldModule?.world_info_cache];
+            for (const cache of caches) {
+                if (!safeString(name) || typeof cache?.get !== 'function') continue;
+                const cached = normalizeWorldInfoData(cache.get(name));
+                if (hasWorldEntries(cached?.entries)) return cached;
+            }
+            const candidates = [
+                worldModule?.worldInfoData,
+                worldModule?.world_info_data,
+                worldInfo?.worldInfoData,
+                worldInfo?.world_info,
+                safeString(name) ? worldInfo?.[name] : null,
+            ];
+            for (const candidate of candidates) {
+                const data = normalizeWorldInfoData(candidate);
+                if (hasWorldEntries(data?.entries)) return data;
+            }
+            return null;
         }
 
         async _refreshWorldInfoCache(name) {
@@ -460,10 +550,14 @@
                 if (typeof worldModule?.loadWorldInfo === 'function') {
                     const loaded = normalizeWorldInfoData(await worldModule.loadWorldInfo(name));
                     if (hasWorldEntries(loaded?.entries)) return { ...loaded, _readSource: '/scripts/world-info.js loadWorldInfo' };
-                    const cached = this._extractWorldInfoModuleData(worldModule);
+                    const cached = this._extractWorldInfoModuleData(worldModule, name);
                     if (hasWorldEntries(cached?.entries)) return { ...cached, _readSource: '/scripts/world-info.js cache after loadWorldInfo' };
                 }
                 const context = await this._getContextWithWorldInfo();
+                if (typeof context?.loadWorldInfo === 'function') {
+                    const direct = normalizeWorldInfoData(await context.loadWorldInfo(name));
+                    if (hasWorldEntries(direct?.entries)) return { ...direct, _readSource: 'context.loadWorldInfo' };
+                }
                 if (typeof context?.getWorldInfo === 'function') {
                     const direct = normalizeWorldInfoData(await context.getWorldInfo(name));
                     if (hasWorldEntries(direct?.entries)) return { ...direct, _readSource: 'context.getWorldInfo' };
@@ -474,7 +568,7 @@
                     const after = normalizeWorldInfoData(await refreshedContext.getWorldInfo(name));
                     if (hasWorldEntries(after?.entries)) return { ...after, _readSource: 'context.getWorldInfo.afterRefresh' };
                 }
-                const moduleData = this._extractWorldInfoModuleData(worldModule);
+                const moduleData = this._extractWorldInfoModuleData(worldModule, name);
                 return hasWorldEntries(moduleData?.entries) ? { ...moduleData, _readSource: 'world-info module cache' } : null;
             } catch (error) {
                 console.warn('[yuzuki-Memory Worldbook] 调用酒馆前端世界书读取失败，尝试接口兜底:', error);
@@ -486,8 +580,15 @@
             const name = safeString(book?.name);
             if (!name) return { ...book, entries: [], allEntries: [], totalEntries: 0, disabledEntries: 0 };
             try {
-                let data = normalizeWorldInfoData(await this._loadWorldInfoViaFrontendModule(name));
-                if (!data) data = await fetchWorldInfoByName(name);
+                let data = null;
+                if (book?.source !== 'character') {
+                    data = normalizeWorldInfoData(await this._loadWorldInfoViaFrontendModule(name));
+                    if (!hasWorldEntries(data?.entries)) data = await fetchWorldInfoByName(name);
+                }
+                const embeddedData = normalizeWorldInfoData(book?.embeddedWorldInfo);
+                if (!hasWorldEntries(data?.entries) && hasWorldEntries(embeddedData?.entries)) {
+                    data = { ...embeddedData, _readSource: 'character.data.character_book' };
+                }
                 const allEntries = normalizeEntries(data?.entries, { includeDisabled: true });
                 const entries = allEntries.filter((entry) => entry.enabled);
                 const rawEntries = getRawEntries(data?.entries);
@@ -508,12 +609,14 @@
             const force = options.force === true;
             const includeEntries = options.includeEntries === true;
             const now = Date.now();
-            if (!force && this._cache && now - this._cacheAt < 5000 && (!includeEntries || this._cache.every((book) => Array.isArray(book.allEntries)))) {
+            const contextKey = this._getWorldbookCacheContextKey();
+            if (!force && this._cache && this._cacheContextKey === contextKey && now - this._cacheAt < 5000 && (!includeEntries || this._cache.every((book) => Array.isArray(book.allEntries)))) {
                 return this._cache;
             }
             const books = await this.fetchAllAvailableWorldBooks();
             this._cache = includeEntries ? await Promise.all(books.map((book) => this._loadWorldContent(book))) : books;
             this._cacheAt = now;
+            this._cacheContextKey = contextKey;
             return this._cache;
         }
 
