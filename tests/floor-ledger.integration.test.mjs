@@ -218,6 +218,50 @@ test('world setting aliases update one record and preserve the composite primary
     assert.equal(record.values.详细说明, '新说明');
 });
 
+test('hidden tables reject realtime rows and keep skipped rows out of the floor ledger', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    storedState = parser.createDefaultState();
+    storedState.tables.find((table) => table.id === 'item_tracking').hidden = true;
+    const hiddenRows = parser.extractMemoryRows('<Memory><!--\n#物品追踪\n[旧钥匙] | 状态: 已获得\n--></Memory>');
+
+    assert.equal(parser.applyRowsToState(storedState, hiddenRows), 0);
+    assert.deepEqual(storedState.records.item_tracking || [], []);
+
+    chat = [assistantMemoryMessage([
+        '#物品追踪',
+        '[旧钥匙] | 状态: 已获得',
+        '#角色档案',
+        '[爱丽丝] | 身份: 法师',
+    ].join('\n'))];
+    const applied = parser.applyMemoryText(chat[0].mes, { floor: 0, dispatch: false });
+
+    assert.equal(applied.success, true);
+    assert.equal(applied.count, 1);
+    assert.deepEqual(storedState.records.item_tracking || [], []);
+    assert.equal(storedState.records.character_profile[0].values.身份, '法师');
+    const entry = storedState.floorLedger.entries[storedState.floorLedger.activeEntries[0].id];
+    assert.deepEqual(entry.rows.map((row) => row.table), ['角色档案']);
+});
+
+test('hiding a table does not prevent deletion replay from removing its older accepted rows', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('获得钥匙'),
+        assistantMemoryMessage('#物品追踪\n[旧钥匙] | 状态: 已获得'),
+    ];
+
+    assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false }).success, true);
+    assert.equal(storedState.records.item_tracking.length, 1);
+    storedState.tables.find((table) => table.id === 'item_tracking').hidden = true;
+
+    chat = [chat[0]];
+    ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
+
+    assert.deepEqual(storedState.records.item_tracking, []);
+});
+
 test('trace optimization replaces duplicate items with one new merged record', () => {
     const parser = window.YuzukiMemory.MemoryTagParser;
     const state = parser.createDefaultState();

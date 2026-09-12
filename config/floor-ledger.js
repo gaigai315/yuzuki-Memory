@@ -371,6 +371,8 @@
         const records = cloneManagedRecords(ledger.baselineRecords);
         const replayState = {
             ...state,
+            // Replay previously accepted deltas regardless of current navigation visibility.
+            tables: (Array.isArray(state.tables) ? state.tables : []).map((table) => ({ ...table, hidden: false })),
             records: {
                 ...(state.records && typeof state.records === 'object' ? state.records : {}),
                 ...records,

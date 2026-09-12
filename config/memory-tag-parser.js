@@ -595,8 +595,9 @@
 
     function removeRealtimePlotItemsForRange(state, range, floorScope = null) {
         const targetRange = normalizeRangeMeta(range);
+        const table = state?.tables?.find((entry) => entry.id === PLOT_SUMMARY_TABLE_ID);
         const record = state?.records?.[PLOT_SUMMARY_TABLE_ID]?.[0];
-        if (!targetRange || !record) return 0;
+        if (!targetRange || !table || table.hidden || !record) return 0;
 
         const targetScope = YuzukiMemory.Storage?.normalizeFloorScope?.(
             floorScope,
@@ -714,7 +715,7 @@
 
     function applyMemoryRow(state, row, options = {}) {
         const table = findTable(state, row.table);
-        if (!table || table.id === FIXED_SUMMARY_TABLE_ID) return false;
+        if (!table || table.hidden || table.id === FIXED_SUMMARY_TABLE_ID) return false;
 
         if (table.id === PLOT_SUMMARY_TABLE_ID) {
             const field = getPlotKind(row.primaryValue) === 'branch' ? '支线' : '主线';
@@ -822,24 +823,29 @@
     }
 
     function applyMemoryText(text, options = {}) {
-        const rows = extractMemoryRows(text);
+        const extractedRows = extractMemoryRows(text);
         const growthCompletionUpdates = YuzukiMemory.CharacterStatus?.parseGrowthTaskCompletionTags?.(text) || [];
         const hasMemoryTag = MEMORY_TAG_PATTERN.test(String(text || ''));
         MEMORY_TAG_PATTERN.lastIndex = 0;
         const hasGrowthCompletionTag = /<角色任务完成>[\s\S]*?<\/角色任务完成>/i.test(String(text || ''));
-        if ((!rows.length && !growthCompletionUpdates.length) || applying) {
+        if ((!extractedRows.length && !growthCompletionUpdates.length) || applying) {
             console.info('[yuzuki-Memory Realtime] apply skipped', {
                 floor: options.floor,
                 textLength: String(text || '').length,
                 hasMemoryTag,
                 hasGrowthCompletionTag,
-                rows: rows.length,
+                rows: extractedRows.length,
                 growthCompletionUpdates: growthCompletionUpdates.length,
                 applying,
             });
             return { success: false, count: 0 };
         }
         const state = YuzukiMemory.Storage?.loadState?.(createDefaultState()) || createDefaultState();
+        const rows = extractedRows.filter((row) => {
+            const table = findTable(state, row.table);
+            return table && !table.hidden && table.id !== FIXED_SUMMARY_TABLE_ID;
+        });
+        if (!rows.length && !growthCompletionUpdates.length) return { success: false, count: 0 };
         const recordsBeforeApply = YuzukiMemory.FloorLedger?.cloneManagedRecords?.(state) || null;
         const chat = getContext()?.chat;
         const floor = Number.isFinite(Number(options.floor))

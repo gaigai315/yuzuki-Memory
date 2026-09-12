@@ -271,4 +271,45 @@ test('trace uses the global historian selection and injects populated non-summar
     assert.equal(optimizeResult.success, true);
     assert.equal(appliedTraceOptions.at(-1).mergeAliasDuplicates, true);
     assert.equal(appliedTraceOptions.at(-1).source, 'traceOptimize');
+
+    state.tables.find((table) => table.id === 'item_tracking').hidden = true;
+    const mixedResult = taskSandbox.window.YuzukiMemory.TaskRunner.commitTraceResult(state, {
+        success: true,
+        kind: 'trace',
+        parsed: {
+            memoryRows: [
+                { table: '物品追踪', primaryValue: '旧钥匙', values: { 持有者: '测试用户' } },
+                { table: '角色档案', primaryValue: '测试角色', values: { 当前位置: '可见表更新' } },
+            ],
+        },
+        meta: {},
+    });
+
+    assert.equal(mixedResult.success, true);
+    assert.equal(mixedResult.count, 1);
+    assert.equal(state.records.character_profile[0].values.当前位置, '可见表更新');
+    assert.equal(state.records.item_tracking[0].values.持有者, '测试角色');
+
+    const parserCallCount = appliedTraceOptions.length;
+    const hiddenMemoryResult = taskSandbox.window.YuzukiMemory.TaskRunner.commitTraceResult(state, {
+        success: true,
+        kind: 'trace',
+        parsed: {
+            memoryRows: [{ table: '物品追踪', primaryValue: '旧钥匙', values: { 持有者: '测试用户' } }],
+        },
+        meta: {},
+    });
+    const hiddenJsonResult = taskSandbox.window.YuzukiMemory.TaskRunner.commitTraceResult(state, {
+        success: true,
+        kind: 'trace',
+        parsed: {
+            records: [{ table: '物品追踪', values: { 物品名称: '旧钥匙', 持有者: '测试用户' } }],
+        },
+        meta: {},
+    });
+
+    assert.equal(hiddenMemoryResult.success, false);
+    assert.equal(hiddenJsonResult.success, false);
+    assert.equal(appliedTraceOptions.length, parserCallCount);
+    assert.equal(state.records.item_tracking[0].values.持有者, '测试角色');
 });

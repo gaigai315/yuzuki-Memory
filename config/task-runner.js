@@ -1610,19 +1610,27 @@
 
     function filterTraceResultByTarget(state, resultRows, options = {}) {
         const targetTable = getOptionTargetTable(state, options);
-        if (!targetTable) return resultRows;
+        if (String(options.tableId || '').trim() && !targetTable) {
+            return resultRows?.memoryRows ? { ...resultRows, memoryRows: [] } : { records: [] };
+        }
         if (resultRows?.memoryRows) {
             return {
                 ...resultRows,
                 memoryRows: resultRows.memoryRows
-                    .map((row) => row && !String(row.table || '').trim() ? { ...row, table: targetTable.name } : row)
-                    .filter((row) => findTargetTable(state, row?.table)?.id === targetTable.id),
+                    .map((row) => targetTable && row && !String(row.table || '').trim() ? { ...row, table: targetTable.name } : row)
+                    .filter((row) => {
+                        const table = findTargetTable(state, row?.table);
+                        return table && (!targetTable || table.id === targetTable.id);
+                    }),
             };
         }
         const records = normalizeTaskRows(resultRows)
-            .map((row) => !row.table ? { ...row, table: targetTable.name } : row)
-            .filter((row) => findTargetTable(state, row.table)?.id === targetTable.id)
-            .map((row) => ({ table: row.table || targetTable.name, values: row.values || {} }));
+            .map((row) => targetTable && !row.table ? { ...row, table: targetTable.name } : row)
+            .filter((row) => {
+                const table = findTargetTable(state, row.table);
+                return table && (!targetTable || table.id === targetTable.id);
+            })
+            .map((row) => ({ table: row.table, values: row.values || {} }));
         return { records };
     }
 
@@ -1641,13 +1649,12 @@
     function findTargetTable(state, tableKey) {
         const key = String(tableKey || '').trim();
         const tables = stateTables(state).filter((table) => table.id !== FIXED_SUMMARY_TABLE_ID);
-        if (/主线摘要|支线摘要|剧情摘要/.test(normalizeSummaryHeadingLabel(key))) {
-            return tables.find((table) => table.id === PLOT_SUMMARY_TABLE_ID || table.name === '剧情摘要') || null;
-        }
-        return tables.find((table) => table.id === key)
+        const table = /主线摘要|支线摘要|剧情摘要/.test(normalizeSummaryHeadingLabel(key))
+            ? tables.find((table) => table.id === PLOT_SUMMARY_TABLE_ID || table.name === '剧情摘要')
+            : tables.find((table) => table.id === key)
             || tables.find((table) => table.name === key)
-            || tables.find((table) => key && table.name.includes(key))
-            || null;
+            || tables.find((table) => key && table.name.includes(key));
+        return table && !table.hidden ? table : null;
     }
 
     function upsertRecord(state, table, values = {}, options = {}) {
@@ -2618,18 +2625,14 @@
     }
 
     function applyTraceResult(state, resultRows, options = {}) {
-        const targetTable = getOptionTargetTable(state, options);
+        resultRows = filterTraceResultByTarget(state, resultRows, options);
         const storyTime = options.storyTime
             || YuzukiMemory.TodoManager?.getStoryTimeForRange?.(options.range)
             || YuzukiMemory.TodoManager?.getCurrentStoryTime?.()
             || null;
         if (resultRows?.memoryRows && YuzukiMemory.MemoryTagParser?.applyRowsToState) {
-            const memoryRows = targetTable
-                ? resultRows.memoryRows
-                    .map((row) => row && !String(row.table || '').trim() ? { ...row, table: targetTable.name } : row)
-                    .filter((row) => findTargetTable(state, row?.table)?.id === targetTable.id)
-                : resultRows.memoryRows;
-            if (targetTable && !memoryRows.length) return 0;
+            const memoryRows = resultRows.memoryRows;
+            if (!memoryRows.length) return 0;
             return YuzukiMemory.MemoryTagParser.applyRowsToState(state, memoryRows, {
                 source: options.source || 'trace',
                 range: options.range,
@@ -2639,9 +2642,7 @@
                 mergeStats: options.mergeStats,
             });
         }
-        const rows = normalizeTaskRows(resultRows)
-            .map((row) => targetTable && !row.table ? { ...row, table: targetTable.name } : row)
-            .filter((row) => !targetTable || findTargetTable(state, row.table)?.id === targetTable.id);
+        const rows = normalizeTaskRows(resultRows);
         let count = 0;
         rows.forEach((row) => {
             const table = findTargetTable(state, row.table);
