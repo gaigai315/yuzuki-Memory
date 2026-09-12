@@ -156,6 +156,8 @@
 
     function isMemoryInjectionMessage(message) {
         if (!message || typeof message !== 'object') return false;
+        const identifier = getMessageIdentifier(message);
+        const pluginNamed = /^SYSTEM\s*\([^)]*\)\s*$/i.test(identifier) || /^MEMORY$/i.test(identifier);
         if (
             message.isGaigaiData === true
             || message.isGaigaiPrompt === true
@@ -163,10 +165,12 @@
             || message.isYuzukiVector === true
             || !!message.yzmMemoryInjectionType
         ) {
-            return true;
+            // Inline macro replacement can mark an entire world-info container.
+            // Keep its unrelated prompt text on a second injection pass.
+            return !identifier || pluginNamed;
         }
         const text = getPrimaryTextFromMessage(message);
-        return MEMORY_INJECTION_MARKERS.some((marker) => text.includes(marker));
+        return pluginNamed && MEMORY_INJECTION_MARKERS.some((marker) => text.includes(marker));
     }
 
     function isRealUserMessage(message) {

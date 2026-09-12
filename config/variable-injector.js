@@ -995,11 +995,14 @@
         )));
     }
 
-    function requestBodyContainsMemoryPrompt(body) {
+    function requestBodyContainsMemoryPrompt(body, state = getCurrentState()) {
+        const expectedPrompt = buildMemoryPromptText(state).trim();
         return getRequestArrays(body).some((target) => target.items.some((item) => {
-            if (item?.isGaigaiPrompt === true || item?.yzmMemoryInjectionType === 'prompt') return true;
+            if (item?.yzmMemoryInjectionType === 'prompt') return true;
             const name = String(item?.name || item?.identifier || '');
-            return name.includes('提示词');
+            const text = getMessageText(item).trim();
+            if (text && /^SYSTEM\s*\(提示词\)\s*$/i.test(name)) return true;
+            return !!expectedPrompt && (text === expectedPrompt || text.includes(expectedPrompt));
         }));
     }
 
@@ -1832,7 +1835,7 @@
         const disableMemoryFallback = options.disableFallbackInjection === true || options.disableMemoryFallbackInjection === true;
         const disableVectorFallback = options.disableFallbackInjection === true || options.disableVectorFallbackInjection === true;
 
-        if (!disableMemoryFallback && settings.injectMemoryPrompt && !injectedVars.has('MEMORY_PROMPT') && !requestBodyContainsMemoryPrompt(body)) {
+        if (!disableMemoryFallback && settings.injectMemoryPrompt && !injectedVars.has('MEMORY_PROMPT') && !requestBodyContainsMemoryPrompt(body, state)) {
             const promptMessage = createPromptMemoryMessage(state);
             if (promptMessage) insertInjectedMessages(body, [promptMessage]);
         }

@@ -39,6 +39,25 @@
         return result;
     }
 
+    function normalizeWorldbookSearchText(value) {
+        return String(value || '')
+            .normalize('NFKC')
+            .toLocaleLowerCase('zh-CN')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+
+    function buildWorldbookSearchText(source) {
+        const entries = Array.isArray(source?.allEntries)
+            ? source.allEntries
+            : (Array.isArray(source?.entries) ? source.entries : []);
+        return normalizeWorldbookSearchText([
+            source?.name,
+            source?.sourceLabel,
+            ...entries.flatMap((entry) => [entry?.comment, entry?.content]),
+        ].join('\n'));
+    }
+
     function isTruthyFlag(value) {
         if (value === true || value === 1) return true;
         if (typeof value === 'string') return ['true', '1', 'yes', 'on', 'enabled', 'checked'].includes(value.trim().toLowerCase());
@@ -258,6 +277,23 @@
             this._worldInfoModulePromise = null;
             this._stContextModulePromise = null;
             this._syncedSummaryWorldbookNames = new Set();
+            this._searchTextCache = new WeakMap();
+        }
+
+        getWorldbookSearchText(source = {}) {
+            if (!source || typeof source !== 'object') return buildWorldbookSearchText(source);
+            const cached = this._searchTextCache.get(source);
+            if (typeof cached === 'string') return cached;
+            const searchText = buildWorldbookSearchText(source);
+            this._searchTextCache.set(source, searchText);
+            return searchText;
+        }
+
+        matchesWorldbookSearch(source = {}, query = '') {
+            const tokens = normalizeWorldbookSearchText(query).split(' ').filter(Boolean);
+            if (!tokens.length) return true;
+            const searchText = this.getWorldbookSearchText(source);
+            return tokens.every((token) => searchText.includes(token));
         }
 
         getSummaryWorldbookName(sessionId = '', displayName = '') {

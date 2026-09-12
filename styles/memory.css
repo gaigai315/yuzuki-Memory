@@ -5473,6 +5473,107 @@
     font-size: 12px;
 }
 
+#yzm-memory-root .yzm-task-worldbook-search-section {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 3px;
+    min-width: 0;
+    padding: 10px 16px 0;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-task-worldbook-search {
+    display: grid;
+    grid-template-columns: 18px minmax(0, 1fr) 30px;
+    align-items: center;
+    gap: 5px;
+    width: 100%;
+    min-height: 38px;
+    padding: 3px 4px 3px 10px;
+    color: var(--yzm-text);
+    background: var(--yzm-input-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 7px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-task-worldbook-search-icon {
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1;
+    pointer-events: none;
+}
+
+#yzm-memory-root .yzm-task-worldbook-search-input {
+    width: 100% !important;
+    min-width: 0 !important;
+    height: 30px !important;
+    min-height: 30px !important;
+    margin: 0 !important;
+    padding: 0 2px !important;
+    color: var(--yzm-text) !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    outline: 0 !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    font: inherit !important;
+    font-size: 12px !important;
+    line-height: 30px !important;
+    letter-spacing: 0 !important;
+}
+
+#yzm-memory-root .yzm-task-worldbook-search-input::placeholder {
+    color: var(--yzm-muted);
+    opacity: 0.8;
+}
+
+#yzm-memory-root .yzm-task-worldbook-search-input::-webkit-search-cancel-button {
+    display: none;
+}
+
+#yzm-memory-root .yzm-task-worldbook-search-clear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    min-width: 30px;
+    height: 30px;
+    min-height: 30px;
+    margin: 0;
+    padding: 0;
+    color: var(--yzm-muted);
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    box-shadow: none;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+}
+
+#yzm-memory-root .yzm-task-worldbook-search-clear:hover {
+    color: var(--yzm-text);
+    background: var(--yzm-hover);
+}
+
+#yzm-memory-root .yzm-task-worldbook-search-result {
+    min-height: 17px;
+    padding: 0 4px;
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.35;
+}
+
+#yzm-memory-root .yzm-task-worldbook-search-section[hidden],
+#yzm-memory-root .yzm-task-worldbook-search-clear[hidden],
+#yzm-memory-root .yzm-task-worldbook-search-result[hidden],
+#yzm-memory-root .yzm-task-worldbook-item[hidden] {
+    display: none !important;
+}
+
 #yzm-memory-root .yzm-task-worldbook-list {
     display: grid;
     grid-template-columns: minmax(0, 1fr);

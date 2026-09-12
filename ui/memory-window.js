@@ -10946,6 +10946,84 @@
         return persistTaskWorldbookSelection(selection);
     }
 
+    function applyTaskWorldbookSearch(scope = ensureRoot()) {
+        const input = scope?.querySelector?.('[data-yzm-task-worldbook-search-input]');
+        const clearButton = scope?.querySelector?.('[data-yzm-task-worldbook-search-clear]');
+        const result = scope?.querySelector?.('[data-yzm-task-worldbook-search-result]');
+        const list = scope?.querySelector?.('[data-yzm-task-worldbook-list]');
+        const manager = getWorldbookManager();
+        if (!input || !clearButton || !result || !list || !manager) return;
+
+        const query = String(input.value || '');
+        const hasQuery = !!query.trim();
+        const rows = Array.from(list.querySelectorAll('.yzm-task-worldbook-item'));
+        let visibleCount = 0;
+        rows.forEach((row) => {
+            const source = taskWorldbookSourcesById.get(String(row.dataset.yzmTaskWorldbookSourceId || ''));
+            const matches = !hasQuery || manager.matchesWorldbookSearch?.(source, query) !== false;
+            row.hidden = !matches;
+            if (matches) visibleCount += 1;
+        });
+
+        clearButton.hidden = !hasQuery;
+        result.hidden = !hasQuery || rows.length === 0;
+        result.textContent = visibleCount > 0
+            ? `找到 ${visibleCount} 本世界书`
+            : '没有找到匹配的世界书';
+    }
+
+    function createTaskWorldbookSearch(enabled) {
+        const section = document.createElement('div');
+        section.className = 'yzm-task-worldbook-search-section';
+        section.dataset.yzmTaskWorldbookSearch = 'true';
+        section.hidden = !enabled;
+
+        const search = document.createElement('div');
+        search.className = 'yzm-task-worldbook-search';
+        search.setAttribute('role', 'search');
+        search.appendChild(createIconNode('fa-solid fa-magnifying-glass', 'yzm-task-worldbook-search-icon'));
+
+        const input = document.createElement('input');
+        input.className = 'yzm-task-worldbook-search-input';
+        input.type = 'search';
+        input.placeholder = '搜索世界书名称或内容';
+        input.setAttribute('aria-label', '搜索世界书名称或内容');
+        input.autocomplete = 'off';
+        input.spellcheck = false;
+        input.disabled = !enabled;
+        input.dataset.yzmTaskWorldbookSearchInput = 'true';
+
+        const clearButton = createButton('', 'yzm-task-worldbook-search-clear');
+        clearButton.title = '清除搜索';
+        clearButton.setAttribute('aria-label', '清除搜索');
+        clearButton.dataset.yzmTaskWorldbookSearchClear = 'true';
+        clearButton.hidden = true;
+        clearButton.appendChild(createIconNode('fa-solid fa-xmark', ''));
+
+        const result = document.createElement('div');
+        result.className = 'yzm-task-worldbook-search-result';
+        result.dataset.yzmTaskWorldbookSearchResult = 'true';
+        result.setAttribute('aria-live', 'polite');
+        result.hidden = true;
+
+        input.addEventListener('input', () => applyTaskWorldbookSearch(section.closest('.yzm-task-worldbook-panel') || section));
+        input.addEventListener('keydown', (event) => {
+            if (event.key !== 'Escape' || !input.value) return;
+            event.stopPropagation();
+            input.value = '';
+            applyTaskWorldbookSearch(section.closest('.yzm-task-worldbook-panel') || section);
+        });
+        clearButton.addEventListener('click', () => {
+            input.value = '';
+            applyTaskWorldbookSearch(section.closest('.yzm-task-worldbook-panel') || section);
+            input.focus();
+        });
+
+        search.append(input, clearButton);
+        section.append(search, result);
+        return section;
+    }
+
     function createTaskWorldbookPanel() {
         const selection = getTaskWorldbookSelection();
         const panel = document.createElement('div');
@@ -10975,7 +11053,7 @@
         list.hidden = !selection.enabled;
         list.textContent = selection.enabled ? '正在读取当前可用世界书...' : '世界书注入已关闭。';
 
-        panel.append(header, tools, list);
+        panel.append(header, tools, createTaskWorldbookSearch(selection.enabled), list);
         return panel;
     }
 
@@ -10992,6 +11070,7 @@
         const unavailable = totalCount === 0;
         const row = document.createElement('div');
         row.className = checked ? 'yzm-task-worldbook-item yzm-task-worldbook-item-active' : 'yzm-task-worldbook-item';
+        row.dataset.yzmTaskWorldbookSourceId = source.id;
 
         const selectionLabel = document.createElement('label');
         selectionLabel.className = 'yzm-task-worldbook-item-select';
@@ -11176,11 +11255,17 @@
     async function refreshTaskWorldbookList(root = ensureRoot(), options = {}) {
         const list = root?.querySelector?.('[data-yzm-task-worldbook-list]');
         const summary = root?.querySelector?.('[data-yzm-task-worldbook-summary]');
+        const searchSection = root?.querySelector?.('[data-yzm-task-worldbook-search]');
+        const searchInput = root?.querySelector?.('[data-yzm-task-worldbook-search-input]');
+        const searchResult = root?.querySelector?.('[data-yzm-task-worldbook-search-result]');
         const manager = getWorldbookManager();
         if (!list || !summary || !manager) return;
         const selection = getTaskWorldbookSelection();
         summary.textContent = selection.enabled ? `已选择 ${selection.ids.length} 本` : '未启用';
         list.hidden = !selection.enabled;
+        if (searchSection) searchSection.hidden = !selection.enabled;
+        if (searchInput) searchInput.disabled = true;
+        if (searchResult) searchResult.hidden = true;
         if (!selection.enabled) {
             taskWorldbookSourcesById = new Map();
             list.textContent = '世界书注入已关闭。';
@@ -11206,6 +11291,8 @@
             }).length;
             summary.textContent = `已选择 ${selectedCount} 本`;
             list.replaceChildren(...displaySources.map((source) => createTaskWorldbookRow(source)));
+            if (searchInput) searchInput.disabled = false;
+            applyTaskWorldbookSearch(root);
         } catch (error) {
             taskWorldbookSourcesById = new Map();
             console.warn('[yuzuki-Memory] 世界书列表渲染失败:', error);
@@ -13493,7 +13580,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【修复】修复任务世界书读取逻辑。',
+            '【优化】优化实时填表注入边界问题。',
+            '【新增】任务世界书新增搜索功能。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

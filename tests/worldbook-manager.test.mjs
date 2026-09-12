@@ -155,6 +155,24 @@ test('embedded lorebook cache does not leak across a character switch', async ()
     assert.equal(second[0].entries[0].content, '乙内容');
 });
 
+test('worldbook search matches source titles, entry titles, and entry content', () => {
+    const { manager } = loadWorldbookManager();
+    const source = {
+        id: 'world:ＡＢＣ设定集',
+        name: 'ＡＢＣ设定集',
+        sourceLabel: '角色卡内嵌世界书',
+        allEntries: [
+            { uid: '1', comment: '角色秘密', content: '雨夜发生在中环公寓', enabled: true },
+            { uid: '2', comment: '关闭条目', content: '仍然属于世界书正文', enabled: false },
+        ],
+    };
+
+    assert.equal(manager.matchesWorldbookSearch(source, 'abc'), true);
+    assert.equal(manager.matchesWorldbookSearch(source, '角色秘密 公寓'), true);
+    assert.equal(manager.matchesWorldbookSearch(source, '关闭条目 正文'), true);
+    assert.equal(manager.matchesWorldbookSearch(source, '不存在的内容'), false);
+});
+
 function runSummarySyncBuilders(record) {
     const source = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
     const match = source.match(/    function getSummarySyncContent\(record\) \{[\s\S]*?(?=\r?\n    function recordToVectorChunk)/);
