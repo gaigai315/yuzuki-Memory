@@ -536,6 +536,52 @@
 
     function parseDateTimeFromContent(content = '') {
         const normalized = String(content || '').replace(/｜/g, '|').replace(/／/g, '/');
+        const sharedDateMatches = YuzukiMemory.PlotSummary?.getDateTokenMatches?.(normalized) || [];
+        const sharedCandidates = sharedDateMatches.map((dateMatch) => {
+            const dateParts = YuzukiMemory.PlotSummary?.parseDateToken?.(dateMatch.token);
+            if (!dateParts || !Number.isInteger(dateParts.year)) return null;
+            const afterDate = normalized.slice(dateMatch.index + dateMatch.length);
+            const timeMatch = afterDate.match(/(\d{1,2})\s*[:：时]\s*(\d{1,2})(?:\s*分)?/);
+            if (!timeMatch) return null;
+            const parts = {
+                year: Number(dateParts.year),
+                month: Number(dateParts.month),
+                day: Number(dateParts.day),
+                hour: Number(timeMatch[1]),
+                minute: Number(timeMatch[2]),
+            };
+            const ancient = dateParts.style === 'ancient';
+            const valid = ancient
+                ? Number.isInteger(parts.month)
+                    && parts.month >= 1
+                    && parts.month <= 12
+                    && Number.isInteger(parts.day)
+                    && parts.day >= 1
+                    && parts.day <= 30
+                    && Number.isInteger(parts.hour)
+                    && parts.hour >= 0
+                    && parts.hour <= 23
+                    && Number.isInteger(parts.minute)
+                    && parts.minute >= 0
+                    && parts.minute <= 59
+                : isValidDateTimeParts(parts.year, parts.month, parts.day, parts.hour, parts.minute);
+            if (!valid) return null;
+            const calendarOrdinalMinutes = toOrdinalMinutes(parts);
+            const ordinalMinutes = ancient && !Number.isFinite(calendarOrdinalMinutes)
+                ? (((parts.year * 12 + parts.month - 1) * 30 + parts.day - 1) * 1440)
+                    + parts.hour * 60
+                    + parts.minute
+                : calendarOrdinalMinutes;
+            return {
+                date: dateMatch.token,
+                time: `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`,
+                dateTimeParts: parts,
+                ordinalMinutes,
+                ...(ancient ? { calendar: 'ancient', era: String(dateParts.era || '') } : {}),
+            };
+        }).filter(Boolean);
+        if (sharedCandidates.length) return sharedCandidates[sharedCandidates.length - 1];
+
         const datePattern = /(\d{1,6})[-\/年]\s*(\d{1,2})[-\/月]\s*(\d{1,2})\s*日?/g;
         const candidates = [];
         let dateMatch;

@@ -455,6 +455,8 @@
     function getPlotDateFromTimeText(timeText = '') {
         const normalized = String(timeText || '').trim();
         if (!normalized) return '';
+        const sharedDate = YuzukiMemory.PlotSummary?.getDateToken?.(normalized);
+        if (sharedDate) return sharedDate;
         const match = normalized.match(/(?:\d{1,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
         return match ? match[0].replace(/\s+/g, '') : '';
     }

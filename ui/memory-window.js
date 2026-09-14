@@ -13008,6 +13008,8 @@
     function getPlotDateFromTimeText(timeText = '') {
         const normalized = String(timeText || '').trim();
         if (!normalized) return '';
+        const sharedDate = YuzukiMemory.PlotSummary?.getDateToken?.(normalized);
+        if (sharedDate) return sharedDate;
         const dateMatch = normalized.match(/(?:\d{1,4}\s*年\s*)?\d{1,2}\s*月\s*\d{1,2}\s*日|\d{4}[-/.]\d{1,2}[-/.]\d{1,2}/);
         if (dateMatch) return dateMatch[0].replace(/\s+/g, '');
         const beforeComma = normalized.split(/[，,]/)[0]?.trim() || '';

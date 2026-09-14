@@ -105,6 +105,8 @@ window.YuzukiMemory.Storage = {
 
 const matcherSource = fs.readFileSync(new URL('../config/character-name-matcher.js', import.meta.url), 'utf8');
 vm.runInThisContext(matcherSource, { filename: 'character-name-matcher.js' });
+const plotSummarySource = fs.readFileSync(new URL('../config/plot-summary.js', import.meta.url), 'utf8');
+vm.runInThisContext(plotSummarySource, { filename: 'plot-summary.js' });
 const parserSource = fs.readFileSync(new URL('../config/memory-tag-parser.js', import.meta.url), 'utf8');
 vm.runInThisContext(parserSource, { filename: 'memory-tag-parser.js' });
 const ledgerSource = fs.readFileSync(new URL('../config/floor-ledger.js', import.meta.url), 'utf8');
@@ -219,6 +221,23 @@ test('world setting aliases update one record and preserve the composite primary
     assert.equal(state.records.world_setting.length, 1);
     assert.equal(record.values.设定名, '苍穹议会|天空议会');
     assert.equal(record.values.详细说明, '新说明');
+});
+
+test('ancient plot summary dates survive realtime Memory parsing', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    storedState = parser.createDefaultState();
+    chat = [assistantMemoryMessage([
+        '#主线摘要',
+        '[景和七年三月十五日,20:00-20:30] | 内容: 沈昭阳将楚玄带回永宁王府',
+    ].join('\n'))];
+
+    assert.equal(parser.applyMemoryText(chat[0].mes, { floor: 0, dispatch: false }).success, true);
+    const record = storedState.records.plot_summary[0];
+    const item = window.YuzukiMemory.PlotSummary.normalizeStoredItems(record.values.主线)[0];
+
+    assert.equal(item.date, '景和七年三月十五日');
+    assert.equal(item.startTime, '20:00');
+    assert.equal(item.endTime, '20:30');
 });
 
 test('hidden tables reject realtime rows and keep skipped rows out of the floor ledger', () => {

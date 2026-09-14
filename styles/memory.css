@@ -10161,6 +10161,7 @@
     }
 
     #yzm-memory-root .yzm-plot-day-header {
+        grid-template-columns: minmax(0, 1fr);
         min-height: 38px;
         padding: 7px 8px;
         gap: 6px;
@@ -10172,9 +10173,14 @@
 
     #yzm-memory-root .yzm-plot-day-title strong {
         font-size: 13px;
+        overflow: visible;
+        text-overflow: clip;
+        white-space: normal;
+        overflow-wrap: anywhere;
     }
 
     #yzm-memory-root .yzm-plot-day-meta {
+        justify-content: flex-end;
         gap: 5px;
         font-size: 10px;
     }

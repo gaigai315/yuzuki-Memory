@@ -14,10 +14,39 @@ const sandbox = {
     },
 };
 vm.createContext(sandbox);
+const plotSummarySource = fs.readFileSync(new URL('../config/plot-summary.js', import.meta.url), 'utf8');
+vm.runInContext(plotSummarySource, sandbox, { filename: 'plot-summary.js' });
 const source = fs.readFileSync(new URL('../config/todo-manager.js', import.meta.url), 'utf8');
 vm.runInContext(source, sandbox, { filename: 'todo-manager.js' });
 
 const todoManager = sandbox.window.YuzukiMemory.TodoManager;
+
+test('ancient globalTime status bars expose regnal date and clock time', () => {
+    const storyTime = todoManager.parseStoryTimeText([
+        '<globalTime>',
+        'T_story：大明永乐十二年九月初八日·🍂·辰时(07:30)·☀️',
+        '</globalTime>',
+    ].join('\n'));
+
+    assert.equal(storyTime.source, 'chat-tag');
+    assert.equal(storyTime.date, '大明永乐十二年九月初八日');
+    assert.equal(storyTime.time, '07:30');
+    assert.equal(storyTime.calendar, 'ancient');
+    assert.equal(storyTime.era, '大明永乐');
+    assert.deepEqual(
+        { ...storyTime.dateTimeParts },
+        { year: 12, month: 9, day: 8, hour: 7, minute: 30 },
+    );
+    assert.equal(Number.isFinite(storyTime.ordinalMinutes), true);
+    assert.equal(
+        todoManager.fillMissingTodoDates('〔1〕07:40·上朝（高）', storyTime),
+        '〔1〕12年09月08日 07:40·上朝（高）',
+    );
+    assert.equal(
+        todoManager.pruneTodoText('〔1〕12-09-08 07:20·上朝（高）', storyTime.ordinalMinutes).changed,
+        true,
+    );
+});
 
 test('timed todos are removed after the 10-minute expiry delay', () => {
     const text = '〔1〕2035-07-19 10:00·审查财务报表（高）';
