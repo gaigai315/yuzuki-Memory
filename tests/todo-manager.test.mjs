@@ -19,6 +19,66 @@ vm.runInContext(source, sandbox, { filename: 'todo-manager.js' });
 
 const todoManager = sandbox.window.YuzukiMemory.TodoManager;
 
+test('timed todos are removed after the 10-minute expiry delay', () => {
+    const text = '〔1〕2035-07-19 10:00·审查财务报表（高）';
+    const scheduled = todoManager.parseTodoItems(text)[0];
+
+    assert.equal(todoManager.EXPIRY_DELAY_MINUTES, 10);
+
+    const beforeExpiry = todoManager.pruneTodoText(text, scheduled.ordinalMinutes + 9);
+    assert.equal(beforeExpiry.changed, false);
+    assert.equal(beforeExpiry.value, text);
+
+    const atExpiry = todoManager.pruneTodoText(text, scheduled.ordinalMinutes + 10);
+    assert.equal(atExpiry.changed, true);
+    assert.equal(atExpiry.removed.length, 1);
+    assert.equal(atExpiry.value, '');
+});
+
+test('multiple user-deleted todos stay excluded from later merges', () => {
+    const record = {
+        values: {
+            待办事项: [
+                '〔1〕2035-07-19 10:00·审查财务报表（高）',
+                '〔2〕2035-07-19 11:00·参加业务会议（中）',
+            ].join(';'),
+        },
+    };
+
+    for (let count = 0; count < 2; count += 1) {
+        const deleted = todoManager.deleteTodoItemAt(record.values.待办事项, 0);
+        assert.equal(deleted.changed, true);
+        todoManager.markTodoItemsDeleted(record, [deleted.removed]);
+        record.values.待办事项 = deleted.value;
+    }
+
+    const merged = todoManager.mergeTodoTexts(record.values.待办事项, [
+        '〔1〕2035-07-19 10:00·再次输出旧财务事项（低）',
+        '〔2〕2035-07-19 11:00·再次输出旧会议事项（高）',
+        '〔3〕2035-07-19 12:00·新增午餐安排（中）',
+    ].join(';'), {
+        deletedIdentities: todoManager.getDeletedTodoIdentities(record),
+    });
+
+    assert.deepEqual(
+        Array.from(todoManager.parseTodoItems(merged), (item) => item.text),
+        ['新增午餐安排'],
+    );
+    assert.equal(todoManager.getDeletedTodoIdentities(record).length, 2);
+});
+
+test('todo ledger reconciliation preserves a user-edited item after its source floor changes', () => {
+    const expected = '〔1〕2035-07-19 10:00·调查遗迹（高）';
+    const current = '〔1〕2035-07-19 10:00·调查遗迹并带回样本（低）';
+
+    const reconciled = todoManager.reconcileTodoTexts(current, expected, '');
+
+    assert.deepEqual(
+        Array.from(todoManager.parseTodoItems(reconciled), (item) => item.rawContent),
+        ['2035-07-19 10:00·调查遗迹并带回样本（低）'],
+    );
+});
+
 test('todo items display in chronological order while retaining their source indexes', () => {
     const items = todoManager.parseTodoItems([
         '〔1〕2035-07-19 14:00·第二轮业务面试（高）',

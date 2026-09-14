@@ -4,7 +4,8 @@
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const CHARACTER_TABLE_ID = 'character_profile';
     const TODO_FIELD_NAME = '待办事项';
-    const EXPIRY_DELAY_MINUTES = 60;
+    const DELETED_TODO_IDENTITIES_FIELD = 'deletedTodoIdentities';
+    const EXPIRY_DELAY_MINUTES = 10;
     const MEMORY_TAG_PATTERN = /<(Memory|GaigaiMemory|memory|tableEdit|gaigaimemory|tableedit)>[\s\S]*?<\/\1>/gi;
     const BRACKETED_TODO_MARKER_SOURCE = '[（(〔\\[]\\s*\\d+\\s*[）)〕\\]]';
     const TODO_MARKER_SOURCE = '(?:[（(〔\\[]\\s*\\d+\\s*[）)〕\\]]|\\d+\\s*[）)〕\\].、])';
@@ -378,6 +379,64 @@
         return `content:${dateTime}|${text}`;
     }
 
+    function normalizeDeletedTodoIdentities(identities = []) {
+        return [...new Set((Array.isArray(identities) ? identities : [])
+            .map((identity) => String(identity || '').trim())
+            .filter((identity) => identity && identity !== 'content:|'))];
+    }
+
+    function getDeletedTodoIdentities(record = {}) {
+        return normalizeDeletedTodoIdentities(record?.[DELETED_TODO_IDENTITIES_FIELD]);
+    }
+
+    function setDeletedTodoIdentities(record = {}, identities = []) {
+        if (!record || typeof record !== 'object') return [];
+        const normalized = normalizeDeletedTodoIdentities(identities);
+        if (normalized.length) record[DELETED_TODO_IDENTITIES_FIELD] = normalized;
+        else delete record[DELETED_TODO_IDENTITIES_FIELD];
+        return normalized;
+    }
+
+    function mergeDeletedTodoIdentities(...groups) {
+        return normalizeDeletedTodoIdentities(groups.flatMap((group) => (
+            Array.isArray(group) ? group : []
+        )));
+    }
+
+    function markTodoItemsDeleted(record = {}, items = []) {
+        const deletedItems = Array.isArray(items) ? items : [items];
+        const additions = deletedItems.map(getTodoIdentity);
+        return setDeletedTodoIdentities(record, mergeDeletedTodoIdentities(
+            getDeletedTodoIdentities(record),
+            additions,
+        ));
+    }
+
+    function filterDeletedTodoItems(items = [], deletedIdentities = []) {
+        const deleted = new Set(normalizeDeletedTodoIdentities(deletedIdentities));
+        if (!deleted.size) return Array.isArray(items) ? items : [];
+        return (Array.isArray(items) ? items : []).filter((item) => !deleted.has(getTodoIdentity(item)));
+    }
+
+    function filterDeletedTodoText(text = '', deletedIdentities = []) {
+        const items = parseTodoItems(text);
+        if (!items.length) return String(text || '').trim();
+        const kept = filterDeletedTodoItems(items, deletedIdentities);
+        return kept.length === items.length ? String(text || '').trim() : serializeTodoItems(kept);
+    }
+
+    function applyDeletedTodoPolicy(record = {}, fieldName = TODO_FIELD_NAME) {
+        if (!record?.values || typeof record.values !== 'object') {
+            return { changed: false, value: '', deletedIdentities: getDeletedTodoIdentities(record) };
+        }
+        const currentValue = String(record.values[fieldName] || '').trim();
+        const deletedIdentities = getDeletedTodoIdentities(record);
+        const nextValue = filterDeletedTodoText(currentValue, deletedIdentities);
+        if (nextValue === currentValue) return { changed: false, value: currentValue, deletedIdentities };
+        record.values[fieldName] = nextValue;
+        return { changed: true, value: nextValue, deletedIdentities };
+    }
+
     function mergeUniqueTodoItems(...groups) {
         const merged = [];
         const identities = new Set();
@@ -410,12 +469,45 @@
         };
     }
 
-    function mergeTodoTexts(current = '', next = '') {
+    function mergeTodoTexts(current = '', next = '', options = {}) {
         const currentItems = parseTodoItems(current);
-        const nextItems = parseTodoItems(next);
+        const deletedIdentities = Array.isArray(options) ? options : options?.deletedIdentities;
+        const nextItems = filterDeletedTodoItems(parseTodoItems(next), deletedIdentities);
         const merged = mergeUniqueTodoItems(currentItems, nextItems);
         if (merged.length) return serializeTodoItems(merged);
         return [String(current || '').trim(), String(next || '').trim()].find(Boolean) || '';
+    }
+
+    function reconcileTodoTexts(current = '', expected = '', rebuilt = '', options = {}) {
+        const currentItems = parseTodoItems(current);
+        const expectedItems = parseTodoItems(expected);
+        const deletedIdentities = normalizeDeletedTodoIdentities(options?.deletedIdentities);
+        const deleted = new Set(deletedIdentities);
+        const currentByIdentity = new Map(currentItems.map((item) => [getTodoIdentity(item), item]));
+        const expectedByIdentity = new Map(expectedItems.map((item) => [getTodoIdentity(item), item]));
+        const externallyRemoved = new Set(expectedItems
+            .map(getTodoIdentity)
+            .filter((identity) => !currentByIdentity.has(identity)));
+
+        const restored = parseTodoItems(rebuilt)
+            .filter((item) => {
+                const identity = getTodoIdentity(item);
+                return !deleted.has(identity) && !externallyRemoved.has(identity);
+            })
+            .map((item) => {
+                const identity = getTodoIdentity(item);
+                const currentItem = currentByIdentity.get(identity);
+                const expectedItem = expectedByIdentity.get(identity);
+                return currentItem && expectedItem && currentItem.rawContent !== expectedItem.rawContent
+                    ? currentItem
+                    : item;
+            });
+        const externalAdditions = currentItems.filter((item) => (
+            !deleted.has(getTodoIdentity(item))
+            && (!expectedByIdentity.has(getTodoIdentity(item))
+                || expectedByIdentity.get(getTodoIdentity(item))?.rawContent !== item.rawContent)
+        ));
+        return serializeTodoItems(mergeUniqueTodoItems(restored, externalAdditions));
     }
 
     function parseStoryTimeText(text = '') {
@@ -546,7 +638,7 @@
         const currentOrdinalDay = Math.floor(currentOrdinalMinutes / 1440);
         const removed = items.filter((item) => (
             (Number.isFinite(item.ordinalMinutes)
-                && currentOrdinalMinutes - item.ordinalMinutes > EXPIRY_DELAY_MINUTES)
+                && currentOrdinalMinutes - item.ordinalMinutes >= EXPIRY_DELAY_MINUTES)
             || (!Number.isFinite(item.ordinalMinutes)
                 && Number.isFinite(item.ordinalDay)
                 && currentOrdinalDay > item.ordinalDay)
@@ -687,6 +779,7 @@
 
     YuzukiMemory.TodoManager = Object.assign(YuzukiMemory.TodoManager || {}, {
         EXPIRY_DELAY_MINUTES,
+        DELETED_TODO_IDENTITIES_FIELD,
         bind,
         parseTodoItems,
         sortTodoItemsChronologically,
@@ -695,7 +788,15 @@
         deleteTodoItemAt,
         fillMissingTodoDates,
         dedupeTodoText,
+        getTodoIdentity,
+        getDeletedTodoIdentities,
+        setDeletedTodoIdentities,
+        mergeDeletedTodoIdentities,
+        markTodoItemsDeleted,
+        filterDeletedTodoText,
+        applyDeletedTodoPolicy,
         mergeTodoTexts,
+        reconcileTodoTexts,
         parseStoryTimeText,
         getStoryTimeForFloor,
         getStoryTimeForRange,

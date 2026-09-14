@@ -1709,6 +1709,9 @@
             records.push(record);
         } else {
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
+            if (table.id === 'character_profile') {
+                YuzukiMemory.TodoManager?.applyDeletedTodoPolicy?.(record);
+            }
             if (!primaryKeyMatcher) record.values[primary] = normalizedValues[primary];
             (table.columns || []).forEach((column) => {
                 const name = cleanColumnName(column);
@@ -1717,13 +1720,21 @@
                 if (!nextValue) return;
                 const currentValue = String(record.values[name] || '').trim();
                 if (!mergedForOptimize && isFillOnceColumn(column) && currentValue) return;
-                if (mergedForOptimize) {
-                    record.values[name] = nextValue;
+                if (table.id === 'character_profile' && name === '待办事项') {
+                    const deletedIdentities = YuzukiMemory.TodoManager?.getDeletedTodoIdentities?.(record) || [];
+                    const filteredTodoValue = YuzukiMemory.TodoManager?.filterDeletedTodoText?.(
+                        nextValue,
+                        deletedIdentities,
+                    ) ?? nextValue;
+                    record.values[name] = mergedForOptimize
+                        ? filteredTodoValue
+                        : (YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[name], filteredTodoValue, {
+                            deletedIdentities,
+                        }) || [String(record.values[name] || '').trim(), filteredTodoValue].filter(Boolean).join('；'));
                     return;
                 }
-                if (isAppendColumn(column) && table.id === 'character_profile' && name === '待办事项') {
-                    record.values[name] = YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[name], nextValue)
-                        || [String(record.values[name] || '').trim(), nextValue].filter(Boolean).join('；');
+                if (mergedForOptimize) {
+                    record.values[name] = nextValue;
                     return;
                 }
                 record.values[name] = isAppendColumn(column)

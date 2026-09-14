@@ -14865,6 +14865,7 @@
                 window.alert('未找到对应的待办事项，请刷新后重试。');
                 return;
             }
+            YuzukiMemory.TodoManager?.markTodoItemsDeleted?.(record, [result.removed]);
             persistTodoChange(result.value, '当前会话尚未就绪，待办事项未删除。');
         });
 

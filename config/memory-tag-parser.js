@@ -450,6 +450,11 @@
         const primaryName = getPrimaryColumnName(table);
         const sourceRecords = matcher.findMatchingRecords(records, primaryName, incomingPrimaryValue);
         if (sourceRecords.length < 2) return null;
+        const deletedTodoIdentities = table.id === 'character_profile'
+            ? (YuzukiMemory.TodoManager?.mergeDeletedTodoIdentities?.(
+                ...sourceRecords.map((sourceRecord) => sourceRecord?.deletedTodoIdentities)
+            ) || [])
+            : [];
 
         const sourceSet = new Set(sourceRecords);
         const sourceIndexes = records
@@ -474,6 +479,9 @@
         mergedValues[primaryName] = matcher.formatNames?.(incomingPrimaryValue) || String(incomingPrimaryValue || '').trim();
 
         const record = createRecord(table, mergedValues);
+        if (deletedTodoIdentities.length) {
+            YuzukiMemory.TodoManager?.setDeletedTodoIdentities?.(record, deletedTodoIdentities);
+        }
         const sourceIds = new Set(sourceRecords.map((sourceRecord) => String(sourceRecord?.id || '')).filter(Boolean));
         for (let index = records.length - 1; index >= 0; index -= 1) {
             if (sourceSet.has(records[index])) records.splice(index, 1);
@@ -780,6 +788,9 @@
             records.push(record);
         }
         record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        if (table.id === 'character_profile') {
+            YuzukiMemory.TodoManager?.applyDeletedTodoPolicy?.(record);
+        }
         if (!primaryKeyMatcher) record.values[primaryName] = primaryValue;
 
         validUpdates.forEach(({ column, value }) => {
@@ -790,11 +801,18 @@
             const shouldAppend = isAppendColumn(column);
             if (table.id === 'character_profile' && columnName === '待办事项') {
                 const datedTodoValue = YuzukiMemory.TodoManager?.fillMissingTodoDates?.(value, options.storyTime) || value;
-                const todoValue = YuzukiMemory.TodoManager?.dedupeTodoText?.(datedTodoValue) || datedTodoValue;
+                const dedupedTodoValue = YuzukiMemory.TodoManager?.dedupeTodoText?.(datedTodoValue) || datedTodoValue;
+                const deletedIdentities = YuzukiMemory.TodoManager?.getDeletedTodoIdentities?.(record) || [];
+                const todoValue = YuzukiMemory.TodoManager?.filterDeletedTodoText?.(
+                    dedupedTodoValue,
+                    deletedIdentities,
+                ) ?? dedupedTodoValue;
                 record.values[columnName] = mergedForOptimize
                     ? todoValue
                     : shouldAppend
-                    ? (YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[columnName], todoValue)
+                    ? (YuzukiMemory.TodoManager?.mergeTodoTexts?.(record.values[columnName], todoValue, {
+                        deletedIdentities,
+                    })
                         || appendCellValue(record.values[columnName], todoValue))
                     : todoValue;
                 return;

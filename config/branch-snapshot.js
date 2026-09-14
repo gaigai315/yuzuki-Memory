@@ -16,6 +16,7 @@
         'characterVectorSynced',
         'itemTrackingVectorSynced',
         'worldSettingVectorSynced',
+        'deletedTodoIdentities',
     ]);
     const snapshotsBySession = {};
     let snapshots = {};
@@ -261,15 +262,18 @@
         return { record: null, index: -1 };
     }
 
-    function applyCurrentRecordPolicy(currentRecord, restoredRecord) {
+    function applyCurrentRecordPolicy(currentRecord, restoredRecord, table = null) {
         if (!currentRecord || !restoredRecord) return restoredRecord;
         RECORD_POLICY_FIELDS.forEach((field) => {
             if (Object.prototype.hasOwnProperty.call(currentRecord, field)) {
-                restoredRecord[field] = currentRecord[field];
+                restoredRecord[field] = clone(currentRecord[field]);
             } else {
                 delete restoredRecord[field];
             }
         });
+        if (table?.id === 'character_profile') {
+            YuzukiMemory.TodoManager?.applyDeletedTodoPolicy?.(restoredRecord);
+        }
         return restoredRecord;
     }
 
@@ -280,7 +284,7 @@
             const currentMatch = findCurrentRecord(currentRecords, table, restoredRecord, usedCurrent);
             if (!currentMatch.record) return;
             usedCurrent.add(currentMatch.index);
-            applyCurrentRecordPolicy(currentMatch.record, restoredRecord);
+            applyCurrentRecordPolicy(currentMatch.record, restoredRecord, table);
         });
         return restoredRecords;
     }

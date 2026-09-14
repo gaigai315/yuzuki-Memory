@@ -29,6 +29,7 @@ globalThis.window = {
     YuzukiMemory: {},
     setTimeout: () => 1,
     clearTimeout() {},
+    addEventListener() {},
     dispatchEvent() {},
 };
 
@@ -51,12 +52,14 @@ window.YuzukiMemory.Storage = {
 
 const snapshotSource = fs.readFileSync(new URL('../config/branch-snapshot.js', import.meta.url), 'utf8');
 vm.runInThisContext(snapshotSource, { filename: 'branch-snapshot.js' });
+const todoSource = fs.readFileSync(new URL('../config/todo-manager.js', import.meta.url), 'utf8');
+vm.runInThisContext(todoSource, { filename: 'todo-manager.js' });
 const branchSnapshot = window.YuzukiMemory.BranchSnapshot;
 
 function createState() {
     return {
         tables: [
-            { id: 'character_profile', name: '角色档案', columns: ['#名称', '状态'] },
+            { id: 'character_profile', name: '角色档案', columns: ['#名称', '状态', '#待办事项'] },
             { id: 'memory_summary', name: '记忆总结', columns: ['#标题', '内容'] },
         ],
         records: {
@@ -66,7 +69,11 @@ function createState() {
                 characterVectorSynced: true,
                 itemTrackingVectorSynced: true,
                 worldSettingVectorSynced: true,
-                values: { 名称: '阿德里安·克罗夫特|阿德里安', 状态: '平静' },
+                values: {
+                    名称: '阿德里安·克罗夫特|阿德里安',
+                    状态: '平静',
+                    待办事项: '〔1〕2035-07-19 10:00·调查遗迹（高）',
+                },
             }],
             memory_summary: [],
         },
@@ -85,6 +92,9 @@ test('forced branch restore rolls back content but keeps current vector policy',
     currentRecord.characterVectorSynced = false;
     currentRecord.itemTrackingVectorSynced = false;
     currentRecord.worldSettingVectorSynced = false;
+    const deleted = window.YuzukiMemory.TodoManager.deleteTodoItemAt(currentRecord.values.待办事项, 0);
+    window.YuzukiMemory.TodoManager.markTodoItemsDeleted(currentRecord, [deleted.removed]);
+    currentRecord.values.待办事项 = deleted.value;
 
     assert.equal(branchSnapshot.restoreSnapshot(0, { force: true }), true);
     const restoredRecord = storedState.records.character_profile[0];
@@ -95,4 +105,6 @@ test('forced branch restore rolls back content but keeps current vector policy',
     assert.equal(restoredRecord.characterVectorSynced, false);
     assert.equal(restoredRecord.itemTrackingVectorSynced, false);
     assert.equal(restoredRecord.worldSettingVectorSynced, false);
+    assert.equal(restoredRecord.values.待办事项, '');
+    assert.equal(restoredRecord.deletedTodoIdentities.length, 1);
 });

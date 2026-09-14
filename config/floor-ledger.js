@@ -20,6 +20,7 @@
         'characterVectorSynced',
         'itemTrackingVectorSynced',
         'worldSettingVectorSynced',
+        'deletedTodoIdentities',
     ]);
     let bound = false;
     let guardsBound = false;
@@ -483,7 +484,15 @@
         });
     }
 
-    function mergeAppendValue(current, expected, rebuilt, table) {
+    function mergeAppendValue(current, expected, rebuilt, table, options = {}) {
+        if (table?.id === 'character_profile'
+            && options.fieldName === '待办事项'
+            && Array.isArray(options.deletedTodoIdentities)
+            && options.deletedTodoIdentities.length) {
+            return YuzukiMemory.TodoManager?.reconcileTodoTexts?.(current, expected, rebuilt, {
+                deletedIdentities: options.deletedTodoIdentities,
+            }) ?? String(current || '');
+        }
         const currentItems = splitAppendValue(current, table);
         const expectedItems = splitAppendValue(expected, table);
         const rebuiltItems = splitAppendValue(rebuilt, table);
@@ -536,7 +545,10 @@
             if (currentValue === expectedValue) return;
             changed = true;
             rebuiltRecord.values[key] = isAppendColumn(table, key)
-                ? mergeAppendValue(currentValue, expectedValue, rebuiltRecord.values[key], table)
+                ? mergeAppendValue(currentValue, expectedValue, rebuiltRecord.values[key], table, {
+                    fieldName: key,
+                    deletedTodoIdentities: currentRecord?.deletedTodoIdentities,
+                })
                 : currentValue;
         });
         return changed;
@@ -547,8 +559,18 @@
             const leftHasField = Object.prototype.hasOwnProperty.call(left || {}, field);
             const rightHasField = Object.prototype.hasOwnProperty.call(right || {}, field);
             return leftHasField !== rightHasField
-                || (leftHasField && !Object.is(left[field], right[field]));
+                || (leftHasField && !policyValuesEqual(left[field], right[field]));
         });
+    }
+
+    function policyValuesEqual(left, right) {
+        if (Object.is(left, right)) return true;
+        if (!left || !right || typeof left !== 'object' || typeof right !== 'object') return false;
+        try {
+            return JSON.stringify(left) === JSON.stringify(right);
+        } catch (_error) {
+            return false;
+        }
     }
 
     function applyRecordPolicyOverlay(currentRecord, expectedRecord, rebuiltRecord) {
@@ -556,9 +578,9 @@
             const currentHasField = Object.prototype.hasOwnProperty.call(currentRecord || {}, field);
             const expectedHasField = Object.prototype.hasOwnProperty.call(expectedRecord || {}, field);
             const isOverride = currentHasField !== expectedHasField
-                || (currentHasField && !Object.is(currentRecord[field], expectedRecord[field]));
+                || (currentHasField && !policyValuesEqual(currentRecord[field], expectedRecord[field]));
             if (!isOverride) return;
-            if (currentHasField) rebuiltRecord[field] = currentRecord[field];
+            if (currentHasField) rebuiltRecord[field] = clone(currentRecord[field]);
             else delete rebuiltRecord[field];
         });
     }
@@ -646,6 +668,9 @@
                 const existing = findRecordMatch(rebuiltList, table, currentRecord, new Set());
                 if (!existing.record) rebuiltList.push(clone(currentRecord));
             });
+            if (table.id === 'character_profile') {
+                rebuiltList.forEach((record) => YuzukiMemory.TodoManager?.applyDeletedTodoPolicy?.(record));
+            }
         });
         return rebuiltRecords;
     }

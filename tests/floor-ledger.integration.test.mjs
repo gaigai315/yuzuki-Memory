@@ -109,6 +109,9 @@ const parserSource = fs.readFileSync(new URL('../config/memory-tag-parser.js', i
 vm.runInThisContext(parserSource, { filename: 'memory-tag-parser.js' });
 const ledgerSource = fs.readFileSync(new URL('../config/floor-ledger.js', import.meta.url), 'utf8');
 vm.runInThisContext(ledgerSource, { filename: 'floor-ledger.js' });
+const todoSource = fs.readFileSync(new URL('../config/todo-manager.js', import.meta.url), 'utf8');
+vm.runInThisContext(todoSource, { filename: 'todo-manager.js' });
+timers.clear();
 
 function flushTimers() {
     let guard = 0;
@@ -522,6 +525,54 @@ test('deleting assistant floors removes their append items but keeps later manua
     assert.equal(rebuiltRecord.values.当前位置, '');
     assert.equal(rebuiltRecord.values.待办事项, '用户手工补充');
     assert.equal(rebuiltRecord.values.约定, '用户手工约定');
+});
+
+test('user-deleted todos do not return in later assistant floors or ledger replay', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const todoManager = window.YuzukiMemory.TodoManager;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('开始'),
+        assistantMemoryMessage([
+            '#角色档案',
+            '[爱丽丝] | #待办事项: 〔1〕2035-07-19 10:00·调查遗迹（高）;〔2〕2035-07-19 11:00·寻找线索（中）',
+        ].join('\n')),
+    ];
+
+    assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false }).success, true);
+    const currentRecord = storedState.records.character_profile[0];
+    for (let count = 0; count < 2; count += 1) {
+        const deleted = todoManager.deleteTodoItemAt(currentRecord.values.待办事项, 0);
+        assert.equal(deleted.changed, true);
+        todoManager.markTodoItemsDeleted(currentRecord, [deleted.removed]);
+        currentRecord.values.待办事项 = deleted.value;
+    }
+
+    chat.push(
+        userMessage('继续'),
+        assistantMemoryMessage([
+            '#角色档案',
+            '[爱丽丝] | 当前位置: 森林 | #待办事项: 〔1〕2035-07-19 10:00·调查遗迹（低）;〔2〕2035-07-19 11:00·寻找线索（高）;〔3〕2035-07-19 12:00·返回营地（中）',
+        ].join('\n')),
+    );
+    assert.equal(parser.applyMemoryText(chat[3].mes, { floor: 3, dispatch: false }).success, true);
+
+    let rebuiltRecord = storedState.records.character_profile[0];
+    assert.deepEqual(
+        Array.from(todoManager.parseTodoItems(rebuiltRecord.values.待办事项), (item) => item.text),
+        ['返回营地'],
+    );
+    assert.equal(rebuiltRecord.deletedTodoIdentities.length, 2);
+
+    chat.splice(1, 1);
+    assert.equal(ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true }).changed, true);
+    rebuiltRecord = storedState.records.character_profile[0];
+    assert.deepEqual(
+        Array.from(todoManager.parseTodoItems(rebuiltRecord.values.待办事项), (item) => item.text),
+        ['返回营地'],
+    );
+    assert.equal(rebuiltRecord.deletedTodoIdentities.length, 2);
 });
 
 test('plot replay removes deleted realtime lines and keeps a manually added line with metadata aligned', () => {
