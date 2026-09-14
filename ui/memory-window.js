@@ -13582,8 +13582,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】优化实时填表注入边界问题。',
-            '【新增】任务世界书新增搜索功能。',
+            '【优化】待办事项过期 10 分钟后自动清理。',
+            '【修复】手动删除的待办不会在新正文或回档后重新出现。',
+            '【新增】支持古代时间状态栏，剧情摘要可正确显示古代日期和时段。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
