@@ -69,7 +69,7 @@
         return { year, month, day };
     }
 
-    function parseMonthDayParts(dateText = '', fallbackYear = null) {
+    function parseMonthDayParts(dateText = '', fallbackYear = null, calendar = 'numeric') {
         const normalizedDate = String(dateText || '').trim().replace(/／/g, '/');
         const chineseDateMatch = normalizedDate.match(/^(\d{1,2})月\s*(\d{1,2})日$/);
         const delimitedDateMatch = normalizedDate.match(/^(\d{1,2})\s*([-/])\s*(\d{1,2})$/);
@@ -78,13 +78,91 @@
 
         const month = Number(chineseDateMatch?.[1] ?? delimitedDateMatch[1]);
         const day = Number(chineseDateMatch?.[2] ?? delimitedDateMatch[3]);
-        if (!isValidDateTimeParts(year, month, day, 0, 0)) return null;
+        const valid = calendar === 'ancient'
+            ? isValidAncientDateTimeParts(year, month, day, 0, 0)
+            : isValidDateTimeParts(year, month, day, 0, 0);
+        if (!valid) return null;
         return { year, month, day };
     }
 
     function formatChineseDate(parts) {
         if (!parts) return '';
         return `${parts.year}年${String(parts.month).padStart(2, '0')}月${String(parts.day).padStart(2, '0')}日`;
+    }
+
+    function normalizeEra(value = '') {
+        return String(value || '').normalize('NFKC').replace(/\s+/g, '').trim();
+    }
+
+    function isValidAncientDateTimeParts(year, month, day, hour, minute) {
+        return Number.isInteger(year)
+            && year >= 1
+            && year <= 999999
+            && Number.isInteger(month)
+            && month >= 1
+            && month <= 12
+            && Number.isInteger(day)
+            && day >= 1
+            && day <= 30
+            && Number.isInteger(hour)
+            && hour >= 0
+            && hour <= 23
+            && Number.isInteger(minute)
+            && minute >= 0
+            && minute <= 59;
+    }
+
+    function toAncientOrdinalMinutes(parts) {
+        if (!parts || !isValidAncientDateTimeParts(
+            Number(parts.year),
+            Number(parts.month),
+            Number(parts.day),
+            Number(parts.hour),
+            Number(parts.minute)
+        )) return null;
+        return ((((Number(parts.year) - 1) * 12 + Number(parts.month) - 1) * 30 + Number(parts.day) - 1) * 1440)
+            + Number(parts.hour) * 60
+            + Number(parts.minute);
+    }
+
+    function toAncientOrdinalDay(parts) {
+        if (!parts) return null;
+        const ordinalMinutes = toAncientOrdinalMinutes({ ...parts, hour: 0, minute: 0 });
+        return Number.isFinite(ordinalMinutes) ? Math.floor(ordinalMinutes / 1440) : null;
+    }
+
+    function getTodoDateMatchAtStart(value = '') {
+        const source = String(value || '');
+        const sharedMatch = (YuzukiMemory.PlotSummary?.getDateTokenMatches?.(source) || [])
+            .find((match) => Number(match?.index) === 0);
+        if (sharedMatch) {
+            const parsed = YuzukiMemory.PlotSummary?.parseDateToken?.(sharedMatch.token);
+            if (parsed?.style === 'ancient' && isValidAncientDateTimeParts(
+                Number(parsed.year),
+                Number(parsed.month),
+                Number(parsed.day),
+                0,
+                0
+            )) {
+                return {
+                    dateText: String(sharedMatch.token || '').replace(/\s+/g, ''),
+                    length: Number(sharedMatch.length) || String(sharedMatch.token || '').length,
+                    parts: {
+                        year: Number(parsed.year),
+                        month: Number(parsed.month),
+                        day: Number(parsed.day),
+                    },
+                    calendar: 'ancient',
+                    era: normalizeEra(parsed.era),
+                };
+            }
+        }
+
+        const match = source.match(new RegExp(`^(${TODO_DATE_SOURCE})`));
+        if (!match) return null;
+        const dateText = match[1].replace(/\s+/g, '');
+        const parts = parseDateParts(dateText);
+        return parts ? { dateText, length: match[0].length, parts, calendar: 'numeric', era: '' } : null;
     }
 
     function parseDateTimeParts(dateText = '', timeText = '') {
@@ -148,41 +226,60 @@
                 if (priorityMatch) content = content.slice(0, priorityMatch.index).trim();
 
                 const rawContent = entry.replace(new RegExp(`^${TODO_MARKER_SOURCE}\\s*`), '').trim();
-                const detailMatch = content.match(new RegExp(`^(${TODO_DATE_SOURCE})\\s*(\\d{1,2}[:：]\\d{2})\\s*[·・•:：]\\s*(.+)$`));
+                const dateMatch = getTodoDateMatchAtStart(content);
+                const afterDate = dateMatch ? content.slice(dateMatch.length).trimStart() : '';
+                const detailMatch = afterDate.match(/^(\d{1,2})\s*[:：]\s*(\d{2})\s*[·・•:：]\s*(.+)$/);
 
-                if (detailMatch) {
-                    const dateText = detailMatch[1].replace(/\s+/g, '');
-                    const timeText = detailMatch[2].replace('：', ':');
-                    const parts = parseDateTimeParts(dateText, timeText);
-                    if (parts) {
+                if (dateMatch && detailMatch) {
+                    const hour = Number(detailMatch[1]);
+                    const minute = Number(detailMatch[2]);
+                    const parts = { ...dateMatch.parts, hour, minute };
+                    const valid = dateMatch.calendar === 'ancient'
+                        ? isValidAncientDateTimeParts(parts.year, parts.month, parts.day, parts.hour, parts.minute)
+                        : isValidDateTimeParts(parts.year, parts.month, parts.day, parts.hour, parts.minute);
+                    if (valid) {
+                        const timeText = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+                        const ordinalMinutes = dateMatch.calendar === 'ancient'
+                            ? toAncientOrdinalMinutes(parts)
+                            : toOrdinalMinutes(parts);
                         return {
                             text: detailMatch[3].trim(),
-                            dateTime: `${dateText} ${timeText}`,
+                            dateTime: `${dateMatch.dateText} ${timeText}`,
                             priority,
                             rawContent,
                             sourceIndex,
                             dateTimeParts: parts,
-                            ordinalMinutes: toOrdinalMinutes(parts),
-                            ordinalDay: toOrdinalDay(parts),
+                            ordinalMinutes,
+                            ordinalDay: dateMatch.calendar === 'ancient'
+                                ? toAncientOrdinalDay(parts)
+                                : toOrdinalDay(parts),
+                            ancientOrdinalMinutes: toAncientOrdinalMinutes(parts),
+                            ancientOrdinalDay: toAncientOrdinalDay(parts),
+                            calendar: dateMatch.calendar,
+                            era: dateMatch.era,
                         };
                     }
                 }
 
-                const dateOnlyMatch = content.match(new RegExp(`^(${TODO_DATE_SOURCE})\\s*(?:[·・•:：,，、]\\s*)?(.+)$`));
-                if (dateOnlyMatch) {
-                    const dateText = dateOnlyMatch[1].replace(/\s+/g, '');
-                    const dateParts = parseDateParts(dateText);
-                    const ordinalDay = toOrdinalDay(dateParts);
-                    if (dateParts && Number.isFinite(ordinalDay)) {
+                const dateOnlyMatch = afterDate.match(/^(?:[·・•:：,，、]\s*)?(.+)$/);
+                if (dateMatch && dateOnlyMatch) {
+                    const ordinalDay = dateMatch.calendar === 'ancient'
+                        ? toAncientOrdinalDay(dateMatch.parts)
+                        : toOrdinalDay(dateMatch.parts);
+                    if (Number.isFinite(ordinalDay)) {
                         return {
-                            text: dateOnlyMatch[2].trim(),
-                            dateTime: dateText,
+                            text: dateOnlyMatch[1].trim(),
+                            dateTime: dateMatch.dateText,
                             priority,
                             rawContent,
                             sourceIndex,
-                            dateParts,
+                            dateParts: dateMatch.parts,
                             ordinalMinutes: null,
                             ordinalDay,
+                            ancientOrdinalMinutes: null,
+                            ancientOrdinalDay: toAncientOrdinalDay(dateMatch.parts),
+                            calendar: dateMatch.calendar,
+                            era: dateMatch.era,
                         };
                     }
                 }
@@ -221,19 +318,34 @@
     function normalizeTodoDateTimeInput(value = '') {
         const source = String(value || '').trim();
         if (!source) return { value: '', parts: null };
-        const match = source.match(new RegExp(`^(${TODO_DATE_SOURCE})\\s*(\\d{1,2}[:：]\\d{2})$`));
-        if (!match) {
-            const dateParts = parseDateParts(source);
-            return dateParts ? { value: source.replace(/\s+/g, ''), parts: dateParts } : null;
+        const dateMatch = getTodoDateMatchAtStart(source);
+        if (!dateMatch) return null;
+        const remainder = source.slice(dateMatch.length).trim();
+        if (!remainder) {
+            return {
+                value: dateMatch.dateText,
+                parts: dateMatch.parts,
+                calendar: dateMatch.calendar,
+                era: dateMatch.era,
+            };
         }
 
-        const dateText = match[1].replace(/\s+/g, '');
-        const timeText = match[2].replace('：', ':');
-        const parts = parseDateTimeParts(dateText, timeText);
-        if (!parts) return null;
+        const timeMatch = remainder.match(/^(\d{1,2})\s*[:：]\s*(\d{2})$/);
+        if (!timeMatch) return null;
+        const parts = {
+            ...dateMatch.parts,
+            hour: Number(timeMatch[1]),
+            minute: Number(timeMatch[2]),
+        };
+        const valid = dateMatch.calendar === 'ancient'
+            ? isValidAncientDateTimeParts(parts.year, parts.month, parts.day, parts.hour, parts.minute)
+            : isValidDateTimeParts(parts.year, parts.month, parts.day, parts.hour, parts.minute);
+        if (!valid) return null;
         return {
-            value: `${dateText} ${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`,
+            value: `${dateMatch.dateText} ${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`,
             parts,
+            calendar: dateMatch.calendar,
+            era: dateMatch.era,
         };
     }
 
@@ -313,40 +425,59 @@
 
     function fillMissingTodoDates(text = '', storyTime = null) {
         const source = normalizeTodoText(text);
-        const storyDateParts = parseDateParts(storyTime?.date)
-            || (isValidDateTimeParts(
-                Number(storyTime?.dateTimeParts?.year),
-                Number(storyTime?.dateTimeParts?.month),
-                Number(storyTime?.dateTimeParts?.day),
+        const storyDateSource = String(storyTime?.date || '').trim();
+        const storyDateMatch = getTodoDateMatchAtStart(storyDateSource);
+        const storyCalendar = storyDateMatch?.calendar === 'ancient' || storyTime?.calendar === 'ancient'
+            ? 'ancient'
+            : 'numeric';
+        const fallbackStoryDateParts = {
+            year: Number(storyTime?.dateTimeParts?.year),
+            month: Number(storyTime?.dateTimeParts?.month),
+            day: Number(storyTime?.dateTimeParts?.day),
+        };
+        const validFallbackStoryDate = storyCalendar === 'ancient'
+            ? isValidAncientDateTimeParts(
+                fallbackStoryDateParts.year,
+                fallbackStoryDateParts.month,
+                fallbackStoryDateParts.day,
                 0,
                 0
-            ) ? {
-                year: Number(storyTime.dateTimeParts.year),
-                month: Number(storyTime.dateTimeParts.month),
-                day: Number(storyTime.dateTimeParts.day),
-            } : null);
-        const date = formatChineseDate(storyDateParts);
+            )
+            : isValidDateTimeParts(
+                fallbackStoryDateParts.year,
+                fallbackStoryDateParts.month,
+                fallbackStoryDateParts.day,
+                0,
+                0
+            );
+        const storyDateParts = storyDateMatch?.parts || (validFallbackStoryDate ? fallbackStoryDateParts : null);
+        const date = storyCalendar === 'ancient' && storyDateMatch?.calendar === 'ancient'
+            ? storyDateMatch.dateText
+            : formatChineseDate(storyDateParts);
         if (!source || !date) return String(text || '').trim();
 
         let changed = false;
         const markerPattern = new RegExp(`^${TODO_MARKER_SOURCE}\\s*`);
-        const fullDatePattern = new RegExp(`^${TODO_DATE_SOURCE}`);
         const monthDayPattern = new RegExp(`^(${TODO_MONTH_DAY_SOURCE})`);
         const entries = source.split(/\n+/).map((entry) => {
             const value = String(entry || '').trim();
             if (!value) return '';
             const marker = value.match(markerPattern)?.[0] || '';
             const content = value.slice(marker.length).trimStart();
-            if (fullDatePattern.test(content)) return value;
+            if (getTodoDateMatchAtStart(content)) return value;
 
             const monthDayMatch = content.match(monthDayPattern);
             if (monthDayMatch) {
-                const monthDayParts = parseMonthDayParts(monthDayMatch[1], storyDateParts.year);
+                const monthDayParts = parseMonthDayParts(monthDayMatch[1], storyDateParts.year, storyCalendar);
                 if (!monthDayParts) return value;
                 const remainder = content.slice(monthDayMatch[0].length).trimStart();
                 const separator = remainder && !/^[·・•:：,，、]/.test(remainder) ? ' ' : '';
+                const yearPrefix = storyCalendar === 'ancient' ? date.match(/^.*?年/)?.[0] : '';
+                const completedDate = yearPrefix
+                    ? `${yearPrefix}${monthDayParts.month}月${monthDayParts.day}日`
+                    : formatChineseDate(monthDayParts);
                 changed = true;
-                return `${marker}${formatChineseDate(monthDayParts)}${separator}${remainder}`;
+                return `${marker}${completedDate}${separator}${remainder}`;
             }
 
             const timeMatch = content.match(/^(\d{1,2})\s*[:：]\s*(\d{2})(?=\s*(?:[·・•:：]\s*)?\S)/);
@@ -365,6 +496,15 @@
 
     function getTodoIdentity(item = {}) {
         const parts = item?.dateTimeParts;
+        if (item?.calendar === 'ancient' && parts && isValidAncientDateTimeParts(
+            Number(parts.year),
+            Number(parts.month),
+            Number(parts.day),
+            Number(parts.hour),
+            Number(parts.minute)
+        )) {
+            return `datetime:ancient:${normalizeEra(item.era)}:${Number(parts.year)}-${Number(parts.month)}-${Number(parts.day)} ${Number(parts.hour)}:${Number(parts.minute)}`;
+        }
         if (parts && isValidDateTimeParts(
             Number(parts.year),
             Number(parts.month),
@@ -377,6 +517,20 @@
         const dateTime = String(item.dateTime || '').normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
         const text = String(item.text || item.rawContent || '').normalize('NFKC').replace(/\s+/g, '').trim().toLowerCase();
         return `content:${dateTime}|${text}`;
+    }
+
+    function getTodoIdentityAliases(item = {}) {
+        const identities = [getTodoIdentity(item)];
+        if (item?.calendar === 'ancient') {
+            const legacyContent = String(item.rawContent || '')
+                .replace(/[（(]\s*(?:高|中|低)(?:优先级|优先)?\s*[）)]\s*$/, '')
+                .normalize('NFKC')
+                .replace(/\s+/g, '')
+                .trim()
+                .toLowerCase();
+            if (legacyContent) identities.push(`content:|${legacyContent}`);
+        }
+        return [...new Set(identities.filter(Boolean))];
     }
 
     function normalizeDeletedTodoIdentities(identities = []) {
@@ -405,7 +559,7 @@
 
     function markTodoItemsDeleted(record = {}, items = []) {
         const deletedItems = Array.isArray(items) ? items : [items];
-        const additions = deletedItems.map(getTodoIdentity);
+        const additions = deletedItems.flatMap(getTodoIdentityAliases);
         return setDeletedTodoIdentities(record, mergeDeletedTodoIdentities(
             getDeletedTodoIdentities(record),
             additions,
@@ -415,7 +569,9 @@
     function filterDeletedTodoItems(items = [], deletedIdentities = []) {
         const deleted = new Set(normalizeDeletedTodoIdentities(deletedIdentities));
         if (!deleted.size) return Array.isArray(items) ? items : [];
-        return (Array.isArray(items) ? items : []).filter((item) => !deleted.has(getTodoIdentity(item)));
+        return (Array.isArray(items) ? items : []).filter((item) => (
+            !getTodoIdentityAliases(item).some((identity) => deleted.has(identity))
+        ));
     }
 
     function filterDeletedTodoText(text = '', deletedIdentities = []) {
@@ -552,26 +708,10 @@
             };
             const ancient = dateParts.style === 'ancient';
             const valid = ancient
-                ? Number.isInteger(parts.month)
-                    && parts.month >= 1
-                    && parts.month <= 12
-                    && Number.isInteger(parts.day)
-                    && parts.day >= 1
-                    && parts.day <= 30
-                    && Number.isInteger(parts.hour)
-                    && parts.hour >= 0
-                    && parts.hour <= 23
-                    && Number.isInteger(parts.minute)
-                    && parts.minute >= 0
-                    && parts.minute <= 59
+                ? isValidAncientDateTimeParts(parts.year, parts.month, parts.day, parts.hour, parts.minute)
                 : isValidDateTimeParts(parts.year, parts.month, parts.day, parts.hour, parts.minute);
             if (!valid) return null;
-            const calendarOrdinalMinutes = toOrdinalMinutes(parts);
-            const ordinalMinutes = ancient && !Number.isFinite(calendarOrdinalMinutes)
-                ? (((parts.year * 12 + parts.month - 1) * 30 + parts.day - 1) * 1440)
-                    + parts.hour * 60
-                    + parts.minute
-                : calendarOrdinalMinutes;
+            const ordinalMinutes = ancient ? toAncientOrdinalMinutes(parts) : toOrdinalMinutes(parts);
             return {
                 date: dateMatch.token,
                 time: `${String(parts.hour).padStart(2, '0')}:${String(parts.minute).padStart(2, '0')}`,
@@ -658,8 +798,11 @@
 
     function normalizeStoryTimeData(timeData, fallbackSource = 'story-time') {
         if (!timeData || timeData.isReal || timeData.isDefault || timeData.inferred) return null;
-        const parts = parseDateTimeParts(timeData.date, timeData.time);
-        const ordinalMinutes = toOrdinalMinutes(parts);
+        const normalized = normalizeTodoDateTimeInput(`${String(timeData.date || '').trim()} ${String(timeData.time || '').trim()}`);
+        const parts = normalized?.parts;
+        const ordinalMinutes = normalized?.calendar === 'ancient'
+            ? toAncientOrdinalMinutes(parts)
+            : toOrdinalMinutes(parts);
         if (!Number.isFinite(ordinalMinutes)) return null;
         return {
             date: String(timeData.date || ''),
@@ -667,6 +810,10 @@
             dateTimeParts: parts,
             ordinalMinutes,
             source: String(timeData.source || fallbackSource),
+            ...(normalized?.calendar === 'ancient' ? {
+                calendar: 'ancient',
+                era: normalized.era,
+            } : {}),
         };
     }
 
@@ -675,20 +822,62 @@
         return chatTime || getPhoneStoryTime() || null;
     }
 
-    function pruneTodoText(text = '', currentOrdinalMinutes) {
+    function normalizeTodoPruneTime(currentTime) {
+        if (Number.isFinite(currentTime)) {
+            return {
+                ordinalMinutes: Number(currentTime),
+                ordinalDay: Math.floor(Number(currentTime) / 1440),
+                calendar: '',
+                era: '',
+                dateTimeParts: null,
+            };
+        }
+        const ordinalMinutes = Number(currentTime?.ordinalMinutes);
+        if (!Number.isFinite(ordinalMinutes)) return null;
+        return {
+            ordinalMinutes,
+            ordinalDay: Math.floor(ordinalMinutes / 1440),
+            calendar: currentTime?.calendar === 'ancient' ? 'ancient' : 'numeric',
+            era: normalizeEra(currentTime?.era),
+            dateTimeParts: currentTime?.dateTimeParts || null,
+        };
+    }
+
+    function getComparableTodoOrdinal(item = {}, currentTime = {}, unit = 'minutes') {
+        const ordinalKey = unit === 'day' ? 'ordinalDay' : 'ordinalMinutes';
+        const readOrdinal = (key) => Number.isFinite(item?.[key]) ? Number(item[key]) : null;
+        if (!currentTime.calendar) return readOrdinal(ordinalKey);
+
+        if (currentTime.calendar !== 'ancient') {
+            return item?.calendar === 'ancient' ? null : readOrdinal(ordinalKey);
+        }
+
+        if (item?.calendar === 'ancient') {
+            if (!currentTime.era || normalizeEra(item.era) !== currentTime.era) return null;
+            return readOrdinal(ordinalKey);
+        }
+
+        const itemParts = item?.dateTimeParts || item?.dateParts;
+        const regnalYear = Number(itemParts?.year);
+        if (!Number.isInteger(regnalYear) || regnalYear < 1 || regnalYear > 999) return null;
+        return readOrdinal(unit === 'day' ? 'ancientOrdinalDay' : 'ancientOrdinalMinutes');
+    }
+
+    function pruneTodoText(text = '', currentTime) {
         const items = parseTodoItems(text);
-        if (!items.length || !Number.isFinite(currentOrdinalMinutes)) {
+        const pruneTime = normalizeTodoPruneTime(currentTime);
+        if (!items.length || !pruneTime) {
             return { changed: false, removed: [], kept: items, value: String(text || '') };
         }
 
-        const currentOrdinalDay = Math.floor(currentOrdinalMinutes / 1440);
-        const removed = items.filter((item) => (
-            (Number.isFinite(item.ordinalMinutes)
-                && currentOrdinalMinutes - item.ordinalMinutes >= EXPIRY_DELAY_MINUTES)
-            || (!Number.isFinite(item.ordinalMinutes)
-                && Number.isFinite(item.ordinalDay)
-                && currentOrdinalDay > item.ordinalDay)
-        ));
+        const removed = items.filter((item) => {
+            const itemOrdinalMinutes = getComparableTodoOrdinal(item, pruneTime, 'minutes');
+            if (Number.isFinite(itemOrdinalMinutes)) {
+                return pruneTime.ordinalMinutes - itemOrdinalMinutes >= EXPIRY_DELAY_MINUTES;
+            }
+            const itemOrdinalDay = getComparableTodoOrdinal(item, pruneTime, 'day');
+            return Number.isFinite(itemOrdinalDay) && pruneTime.ordinalDay > itemOrdinalDay;
+        });
         if (!removed.length) return { changed: false, removed, kept: items, value: String(text || '') };
         const kept = items.filter((item) => !removed.includes(item));
         return { changed: true, removed, kept, value: serializeTodoItems(kept) };
@@ -728,7 +917,7 @@
                 duplicateCount += deduplication.duplicateCount;
 
                 if (canPruneExpired) {
-                    const expiry = pruneTodoText(nextValue, storyTime.ordinalMinutes);
+                    const expiry = pruneTodoText(nextValue, storyTime);
                     if (expiry.changed) {
                         nextValue = expiry.value;
                         removedCount += expiry.removed.length;

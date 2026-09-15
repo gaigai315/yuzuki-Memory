@@ -40,12 +40,69 @@ test('ancient globalTime status bars expose regnal date and clock time', () => {
     assert.equal(Number.isFinite(storyTime.ordinalMinutes), true);
     assert.equal(
         todoManager.fillMissingTodoDates('〔1〕07:40·上朝（高）', storyTime),
-        '〔1〕12年09月08日 07:40·上朝（高）',
+        '〔1〕大明永乐十二年九月初八日 07:40·上朝（高）',
     );
     assert.equal(
-        todoManager.pruneTodoText('〔1〕12-09-08 07:20·上朝（高）', storyTime.ordinalMinutes).changed,
+        todoManager.pruneTodoText('〔1〕大明永乐十二年九月初八日 07:20·上朝（高）', storyTime).changed,
         true,
     );
+});
+
+test('ancient todos parse and expire after the 10-minute delay', () => {
+    const text = '〔1〕大楚宣武十二年十二月十八日 18:00·调定国军布防西市北仓与各处要害（高）';
+    const item = todoManager.parseTodoItems(text)[0];
+    const beforeExpiry = todoManager.parseStoryTimeText([
+        '<globalTime>',
+        'T_story：大楚宣武十二年十二月十八日·❄️·酉时(18:09)·☀️',
+        '</globalTime>',
+    ].join('\n'));
+    const atExpiry = todoManager.parseStoryTimeText([
+        '<globalTime>',
+        'T_story：大楚宣武十二年十二月十八日·❄️·酉时(18:10)·☀️',
+        '</globalTime>',
+    ].join('\n'));
+
+    assert.equal(item.calendar, 'ancient');
+    assert.equal(item.era, '大楚宣武');
+    assert.equal(item.dateTime, '大楚宣武十二年十二月十八日 18:00');
+    assert.equal(item.text, '调定国军布防西市北仓与各处要害');
+    assert.deepEqual(
+        { ...item.dateTimeParts },
+        { year: 12, month: 12, day: 18, hour: 18, minute: 0 },
+    );
+    assert.equal(todoManager.pruneTodoText(text, beforeExpiry).changed, false);
+    assert.equal(todoManager.pruneTodoText(text, atExpiry).changed, true);
+});
+
+test('ancient todo expiry handles day rollover and rejects a different era', () => {
+    const text = '〔1〕大楚宣武十二年十二月十八日 23:55·巡视西市北仓（高）';
+    const nextDay = todoManager.parseStoryTimeText([
+        '<globalTime>',
+        'T_story：大楚宣武十二年十二月十九日·❄️·子时(00:05)·☀️',
+        '</globalTime>',
+    ].join('\n'));
+    const differentEra = todoManager.parseStoryTimeText([
+        '<globalTime>',
+        'T_story：大楚承平十二年十二月十九日·❄️·子时(00:05)·☀️',
+        '</globalTime>',
+    ].join('\n'));
+
+    assert.equal(todoManager.pruneTodoText(text, nextDay).changed, true);
+    assert.equal(todoManager.pruneTodoText(text, differentEra).changed, false);
+});
+
+test('ancient cleanup supports legacy numeric regnal dates and deletion identities', () => {
+    const storyTime = todoManager.parseStoryTimeText([
+        '<globalTime>',
+        'T_story：大楚宣武十二年十二月十八日·❄️·酉时(18:10)·☀️',
+        '</globalTime>',
+    ].join('\n'));
+    const legacyNumeric = '〔1〕12年12月18日 18:00·巡视西市北仓（高）';
+    const ancientText = '〔1〕大楚宣武十二年十二月十八日 18:00·巡视西市北仓（高）';
+    const legacyDeletedIdentity = 'content:|大楚宣武十二年十二月十八日18:00·巡视西市北仓';
+
+    assert.equal(todoManager.pruneTodoText(legacyNumeric, storyTime).changed, true);
+    assert.equal(todoManager.filterDeletedTodoText(ancientText, [legacyDeletedIdentity]), '');
 });
 
 test('timed todos are removed after the 10-minute expiry delay', () => {
