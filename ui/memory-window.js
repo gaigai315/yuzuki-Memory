@@ -2760,6 +2760,17 @@
         let shellOpenTimer = null;
         let lastTapAt = 0;
 
+        const suppressNativeIconAction = (event) => {
+            if (event.cancelable) event.preventDefault();
+        };
+
+        // Android Chrome/WebView may open the image action menu before the
+        // long-press timer fires. Capture the native gesture at the button.
+        button.addEventListener('touchstart', suppressNativeIconAction, { capture: true, passive: false });
+        button.addEventListener('contextmenu', suppressNativeIconAction, { capture: true });
+        button.addEventListener('dragstart', suppressNativeIconAction, { capture: true });
+        button.addEventListener('selectstart', suppressNativeIconAction, { capture: true });
+
         const cancelLongPress = () => {
             window.clearTimeout(longPressTimer);
             longPressTimer = null;
@@ -2876,8 +2887,6 @@
             event.preventDefault();
             event.stopImmediatePropagation();
         });
-        button.addEventListener('contextmenu', (event) => event.preventDefault());
-        button.addEventListener('dragstart', (event) => event.preventDefault());
     }
 
     function isMemoryShellOpen() {
