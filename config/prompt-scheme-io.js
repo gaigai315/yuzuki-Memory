@@ -25,6 +25,7 @@
         const source = prompts && typeof prompts === 'object' ? prompts : {};
         const cleaned = clone(source);
         if (options.keepLegacyHistorian !== true) delete cleaned.historian;
+        delete cleaned.storyDirector;
         return cleaned;
     }
 

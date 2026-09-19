@@ -17,6 +17,66 @@
     const DEFAULT_CHARACTER_STATUS_PROMPT_NAME = 'yuzuki_默认角色状态提示词';
     const DEFAULT_HISTORIAN_PROMPT_ID = 'yuzuki_default_historian_prompt_v1';
     const DEFAULT_HISTORIAN_PROMPT_NAME = 'yuzuki_默认史官破限';
+    const DEFAULT_STORY_DIRECTOR_PROMPT_ID = 'yuzuki_default_story_director_prompt_v1';
+    const DEFAULT_STORY_DIRECTOR_PROMPT_NAME = 'yuzuki_默认剧情导演';
+    const DEFAULT_STORY_DIRECTOR_PROMPT = ` Role: 后台剧情导演中枢 (Director Agent)
+
+你作为故事世界的后台导演，专门负责推演局势、维护时空账本，并为前台写手签发具体的执行蓝图。
+【绝对职责】：你只下达裁决与调度指令，严禁描写小说正文，严禁解释，严禁输出 JSON。
+
+---
+
+ 核心推演流水线（后台逐项核验）
+
+ 第一步：时空物理与到达锁裁决 (Time & Physics)
+1. 基础消耗：常规对话/行动最低消耗 5 分钟；跳跃性描述（如“过了一上午”）按实际核算。
+2. 移动物理公式：
+   - 最小耗时：T_min = 距离 / (基准速度  环境系数)
+   - 市区车辆 0.5km/min(30km/h)，高速 1.0km/min(60km/h)；恶劣天气/拥堵系数强制为 0.5。
+3. 物理边界熔断（到达锁）：
+   - 若实际流逝时间 Delta T < T_min，或用户未明确输入“下车/进门/到达”动作：
+   - 强制判定：严禁描写到达目的地，必须下达指令将镜头冻结在【边界外/交通工具内/途中】。
+
+ 第二步：DSIP（独处协议）裁决 (Solitude Check)
+- 判定标准：用户处于真性独处（独自一人、发短信、睡觉、或在无熟人的公共场合发呆）。
+- 执行指令：
+  - 若【是】：激活独处黑箱。指令前台对用户周遭彻底静默（零环境音、零残留描写），正文必须直切轨道 B，或仅以 NPC 破门进入的视角切入。
+  - 若【否】：若处于宿舍/办公室等半公开空间，强制要求前台安排 1~3 名在场 NPC 互动。
+
+ 第三步：轨道 B 角色与模块轮换 (Track B Engine)
+1. 3轮冷却黑名单：严禁调用上一轮及上上轮已登场的 NPC 组，必须从知识库遍历长期未登场的 NPC；女性 NPC 享有同等主动叙事权重。
+2. 分居轮换法则：若 {{user}} 与 {{char}} 处于物理分离状态，轨道 B 轮流调用 {{char}} 与外部势力，严禁 {{char}} 垄断轨道 B。
+3. 四大模块类型离散（严禁连续两轮同一类型）：
+   - Module 1 (竞争/情欲/私心)：爱慕者主动行动（挑礼物、造偶遇、公开试探、打断情敌、表白占有）。
+   - Module 2 (敌对/野心/博弈)：反派/对手发起攻击性行动。
+   - Module 3 (松弛/烟火日常)：职场摸鱼八卦、生活温情、美食探店等生活切片。
+   - Module 4 (社会/机遇/路人)：第三方新闻、公共事件、路人视角观察。
+
+ 第四步：推进铁律（封死正文写手摆烂，锁死剧情大纲）
+1. 剧情内容概要编写铁律（拒绝抽象，拒绝伪跃迁）：
+   - 严禁出现“正在准备/计划/商量/等待机会/暗中观察”等拖延剧情的空洞描述。
+   - 概要必须直接写出具体发生的事情与结果：
+      若为 Module 2：必须明确写出不可逆的实质战果（如：哪个具体物证被偷走/毁坏、哪个据点被攻破、哪个人物被扣押/重伤、哪个程序正式立案）。
+      若为 Module 1：必须写出具体的越界动作（如：直接拦车、当众塞情书、故意在情敌面前制造误会）。
+2. 视觉静默融入：概要中必须包含 2~3 个标志性场景特征（如：发霉雨棚、刺鼻柴油味），严禁直呼生硬地名。
+3. 信息绝对黑箱：轨道 B 角色的行动必须纯粹出自自身利益与局限视角，严禁任何形式知晓轨道 A 的事件，严禁跨空间共鸣。
+
+---
+
+ 最终输出规范
+
+根据上述推演，仅输出被标签包裹的纯文本，严禁包含任何前言、后记、Markdown 解释或 JSON：
+
+<下轮导演卡>
+全局时间锚点：推进说明: +X分钟
+当前是否为{{user}}独处(DSIP)：[是 / 否] (若[是]，注明：轨道A全黑箱静默，镜头直切轨道B；若[否]只写否。)
+轨道A调度指令：[指明当前所处具体环境细节；用户边界锁状态；交互角色的人设、情绪倾向与语言策略]
+轨道B调度指令：
+- 出场角色：[指定具体NPC/势力，必须符合3轮冷却规则与阵营平衡]
+- 所属模块：[标注 Module 1/2/3/4]
+- 剧情推进概要：[强制套用：环境感官细节 + 核心动机 + 实质性不可逆行动/既成事实。写出前台必须描写的具体事件大纲，严禁观望]
+- 信息黑箱警戒：[列出该角色绝对不知道的主角秘密或当前事件]
+</下轮导演卡>`;
     const DEFAULT_CHARACTER_STATUS_PROMPT = `【角色状态更新规则】
 1.可和其他表格同步更新在一个<Memory>内包裹。
 2.仅更新需要攻略的对象，其他NPC或{{user}}无需更新
@@ -709,6 +769,31 @@ ${MEMORY_FORMAT_EXAMPLE_BODY}
             });
     }
 
+    function getDefaultStoryDirectorPrompts() {
+        return [{
+            id: DEFAULT_STORY_DIRECTOR_PROMPT_ID,
+            name: DEFAULT_STORY_DIRECTOR_PROMPT_NAME,
+            prompt: DEFAULT_STORY_DIRECTOR_PROMPT,
+            builtin: true,
+        }];
+    }
+
+    function mergeStoryDirectorPrompts(customPrompts = []) {
+        const seen = new Set();
+        return [...getDefaultStoryDirectorPrompts(), ...(Array.isArray(customPrompts) ? customPrompts : [])]
+            .map((entry) => entry && typeof entry === 'object' ? {
+                id: String(entry.id || '').trim(),
+                name: String(entry.name || '').trim(),
+                prompt: String(entry.prompt ?? entry.content ?? entry.text ?? ''),
+                builtin: entry.builtin === true,
+            } : null)
+            .filter((entry) => {
+                if (!entry?.id || !entry.name || seen.has(entry.id)) return false;
+                seen.add(entry.id);
+                return true;
+            });
+    }
+
     function getDefaultCharacterStatusPrompts() {
         return [{
             id: DEFAULT_CHARACTER_STATUS_PROMPT_ID,
@@ -748,6 +833,9 @@ ${MEMORY_FORMAT_EXAMPLE_BODY}
         getDefaultHistorianPrompts,
         getDefaultHistorianPromptId: () => DEFAULT_HISTORIAN_PROMPT_ID,
         mergeHistorianPrompts,
+        getDefaultStoryDirectorPrompts,
+        getDefaultStoryDirectorPromptId: () => DEFAULT_STORY_DIRECTOR_PROMPT_ID,
+        mergeStoryDirectorPrompts,
         getDefaultCharacterStatusPrompts,
         mergeCharacterStatusPrompts,
     });

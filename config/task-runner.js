@@ -139,6 +139,13 @@
         return window.yzmMemoryManualTaskRunning === true;
     }
 
+    function isBackgroundWorkPending() {
+        return isPluginTaskBusy()
+            || autoTaskArmed
+            || autoTaskRetryPending
+            || Boolean(autoTaskRequestPromise);
+    }
+
     function resetAutoTaskRetry() {
         autoTaskRetryPending = false;
         autoTaskRetryAttempt = 0;
@@ -988,6 +995,7 @@
         if (normalized === 'trace' || normalized === 'traceOptimize') return 'trace';
         if (normalized === 'characterGrowth') return 'trace';
         if (normalized === 'summary' || normalized === 'summaryOptimize') return 'summary';
+        if (normalized === 'storyDirector') return 'storyDirector';
         return '';
     }
 
@@ -4427,6 +4435,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         commitSummaryOptimizeResult,
         rebuildTaskResultFromText,
         createLlmRequestSnapshot,
+        isForegroundGenerationBusy,
+        isBackgroundWorkPending,
         cleanupSmallAutoSummaries,
         hidePlotSummaryItemsCoveredByExistingSummaries,
         invalidateSummariesAfterChatDeletion,

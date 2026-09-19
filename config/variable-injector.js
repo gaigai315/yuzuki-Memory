@@ -193,6 +193,14 @@
                 ],
             },
             promptPresetId: '',
+            storyDirector: {
+                ledger: '',
+                pendingCard: '',
+                source: null,
+                status: 'idle',
+                lastError: '',
+                updatedAt: 0,
+            },
             settings: {},
         };
     }

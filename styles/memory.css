@@ -404,6 +404,12 @@
     font-size: 14px;
 }
 
+#yzm-memory-root .yzm-top-story-director:disabled,
+#yzm-memory-root .yzm-top-story-director-loading {
+    cursor: wait;
+    opacity: 0.62;
+}
+
 #yzm-memory-root .yzm-shell-close,
 #yzm-memory-root .yzm-structure-close {
     display: flex;
@@ -4098,6 +4104,42 @@
     min-width: 0;
 }
 
+#yzm-memory-root .yzm-request-probe-source-tabs {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    min-width: 0;
+    padding: 4px;
+    background: var(--yzm-row-bg);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 10px;
+    box-sizing: border-box;
+}
+
+#yzm-memory-root .yzm-request-probe-source {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    min-width: 0;
+    min-height: 34px;
+    padding: 6px 10px;
+    color: var(--yzm-muted);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 7px;
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    font-size: 12px;
+}
+
+#yzm-memory-root .yzm-request-probe-source-active {
+    color: var(--yzm-title);
+    background: var(--yzm-surface);
+    border-color: var(--yzm-border);
+}
+
 #yzm-memory-root .yzm-request-probe-top {
     display: grid;
     gap: 10px;
@@ -4334,6 +4376,21 @@
 #yzm-memory-root .yzm-probe-role-vector,
 #yzm-memory-root .yzm-probe-role-vector i {
     color: #d47a28;
+}
+
+#yzm-memory-root .yzm-probe-role-agent-call,
+#yzm-memory-root .yzm-probe-role-agent-call i {
+    color: #7b63c8;
+}
+
+#yzm-memory-root .yzm-probe-role-agent-result,
+#yzm-memory-root .yzm-probe-role-agent-result i {
+    color: #168a69;
+}
+
+#yzm-memory-root .yzm-probe-role-agent-schema,
+#yzm-memory-root .yzm-probe-role-agent-schema i {
+    color: #b56b24;
 }
 
 #yzm-memory-root .yzm-request-probe-preview {

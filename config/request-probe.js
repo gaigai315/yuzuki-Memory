@@ -10,6 +10,7 @@
     const EXCLUDED_GENERATE_TYPES = ['/api/sd/', '/api/tts/', '/api/images/'];
     let lastRequestData = null;
     let lastPreviewRequestData = null;
+    let lastStoryDirectorRequestData = null;
     let originalFetch = null;
     let originalXhrOpen = null;
     let originalXhrSend = null;
@@ -25,6 +26,7 @@
     const jsGenerationStartedAt = new Map();
     let requestCaptureSequence = 0;
     let previewCaptureSequence = 0;
+    let storyDirectorCaptureSequence = 0;
     const FETCH_WRAPPER_FLAG = '__yzmMemoryRequestProbeFetch';
     const FETCH_REGISTRATION_KEY = '__yzmMemoryRequestProbeFetchRegistration';
     const FETCH_INSTANCE_ID = Symbol('yzmMemoryRequestProbeInstance');
@@ -41,6 +43,7 @@
         'isGaigaiVector',
         'isYuzukiVector',
         'isYuzukiTimedPrompt',
+        'isYuzukiStoryDirector',
         'yzmMemoryInjectionType',
         'yzmMemoryTableId',
         'yzmMemorySummaryId',
@@ -1050,6 +1053,7 @@
             || injectionType === 'vector'
             || content.includes('【系统检索到的历史记忆片段】');
         const isPhone = !isMemory && !isPrompt && !isVector && isPhoneProbeMessage(item, content, role);
+        const agentTraceType = String(item.yzmAgentTraceType || '').trim().toLowerCase();
         const tokens = estimateTokens(content);
         return {
             index,
@@ -1063,6 +1067,9 @@
                 prompt: isPrompt,
                 vector: isVector,
                 phone: isPhone,
+                agentToolCall: agentTraceType === 'tool-call',
+                agentToolResult: agentTraceType === 'tool-result',
+                agentToolSchema: agentTraceType === 'tool-schema',
             },
         };
     }
@@ -1071,11 +1078,14 @@
         const targets = getRequestArrays(body);
         if (!targets.length) return null;
         const preview = options.preview === true;
+        const storyDirector = options.storyDirector === true;
         const key = targets.map((target) => target.key).join(',');
         const model = String(body.model || '');
         const phonePermissions = getPhoneMemoryPermissions(body);
         let captureSequence = 0;
-        if (preview) {
+        if (storyDirector) {
+            captureSequence = ++storyDirectorCaptureSequence;
+        } else if (preview) {
             captureSequence = ++previewCaptureSequence;
         } else {
             captureSequence = ++requestCaptureSequence;
@@ -1086,7 +1096,9 @@
             ...normalizeMessage(item, index),
             sourceKey: target.key,
         })));
-        if (preview ? captureSequence !== previewCaptureSequence : captureSequence !== requestCaptureSequence) return null;
+        if (storyDirector
+            ? captureSequence !== storyDirectorCaptureSequence
+            : (preview ? captureSequence !== previewCaptureSequence : captureSequence !== requestCaptureSequence)) return null;
         const totalTokens = messages.reduce((sum, message) => sum + message.tokens, 0);
         const requestData = {
             url,
@@ -1101,7 +1113,16 @@
             promptReady: options.promptReady === true,
             downstreamFinal: options.downstreamFinal === true,
             preparedTask: options.preparedTask === true,
+            storyDirector,
+            sessionId: storyDirector ? String(options.sessionId || '') : '',
+            agentTurn: storyDirector ? Math.max(1, Math.round(Number(options.agentTurn) || 1)) : 0,
+            toolCount: storyDirector ? Math.max(0, Math.round(Number(options.toolCount) || 0)) : 0,
         };
+        if (storyDirector) {
+            lastStoryDirectorRequestData = requestData;
+            window.dispatchEvent(new CustomEvent('yzm-memory-request-probe-updated', { detail: requestData }));
+            return requestData;
+        }
         if (preview) {
             lastPreviewRequestData = requestData;
             window.dispatchEvent(new CustomEvent('yzm-memory-request-probe-updated', { detail: requestData }));
@@ -1744,6 +1765,13 @@
         return copyRequestDataForRead(previewTimestamp > realTimestamp ? lastPreviewRequestData : lastRequestData);
     }
 
+    function getLastStoryDirectorRequestData() {
+        const currentSessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        if (!lastStoryDirectorRequestData || !currentSessionId
+            || lastStoryDirectorRequestData.sessionId !== currentSessionId) return null;
+        return copyRequestDataForRead(lastStoryDirectorRequestData);
+    }
+
     YuzukiMemory.RequestProbe = Object.assign(YuzukiMemory.RequestProbe || {}, {
         installed: false,
         captureFromBody,
@@ -1759,6 +1787,7 @@
         getLastRequestData,
         getLastPreviewRequestData,
         getLatestRequestData,
+        getLastStoryDirectorRequestData,
         getChatRequestState: () => ({
             activeCount: activeChatRequestCount,
             lastFinishedAt: lastChatRequestFinishedAt,

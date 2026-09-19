@@ -36,6 +36,18 @@ test('built-in historian remains available outside prompt schemes', () => {
     assert.match(defaultHistorian.prompt, /data extraction, summarization, and structuring engine/);
 });
 
+test('built-in story director remains independent from prompt schemes', () => {
+    const sandbox = createSandbox();
+    const library = sandbox.window.YuzukiMemory.PromptLibrary;
+    const defaultScheme = library.getDefaultScheme();
+    const [director] = library.getDefaultStoryDirectorPrompts();
+
+    assert.equal(Object.hasOwn(defaultScheme.prompts, 'storyDirector'), false);
+    assert.equal(director.id, library.getDefaultStoryDirectorPromptId());
+    assert.equal(director.builtin, true);
+    assert.match(director.prompt, /<下轮导演卡>/);
+});
+
 test('prompt scheme export strips historian while legacy imports preserve it for migration', () => {
     const sandbox = createSandbox();
     const io = sandbox.window.YuzukiMemory.PromptSchemeIO;
@@ -44,6 +56,7 @@ test('prompt scheme export strips historian while legacy imports preserve it for
         name: '旧方案',
         prompts: {
             historian: 'LEGACY_HISTORIAN',
+            storyDirector: 'SHOULD_NOT_EXPORT',
             traceRealtime: 'TRACE',
             summary: 'SUMMARY',
             table: 'LEGACY_TABLE_ALIAS',
@@ -55,6 +68,7 @@ test('prompt scheme export strips historian while legacy imports preserve it for
     const exported = io.createExport(legacyScheme, 'single');
     assert.equal(exported.version, 2);
     assert.equal(Object.hasOwn(exported.scheme.prompts, 'historian'), false);
+    assert.equal(Object.hasOwn(exported.scheme.prompts, 'storyDirector'), false);
     assert.equal(exported.scheme.prompts.traceRealtime, 'TRACE');
     assert.equal(exported.scheme.prompts.table, 'LEGACY_TABLE_ALIAS');
     assert.equal(exported.scheme.prompts.futurePrompt, 'FUTURE_PROMPT');

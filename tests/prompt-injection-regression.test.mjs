@@ -109,6 +109,41 @@ test('request probe keeps summaries in the memory color group without the legacy
     assert.ok(data.messages.every((message) => message.flags.memory === true));
 });
 
+test('request probe stores story director snapshots separately from normal requests', async () => {
+    const sandbox = createBaseSandbox();
+    let currentSessionId = 'chat:first';
+    sandbox.window.YuzukiMemory.Storage = { getCurrentSessionId: () => currentSessionId };
+    sandbox.CustomEvent = class CustomEvent {
+        constructor(type, options = {}) {
+            this.type = type;
+            this.detail = options.detail;
+        }
+    };
+    sandbox.window.dispatchEvent = () => true;
+    vm.runInContext(requestProbeSource, sandbox, { filename: 'request-probe.js' });
+    const probe = sandbox.window.YuzukiMemory.RequestProbe;
+
+    await probe.captureFromBody({ messages: [{ role: 'user', content: '普通正文请求' }] }, 'normal://request');
+    await probe.captureFromBody({
+        messages: [{
+            role: 'tool',
+            name: '工具返回 · 读取全部启用表格',
+            content: '{"tables":[{"name":"记忆总结"}]}',
+            yzmAgentTraceType: 'tool-result',
+        }],
+    }, 'yuzuki-memory://story-director', { storyDirector: true, sessionId: currentSessionId, agentTurn: 2, toolCount: 4 });
+
+    assert.equal(probe.getLastRequestData().messages[0].content, '普通正文请求');
+    const director = probe.getLastStoryDirectorRequestData();
+    assert.equal(director.storyDirector, true);
+    assert.equal(director.agentTurn, 2);
+    assert.equal(director.toolCount, 4);
+    assert.equal(director.messages[0].flags.agentToolResult, true);
+    assert.match(director.messages[0].content, /记忆总结/);
+    currentSessionId = 'chat:second';
+    assert.equal(probe.getLastStoryDirectorRequestData(), null);
+});
+
 test('memory prompt fallback ignores unrelated names and schema flags without duplicating actual prompts', async () => {
     const sandbox = createBaseSandbox();
     const memory = sandbox.window.YuzukiMemory;

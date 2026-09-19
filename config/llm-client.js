@@ -662,6 +662,95 @@
             .filter(Boolean);
     }
 
+    function normalizeAgentMessages(messages) {
+        const sourceMessages = Array.isArray(messages) ? messages : [];
+        return sourceMessages.map((message) => {
+            const role = String(message?.role || '').trim().toLowerCase();
+            if (role === 'tool') {
+                const toolCallId = String(message?.tool_call_id || '').trim();
+                if (!toolCallId) return null;
+                return {
+                    role: 'tool',
+                    tool_call_id: toolCallId,
+                    content: typeof message?.content === 'string' ? message.content : JSON.stringify(message?.content ?? ''),
+                };
+            }
+            if (!['system', 'assistant', 'user'].includes(role)) return null;
+            const toolCalls = role === 'assistant' && Array.isArray(message?.tool_calls)
+                ? message.tool_calls
+                : [];
+            const content = normalizeStreamTextValue(message?.content);
+            if (!content.trim() && !toolCalls.length) return null;
+            return {
+                role,
+                content,
+                ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+            };
+        }).filter(Boolean);
+    }
+
+    function normalizeAgentToolCall(rawCall, index = 0) {
+        const source = rawCall && typeof rawCall === 'object' ? rawCall : {};
+        const functionSource = source.function || source.functionCall || source;
+        const name = String(functionSource?.name || source.name || '').trim();
+        if (!name) return null;
+        const rawArguments = functionSource?.arguments ?? functionSource?.args ?? source.input ?? {};
+        const args = typeof rawArguments === 'string' ? rawArguments : JSON.stringify(rawArguments || {});
+        return {
+            id: String(source.id || source.tool_call_id || `yzm_story_tool_${Date.now()}_${index}`),
+            type: 'function',
+            function: { name, arguments: args || '{}' },
+        };
+    }
+
+    function parseAgentResponsePayload(rawData) {
+        let data = rawData;
+        if (typeof data === 'string') {
+            const text = data.trim();
+            if (!text) throw new Error('Agent API 返回内容为空');
+            try {
+                data = JSON.parse(text);
+            } catch (_error) {
+                return { success: true, message: { role: 'assistant', content: text }, text, toolCalls: [] };
+            }
+        }
+        if (!data || typeof data !== 'object') throw new Error('Agent API 返回格式异常');
+        if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+
+        const root = data.data && typeof data.data === 'object' ? data.data : data;
+        const choiceMessage = root?.choices?.[0]?.message || root?.message || null;
+        const claudeBlocks = Array.isArray(root?.content) ? root.content : [];
+        const geminiParts = Array.isArray(root?.candidates?.[0]?.content?.parts)
+            ? root.candidates[0].content.parts
+            : [];
+        const rawToolCalls = Array.isArray(choiceMessage?.tool_calls)
+            ? choiceMessage.tool_calls
+            : [
+                ...claudeBlocks.filter((block) => block?.type === 'tool_use').map((block) => ({
+                    id: block.id,
+                    function: { name: block.name, arguments: block.input || {} },
+                })),
+                ...geminiParts.filter((part) => part?.functionCall).map((part) => ({
+                    id: part.functionCall.id,
+                    function: part.functionCall,
+                })),
+            ];
+        const toolCalls = rawToolCalls.map(normalizeAgentToolCall).filter(Boolean);
+        const content = stripThinking([
+            normalizeStreamTextValue(choiceMessage?.content),
+            ...claudeBlocks.filter((block) => block?.type === 'text').map((block) => String(block.text || '')),
+            ...geminiParts.map((part) => String(part?.text || '')),
+            normalizeStreamTextValue(root?.text || root?.output_text || root?.response || ''),
+        ].filter(Boolean).join('\n').trim());
+        if (!toolCalls.length && !content) throw new Error('Agent API 未返回文本或工具调用');
+        const message = {
+            role: 'assistant',
+            content,
+            ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
+        };
+        return { success: true, message, text: content, toolCalls };
+    }
+
     function normalizeStreamTextValue(value) {
         if (typeof value === 'string') return value;
         if (typeof value === 'number') return String(value);
@@ -1141,6 +1230,104 @@
         }
     }
 
+    async function postTavernAgentGenerate(payload, options = {}) {
+        const send = async (forceRefresh = false) => fetch('/api/backends/chat-completions/generate', {
+            method: 'POST',
+            headers: await getJsonHeaders({ forceRefresh }),
+            credentials: 'include',
+            yzmMemoryInternalApi: true,
+            body: JSON.stringify({ ...payload, stream: false }),
+            signal: options.signal,
+        });
+
+        let response = await send(false);
+        if (!response.ok) {
+            let text = await response.text().catch(() => '');
+            if (isUnauthorized(response.status, text)) {
+                response = await send(true);
+                if (!response.ok) text = await response.text().catch(() => '');
+            }
+            if (!response.ok) {
+                return {
+                    success: false,
+                    error: createUpstreamError(response.status, text, response.statusText),
+                    status: response.status,
+                    statusText: response.statusText,
+                    upstreamBody: text,
+                };
+            }
+        }
+
+        const text = await response.text().catch(() => '');
+        try {
+            return parseAgentResponsePayload(text);
+        } catch (error) {
+            return {
+                success: false,
+                error: formatResponseParseError(error, response, text),
+                status: response.status,
+                statusText: response.statusText,
+            };
+        }
+    }
+
+    async function requestAgentWithTavern(messages, tools, options = {}) {
+        const cleanMessages = normalizeAgentMessages(messages);
+        if (!cleanMessages.length) return { success: false, error: 'Agent 消息数组为空' };
+        if (!Array.isArray(tools) || !tools.length) return { success: false, error: 'Agent 工具数组为空' };
+        try {
+            const settings = await getTavernSettings();
+            const config = resolveTavernConfig(settings, options);
+            const payload = {
+                chat_completion_source: config.source,
+                messages: cleanMessages,
+                tools,
+                tool_choice: 'auto',
+                temperature: config.temperature,
+                max_tokens: config.maxTokens,
+                stream: false,
+            };
+            if (config.frequencyPenalty !== undefined) payload.frequency_penalty = config.frequencyPenalty;
+            if (config.presencePenalty !== undefined) payload.presence_penalty = config.presencePenalty;
+            if (config.topP !== undefined) payload.top_p = config.topP;
+            if (config.model) payload.model = config.model;
+            if (config.reverseProxy) {
+                payload.reverse_proxy = config.reverseProxy;
+                payload.custom_url = config.reverseProxy;
+            }
+            if (config.apiKey) payload.proxy_password = config.apiKey;
+            if (config.source === 'custom') {
+                const customIncludeHeaders = resolveTavernCustomHeaderText(config);
+                if (customIncludeHeaders) payload.custom_include_headers = customIncludeHeaders;
+            }
+            const result = await postTavernAgentGenerate(payload, options);
+            return { ...result, config };
+        } catch (error) {
+            if (options.signal?.aborted || error?.name === 'AbortError') return { success: false, error: '已中断发送', aborted: true };
+            return { success: false, error: formatError(error) };
+        }
+    }
+
+    async function requestAgentWithCustom(rawConfig, messages, tools, options = {}) {
+        const config = normalizeCustomConfig(rawConfig);
+        if (!PROVIDERS[config.provider]) return { success: false, error: '请选择 API 服务商。' };
+        if (!config.apiUrl) return { success: false, error: '请填写 Base URL。' };
+        if (!config.model) return { success: false, error: '请填写模型名称。' };
+        if (config.customHeadersError) return { success: false, error: config.customHeadersError };
+        if (config.provider === OPENCODE_GO_PROVIDER && !isSupportedOpenCodeGoBaseUrl(config.apiUrl)) {
+            return { success: false, error: `OpenCode Go Base URL 请填写 ${OPENCODE_GO_BASE_URL}。` };
+        }
+        const cleanMessages = normalizeAgentMessages(messages);
+        if (!cleanMessages.length) return { success: false, error: 'Agent 消息数组为空' };
+        if (!Array.isArray(tools) || !tools.length) return { success: false, error: 'Agent 工具数组为空' };
+        const payload = resolveCustomProxyPayload(config, cleanMessages, { ...options, stream: false });
+        payload.stream = false;
+        payload.tools = tools;
+        payload.tool_choice = 'auto';
+        const result = await postTavernAgentGenerate(payload, options);
+        return { ...result, config };
+    }
+
     function resolveDirectUrl(config) {
         let directUrl = config.apiUrl.replace(/\/+$/, '');
         if (shouldUseGeminiNative(config)) {
@@ -1598,6 +1785,9 @@
         getTavernStatus,
         generateWithTavern,
         generateWithCustom,
+        requestAgentWithTavern,
+        requestAgentWithCustom,
+        parseAgentResponsePayload,
         fetchCustomModels,
         testTavernConnection,
         testCustomConnection,

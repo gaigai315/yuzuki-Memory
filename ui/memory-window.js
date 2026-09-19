@@ -143,7 +143,7 @@
     const CONFIG_SECTIONS = [
         { id: 'plugin', label: '插件配置', icon: 'fa-solid fa-gear' },
         { id: 'init', label: '基础设置', icon: 'fa-solid fa-pen' },
-        { id: 'autoSummary', label: '自动总结', icon: 'fa-solid fa-clipboard-list' },
+        { id: 'autoSummary', label: '自动总结', icon: 'fa-solid fa-window-restore' },
         { id: 'logViewer', label: '日志查看器', icon: 'fa-regular fa-file-lines' },
     ];
     const API_SECTIONS = [
@@ -165,6 +165,7 @@
         { id: 'historian', label: '史官破限', icon: 'fa-solid fa-scroll' },
         { id: 'trace', label: '填表提示词', icon: 'fa-solid fa-pen' },
         { id: 'characterStatus', label: '角色状态提示词', icon: 'fa-solid fa-heart-pulse' },
+        { id: 'storyDirector', label: '剧情导演 Agent', icon: 'fa-solid fa-clapperboard' },
         { id: 'summary', label: '总结提示词', icon: 'fa-solid fa-window-restore' },
         { id: 'timedPrompt', label: '定时注入提示词', icon: 'fa-regular fa-clock' },
     ];
@@ -185,6 +186,7 @@
     const DEFAULT_PLUGIN_SETTINGS = {
         injectMemoryTable: true,
         injectVectorMemory: false,
+        enableStoryDirector: false,
         smartCalculationLinkage: false,
         hideFloorsEnabled: false,
         hiddenFloorCount: 50,
@@ -309,6 +311,7 @@
     let activePromptSchemeDraft = null;
     let activeHistorianPromptDraft = null;
     let activeCharacterStatusPromptDraft = null;
+    let activeStoryDirectorPromptDraft = null;
     let activeTimedPromptInjectionDraft = null;
     let activePlotSummaryKind = 'main';
     let plotSummaryRepairSessionId = null;
@@ -321,6 +324,7 @@
     };
     let vectorSearchTimer = null;
     let requestProbeSearchQuery = '';
+    let requestProbeSource = 'request';
 
     function createDefaultState() {
         const customTables = loadGlobalCustomTables().map((table) => ({
@@ -372,6 +376,14 @@
             },
             promptPresetId: '',
             characterStatusPromptId: '',
+            storyDirector: {
+                ledger: '',
+                pendingCard: '',
+                source: null,
+                status: 'idle',
+                lastError: '',
+                updatedAt: 0,
+            },
             settings: {},
         };
     }
@@ -1764,11 +1776,12 @@
                 ? {
                     trace: String(raw.trace || '').trim(),
                     summary: String(raw.summary || '').trim(),
+                    storyDirector: String(raw.storyDirector || '').trim(),
                 }
-                : { trace: '', summary: '' };
+                : { trace: '', summary: '', storyDirector: '' };
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to load LLM API task routes.', error);
-            return { trace: '', summary: '' };
+            return { trace: '', summary: '', storyDirector: '' };
         }
     }
 
@@ -1777,6 +1790,7 @@
         const normalized = {
             trace: presetIds.has(String(routes.trace || '').trim()) ? String(routes.trace || '').trim() : '',
             summary: presetIds.has(String(routes.summary || '').trim()) ? String(routes.summary || '').trim() : '',
+            storyDirector: presetIds.has(String(routes.storyDirector || '').trim()) ? String(routes.storyDirector || '').trim() : '',
         };
         if (YuzukiMemory.GlobalSettings?.set) {
             YuzukiMemory.GlobalSettings.set(LLM_API_TASK_ROUTES_STORAGE_KEY, normalized);
@@ -1944,7 +1958,7 @@
             .filter((scheme) => scheme && !scheme.builtin && !builtinIds.has(scheme.id));
         const persisted = normalized.map(({ legacyHistorian: _legacyHistorian, ...scheme }) => ({
             ...scheme,
-            prompts: Object.fromEntries(Object.entries(scheme.prompts || {}).filter(([id]) => id !== 'historian')),
+            prompts: Object.fromEntries(Object.entries(scheme.prompts || {}).filter(([id]) => !['historian', 'storyDirector'].includes(id))),
         }));
         if (YuzukiMemory.GlobalSettings?.set) {
             YuzukiMemory.GlobalSettings.set(PROMPT_SCHEMES_STORAGE_KEY, persisted);
@@ -2064,6 +2078,33 @@
 
     function updateActiveHistorianPromptField(field, value) {
         const draft = getActiveHistorianPromptDraft();
+        if (!draft || !['name', 'prompt'].includes(field)) return;
+        draft[field] = String(value ?? '');
+    }
+
+    function getStoryDirectorPrompts() {
+        return YuzukiMemory.StoryDirectorSettings?.getPrompts?.() || [];
+    }
+
+    function getCurrentStoryDirectorPromptId() {
+        return String(YuzukiMemory.StoryDirectorSettings?.getActivePromptId?.() || '').trim();
+    }
+
+    function getActiveStoryDirectorPromptDraft() {
+        const selectedId = getCurrentStoryDirectorPromptId();
+        if (!selectedId) {
+            activeStoryDirectorPromptDraft = null;
+            return null;
+        }
+        if (!activeStoryDirectorPromptDraft || activeStoryDirectorPromptDraft.id !== selectedId) {
+            const prompt = getStoryDirectorPrompts().find((entry) => entry.id === selectedId);
+            activeStoryDirectorPromptDraft = prompt ? { ...prompt } : null;
+        }
+        return activeStoryDirectorPromptDraft;
+    }
+
+    function updateActiveStoryDirectorPromptField(field, value) {
+        const draft = getActiveStoryDirectorPromptDraft();
         if (!draft || !['name', 'prompt'].includes(field)) return;
         draft[field] = String(value ?? '');
     }
@@ -2512,6 +2553,7 @@
         return {
             injectMemoryTable: typeof source.injectMemoryTable === 'boolean' ? source.injectMemoryTable : DEFAULT_PLUGIN_SETTINGS.injectMemoryTable,
             injectVectorMemory: typeof source.injectVectorMemory === 'boolean' ? source.injectVectorMemory : DEFAULT_PLUGIN_SETTINGS.injectVectorMemory,
+            enableStoryDirector: typeof source.enableStoryDirector === 'boolean' ? source.enableStoryDirector : DEFAULT_PLUGIN_SETTINGS.enableStoryDirector,
             smartCalculationLinkage: typeof source.smartCalculationLinkage === 'boolean' ? source.smartCalculationLinkage : DEFAULT_PLUGIN_SETTINGS.smartCalculationLinkage,
             hideFloorsEnabled: typeof source.hideFloorsEnabled === 'boolean' ? source.hideFloorsEnabled : DEFAULT_PLUGIN_SETTINGS.hideFloorsEnabled,
             hiddenFloorCount: Math.round(normalizeNumberSetting(source.hiddenFloorCount, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0)),
@@ -2569,6 +2611,10 @@
         }
         if (key === 'floatingIconStyle') {
             updateFloatingIconImage();
+        }
+        if (key === 'enableStoryDirector' && nextSettings.enableStoryDirector === false) {
+            YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('story director disabled');
+            YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.('disabled');
         }
         return nextSettings;
     }
@@ -3560,6 +3606,14 @@
         actions.className = 'yzm-top-actions';
         actions.setAttribute('aria-label', '记忆面板操作');
 
+        const storyDirectorButton = createIconButton(
+            '剧情规划',
+            'fa-solid fa-clapperboard',
+            'yzm-top-action-button yzm-top-story-director',
+        );
+        storyDirectorButton.title = '根据最新助手正文重新生成下一轮导演卡';
+        storyDirectorButton.dataset.yzmStoryDirectorReplan = 'true';
+
         const characterGraphButton = createIconButton(
             '图谱',
             'fa-solid fa-share-nodes',
@@ -3590,9 +3644,49 @@
         );
 
         moreMenu.append(moreButton, moreList);
-        actions.append(characterGraphButton, moreMenu);
+        actions.append(storyDirectorButton, characterGraphButton, moreMenu);
 
         return actions;
+    }
+
+    async function runManualStoryDirector(button) {
+        if (!(button instanceof HTMLButtonElement) || button.disabled) return;
+        const runtime = YuzukiMemory.StoryDirectorRuntime;
+        if (typeof runtime?.replanLatest !== 'function') {
+            showTaskToast('剧情导演模块尚未加载。', 'error');
+            return;
+        }
+
+        const icon = button.querySelector('i');
+        const label = button.querySelector('span');
+        const originalIconClass = icon?.className || 'fa-solid fa-clapperboard';
+        const originalLabel = label?.textContent || '剧情规划';
+        button.disabled = true;
+        button.classList.add('yzm-top-story-director-loading');
+        button.setAttribute('aria-busy', 'true');
+        if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
+        if (label) label.textContent = '规划中';
+
+        let result;
+        try {
+            result = await runtime.replanLatest();
+        } catch (error) {
+            result = { success: false, error: String(error?.message || error || '剧情规划失败。') };
+        } finally {
+            if (button.isConnected) {
+                button.disabled = false;
+                button.classList.remove('yzm-top-story-director-loading');
+                button.removeAttribute('aria-busy');
+            }
+            if (icon?.isConnected) icon.className = originalIconClass;
+            if (label?.isConnected) label.textContent = originalLabel;
+        }
+
+        if (result?.success) {
+            showTaskToast('剧情规划完成', 'success');
+            return;
+        }
+        showTaskToast(result?.error || '剧情规划失败，请稍后重试。', result?.skipped ? 'warning' : 'error');
     }
 
     function createSidebarTableItem(table, isActive) {
@@ -7953,6 +8047,7 @@
         if (section.id === 'info') return createPromptSchemeInfoPanel(section);
         if (section.id === 'historian') return createHistorianPromptSchemePanel(section);
         if (section.id === 'characterStatus') return createCharacterStatusPromptPanel(section);
+        if (section.id === 'storyDirector') return createStoryDirectorPromptPanel(section);
         if (section.id === 'timedPrompt') return createTimedPromptSchemePanel(section);
 
         const panel = document.createElement('section');
@@ -8088,6 +8183,104 @@
                 cardHeader,
                 createApiField('破限名称', nameInputWrap),
                 createApiField('破限内容', textarea),
+                counter,
+            );
+            panel.appendChild(editorCard);
+        }
+        return panel;
+    }
+
+    function createStoryDirectorPromptPanel(section) {
+        const panel = document.createElement('section');
+        panel.className = 'yzm-scheme-panel yzm-story-director-prompt-panel';
+
+        const header = document.createElement('div');
+        header.className = 'yzm-scheme-header';
+        const title = document.createElement('div');
+        title.className = 'yzm-scheme-title';
+        title.append(createIconNode(section.icon, ''), document.createTextNode(section.label));
+        const desc = document.createElement('div');
+        desc.className = 'yzm-scheme-desc';
+        desc.textContent = getPromptSchemeDescription(section.id);
+        header.append(title, desc);
+
+        const prompts = getStoryDirectorPrompts();
+        const selectedId = getCurrentStoryDirectorPromptId();
+        const draft = getActiveStoryDirectorPromptDraft();
+        const options = [
+            { label: '不使用剧情导演 Agent', value: '' },
+            ...prompts.map((prompt) => ({ label: prompt.name, value: prompt.id })),
+        ];
+        const selectWrap = createApiSelect(selectedId, options, 'storyDirectorPrompt');
+        const select = selectWrap.querySelector('.yzm-api-select');
+        if (select) {
+            select.dataset.yzmStoryDirectorPromptSelect = 'true';
+            select.setAttribute('aria-label', '当前全局剧情导演提示词');
+        }
+
+        const selectionHint = document.createElement('div');
+        selectionHint.className = 'yzm-scheme-editor-hint';
+        const runtimeState = getState().storyDirector || {};
+        const statusText = runtimeState.status === 'ready'
+            ? '导演卡已就绪'
+            : (runtimeState.status === 'running' ? '导演正在后台运行' : (runtimeState.status === 'error' ? `上次运行失败：${runtimeState.lastError || '未知错误'}` : '等待下一次助手正文'));
+        selectionHint.textContent = `提示词与当前选择全局共享，不跟随记忆方案。${statusText}。`;
+        const selectionActions = createApiActions([
+            ['新增', 'fa-solid fa-plus', 'yzm-api-button-primary', 'newStoryDirectorPrompt'],
+            ['保存', 'fa-regular fa-floppy-disk', '', 'saveStoryDirectorPrompt'],
+            ['删除', 'fa-regular fa-trash-can', 'yzm-api-button-danger', 'deleteStoryDirectorPrompt'],
+        ]);
+        selectionActions.querySelectorAll('[data-yzm-api-action]').forEach((button) => {
+            button.dataset.yzmStoryDirectorPromptAction = button.dataset.yzmApiAction;
+        });
+        if (!draft || draft.builtin) {
+            selectionActions.querySelector('[data-yzm-story-director-prompt-action="saveStoryDirectorPrompt"]')?.setAttribute('disabled', 'true');
+            selectionActions.querySelector('[data-yzm-story-director-prompt-action="deleteStoryDirectorPrompt"]')?.setAttribute('disabled', 'true');
+        }
+        panel.append(
+            header,
+            createApiCard('当前全局选择', 'fa-solid fa-globe', [
+                createApiField('剧情导演提示词', selectWrap),
+                selectionHint,
+                selectionActions,
+            ]),
+        );
+
+        if (draft) {
+            const editorCard = document.createElement('section');
+            editorCard.className = 'yzm-config-card yzm-scheme-editor-card yzm-story-director-editor-card';
+            editorCard.dataset.yzmSchemeEditorCard = 'true';
+            const cardHeader = document.createElement('div');
+            cardHeader.className = 'yzm-scheme-card-header';
+            const cardTitle = document.createElement('div');
+            cardTitle.className = 'yzm-config-card-title yzm-scheme-card-title';
+            cardTitle.append(createIconNode('fa-regular fa-pen-to-square', ''), document.createTextNode('编辑剧情导演 System Prompt'));
+            cardHeader.append(cardTitle, createSchemeExpandButton());
+
+            const nameInputWrap = createApiInput('输入提示词名称');
+            const nameInput = nameInputWrap.querySelector('.yzm-api-input');
+            if (nameInput) {
+                nameInput.value = draft.name || '';
+                nameInput.dataset.yzmStoryDirectorPromptField = 'name';
+                nameInput.readOnly = draft.builtin === true;
+            }
+            const textarea = document.createElement('textarea');
+            textarea.className = 'yzm-scheme-textarea yzm-story-director-textarea';
+            textarea.placeholder = '填写剧情导演 Agent 提示词...';
+            textarea.value = draft.prompt || '';
+            textarea.spellcheck = false;
+            textarea.readOnly = draft.builtin === true;
+            textarea.dataset.yzmStoryDirectorPromptField = 'prompt';
+            textarea.dataset.yzmSchemeTitle = '编辑剧情导演 System Prompt';
+
+            const counter = document.createElement('div');
+            counter.className = 'yzm-scheme-counter';
+            counter.dataset.yzmStoryDirectorPromptCounter = 'true';
+            counter.textContent = `字数统计：${textarea.value.length} / 50000`;
+            editorCard.append(
+                cardHeader,
+                createApiField('提示词名称', nameInputWrap),
+                createApiField('提示词内容', textarea),
                 counter,
             );
             panel.appendChild(editorCard);
@@ -8842,6 +9035,80 @@
         showTaskToast('史官破限已删除。', 'success');
     }
 
+    function applyStoryDirectorPromptSelection(root, promptId) {
+        YuzukiMemory.StoryDirectorSettings?.setActivePromptId?.(promptId);
+        activeStoryDirectorPromptDraft = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
+        YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('prompt selection changed');
+        YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.(promptId ? 'idle' : 'disabled');
+        YuzukiMemory.StoryDirectorRuntime?.scheduleDirector?.('prompt-selection', 300);
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function startNewStoryDirectorPrompt(root) {
+        const name = String(window.prompt('请输入剧情导演提示词名称：', '') || '').trim();
+        if (!name) return;
+        const settings = YuzukiMemory.StoryDirectorSettings;
+        const prompt = {
+            id: settings?.createPromptId?.() || `story_director_prompt_${Date.now()}`,
+            name,
+            prompt: '',
+            builtin: false,
+        };
+        settings?.savePrompts?.([...getStoryDirectorPrompts(), prompt]);
+        settings?.setActivePromptId?.(prompt.id);
+        activeStoryDirectorPromptDraft = { ...prompt };
+        renderPromptSchemeWorkspace(root);
+    }
+
+    function saveActiveStoryDirectorPrompt(root) {
+        const draft = getActiveStoryDirectorPromptDraft();
+        if (!draft) {
+            window.alert('请先新增或选择一套剧情导演提示词。');
+            return;
+        }
+        if (draft.builtin) {
+            window.alert('内置默认剧情导演提示词不能修改。');
+            return;
+        }
+        const name = String(draft.name || '').trim();
+        if (!name) {
+            window.alert('请填写剧情导演提示词名称。');
+            return;
+        }
+        const settings = YuzukiMemory.StoryDirectorSettings;
+        const prompts = getStoryDirectorPrompts();
+        const index = prompts.findIndex((entry) => entry.id === draft.id);
+        const nextPrompt = { id: draft.id, name, prompt: String(draft.prompt || ''), builtin: false };
+        if (index >= 0) prompts[index] = nextPrompt;
+        else prompts.push(nextPrompt);
+        settings?.savePrompts?.(prompts);
+        settings?.setActivePromptId?.(nextPrompt.id);
+        activeStoryDirectorPromptDraft = { ...nextPrompt };
+        YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('prompt saved');
+        YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.('idle');
+        YuzukiMemory.StoryDirectorRuntime?.scheduleDirector?.('prompt-saved', 300);
+        renderPromptSchemeWorkspace(root);
+        showTaskToast('剧情导演提示词已保存。', 'success');
+    }
+
+    function deleteActiveStoryDirectorPrompt(root) {
+        const draft = getActiveStoryDirectorPromptDraft();
+        if (!draft) return;
+        if (draft.builtin) {
+            window.alert('内置默认剧情导演提示词不能删除。');
+            return;
+        }
+        if (!window.confirm(`确定删除剧情导演提示词「${draft.name}」吗？`)) return;
+        const settings = YuzukiMemory.StoryDirectorSettings;
+        settings?.savePrompts?.(getStoryDirectorPrompts().filter((entry) => entry.id !== draft.id));
+        settings?.setActivePromptId?.('');
+        activeStoryDirectorPromptDraft = null;
+        YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('prompt deleted');
+        YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.('disabled');
+        renderPromptSchemeWorkspace(root);
+        showTaskToast('剧情导演提示词已删除。', 'success');
+    }
+
     function applyCharacterStatusPromptSelection(root, promptId) {
         const selectedId = String(promptId || '').trim();
         const prompt = getCharacterStatusPrompts().find((entry) => entry.id === selectedId);
@@ -9137,6 +9404,7 @@
         if (sectionId === 'timedPrompt') return '按设定楼层间隔，在用户发送消息时自动隐式注入修正提示词。';
         if (sectionId === 'trace') return '控制实时/批量填表与填表优化的提示词。';
         if (sectionId === 'characterStatus') return '管理角色状态更新与属性成长任务提示词；当前会话只使用当前选择。';
+        if (sectionId === 'storyDirector') return '独立管理后台剧情导演 Agent；正文完成后生成下一轮导演卡。';
         return '控制手动/自动总结与总结优化的提示词。';
     }
 
@@ -9216,6 +9484,7 @@
                 createApiGrid([
                     createApiField('填表', createLlmApiTaskRouteSelect('trace')),
                     createApiField('总结', createLlmApiTaskRouteSelect('summary')),
+                    createApiField('剧情导演', createLlmApiTaskRouteSelect('storyDirector')),
                 ]),
             ], '', createApiTitleNote('绑定后，该用途的手动、自动与优化任务统一使用所选预设；未绑定时跟随当前预设。')),
             createApiCard('连接配置', 'fa-solid fa-link', [
@@ -9476,7 +9745,12 @@
         const select = wrap.querySelector('.yzm-api-select');
         if (select) {
             select.dataset.yzmLlmTaskRoute = routeKind;
-            select.setAttribute('aria-label', routeKind === 'summary' ? '总结 API 预设' : '填表 API 预设');
+            const labels = {
+                trace: '填表 API 预设',
+                summary: '总结 API 预设',
+                storyDirector: '剧情导演 API 预设',
+            };
+            select.setAttribute('aria-label', labels[routeKind] || '任务 API 预设');
         }
         return wrap;
     }
@@ -10322,6 +10596,9 @@
     }
 
     function getRequestProbeData() {
+        if (requestProbeSource === 'storyDirector') {
+            return YuzukiMemory.RequestProbe?.getLastStoryDirectorRequestData?.() || null;
+        }
         return YuzukiMemory.RequestProbe?.getLatestRequestData?.()
             || YuzukiMemory.RequestProbe?.getLastRequestData?.()
             || YuzukiMemory.RequestProbe?.getLastPreviewRequestData?.()
@@ -10337,6 +10614,9 @@
 
     function getProbeRoleMeta(message) {
         const role = String(message?.role || '').toLowerCase();
+        if (message?.flags?.agentToolCall) return { label: message.name || 'AGENT 工具调用', className: 'yzm-probe-role-agent-call', icon: 'fa-solid fa-wand-magic-sparkles' };
+        if (message?.flags?.agentToolResult) return { label: message.name || '工具返回', className: 'yzm-probe-role-agent-result', icon: 'fa-solid fa-toolbox' };
+        if (message?.flags?.agentToolSchema) return { label: message.name || '可用工具定义', className: 'yzm-probe-role-agent-schema', icon: 'fa-solid fa-screwdriver-wrench' };
         if (message?.flags?.vector) return { label: message.name || 'SYSTEM (向量化)', className: 'yzm-probe-role-vector', icon: 'fa-solid fa-diagram-project' };
         if (message?.flags?.memory) {
             const memoryName = String(message.name || 'MEMORY').replace(/^SYSTEM\s*/i, '').trim();
@@ -10356,10 +10636,10 @@
         const data = getRequestProbeData();
         const panel = document.createElement('section');
         panel.className = 'yzm-request-probe-panel';
-        panel.append(createRequestProbeHeader(data));
+        panel.append(createRequestProbeSourceTabs(), createRequestProbeHeader(data));
 
         if (!data?.messages?.length) {
-            panel.appendChild(createRequestProbeEmpty());
+            panel.appendChild(createRequestProbeEmpty(requestProbeSource === 'storyDirector'));
             return panel;
         }
 
@@ -10373,9 +10653,15 @@
         const titleWrap = document.createElement('div');
         titleWrap.className = 'yzm-request-probe-title';
         const title = document.createElement('div');
-        title.append(createIconNode('fa-solid fa-list-check', ''), document.createTextNode('API 请求查看器'));
+        const isDirector = data?.storyDirector === true || requestProbeSource === 'storyDirector';
+        title.append(
+            createIconNode(isDirector ? 'fa-solid fa-clapperboard' : 'fa-solid fa-list-check', ''),
+            document.createTextNode(isDirector ? '剧情导演 Agent 请求' : 'API 请求查看器'),
+        );
         const desc = document.createElement('span');
-        desc.textContent = data?.preparedTask
+        desc.textContent = isDirector && data
+            ? `显示第 ${data.agentTurn || 1} 轮发送给导演模型的完整上下文。工具调用和工具返回均为便于阅读的展开副本。`
+            : data?.preparedTask
             ? '插件任务发送前构造的请求快照，不代表酒馆后端已接收或上游已成功返回。'
             : data?.preview
             ? '仅捕获到发送前预览，最终 API 请求体尚未被插件捕获。'
@@ -10395,11 +10681,9 @@
                 'fa-solid fa-coins'
             ),
             createRequestProbeStat('Messages', `${data?.messages?.length || 0} 条`, 'fa-regular fa-message'),
-            createRequestProbeStat(
-                '最近捕获于',
-                formatRequestProbeTime(data?.timestamp),
-                'fa-regular fa-clock'
-            )
+            isDirector
+                ? createRequestProbeStat('Agent 轮次', `第 ${data?.agentTurn || 0} 轮`, 'fa-solid fa-rotate')
+                : createRequestProbeStat('最近捕获于', formatRequestProbeTime(data?.timestamp), 'fa-regular fa-clock')
         );
 
         const wrap = document.createElement('div');
@@ -10487,10 +10771,15 @@
         return item;
     }
 
-    function createRequestProbeEmpty() {
+    function createRequestProbeEmpty(isDirector = false) {
         const empty = document.createElement('div');
         empty.className = 'yzm-request-probe-empty';
-        empty.append(createIconNode('fa-regular fa-message', ''), document.createTextNode('暂无记录。发送一条消息后，这里会显示最后一次 API 请求内容。'));
+        empty.append(
+            createIconNode(isDirector ? 'fa-solid fa-clapperboard' : 'fa-regular fa-message', ''),
+            document.createTextNode(isDirector
+                ? '暂无导演请求。等待下一次助手正文完成后，导演会在后台生成记录。'
+                : '暂无记录。发送一条消息后，这里会显示最后一次 API 请求内容。'),
+        );
         return empty;
     }
 
@@ -10819,6 +11108,7 @@
             createPluginConfigHeader(),
             createPluginConfigRow('注入记忆', '处理 {{MEMORY}}、{{MEMORY_TABLE_表名}}、{{MEMORY_SUMMARY_标题或序号}} 等变量，并按表/总结分消息注入。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
             createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
+            createPluginConfigRow('剧情规划', '开启后在正文与记忆任务完成时规划下一轮；关闭后不运行导演，也不注入导演卡。', 'fa-solid fa-clapperboard', createConfigSwitch(settings.enableStoryDirector, 'enableStoryDirector')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
             createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标；单击打开记忆，双击或长按打开角色图谱。图标样式和拖动位置都会记住。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon'), createFloatingIconStylePicker(settings.floatingIconStyle)),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
@@ -11071,6 +11361,22 @@
 
         panel.append(header, tools, createTaskWorldbookSearch(selection.enabled), list);
         return panel;
+    }
+
+    function createRequestProbeSourceTabs() {
+        const tabs = document.createElement('div');
+        tabs.className = 'yzm-request-probe-source-tabs';
+        [
+            { value: 'request', label: '普通请求', icon: 'fa-solid fa-comments' },
+            { value: 'storyDirector', label: '剧情导演 Agent', icon: 'fa-solid fa-clapperboard' },
+        ].forEach((option) => {
+            const button = createIconButton(option.label, option.icon, requestProbeSource === option.value
+                ? 'yzm-request-probe-source yzm-request-probe-source-active'
+                : 'yzm-request-probe-source');
+            button.dataset.yzmRequestProbeSource = option.value;
+            tabs.appendChild(button);
+        });
+        return tabs;
     }
 
     function createTaskWorldbookRow(source) {
@@ -13663,9 +13969,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】优化总结注入格式。',
-            '【优化】优化界面图标渲染。',
-            '【新增】新增角色图谱入口。',
+            '新增剧情规划功能。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -15647,6 +15951,17 @@
 
         const moreButton = root.querySelector('.yzm-top-more-button');
         const moreMenu = root.querySelector('.yzm-top-more-menu');
+        const storyDirectorButton = root.querySelector('[data-yzm-story-director-replan]');
+        if (storyDirectorButton && storyDirectorButton.dataset.yzmBound !== 'true') {
+            storyDirectorButton.dataset.yzmBound = 'true';
+            storyDirectorButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                closeMoreMenu(root);
+                void runManualStoryDirector(storyDirectorButton);
+            });
+        }
+
         const characterGraphButton = root.querySelector('.yzm-top-character-graph');
         if (characterGraphButton && characterGraphButton.dataset.yzmBound !== 'true') {
             characterGraphButton.dataset.yzmBound = 'true';
@@ -16317,6 +16632,7 @@
                 const timedPromptSave = target?.closest('[data-yzm-timed-prompt-save]');
                 const historianPromptAction = target?.closest('[data-yzm-historian-prompt-action]');
                 const characterStatusPromptAction = target?.closest('[data-yzm-character-status-prompt-action]');
+                const storyDirectorPromptAction = target?.closest('[data-yzm-story-director-prompt-action]');
                 if (schemeIoAction) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -16349,6 +16665,15 @@
                     if (action === 'newCharacterStatusPrompt') startNewCharacterStatusPrompt(root);
                     if (action === 'saveCharacterStatusPrompt') saveActiveCharacterStatusPrompt(root);
                     if (action === 'deleteCharacterStatusPrompt') deleteActiveCharacterStatusPrompt(root);
+                    return;
+                }
+                if (storyDirectorPromptAction) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    const action = storyDirectorPromptAction.dataset.yzmStoryDirectorPromptAction || '';
+                    if (action === 'newStoryDirectorPrompt') startNewStoryDirectorPrompt(root);
+                    if (action === 'saveStoryDirectorPrompt') saveActiveStoryDirectorPrompt(root);
+                    if (action === 'deleteStoryDirectorPrompt') deleteActiveStoryDirectorPrompt(root);
                     return;
                 }
                 if (timedPromptToggle) {
@@ -16451,6 +16776,17 @@
                     );
                     return;
                 }
+                if (target?.matches?.('[data-yzm-story-director-prompt-field]')) {
+                    updateActiveStoryDirectorPromptField(
+                        target.dataset.yzmStoryDirectorPromptField || '',
+                        target.value,
+                    );
+                    const counter = root.querySelector('[data-yzm-story-director-prompt-counter]');
+                    if (counter && target.dataset.yzmStoryDirectorPromptField === 'prompt') {
+                        counter.textContent = `字数统计：${target.value.length} / 50000`;
+                    }
+                    return;
+                }
                 if (target?.matches?.('[data-yzm-timed-prompt-field]')) {
                     updateTimedPromptRuleField(
                         target.dataset.yzmTimedPromptRuleId || '',
@@ -16472,6 +16808,10 @@
                 }
                 if (target?.matches?.('[data-yzm-character-status-prompt-select]')) {
                     applyCharacterStatusPromptSelection(root, target.value);
+                    return;
+                }
+                if (target?.matches?.('[data-yzm-story-director-prompt-select]')) {
+                    applyStoryDirectorPromptSelection(root, target.value);
                     return;
                 }
                 if (!target?.matches?.('[data-yzm-scheme-select]')) return;
@@ -16499,6 +16839,16 @@
                 const apiChoice = target?.closest?.('.yzm-api-choice');
                 const requestProbeRefresh = target?.closest?.('.yzm-request-probe-refresh');
                 const requestProbeJump = target?.closest?.('[data-yzm-request-probe-jump]');
+                const requestProbeSourceButton = target?.closest?.('[data-yzm-request-probe-source]');
+
+                if (requestProbeSourceButton) {
+                    requestProbeSource = requestProbeSourceButton.dataset.yzmRequestProbeSource === 'storyDirector'
+                        ? 'storyDirector'
+                        : 'request';
+                    requestProbeSearchQuery = '';
+                    renderApiWorkspace(root);
+                    return;
+                }
 
                 if (requestProbeRefresh) {
                     requestProbeSearchQuery = root.querySelector('[data-yzm-request-probe-search]')?.value || requestProbeSearchQuery;
@@ -17092,6 +17442,7 @@
         memoryState = prepareLoadedState(createDefaultState());
         activeHistorianPromptDraft = null;
         activeCharacterStatusPromptDraft = null;
+        activeStoryDirectorPromptDraft = null;
         refreshActiveWorkspace(root);
 
         window.setTimeout(() => {
@@ -17133,6 +17484,7 @@
         memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
         activeHistorianPromptDraft = null;
         activeCharacterStatusPromptDraft = null;
+        activeStoryDirectorPromptDraft = null;
         sessionStateReady = Boolean(loadedSessionId);
         applyResolvedPromptSchemeToState({ save: false });
         refreshActiveWorkspace(root);

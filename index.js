@@ -10,8 +10,12 @@ import { extension_settings } from '../../../extensions.js';
     'use strict';
 
     const NAMESPACE = 'YuzukiMemory';
-    const VERSION = '0.9.8';
+    const VERSION = '1.0.0';
     const baseUrl = new URL('./', import.meta.url).href;
+    let resolveReady;
+    const readyPromise = new Promise((resolve) => {
+        resolveReady = resolve;
+    });
 
     const MODULES = [
         'config/global-settings.js',
@@ -27,10 +31,12 @@ import { extension_settings } from '../../../extensions.js';
         'config/floor-ledger.js',
         'config/todo-manager.js',
         'config/prompt-library.js',
+        'config/story-director-settings.js',
         'config/prompt-scheme-io.js',
         'config/llm-client.js',
         'config/worldbook-manager.js',
         'config/task-runner.js',
+        'config/story-director-runtime.js',
         'config/embedding-client.js',
         'config/rerank-client.js',
         'config/vector-store.js',
@@ -52,11 +58,21 @@ import { extension_settings } from '../../../extensions.js';
         loaded: true,
         version: VERSION,
         baseUrl,
+        readyPromise,
         settingsBridge: Object.freeze({
             extensionSettings: extension_settings,
             saveSettingsDebounced,
         }),
     });
+
+    globalThis.yuzukiMemoryGenerateInterceptor = async function (chat, _contextSize, _abort, type = 'normal') {
+        const generationType = String(type || 'normal').trim().toLowerCase();
+        if (generationType !== 'normal') return;
+        await readyPromise;
+        return window[NAMESPACE]?.StoryDirectorRuntime?.injectDirectorCardForGeneration?.(chat, {
+            generationType,
+        });
+    };
 
     function resolveModule(path) {
         const url = new URL(path, baseUrl);
@@ -89,12 +105,14 @@ import { extension_settings } from '../../../extensions.js';
             for (const modulePath of MODULES) {
                 await loadScript(modulePath);
             }
+            resolveReady?.();
 
             onDomReady(() => {
                 window[NAMESPACE].MemoryWindow?.mount?.();
                 console.log(`[yuzuki-Memory] v${VERSION} ready.`);
             });
         } catch (error) {
+            resolveReady?.();
             console.error('[yuzuki-Memory] Startup failed.', error);
         }
     }

@@ -215,3 +215,58 @@ test('invalid custom headers and unsupported OpenCode endpoints fail before fetc
     assert.match(unsupportedEndpoint.error, /chat\/completions/);
     assert.equal(fetchCount, 0);
 });
+
+test('agent request preserves tool transcript and returns structured tool calls', async () => {
+    const requests = [];
+    const { client } = createClient(async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        return createResponse({
+            choices: [{
+                message: {
+                    content: '',
+                    tool_calls: [{
+                        id: 'call-1',
+                        type: 'function',
+                        function: { name: 'read_state', arguments: '{}' },
+                    }],
+                },
+            }],
+        });
+    });
+    const tools = [{
+        type: 'function',
+        function: { name: 'read_state', description: 'read', parameters: { type: 'object', properties: {} } },
+    }];
+    const result = await client.requestAgentWithCustom(openCodeConfig, [
+        { role: 'system', content: 'director' },
+        { role: 'assistant', content: '', tool_calls: [{ id: 'old', type: 'function', function: { name: 'read_state', arguments: '{}' } }] },
+        { role: 'tool', tool_call_id: 'old', content: '{"ok":true}' },
+    ], tools);
+
+    assert.equal(result.success, true);
+    assert.equal(result.toolCalls[0].function.name, 'read_state');
+    assert.equal(requests[0].stream, false);
+    assert.equal(requests[0].tool_choice, 'auto');
+    assert.deepEqual(requests[0].tools, tools);
+    assert.equal(requests[0].messages[1].tool_calls[0].id, 'old');
+    assert.equal(requests[0].messages[2].role, 'tool');
+    assert.equal(requests[0].messages[2].tool_call_id, 'old');
+});
+
+test('agent response accepts array-based assistant content', () => {
+    const { client } = createClient(async () => createResponse({}));
+    const result = client.parseAgentResponsePayload({
+        choices: [{
+            message: {
+                content: [
+                    { type: 'text', text: '<下轮导演卡>' },
+                    { type: 'text', text: '推进支线。</下轮导演卡>' },
+                ],
+            },
+        }],
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.text, '<下轮导演卡>推进支线。</下轮导演卡>');
+    assert.equal(result.message.content, result.text);
+});

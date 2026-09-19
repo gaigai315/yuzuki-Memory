@@ -654,6 +654,26 @@
         return matchesFallback ? fallbackBreaks : null;
     }
 
+    function normalizeStoryDirectorState(rawValue, fallbackValue = {}) {
+        const source = rawValue && typeof rawValue === 'object' ? rawValue : {};
+        const fallback = fallbackValue && typeof fallbackValue === 'object' ? fallbackValue : {};
+        const anchor = source.source && typeof source.source === 'object' ? source.source : null;
+        return {
+            ledger: String(source.ledger ?? fallback.ledger ?? ''),
+            pendingCard: String(source.pendingCard ?? fallback.pendingCard ?? ''),
+            source: anchor ? {
+                sessionId: String(anchor.sessionId || ''),
+                assistantIndex: Number.isInteger(Number(anchor.assistantIndex)) ? Number(anchor.assistantIndex) : -1,
+                swipeId: Math.max(0, Math.round(Number(anchor.swipeId) || 0)),
+                signature: String(anchor.signature || ''),
+                createdAt: Math.max(0, Math.round(Number(anchor.createdAt) || 0)),
+            } : null,
+            status: String(source.status || fallback.status || 'idle'),
+            lastError: String(source.lastError || ''),
+            updatedAt: Math.max(0, Math.round(Number(source.updatedAt) || 0)),
+        };
+    }
+
     function normalizeState(rawState, fallbackState) {
         const fallback = clone(fallbackState);
         if (!rawState || typeof rawState !== 'object') {
@@ -776,6 +796,7 @@
                     : hasLegacyHistorianPromptSelection,
             } : {}),
             characterStatusPromptId: String(rawState.characterStatusPromptId ?? fallback.characterStatusPromptId ?? ''),
+            storyDirector: normalizeStoryDirectorState(rawState.storyDirector, fallback.storyDirector),
             settings: Object.assign({}, fallback.settings || {}, rawState.settings || {}),
         };
     }
