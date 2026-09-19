@@ -78,7 +78,7 @@
         { id: 'summary', label: '总结', className: 'fa-solid fa-house' },
         { id: 'person', label: '人物档案', className: 'fa-solid fa-user' },
         { id: 'item', label: '物品', className: 'fa-solid fa-box-open' },
-        { id: 'world', label: '世界设定', className: 'fa-solid fa-layer-group' },
+        { id: 'world', label: '世界设定', className: 'fa-solid fa-earth-asia' },
         { id: 'promise', label: '约定', className: 'fa-solid fa-handshake' },
         { id: 'status', label: '状态栏', className: 'fa-solid fa-heart-pulse' },
         { id: 'location', label: '地点', className: 'fa-solid fa-location-dot' },
@@ -162,10 +162,10 @@
     ];
     const PROMPT_SCHEME_SECTIONS = [
         { id: 'info', label: '方案信息', icon: 'fa-regular fa-clipboard' },
-        { id: 'historian', label: '史官破限', icon: 'fa-regular fa-clipboard' },
-        { id: 'trace', label: '填表提示词', icon: 'fa-regular fa-clipboard' },
-        { id: 'characterStatus', label: '角色状态提示词', icon: 'fa-regular fa-clipboard' },
-        { id: 'summary', label: '总结提示词', icon: 'fa-regular fa-clipboard' },
+        { id: 'historian', label: '史官破限', icon: 'fa-solid fa-scroll' },
+        { id: 'trace', label: '填表提示词', icon: 'fa-solid fa-pen' },
+        { id: 'characterStatus', label: '角色状态提示词', icon: 'fa-solid fa-heart-pulse' },
+        { id: 'summary', label: '总结提示词', icon: 'fa-solid fa-window-restore' },
         { id: 'timedPrompt', label: '定时注入提示词', icon: 'fa-regular fa-clock' },
     ];
     const PROMPT_SCHEME_PROMPT_IDS = ['traceRealtime', 'traceBatch', 'trace', 'traceOptimize', 'summary', 'summaryOptimize'];
@@ -3560,6 +3560,13 @@
         actions.className = 'yzm-top-actions';
         actions.setAttribute('aria-label', '记忆面板操作');
 
+        const characterGraphButton = createIconButton(
+            '图谱',
+            'fa-solid fa-share-nodes',
+            'yzm-top-action-button yzm-top-character-graph',
+        );
+        characterGraphButton.title = '进入角色图谱';
+
         const moreMenu = document.createElement('div');
         moreMenu.className = 'yzm-top-more';
 
@@ -3583,7 +3590,7 @@
         );
 
         moreMenu.append(moreButton, moreList);
-        actions.append(moreMenu);
+        actions.append(characterGraphButton, moreMenu);
 
         return actions;
     }
@@ -3872,7 +3879,7 @@
         summaryToolAction.dataset.yzmAction = 'summaryTool';
         const apiAction = createIconButton('API', 'fa-solid fa-plug', 'yzm-sidebar-action');
         apiAction.dataset.yzmAction = 'api';
-        const vectorAction = createIconButton('向量化', 'fa-solid fa-diagram-project', 'yzm-sidebar-action');
+        const vectorAction = createIconButton('向量化', 'fa-solid fa-database', 'yzm-sidebar-action');
         vectorAction.dataset.yzmAction = 'vector';
         const schemeAction = createIconButton('记忆方案', 'fa-solid fa-book-bookmark', 'yzm-sidebar-action');
         schemeAction.dataset.yzmAction = 'scheme';
@@ -12461,11 +12468,91 @@
         return 'neutral';
     }
 
+    function openCharacterStatusTaskDialog(root, transaction) {
+        const host = getModalHost(root);
+        removeModal(root, '.yzm-character-status-task-modal');
+        const previousFocus = document.activeElement;
+        const growthTask = transaction.growthTask;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-character-status-task-modal';
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-character-status-task-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+        dialog.setAttribute('aria-label', `事务详情：${transaction.title}`);
+
+        const header = document.createElement('div');
+        header.className = 'yzm-character-status-task-dialog-header';
+        const heading = document.createElement('strong');
+        heading.className = 'yzm-character-status-task-dialog-title';
+        heading.textContent = transaction.title;
+        const close = createButton('', 'yzm-character-status-task-dialog-close');
+        close.setAttribute('aria-label', '关闭事务详情');
+        close.appendChild(createIconNode('fa-solid fa-xmark', ''));
+        header.append(heading, close);
+
+        const body = document.createElement('div');
+        body.className = 'yzm-character-status-task-dialog-body';
+        const addDetail = (label, value) => {
+            const section = document.createElement('div');
+            section.className = 'yzm-character-status-task-dialog-section';
+            const title = document.createElement('span');
+            title.className = 'yzm-character-status-task-dialog-label';
+            title.textContent = label;
+            const text = document.createElement('p');
+            text.className = 'yzm-character-status-task-dialog-text';
+            text.textContent = value;
+            section.append(title, text);
+            body.appendChild(section);
+        };
+        addDetail('来源', transaction.column);
+        addDetail('内容', transaction.description);
+        if (growthTask) {
+            addDetail('奖励', `${growthTask.attribute} +${growthTask.increase}`);
+            addDetail('目标', growthTask.completion || '按剧情达成任务内容');
+        }
+        dialog.append(header, body);
+        overlay.appendChild(dialog);
+        host.appendChild(overlay);
+
+        const closeDialog = () => {
+            removePluginElement(overlay);
+            if (previousFocus instanceof HTMLElement && previousFocus.isConnected) previousFocus.focus();
+        };
+        close.addEventListener('click', closeDialog);
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeDialog();
+        });
+        overlay.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                event.stopPropagation();
+                closeDialog();
+            } else if (event.key === 'Tab') {
+                event.preventDefault();
+                close.focus();
+            }
+        });
+        close.focus();
+    }
+
     function createCharacterStatusTransactionCard(table, record, transaction) {
         const growthTask = transaction.growthTask;
         const tone = getCharacterStatusTransactionTone(transaction.column);
         const card = document.createElement('article');
         card.className = `yzm-character-status-task-card yzm-character-status-task-tone-${tone}`;
+        card.tabIndex = 0;
+        card.setAttribute('role', 'button');
+        card.setAttribute('aria-label', `查看${transaction.title}详情`);
+        card.addEventListener('click', () => {
+            const root = document.getElementById(ROOT_ID);
+            if (root) openCharacterStatusTaskDialog(root, transaction);
+        });
+        card.addEventListener('keydown', (event) => {
+            if (event.target !== card || (event.key !== 'Enter' && event.key !== ' ')) return;
+            event.preventDefault();
+            card.click();
+        });
 
         const header = document.createElement('div');
         header.className = 'yzm-character-status-task-header';
@@ -12479,7 +12566,9 @@
         title.className = 'yzm-character-status-task-title';
         title.textContent = transaction.title;
         title.title = transaction.title;
-        header.append(kind, title);
+        const openIcon = createIconNode('fa-solid fa-chevron-right', '');
+        openIcon.classList.add('yzm-character-status-task-open-icon');
+        header.append(kind, title, openIcon);
 
         const description = document.createElement('p');
         description.className = 'yzm-character-status-task-description';
@@ -12503,7 +12592,6 @@
             card.appendChild(meta);
         }
 
-        const detailsAreLong = transaction.description.length > 72 || String(growthTask?.completion || '').length > 30;
         const footer = document.createElement('div');
         footer.className = 'yzm-character-status-task-footer';
         const goal = document.createElement('span');
@@ -12520,22 +12608,6 @@
 
         const actions = document.createElement('span');
         actions.className = 'yzm-character-status-task-actions';
-        if (detailsAreLong) {
-            const detailsButton = document.createElement('button');
-            detailsButton.type = 'button';
-            detailsButton.className = 'yzm-character-status-task-details';
-            detailsButton.setAttribute('aria-expanded', 'false');
-            detailsButton.innerHTML = '<span>查看详情</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i>';
-            detailsButton.addEventListener('click', () => {
-                const expanded = card.classList.toggle('yzm-character-status-task-expanded');
-                detailsButton.setAttribute('aria-expanded', String(expanded));
-                detailsButton.querySelector('span').textContent = expanded ? '收起详情' : '查看详情';
-                detailsButton.querySelector('i').className = expanded
-                    ? 'fa-solid fa-chevron-up'
-                    : 'fa-solid fa-chevron-down';
-            });
-            actions.appendChild(detailsButton);
-        }
         if (growthTask) {
             const completeButton = document.createElement('button');
             completeButton.type = 'button';
@@ -13591,9 +13663,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】待办事项过期 10 分钟后自动清理。',
-            '【修复】手动删除的待办不会在新正文或回档后重新出现。',
-            '【新增】支持古代时间状态栏，剧情摘要可正确显示古代日期和时段。',
+            '【优化】优化总结注入格式。',
+            '【优化】优化界面图标渲染。',
+            '【新增】新增角色图谱入口。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -15575,6 +15647,17 @@
 
         const moreButton = root.querySelector('.yzm-top-more-button');
         const moreMenu = root.querySelector('.yzm-top-more-menu');
+        const characterGraphButton = root.querySelector('.yzm-top-character-graph');
+        if (characterGraphButton && characterGraphButton.dataset.yzmBound !== 'true') {
+            characterGraphButton.dataset.yzmBound = 'true';
+            characterGraphButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                closeMoreMenu(root);
+                YuzukiMemory.CharacterGraphWindow?.open?.();
+            });
+        }
+
         if (moreButton && moreMenu && moreButton.dataset.yzmBound !== 'true') {
             moreButton.dataset.yzmBound = 'true';
             moreButton.addEventListener('click', (event) => {

@@ -13448,6 +13448,17 @@
     border: 1px solid var(--yzm-border);
     border-radius: 8px;
     box-sizing: border-box;
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-character-status-task-card:hover,
+#yzm-memory-root .yzm-character-status-task-card:focus-visible {
+    border-color: var(--yzm-selected-color);
+}
+
+#yzm-memory-root .yzm-character-status-task-card:focus-visible {
+    outline: 2px solid var(--yzm-selected-color);
+    outline-offset: 2px;
 }
 
 #yzm-memory-root .yzm-character-status-task-tone-adventure {
@@ -13505,6 +13516,13 @@
     white-space: nowrap;
 }
 
+#yzm-memory-root .yzm-character-status-task-open-icon {
+    flex: 0 0 auto;
+    margin-left: auto;
+    color: var(--yzm-muted);
+    font-size: 11px;
+}
+
 #yzm-memory-root .yzm-character-status-task-description {
     display: -webkit-box;
     min-width: 0;
@@ -13516,7 +13534,7 @@
     overflow-wrap: anywhere;
     word-break: break-word;
     -webkit-box-orient: vertical;
-    -webkit-line-clamp: 2;
+    -webkit-line-clamp: 3;
 }
 
 #yzm-memory-root .yzm-character-status-task-meta,
@@ -13581,7 +13599,6 @@
     flex: 0 0 auto;
 }
 
-#yzm-memory-root .yzm-character-status-task-details,
 #yzm-memory-root .yzm-character-status-complete-task {
     display: inline-flex;
     align-items: center;
@@ -13599,8 +13616,6 @@
     transition: color 160ms ease, background 160ms ease, border-color 160ms ease;
 }
 
-#yzm-memory-root .yzm-character-status-task-details:hover,
-#yzm-memory-root .yzm-character-status-task-details:focus-visible,
 #yzm-memory-root .yzm-character-status-complete-task:hover,
 #yzm-memory-root .yzm-character-status-complete-task:focus-visible {
     color: var(--yzm-selected-color);
@@ -13609,7 +13624,6 @@
     outline: 0;
 }
 
-#yzm-memory-root .yzm-character-status-task-details span,
 #yzm-memory-root .yzm-character-status-complete-task span {
     color: inherit;
     font-size: 11px;
@@ -13617,21 +13631,92 @@
     white-space: nowrap;
 }
 
-#yzm-memory-root .yzm-character-status-task-details i,
 #yzm-memory-root .yzm-character-status-complete-task i {
     color: inherit;
     font-size: 10px;
 }
 
-#yzm-memory-root .yzm-character-status-task-expanded .yzm-character-status-task-description {
-    display: block;
-    overflow: visible;
+#yzm-memory-root .yzm-character-status-task-dialog {
+    width: min(460px, 100%);
+    max-height: min(76dvh, 100%, 620px);
+    min-height: 0;
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
 }
 
-#yzm-memory-root .yzm-character-status-task-expanded .yzm-character-status-task-goal {
-    overflow: visible;
-    text-overflow: clip;
-    white-space: normal;
+#yzm-memory-root .yzm-character-status-task-dialog-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex: 0 0 auto;
+    gap: 12px;
+    padding: 15px 16px;
+    border-bottom: 1px solid var(--yzm-border-soft);
+}
+
+#yzm-memory-root .yzm-character-status-task-dialog-title {
+    min-width: 0;
+    color: var(--yzm-title);
+    font-size: 16px;
+    line-height: 1.4;
+    overflow-wrap: anywhere;
+}
+
+#yzm-memory-root .yzm-character-status-task-dialog-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 32px;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--yzm-icon);
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-character-status-task-dialog-close:hover,
+#yzm-memory-root .yzm-character-status-task-dialog-close:focus-visible {
+    background: var(--yzm-hover);
+    color: var(--yzm-title);
+}
+
+#yzm-memory-root .yzm-character-status-task-dialog-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 0;
+    padding: 0 16px;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+}
+
+#yzm-memory-root .yzm-character-status-task-dialog-section {
+    padding: 14px 0;
+    border-bottom: 1px solid var(--yzm-border-soft);
+}
+
+#yzm-memory-root .yzm-character-status-task-dialog-section:last-child {
+    border-bottom: 0;
+}
+
+#yzm-memory-root .yzm-character-status-task-dialog-label {
+    color: var(--yzm-muted);
+    font-size: 11px;
+    line-height: 1.4;
+}
+
+#yzm-memory-root .yzm-character-status-task-dialog-text {
+    margin: 5px 0 0;
+    color: var(--yzm-text);
+    font-size: 13px;
+    line-height: 1.65;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
 }
 
 #yzm-memory-root .yzm-character-status-task-empty {

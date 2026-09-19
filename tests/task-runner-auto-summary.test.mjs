@@ -11,6 +11,7 @@ function createHarness(options = {}) {
     let nextTimerId = 1;
     const timers = new Map();
     const eventHandlers = new Map();
+    const windowEventHandlers = new Map();
     const saveCalls = [];
     const successToasts = [];
     const errorToasts = [];
@@ -33,7 +34,10 @@ function createHarness(options = {}) {
         }
     }
 
-    const chat = Array.from({ length: options.chatLength ?? 203 }, (_entry, index) => ({
+    const targetChatLength = options.chatLength ?? 203;
+    const activateAfterBind = options.activateAfterBind !== false;
+    const initialChatLength = Math.max(0, targetChatLength - (activateAfterBind ? 2 : 0));
+    const chat = Array.from({ length: initialChatLength }, (_entry, index) => ({
         is_user: index % 2 === 1,
         name: index % 2 === 1 ? '测试用户' : '测试角色',
         mes: `第 ${index} 层内容`,
@@ -75,6 +79,7 @@ function createHarness(options = {}) {
         eventSource,
         eventTypes: {
             CHARACTER_MESSAGE_RENDERED: 'character_message_rendered',
+            MESSAGE_SENT: 'message_sent',
             GENERATION_STARTED: 'generation_started',
             GENERATION_ENDED: 'generation_ended',
             GENERATION_STOPPED: 'generation_stopped',
@@ -165,7 +170,10 @@ function createHarness(options = {}) {
                 return 1;
             },
             clearInterval() {},
-            addEventListener() {},
+            addEventListener(name, handler) {
+                if (!windowEventHandlers.has(name)) windowEventHandlers.set(name, []);
+                windowEventHandlers.get(name).push(handler);
+            },
         },
     };
     vm.createContext(sandbox);
@@ -232,6 +240,14 @@ function createHarness(options = {}) {
         },
     };
     sandbox.window.YuzukiMemory.TaskRunner.bindAutoSummary(callbacks);
+    if (activateAfterBind) {
+        chat.push({ is_user: true, name: '测试用户', mes: `第 ${chat.length} 层用户内容` });
+        (eventHandlers.get('message_sent') || []).forEach((handler) => handler());
+        (eventHandlers.get('generation_started') || []).forEach((handler) => handler('normal', {}, false));
+        chat.push({ is_user: false, name: '测试角色', mes: `第 ${chat.length} 层角色内容` });
+        (eventHandlers.get('character_message_rendered') || []).forEach((handler) => handler());
+        (eventHandlers.get('generation_ended') || []).forEach((handler) => handler());
+    }
 
     return {
         chat,
@@ -254,11 +270,17 @@ function createHarness(options = {}) {
         get storedState() {
             return storedState;
         },
+        get pendingTimerCount() {
+            return timers.size;
+        },
         advance(ms = 2000) {
             now += ms;
         },
         emit(name, ...args) {
             (eventHandlers.get(name) || []).forEach((handler) => handler(...args));
+        },
+        emitWindow(name, ...args) {
+            (windowEventHandlers.get(name) || []).forEach((handler) => handler(...args));
         },
         async runNextTimer() {
             const entry = timers.entries().next().value;
@@ -269,6 +291,30 @@ function createHarness(options = {}) {
         },
     };
 }
+
+test('loading a chat with pending summary ranges waits for the user to resume chatting', async () => {
+    const harness = createHarness({ activateAfterBind: false });
+
+    assert.equal(harness.pendingTimerCount, 0);
+    harness.emitWindow('yzm-memory-session-ready');
+    harness.emit('character_message_rendered');
+    harness.emit('generation_ended');
+    assert.equal(harness.pendingTimerCount, 0, 'chat loading and historical rendering must not schedule automatic summaries');
+    assert.equal(harness.generatedCount, 0);
+
+    harness.chat.push({ is_user: true, name: '测试用户', mes: '继续当前剧情' });
+    harness.emit('message_sent');
+    harness.emit('generation_started', 'normal', {}, false);
+    harness.chat.push({ is_user: false, name: '测试角色', mes: '新的剧情回复' });
+    harness.emit('character_message_rendered');
+    harness.emit('generation_ended');
+
+    assert.equal(harness.pendingTimerCount, 1);
+    harness.advance();
+    await harness.runNextTimer();
+    assert.equal(harness.generatedCount, 1);
+    assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 200);
+});
 
 function createSummaryRecord({
     id,

@@ -857,7 +857,7 @@
         if (!blocks.length) return null;
         return {
             role: 'system',
-            content: compactLines(['【前情提要】', blocks.join('\n\n')]),
+            content: blocks.join('\n\n'),
             name: `SYSTEM(总结${sequence ?? first.number})`,
             isGaigaiData: true,
             yzmMemoryInjectionType: 'summary',

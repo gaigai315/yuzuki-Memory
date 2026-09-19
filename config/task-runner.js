@@ -65,6 +65,7 @@
     let autoSummaryPromptOpen = false;
     let autoTaskArmed = false;
     let autoTaskSessionId = '';
+    let autoTaskSessionActivated = false;
     let autoTaskBaselineChatLength = 0;
     let autoTaskBaselineAssistantKey = '';
     let autoTaskSessionPollTimer = null;
@@ -479,6 +480,7 @@
     function refreshAutoTaskBaseline() {
         window.clearTimeout(autoSummaryTimer);
         autoTaskSessionId = getCurrentSessionId();
+        autoTaskSessionActivated = false;
         autoTaskBaselineChatLength = getChatLength();
         autoTaskBaselineAssistantKey = getLatestAssistantMessageKey();
         autoTaskArmed = false;
@@ -3894,25 +3896,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return null;
     }
 
-    function armExistingPendingAutoTask(callbacks = {}) {
-        if (!isAutoTaskStateReady(callbacks) || !isLatestAssistantMessage()) return false;
-        const state = callbacks.getState?.();
-        if (!state) return false;
-        const task = buildPendingAutoTask(
-            normalizePointers(state),
-            getChatLength(),
-            getAutoSummarySettings(),
-            getPluginSettings()
-        );
-        if (!task) return false;
-        autoTaskArmed = true;
-        // Existing pointer backlog must bypass the new-message baseline once.
-        autoTaskRetryPending = true;
-        markLatestAssistantMessageActivity();
-        scheduleAutoSummary(callbacks, AUTO_TASK_MESSAGE_STABLE_MS);
-        return true;
-    }
-
     async function confirmAutoTask(task, callbacks = {}) {
         if (settingsSupportsDirect(callbacks) && callbacks.confirmAutoTask) {
             return callbacks.confirmAutoTask(task);
@@ -4338,7 +4321,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     function armAutoTaskAfterGeneration(callbacks = {}) {
-        if (!isAutoTaskStateReady(callbacks)) return;
+        if (!autoTaskSessionActivated || !isAutoTaskStateReady(callbacks)) return;
         const currentSessionId = getCurrentSessionId();
         const chatLength = getChatLength();
         const latestAssistantKey = getLatestAssistantMessageKey();
@@ -4373,8 +4356,16 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 markLatestAssistantMessageActivity();
                 armAutoTaskAfterGeneration(callbacks);
             };
+            const activateCurrentSession = () => {
+                const currentSessionId = getCurrentSessionId();
+                if (currentSessionId && currentSessionId !== autoTaskSessionId) {
+                    refreshAutoTaskBaseline();
+                }
+                autoTaskSessionActivated = true;
+            };
             const onGenerationStarted = (type, options, dryRun) => {
                 if (!isForegroundGenerationEvent(type, options, dryRun)) return undefined;
+                activateCurrentSession();
                 foregroundGenerationActive = true;
                 window.clearTimeout(autoSummaryTimer);
                 autoSummaryTimer = null;
@@ -4400,6 +4391,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 refreshAutoTaskBaseline();
             };
             if (eventTypes.CHARACTER_MESSAGE_RENDERED) eventSource.on?.(eventTypes.CHARACTER_MESSAGE_RENDERED, onCharacterRendered);
+            bindEvents([eventTypes.MESSAGE_SENT, 'message_sent'], activateCurrentSession);
             bindEvents([eventTypes.GENERATION_STARTED, 'generation_started'], onGenerationStarted);
             bindEvents([
                 eventTypes.GENERATION_ENDED,
@@ -4412,7 +4404,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         window.addEventListener('yzm-memory-session-ready', () => {
             refreshAutoTaskBaseline();
             clampPointersToChatLength(getChatLength(), 'session_ready');
-            armExistingPendingAutoTask(callbacks);
         });
         autoTaskSessionPollTimer = window.setInterval(() => {
             const currentSessionId = getCurrentSessionId();
@@ -4420,7 +4411,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 refreshAutoTaskBaseline();
             }
         }, 1500);
-        armExistingPendingAutoTask(callbacks);
     }
 
     YuzukiMemory.TaskRunner = Object.assign(YuzukiMemory.TaskRunner || {}, {

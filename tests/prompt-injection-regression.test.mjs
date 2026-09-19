@@ -193,6 +193,7 @@ test('branch summaries for one character share one injected message across floor
 
     const messages = memory.VariableInjector.buildSummaryMessages(state);
     assert.equal(messages.length, 4, 'two main ranges and two distinct characters');
+    assert.ok(messages.every((message) => !message.content.includes('【前情提要】')));
     const branch = messages.find((message) => message.content.includes('【支线总结：江栖年】'));
     assert.ok(branch);
     assert.equal(branch.content.match(/【支线总结：江栖年】/g)?.length, 1);
