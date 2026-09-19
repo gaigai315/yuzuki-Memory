@@ -221,3 +221,23 @@ test('empty summary synchronization removes its vector book and indexes', async 
     assert.equal(purgedBackendBook, created.bookId);
     assert.equal(purgedLocalBook, created.bookId);
 });
+
+test('director search can use active vector books without enabling foreground vector injection', async () => {
+    const sandbox = await createVectorStoreSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    const store = memory.VectorStore;
+    memory.GlobalSettings = { get: () => ({ injectVectorMemory: false }) };
+    memory.EmbeddingClient.loadSettings = () => ({ recallLimit: 3, threshold: 0.3 });
+    store.library.test = store.normalizeBook({ name: '剧情线索', chunks: ['被检索到的旧线索'] }, '剧情线索');
+    store.library.test.vectorized = [true];
+    store.library.test.vectorDimension = 3;
+    store.library.test.vectorScope = 'test-scope';
+    store.getEmbedding = async () => [1, 2, 3];
+    store.getVectorScope = () => 'test-scope';
+    store.vectorBackendState = 'unavailable';
+    store.queryLocalBooks = async () => [{ source: '剧情线索 #1', text: '被检索到的旧线索', score: 0.9 }];
+
+    assert.equal((await store.search('最新剧情', ['test'])).length, 0);
+    const results = await store.search('最新剧情', ['test'], { ignoreInjectionSetting: true });
+    assert.deepEqual(Array.from(results, (result) => result.text), ['被检索到的旧线索']);
+});

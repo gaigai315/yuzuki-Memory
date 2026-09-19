@@ -13,17 +13,19 @@
     const TOOL_NAMES = Object.freeze({
         tables: 'yzm_story_read_tables',
         chat: 'yzm_story_read_visible_chat',
+        vectors: 'yzm_story_search_vectors',
         ledger: 'yzm_story_read_ledger',
         updateLedger: 'yzm_story_update_ledger',
     });
     const TOOL_LABELS = Object.freeze({
         [TOOL_NAMES.tables]: '读取全部启用表格',
         [TOOL_NAMES.chat]: '读取全部未隐藏聊天楼层',
+        [TOOL_NAMES.vectors]: '检索当前启用的向量书',
         [TOOL_NAMES.ledger]: '读取导演账本',
         [TOOL_NAMES.updateLedger]: '更新导演账本',
     });
     const REQUIRED_TOOL_NAMES = new Set([TOOL_NAMES.tables, TOOL_NAMES.chat, TOOL_NAMES.ledger]);
-    const MAX_AGENT_TURNS = 6;
+    const MAX_AGENT_TURNS = 8;
     const RUN_DELAY_MS = 1800;
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     let bound = false;
@@ -239,7 +241,7 @@
         return JSON.stringify({ tables });
     }
 
-    function serializeVisibleChat() {
+    function collectVisibleChatMessages() {
         const context = getContext() || {};
         const chat = Array.isArray(context.chat) ? context.chat : [];
         const userName = String(context.name1 || context.userName || context.playerName || 'User');
@@ -258,10 +260,19 @@
                 content,
             });
         });
-        return JSON.stringify({ messages });
+        return messages;
     }
 
-    function getToolDefinitions() {
+    function serializeVisibleChat() {
+        return JSON.stringify({ messages: collectVisibleChatMessages() });
+    }
+
+    function getDefaultVectorQuery() {
+        const depth = Math.max(1, Math.round(Number(YuzukiMemory.EmbeddingClient?.loadSettings?.()?.contextDepth) || 2));
+        return collectVisibleChatMessages().slice(-depth).map((message) => message.content).join('\n').slice(-6000);
+    }
+
+    function getToolDefinitions(includeVectors = false) {
         return [
             {
                 type: 'function',
@@ -279,6 +290,18 @@
                     parameters: { type: 'object', properties: {}, additionalProperties: false },
                 },
             },
+            ...(includeVectors ? [{
+                type: 'function',
+                function: {
+                    name: TOOL_NAMES.vectors,
+                    description: '检索当前会话已启用的向量书，返回相关历史片段。query 留空时使用最近的未隐藏对话。',
+                    parameters: {
+                        type: 'object',
+                        properties: { query: { type: 'string', description: '可选的剧情检索词。' } },
+                        additionalProperties: false,
+                    },
+                },
+            }] : []),
             {
                 type: 'function',
                 function: {
@@ -305,7 +328,7 @@
         ];
     }
 
-    function registerRuntimeTools(runContext) {
+    function registerRuntimeTools(runContext, includeVectors = false) {
         const manager = getContext()?.ToolManager;
         if (!manager?.registerFunctionTool || !manager?.invokeFunctionTool) {
             throw new Error('当前 SillyTavern 未提供 ToolManager。');
@@ -332,6 +355,43 @@
         register(TOOL_NAMES.chat, '读取当前全部未隐藏聊天楼层。', { type: 'object', properties: {}, additionalProperties: false }, () => {
             assertActive();
             return serializeVisibleChat();
+        });
+        if (includeVectors) register(TOOL_NAMES.vectors, '检索当前启用的向量书。', {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            additionalProperties: false,
+        }, async (parameters = {}) => {
+            assertActive();
+            const store = YuzukiMemory.VectorStore;
+            const activeBooks = store?.getActiveBooks?.() || [];
+            const query = String(parameters.query || getDefaultVectorQuery()).trim().slice(-6000);
+            if (!activeBooks.length || !query) return JSON.stringify({ query, matches: [], note: '当前没有启用的向量书或可检索的对话。' });
+            if (YuzukiMemory.EmbeddingClient?.loadSettings?.()?.enabled !== true) {
+                return JSON.stringify({ query, matches: [], note: 'Embedding 未启用，无法检索向量书。' });
+            }
+            let timeoutId;
+            try {
+                const results = await Promise.race([
+                    store.search(query, activeBooks, { ignoreInjectionSetting: true }),
+                    new Promise((_, reject) => {
+                        timeoutId = window.setTimeout(() => reject(new Error('向量检索超时')), 20000);
+                    }),
+                ]);
+                assertActive();
+                return JSON.stringify({
+                    query,
+                    matches: (Array.isArray(results) ? results : []).map((item) => ({
+                        source: String(item.source || ''),
+                        text: String(item.text || ''),
+                        score: Number(item.score) || 0,
+                    })),
+                });
+            } catch (error) {
+                assertActive();
+                return JSON.stringify({ query, matches: [], error: String(error?.message || error || '向量检索失败') });
+            } finally {
+                window.clearTimeout(timeoutId);
+            }
         });
         register(TOOL_NAMES.ledger, '读取剧情导演账本。', { type: 'object', properties: {}, additionalProperties: false }, () => {
             assertActive();
@@ -474,14 +534,22 @@
         };
         let manager = null;
         try {
-            manager = registerRuntimeTools(runContext);
-            const tools = getToolDefinitions();
+            const store = YuzukiMemory.VectorStore;
+            await store?.whenReady?.();
+            if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
+            const includeVectors = (store?.getActiveBooks?.() || []).length > 0;
+            manager = registerRuntimeTools(runContext, includeVectors);
+            const tools = getToolDefinitions(includeVectors);
+            const requiredTools = includeVectors
+                ? new Set([...REQUIRED_TOOL_NAMES, TOOL_NAMES.vectors])
+                : REQUIRED_TOOL_NAMES;
             const snapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.('storyDirector') || { mode: 'tavern', preset: null };
+            const instruction = source.role === 'user'
+                ? '请根据最新用户消息及此前剧情生成下一轮导演卡。先按要求调用工具读取数据。'
+                : '请为最新完成的助手正文生成下一轮导演卡。先按要求调用工具读取数据。';
             const messages = [
                 { role: 'system', content: String(promptEntry.prompt || '').trim() },
-                { role: 'user', content: source.role === 'user'
-                    ? '请根据最新用户消息及此前剧情生成下一轮导演卡。先按要求调用工具读取数据。'
-                    : '请为最新完成的助手正文生成下一轮导演卡。先按要求调用工具读取数据。' },
+                { role: 'user', content: includeVectors ? `${instruction} 并检索已启用的向量书。` : instruction },
             ];
             const usedTools = new Set();
             for (let turn = 0; turn < MAX_AGENT_TURNS; turn += 1) {
@@ -508,7 +576,7 @@
                     }
                     continue;
                 }
-                const missingRequired = [...REQUIRED_TOOL_NAMES].filter((name) => !usedTools.has(name));
+                const missingRequired = [...requiredTools].filter((name) => !usedTools.has(name));
                 if (missingRequired.length) {
                     messages.push({
                         role: 'user',

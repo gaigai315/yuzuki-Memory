@@ -1820,7 +1820,7 @@
             return this.getVectorDimensionFromReference(vector);
         }
 
-        async search(query, allowedBookIds = null) {
+        async search(query, allowedBookIds = null, options = {}) {
             await this.whenReady();
             let pluginSettings = {};
             try {
@@ -1829,7 +1829,7 @@
             } catch (_error) {
                 pluginSettings = {};
             }
-            if (pluginSettings?.injectVectorMemory !== true) {
+            if (pluginSettings?.injectVectorMemory !== true && options.ignoreInjectionSetting !== true) {
                 console.info('[yuzuki-Memory Vector] 搜索跳过：注入向量记忆未启用');
                 return [];
             }

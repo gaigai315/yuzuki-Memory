@@ -7,6 +7,8 @@ const source = fs.readFileSync(new URL('../config/story-director-runtime.js', im
 
 function createSandbox(options = {}) {
     let enabled = Object.hasOwn(options, 'enabled') ? options.enabled : true;
+    const vectorBooks = Array.isArray(options.vectorBooks) ? options.vectorBooks : [];
+    const vectorCalls = [];
     let state = {
         tables: [
             { id: 'memory_summary', name: '记忆总结', columns: ['总结内容'], hidden: false },
@@ -78,6 +80,15 @@ function createSandbox(options = {}) {
             },
         },
         VariableInjector: { createDefaultState: () => structuredClone(state) },
+        EmbeddingClient: { loadSettings: () => ({ enabled: options.embeddingEnabled !== false, contextDepth: 2 }) },
+        VectorStore: {
+            async whenReady() {},
+            getActiveBooks: () => vectorBooks,
+            async search(query, bookIds, searchOptions) {
+                vectorCalls.push(structuredClone({ query, bookIds, searchOptions }));
+                return [{ source: '启用的剧情书 #3', text: '向量中保存的历史线索', score: 0.92 }];
+            },
+        },
         StoryDirectorSettings: {
             getActivePrompt: () => ({ id: 'director', prompt: '必须调用工具并输出导演卡。' }),
         },
@@ -97,24 +108,18 @@ function createSandbox(options = {}) {
                 requests.push(structuredClone(messages));
                 requestCount += 1;
                 if (requestCount === 1) {
+                    const toolCalls = [
+                        { id: 'tables', type: 'function', function: { name: 'yzm_story_read_tables', arguments: '{}' } },
+                        { id: 'chat', type: 'function', function: { name: 'yzm_story_read_visible_chat', arguments: '{}' } },
+                        { id: 'ledger', type: 'function', function: { name: 'yzm_story_read_ledger', arguments: '{}' } },
+                        { id: 'write', type: 'function', function: { name: 'yzm_story_update_ledger', arguments: '{"content":"新账本"}' } },
+                    ];
+                    if (vectorBooks.length) toolCalls.splice(2, 0,
+                        { id: 'vectors', type: 'function', function: { name: 'yzm_story_search_vectors', arguments: '{}' } });
                     return {
                         success: true,
-                        message: {
-                            role: 'assistant',
-                            content: '',
-                            tool_calls: [
-                                { id: 'tables', type: 'function', function: { name: 'yzm_story_read_tables', arguments: '{}' } },
-                                { id: 'chat', type: 'function', function: { name: 'yzm_story_read_visible_chat', arguments: '{}' } },
-                                { id: 'ledger', type: 'function', function: { name: 'yzm_story_read_ledger', arguments: '{}' } },
-                                { id: 'write', type: 'function', function: { name: 'yzm_story_update_ledger', arguments: '{"content":"新账本"}' } },
-                            ],
-                        },
-                        toolCalls: [
-                            { id: 'tables', type: 'function', function: { name: 'yzm_story_read_tables', arguments: '{}' } },
-                            { id: 'chat', type: 'function', function: { name: 'yzm_story_read_visible_chat', arguments: '{}' } },
-                            { id: 'ledger', type: 'function', function: { name: 'yzm_story_read_ledger', arguments: '{}' } },
-                            { id: 'write', type: 'function', function: { name: 'yzm_story_update_ledger', arguments: '{"content":"新账本"}' } },
-                        ],
+                        message: { role: 'assistant', content: '', tool_calls: toolCalls },
+                        toolCalls,
                     };
                 }
                 return {
@@ -149,7 +154,7 @@ function createSandbox(options = {}) {
     sandbox.window.window = sandbox.window;
     vm.createContext(sandbox);
     vm.runInContext(source, sandbox, { filename: 'story-director-runtime.js' });
-    return { sandbox, memory, chat, requests, eventBindings, directorCaptures, getState: () => state, setEnabled: (value) => { enabled = value; } };
+    return { sandbox, memory, chat, requests, vectorCalls, eventBindings, directorCaptures, getState: () => state, setEnabled: (value) => { enabled = value; } };
 }
 
 test('story director performs a private tool loop and stores the next card', async () => {
@@ -183,6 +188,70 @@ test('story director performs a private tool loop and stores the next card', asy
     assert.match(generationClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
     assert.equal(chat.at(-1).mes, '下一步怎么办？');
     assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'regenerate' }), false);
+});
+
+test('director retrieves selected vector memories from visible chat and shows them in the request viewer', async () => {
+    const { memory, chat, requests, vectorCalls, directorCaptures, getState } = createSandbox({ vectorBooks: ['selected-book'] });
+    const result = await memory.StoryDirectorRuntime.replanLatest();
+
+    assert.equal(result.success, true);
+    assert.equal(getState().storyDirector.status, 'ready');
+    assert.equal(vectorCalls.length, 1);
+    assert.deepEqual(vectorCalls[0].bookIds, ['selected-book']);
+    assert.equal(vectorCalls[0].searchOptions.ignoreInjectionSetting, true);
+    assert.equal(vectorCalls[0].query, '当前行动\n最新正文');
+    assert.match(requests[0][1].content, /检索已启用的向量书/);
+    assert.deepEqual(chat.map((message) => message.mes), ['很久以前', '旧回复', '当前行动', '最新正文<Memory><!-- hidden --></Memory>']);
+    const resultMessage = requests[1].find((message) => message.tool_call_id === 'vectors');
+    const vectorResult = JSON.parse(resultMessage.content);
+    assert.deepEqual(Array.from(vectorResult.matches, (match) => match.text), ['向量中保存的历史线索']);
+    assert.equal(vectorResult.matches[0].source, '启用的剧情书 #3');
+    assert.match(directorCaptures[1].body.messages.find((message) => message.name?.includes('检索当前启用的向量书')).content, /向量中保存的历史线索/);
+    assert.match(directorCaptures[0].body.messages.find((message) => message.yzmAgentTraceType === 'tool-schema').content, /yzm_story_search_vectors/);
+});
+
+test('director reports missing embeddings but still plans with tables and chat', async () => {
+    const { memory, requests, vectorCalls } = createSandbox({ vectorBooks: ['selected-book'], embeddingEnabled: false });
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(vectorCalls.length, 0);
+    assert.match(requests[1].find((message) => message.tool_call_id === 'vectors').content, /Embedding 未启用/);
+});
+
+test('vector search failure is visible to the director without losing the planned card', async () => {
+    const { memory, requests, getState } = createSandbox({ vectorBooks: ['selected-book'] });
+    memory.VectorStore.search = async () => { throw new Error('向量服务暂时不可用'); };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(getState().storyDirector.status, 'ready');
+    assert.match(requests[1].find((message) => message.tool_call_id === 'vectors').content, /向量服务暂时不可用/);
+});
+
+test('director asks for vector retrieval before accepting a card when books are active', async () => {
+    const { memory, directorCaptures, vectorCalls } = createSandbox({ vectorBooks: ['selected-book'] });
+    let turn = 0;
+    memory.LlmClient.requestAgentWithTavern = async () => {
+        turn += 1;
+        if (turn === 1) {
+            const toolCalls = ['tables', 'chat', 'ledger'].map((id) => ({
+                id,
+                type: 'function',
+                function: {
+                    name: { tables: 'yzm_story_read_tables', chat: 'yzm_story_read_visible_chat', ledger: 'yzm_story_read_ledger' }[id],
+                    arguments: '{}',
+                },
+            }));
+            return { success: true, message: { role: 'assistant', content: '', tool_calls: toolCalls }, toolCalls };
+        }
+        if (turn === 3) {
+            const toolCalls = [{ id: 'vectors', type: 'function', function: { name: 'yzm_story_search_vectors', arguments: '{}' } }];
+            return { success: true, message: { role: 'assistant', content: '', tool_calls: toolCalls }, toolCalls };
+        }
+        return { success: true, message: { role: 'assistant', content: '<下轮导演卡>继续。</下轮导演卡>' }, text: '<下轮导演卡>继续。</下轮导演卡>', toolCalls: [] };
+    };
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(turn, 4);
+    assert.equal(vectorCalls.length, 1);
+    assert.match(directorCaptures[2].body.messages.at(-2).content, /还没有调用.*yzm_story_search_vectors/);
 });
 
 test('a changed assistant branch invalidates its card and a disabled director cannot inject', async () => {
@@ -499,6 +568,8 @@ test('turning off during an agent request cannot commit a card or ledger update'
     const runtime = memory.StoryDirectorRuntime;
 
     const running = runtime.replanLatest();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(typeof resolveRequest, 'function');
     setEnabled(false);
     runtime.cancelActiveRun('switch disabled');
     runtime.clearPendingCard('disabled');
