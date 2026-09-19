@@ -5,6 +5,39 @@ import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../config/story-director-runtime.js', import.meta.url), 'utf8');
 
+const TOOL_CALL_IDS = {
+    yzm_story_search_vectors: 'vectors',
+    yzm_story_read_tables: 'tables',
+    yzm_story_read_visible_chat: 'chat',
+    yzm_story_read_ledger: 'ledger',
+    yzm_story_update_ledger: 'write',
+};
+
+function createToolResponse(name, args = '{}') {
+    const call = {
+        id: TOOL_CALL_IDS[name] || name,
+        type: 'function',
+        function: { name, arguments: args },
+    };
+    return {
+        success: true,
+        message: { role: 'assistant', content: '', tool_calls: [call] },
+        toolCalls: [call],
+    };
+}
+
+function getOfferedToolName(tools) {
+    return String(tools?.[0]?.function?.name || '');
+}
+
+function findRequestWithToolResult(requests, callId) {
+    return requests.find((messages) => messages.some((message) => message.tool_call_id === callId));
+}
+
+function findCaptureWithToolResult(captures, label) {
+    return captures.find((capture) => capture.body.messages.some((message) => message.name?.includes(label)));
+}
+
 function createSandbox(options = {}) {
     let enabled = Object.hasOwn(options, 'enabled') ? options.enabled : true;
     const vectorBooks = Array.isArray(options.vectorBooks) ? options.vectorBooks : [];
@@ -62,6 +95,7 @@ function createSandbox(options = {}) {
     };
     const requests = [];
     let requestCount = 0;
+    let defaultLedgerUpdated = false;
     const memory = {
         GlobalSettings: {
             get(key, fallback) {
@@ -104,23 +138,16 @@ function createSandbox(options = {}) {
             isBackgroundWorkPending: () => false,
         },
         LlmClient: {
-            async requestAgentWithTavern(messages) {
+            async requestAgentWithTavern(messages, availableTools) {
                 requests.push(structuredClone(messages));
                 requestCount += 1;
-                if (requestCount === 1) {
-                    const toolCalls = [
-                        { id: 'tables', type: 'function', function: { name: 'yzm_story_read_tables', arguments: '{}' } },
-                        { id: 'chat', type: 'function', function: { name: 'yzm_story_read_visible_chat', arguments: '{}' } },
-                        { id: 'ledger', type: 'function', function: { name: 'yzm_story_read_ledger', arguments: '{}' } },
-                        { id: 'write', type: 'function', function: { name: 'yzm_story_update_ledger', arguments: '{"content":"新账本"}' } },
-                    ];
-                    if (vectorBooks.length) toolCalls.splice(2, 0,
-                        { id: 'vectors', type: 'function', function: { name: 'yzm_story_search_vectors', arguments: '{}' } });
-                    return {
-                        success: true,
-                        message: { role: 'assistant', content: '', tool_calls: toolCalls },
-                        toolCalls,
-                    };
+                const offeredTool = getOfferedToolName(availableTools);
+                if (offeredTool && offeredTool !== 'yzm_story_update_ledger') {
+                    return createToolResponse(offeredTool);
+                }
+                if (offeredTool === 'yzm_story_update_ledger' && !defaultLedgerUpdated) {
+                    defaultLedgerUpdated = true;
+                    return createToolResponse(offeredTool, '{"content":"新账本"}');
                 }
                 return {
                     success: true,
@@ -167,20 +194,22 @@ test('story director performs a private tool loop and stores the next card', asy
     assert.equal(getState().storyDirector.ledger, '新账本');
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>推进支线。</下轮导演卡>');
     assert.equal(getState().storyDirector.status, 'ready');
-    const toolMessages = requests[1].filter((message) => message.role === 'tool');
+    const finalRequest = requests.at(-1);
+    const toolMessages = finalRequest.filter((message) => message.role === 'tool');
     assert.equal(toolMessages.length, 4);
     assert.match(toolMessages.find((message) => message.tool_call_id === 'tables').content, /前100楼总结/);
     assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'tables').content, /不应出现/);
     assert.match(toolMessages.find((message) => message.tool_call_id === 'chat').content, /当前行动/);
     assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'chat').content, /很久以前/);
     assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'chat').content, /<Memory>/);
-    assert.equal(directorCaptures.length, 2);
-    assert.equal(directorCaptures[1].options.storyDirector, true);
-    assert.equal(directorCaptures[1].options.agentTurn, 2);
-    assert.equal(directorCaptures[1].options.sessionId, 'chat:test');
-    assert.match(directorCaptures[1].body.messages.find((message) => message.yzmAgentTraceType === 'tool-call').content, /yzm_story_read_tables/);
-    assert.match(directorCaptures[1].body.messages.find((message) => message.name?.includes('读取全部启用表格')).content, /前100楼总结/);
-    assert.ok(directorCaptures[1].body.messages.some((message) => message.yzmAgentTraceType === 'tool-schema'));
+    assert.equal(directorCaptures.length, 5);
+    const tableResultCapture = findCaptureWithToolResult(directorCaptures, '读取全部启用表格');
+    assert.equal(tableResultCapture.options.storyDirector, true);
+    assert.equal(tableResultCapture.options.agentTurn, 2);
+    assert.equal(tableResultCapture.options.sessionId, 'chat:test');
+    assert.match(tableResultCapture.body.messages.find((message) => message.yzmAgentTraceType === 'tool-call').content, /yzm_story_read_tables/);
+    assert.match(tableResultCapture.body.messages.find((message) => message.name?.includes('读取全部启用表格')).content, /前100楼总结/);
+    assert.ok(tableResultCapture.body.messages.some((message) => message.yzmAgentTraceType === 'tool-schema'));
 
     chat.push({ is_user: true, mes: '下一步怎么办？' });
     const generationClone = structuredClone(chat);
@@ -200,13 +229,13 @@ test('director retrieves selected vector memories from visible chat and shows th
     assert.deepEqual(vectorCalls[0].bookIds, ['selected-book']);
     assert.equal(vectorCalls[0].searchOptions.ignoreInjectionSetting, true);
     assert.equal(vectorCalls[0].query, '当前行动\n最新正文');
-    assert.match(requests[0][1].content, /检索已启用的向量书/);
+    assert.match(requests[0][1].content, /检索当前启用的向量书/);
     assert.deepEqual(chat.map((message) => message.mes), ['很久以前', '旧回复', '当前行动', '最新正文<Memory><!-- hidden --></Memory>']);
-    const resultMessage = requests[1].find((message) => message.tool_call_id === 'vectors');
+    const resultMessage = findRequestWithToolResult(requests, 'vectors').find((message) => message.tool_call_id === 'vectors');
     const vectorResult = JSON.parse(resultMessage.content);
     assert.deepEqual(Array.from(vectorResult.matches, (match) => match.text), ['向量中保存的历史线索']);
     assert.equal(vectorResult.matches[0].source, '启用的剧情书 #3');
-    assert.match(directorCaptures[1].body.messages.find((message) => message.name?.includes('检索当前启用的向量书')).content, /向量中保存的历史线索/);
+    assert.match(findCaptureWithToolResult(directorCaptures, '检索当前启用的向量书').body.messages.find((message) => message.name?.includes('检索当前启用的向量书')).content, /向量中保存的历史线索/);
     assert.match(directorCaptures[0].body.messages.find((message) => message.yzmAgentTraceType === 'tool-schema').content, /yzm_story_search_vectors/);
 });
 
@@ -214,7 +243,7 @@ test('director reports missing embeddings but still plans with tables and chat',
     const { memory, requests, vectorCalls } = createSandbox({ vectorBooks: ['selected-book'], embeddingEnabled: false });
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(vectorCalls.length, 0);
-    assert.match(requests[1].find((message) => message.tool_call_id === 'vectors').content, /Embedding 未启用/);
+    assert.match(findRequestWithToolResult(requests, 'vectors').find((message) => message.tool_call_id === 'vectors').content, /Embedding 未启用/);
 });
 
 test('vector search failure is visible to the director without losing the planned card', async () => {
@@ -223,35 +252,37 @@ test('vector search failure is visible to the director without losing the planne
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(getState().storyDirector.status, 'ready');
-    assert.match(requests[1].find((message) => message.tool_call_id === 'vectors').content, /向量服务暂时不可用/);
+    assert.match(findRequestWithToolResult(requests, 'vectors').find((message) => message.tool_call_id === 'vectors').content, /向量服务暂时不可用/);
 });
 
-test('director asks for vector retrieval before accepting a card when books are active', async () => {
-    const { memory, directorCaptures, vectorCalls } = createSandbox({ vectorBooks: ['selected-book'] });
+test('director enforces vector, tables, visible chat, then ledger even after an out-of-order call', async () => {
+    const { memory, requests, directorCaptures, vectorCalls } = createSandbox({ vectorBooks: ['selected-book'] });
     let turn = 0;
-    memory.LlmClient.requestAgentWithTavern = async () => {
+    const offeredTools = [];
+    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+        requests.push(structuredClone(messages));
         turn += 1;
+        const offeredTool = getOfferedToolName(tools);
+        offeredTools.push(offeredTool);
         if (turn === 1) {
-            const toolCalls = ['tables', 'chat', 'ledger'].map((id) => ({
-                id,
-                type: 'function',
-                function: {
-                    name: { tables: 'yzm_story_read_tables', chat: 'yzm_story_read_visible_chat', ledger: 'yzm_story_read_ledger' }[id],
-                    arguments: '{}',
-                },
-            }));
-            return { success: true, message: { role: 'assistant', content: '', tool_calls: toolCalls }, toolCalls };
+            return createToolResponse('yzm_story_read_tables');
         }
-        if (turn === 3) {
-            const toolCalls = [{ id: 'vectors', type: 'function', function: { name: 'yzm_story_search_vectors', arguments: '{}' } }];
-            return { success: true, message: { role: 'assistant', content: '', tool_calls: toolCalls }, toolCalls };
-        }
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
         return { success: true, message: { role: 'assistant', content: '<下轮导演卡>继续。</下轮导演卡>' }, text: '<下轮导演卡>继续。</下轮导演卡>', toolCalls: [] };
     };
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    assert.equal(turn, 4);
+    assert.equal(turn, 6);
     assert.equal(vectorCalls.length, 1);
-    assert.match(directorCaptures[2].body.messages.at(-2).content, /还没有调用.*yzm_story_search_vectors/);
+    assert.deepEqual(offeredTools, [
+        'yzm_story_search_vectors',
+        'yzm_story_search_vectors',
+        'yzm_story_read_tables',
+        'yzm_story_read_visible_chat',
+        'yzm_story_read_ledger',
+        'yzm_story_update_ledger',
+    ]);
+    assert.match(findRequestWithToolResult(requests, 'tables').find((message) => message.tool_call_id === 'tables').content, /本阶段不允许调用/);
+    assert.match(directorCaptures[1].body.messages.find((message) => message.name?.includes('读取全部启用表格')).content, /本阶段不允许调用/);
 });
 
 test('a changed assistant branch invalidates its card and a disabled director cannot inject', async () => {
@@ -273,17 +304,13 @@ test('a changed assistant branch invalidates its card and a disabled director ca
 
 test('failed director runs do not commit a staged ledger update', async () => {
     const { memory, getState } = createSandbox();
-    let requestCount = 0;
-    memory.LlmClient.requestAgentWithTavern = async () => {
-        requestCount += 1;
-        if (requestCount === 1) {
-            const toolCalls = [
-                { id: 'tables', type: 'function', function: { name: 'yzm_story_read_tables', arguments: '{}' } },
-                { id: 'chat', type: 'function', function: { name: 'yzm_story_read_visible_chat', arguments: '{}' } },
-                { id: 'ledger', type: 'function', function: { name: 'yzm_story_read_ledger', arguments: '{}' } },
-                { id: 'write', type: 'function', function: { name: 'yzm_story_update_ledger', arguments: '{"content":"不应提交"}' } },
-            ];
-            return { success: true, message: { role: 'assistant', content: '', tool_calls: toolCalls }, toolCalls };
+    let ledgerUpdated = false;
+    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
+            ledgerUpdated = true;
+            return createToolResponse(offeredTool, '{"content":"不应提交"}');
         }
         return { success: true, message: { role: 'assistant', content: '格式错误' }, text: '格式错误', toolCalls: [] };
     };
@@ -340,7 +367,7 @@ test('manual replan after deleting the last assistant sees all visible dialogue 
     assert.equal(getState().storyDirector.source.role, 'user');
     assert.equal(getState().storyDirector.source.messageIndex, 4);
     assert.match(requests[0][1].content, /最新用户消息/);
-    const toolMessages = requests[1].filter((message) => message.role === 'tool');
+    const toolMessages = requests.at(-1).filter((message) => message.role === 'tool');
     const tables = JSON.parse(toolMessages.find((message) => message.tool_call_id === 'tables').content);
     assert.deepEqual(tables.tables.map((table) => table.name), ['记忆总结', '角色档案']);
     assert.equal(tables.tables[0].records[0].values.总结内容, '前100楼总结');
@@ -418,17 +445,11 @@ test('manual replan rejects a concurrent director run', async () => {
 test('manual replan can retry after a request failure and replace the director card', async () => {
     const { memory, getState } = createSandbox();
     let requestCount = 0;
-    memory.LlmClient.requestAgentWithTavern = async () => {
+    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
         requestCount += 1;
         if (requestCount === 1) return { success: false, error: 'rate limit exceeded' };
-        if (requestCount === 2) {
-            const toolCalls = [
-                { id: 'tables', type: 'function', function: { name: 'yzm_story_read_tables', arguments: '{}' } },
-                { id: 'chat', type: 'function', function: { name: 'yzm_story_read_visible_chat', arguments: '{}' } },
-                { id: 'ledger', type: 'function', function: { name: 'yzm_story_read_ledger', arguments: '{}' } },
-            ];
-            return { success: true, message: { role: 'assistant', content: '', tool_calls: toolCalls }, toolCalls };
-        }
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
         return {
             success: true,
             message: { role: 'assistant', content: '<下轮导演卡>重试成功。</下轮导演卡>' },
@@ -454,17 +475,9 @@ test('manual replan replaces an existing card without changing chat messages', a
     const originalChat = structuredClone(chat);
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
 
-    let turn = 0;
-    memory.LlmClient.requestAgentWithTavern = async () => {
-        turn += 1;
-        if (turn === 1) {
-            const toolCalls = [
-                { id: 'tables', type: 'function', function: { name: 'yzm_story_read_tables', arguments: '{}' } },
-                { id: 'chat', type: 'function', function: { name: 'yzm_story_read_visible_chat', arguments: '{}' } },
-                { id: 'ledger', type: 'function', function: { name: 'yzm_story_read_ledger', arguments: '{}' } },
-            ];
-            return { success: true, message: { role: 'assistant', content: '', tool_calls: toolCalls }, toolCalls };
-        }
+    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
         return {
             success: true,
             message: { role: 'assistant', content: '<下轮导演卡>新的安排。</下轮导演卡>' },

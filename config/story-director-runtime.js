@@ -24,7 +24,11 @@
         [TOOL_NAMES.ledger]: '读取导演账本',
         [TOOL_NAMES.updateLedger]: '更新导演账本',
     });
-    const REQUIRED_TOOL_NAMES = new Set([TOOL_NAMES.tables, TOOL_NAMES.chat, TOOL_NAMES.ledger]);
+    const BASE_READ_TOOL_ORDER = Object.freeze([
+        TOOL_NAMES.tables,
+        TOOL_NAMES.chat,
+        TOOL_NAMES.ledger,
+    ]);
     const MAX_AGENT_TURNS = 8;
     const RUN_DELAY_MS = 1800;
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
@@ -272,8 +276,8 @@
         return collectVisibleChatMessages().slice(-depth).map((message) => message.content).join('\n').slice(-6000);
     }
 
-    function getToolDefinitions(includeVectors = false) {
-        return [
+    function getToolDefinitions(includeVectors = false, allowedNames = null) {
+        const definitions = [
             {
                 type: 'function',
                 function: {
@@ -326,6 +330,15 @@
                 },
             },
         ];
+        if (!allowedNames) return definitions;
+        const allowed = allowedNames instanceof Set ? allowedNames : new Set(allowedNames);
+        return definitions.filter((definition) => allowed.has(definition?.function?.name));
+    }
+
+    function getReadToolOrder(includeVectors = false) {
+        return includeVectors
+            ? [TOOL_NAMES.vectors, ...BASE_READ_TOOL_ORDER]
+            : [...BASE_READ_TOOL_ORDER];
     }
 
     function registerRuntimeTools(runContext, includeVectors = false) {
@@ -539,21 +552,25 @@
             if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
             const includeVectors = (store?.getActiveBooks?.() || []).length > 0;
             manager = registerRuntimeTools(runContext, includeVectors);
-            const tools = getToolDefinitions(includeVectors);
-            const requiredTools = includeVectors
-                ? new Set([...REQUIRED_TOOL_NAMES, TOOL_NAMES.vectors])
-                : REQUIRED_TOOL_NAMES;
+            const readToolOrder = getReadToolOrder(includeVectors);
             const snapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.('storyDirector') || { mode: 'tavern', preset: null };
             const instruction = source.role === 'user'
-                ? '请根据最新用户消息及此前剧情生成下一轮导演卡。先按要求调用工具读取数据。'
-                : '请为最新完成的助手正文生成下一轮导演卡。先按要求调用工具读取数据。';
+                ? '请根据最新用户消息及此前剧情生成下一轮导演卡。'
+                : '请为最新完成的助手正文生成下一轮导演卡。';
+            const readOrderText = readToolOrder.map((name) => TOOL_LABELS[name] || name).join(' → ');
             const messages = [
                 { role: 'system', content: String(promptEntry.prompt || '').trim() },
-                { role: 'user', content: includeVectors ? `${instruction} 并检索已启用的向量书。` : instruction },
+                {
+                    role: 'user',
+                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文。`,
+                },
             ];
             const usedTools = new Set();
             for (let turn = 0; turn < MAX_AGENT_TURNS; turn += 1) {
                 if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
+                const pendingReadTool = readToolOrder.find((name) => !usedTools.has(name)) || '';
+                const allowedToolNames = pendingReadTool ? [pendingReadTool] : [TOOL_NAMES.updateLedger];
+                const tools = getToolDefinitions(includeVectors, allowedToolNames);
                 captureDirectorRequest(snapshot, messages, tools, turn + 1, sessionId);
                 const result = await requestAgentTurn(snapshot, messages, tools, controller.signal);
                 if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
@@ -564,10 +581,14 @@
                 if (toolCalls.length) {
                     for (const call of toolCalls) {
                         const name = String(call?.function?.name || '');
-                        if (!Object.values(TOOL_NAMES).includes(name)) throw new Error(`剧情导演请求了未授权工具：${name || '未知工具'}`);
-                        const toolResult = await manager.invokeFunctionTool(name, call.function.arguments || '{}');
+                        let toolResult;
+                        if (!allowedToolNames.includes(name)) {
+                            toolResult = `本阶段不允许调用 ${name || '未知工具'}。当前只允许调用：${allowedToolNames.join('、')}。`;
+                        } else {
+                            toolResult = await manager.invokeFunctionTool(name, call.function.arguments || '{}');
+                        }
                         if (toolResult instanceof Error) throw toolResult;
-                        usedTools.add(name);
+                        if (name === pendingReadTool) usedTools.add(name);
                         messages.push({
                             role: 'tool',
                             tool_call_id: String(call.id || ''),
@@ -576,11 +597,10 @@
                     }
                     continue;
                 }
-                const missingRequired = [...requiredTools].filter((name) => !usedTools.has(name));
-                if (missingRequired.length) {
+                if (pendingReadTool) {
                     messages.push({
                         role: 'user',
-                        content: `你还没有调用这些必需工具：${missingRequired.join('、')}。请先调用后再输出导演卡。`,
+                        content: `当前必须先调用 ${pendingReadTool}（${TOOL_LABELS[pendingReadTool] || pendingReadTool}）。读取结果后才能继续。`,
                     });
                     continue;
                 }
