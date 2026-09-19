@@ -3687,7 +3687,84 @@
             showTaskToast('剧情规划完成', 'success');
             return;
         }
-        showTaskToast(result?.error || '剧情规划失败，请稍后重试。', result?.skipped ? 'warning' : 'error');
+        const errorText = String(result?.error || '剧情规划失败，请稍后重试。');
+        if (result?.skipped) {
+            showTaskToast(errorText, 'warning');
+            return;
+        }
+        openStoryDirectorErrorDialog(ensureRoot(), errorText);
+    }
+
+    function openStoryDirectorErrorDialog(root, errorText = '') {
+        const modalHost = getGlobalModalHost(root);
+        removeGlobalModal(root, '.yzm-story-director-error-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-story-director-error-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-story-director-error-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+        dialog.setAttribute('aria-label', '剧情规划失败详情');
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title yzm-story-director-error-title';
+        title.append(
+            createIconNode('fa-solid fa-circle-exclamation', ''),
+            document.createTextNode('剧情规划失败详情'),
+        );
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭失败详情');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const content = document.createElement('pre');
+        content.className = 'yzm-story-director-error-content';
+        content.textContent = String(errorText || '').trim() || '未知错误';
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-structure-actions yzm-story-director-error-actions';
+        const copy = createIconButton('复制', 'fa-regular fa-copy', 'yzm-api-button yzm-story-director-error-copy');
+        const confirm = createButton('关闭', 'yzm-add-table-confirm');
+        actions.append(copy, confirm);
+
+        dialog.append(header, content, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeDialog = () => {
+            removePluginElement(overlay);
+            document.removeEventListener('keydown', handleKeydown, true);
+        };
+        const handleKeydown = (event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            closeDialog();
+        };
+        close.onclick = closeDialog;
+        confirm.onclick = closeDialog;
+        copy.onclick = async () => {
+            const copied = await writeTextToClipboard(content.textContent || '');
+            const icon = copy.querySelector('i');
+            const label = copy.querySelector('span');
+            if (icon) icon.className = copied ? 'fa-solid fa-check' : 'fa-solid fa-xmark';
+            if (label) label.textContent = copied ? '已复制' : '复制失败';
+            window.setTimeout(() => {
+                if (icon?.isConnected) icon.className = 'fa-regular fa-copy';
+                if (label?.isConnected) label.textContent = '复制';
+            }, 1200);
+        };
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeDialog();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        document.addEventListener('keydown', handleKeydown, true);
+        close.focus();
     }
 
     function createSidebarTableItem(table, isActive) {
@@ -8220,12 +8297,28 @@
         }
 
         const selectionHint = document.createElement('div');
-        selectionHint.className = 'yzm-scheme-editor-hint';
+        selectionHint.className = 'yzm-scheme-editor-hint yzm-story-director-status';
         const runtimeState = getState().storyDirector || {};
         const statusText = runtimeState.status === 'ready'
             ? '导演卡已就绪'
-            : (runtimeState.status === 'running' ? '导演正在后台运行' : (runtimeState.status === 'error' ? `上次运行失败：${runtimeState.lastError || '未知错误'}` : '等待下一次助手正文'));
-        selectionHint.textContent = `提示词与当前选择全局共享，不跟随记忆方案。${statusText}。`;
+            : (runtimeState.status === 'running' ? '导演正在后台运行' : (runtimeState.status === 'error' ? '上次运行失败' : '等待下一次助手正文'));
+        const statusCopy = document.createElement('span');
+        statusCopy.className = runtimeState.status === 'error'
+            ? 'yzm-story-director-status-copy yzm-story-director-status-error'
+            : 'yzm-story-director-status-copy';
+        statusCopy.textContent = `提示词与当前选择全局共享，不跟随记忆方案。${statusText}。`;
+        selectionHint.appendChild(statusCopy);
+        if (runtimeState.status === 'error') {
+            const errorDetail = createIconButton(
+                '查看失败详情',
+                'fa-solid fa-circle-exclamation',
+                'yzm-story-director-error-detail',
+            );
+            errorDetail.dataset.yzmStoryDirectorErrorDetail = 'true';
+            errorDetail.title = '查看剧情规划失败详情';
+            errorDetail.setAttribute('aria-label', '查看剧情规划失败详情');
+            selectionHint.appendChild(errorDetail);
+        }
         const selectionActions = createApiActions([
             ['新增', 'fa-solid fa-plus', 'yzm-api-button-primary', 'newStoryDirectorPrompt'],
             ['保存', 'fa-regular fa-floppy-disk', '', 'saveStoryDirectorPrompt'],
@@ -16634,6 +16727,13 @@
                 const historianPromptAction = target?.closest('[data-yzm-historian-prompt-action]');
                 const characterStatusPromptAction = target?.closest('[data-yzm-character-status-prompt-action]');
                 const storyDirectorPromptAction = target?.closest('[data-yzm-story-director-prompt-action]');
+                const storyDirectorErrorDetail = target?.closest('[data-yzm-story-director-error-detail]');
+                if (storyDirectorErrorDetail) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    openStoryDirectorErrorDialog(root, getState().storyDirector?.lastError || '未知错误');
+                    return;
+                }
                 if (schemeIoAction) {
                     event.preventDefault();
                     event.stopPropagation();
