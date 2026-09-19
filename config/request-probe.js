@@ -1031,9 +1031,12 @@
         const role = String(item.role || fallbackRole).toLowerCase();
         const name = String(item.name || item.identifier || '').trim();
         const injectionType = String(item.yzmMemoryInjectionType || '').trim().toLowerCase();
+        const isSummaryMessage = /^SYSTEM\s*\(\s*总结\d+\s*\)$/i.test(name)
+            || /^\s*【(?:主线总结(?:\s*[（(]\d+[）)])?|支线总结(?:：|:)[^】]+)】/.test(content);
         const isMemory = !!item.isGaigaiData
             || injectionType === 'summary'
             || injectionType === 'table'
+            || isSummaryMessage
             || content.includes('【前情提要 -')
             || content.includes('【前情提要】')
             || content.includes('【当前世界状态参考 -')

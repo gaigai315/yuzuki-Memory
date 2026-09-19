@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const promptReadySource = fs.readFileSync(new URL('../config/prompt-ready-injector.js', import.meta.url), 'utf8');
+const requestProbeSource = fs.readFileSync(new URL('../config/request-probe.js', import.meta.url), 'utf8');
 const variableInjectorSource = fs.readFileSync(new URL('../config/variable-injector.js', import.meta.url), 'utf8');
 const promptLibrarySource = fs.readFileSync(new URL('../config/prompt-library.js', import.meta.url), 'utf8');
 const plotSummarySource = fs.readFileSync(new URL('../config/plot-summary.js', import.meta.url), 'utf8');
@@ -84,6 +85,28 @@ test('prompt-ready cleanup preserves mixed world-info prompt containers', () => 
         assert.match(message.content, /【剧情摘要】/);
         assert.doesNotMatch(message.content, /STALE_MEMORY/);
     });
+});
+
+test('request probe keeps summaries in the memory color group without the legacy preface', async () => {
+    const sandbox = createBaseSandbox();
+    sandbox.CustomEvent = class CustomEvent {
+        constructor(type, options = {}) {
+            this.type = type;
+            this.detail = options.detail;
+        }
+    };
+    sandbox.window.dispatchEvent = () => true;
+    vm.runInContext(requestProbeSource, sandbox, { filename: 'request-probe.js' });
+
+    const data = await sandbox.window.YuzukiMemory.RequestProbe.captureFromBody({
+        messages: [
+            { role: 'system', name: 'SYSTEM(总结1)', content: '【主线总结（1）】 2044年03月15日...' },
+            { role: 'system', name: 'SYSTEM(总结2)', content: '【支线总结：江栖年】 2044年03月15日...' },
+        ],
+    });
+
+    assert.equal(data.messages.length, 2);
+    assert.ok(data.messages.every((message) => message.flags.memory === true));
 });
 
 test('memory prompt fallback ignores unrelated names and schema flags without duplicating actual prompts', async () => {
