@@ -722,6 +722,7 @@
             throw new Error('剧情导演超过最大工具调用轮数，未返回有效导演卡。');
         } catch (error) {
             const aborted = controller.signal.aborted || error?.name === 'AbortError';
+            let errorNotified = false;
             if (aborted) {
                 saveDirectorState(sessionId, {
                     ledger: String(previousDirector.ledger || ''),
@@ -739,8 +740,16 @@
                     lastError: String(error?.message || error || '剧情导演运行失败'),
                 });
                 console.warn('[yuzuki-Memory] 剧情导演运行失败。', error);
+                window.dispatchEvent(new CustomEvent('yzm-story-director-error', {
+                    detail: {
+                        error: String(error?.message || error || '剧情导演运行失败'),
+                        sessionId,
+                        source: { ...source },
+                    },
+                }));
+                errorNotified = true;
             }
-            return { success: false, aborted, error: String(error?.message || error || '') };
+            return { success: false, aborted, errorNotified, error: String(error?.message || error || '') };
         } finally {
             unregisterRuntimeTools(manager);
             if (activeAbortController === controller) activeAbortController = null;

@@ -95,6 +95,7 @@ function createSandbox(options = {}) {
         },
     };
     const requests = [];
+    const dispatchedEvents = [];
     let requestCount = 0;
     let defaultLedgerUpdated = false;
     const memory = {
@@ -176,13 +177,13 @@ function createSandbox(options = {}) {
             setTimeout() { return 1; },
             clearTimeout() {},
             addEventListener() {},
-            dispatchEvent() { return true; },
+            dispatchEvent(event) { dispatchedEvents.push(event); return true; },
         },
     };
     sandbox.window.window = sandbox.window;
     vm.createContext(sandbox);
     vm.runInContext(source, sandbox, { filename: 'story-director-runtime.js' });
-    return { sandbox, memory, chat, requests, vectorCalls, eventBindings, directorCaptures, getState: () => state, setEnabled: (value) => { enabled = value; } };
+    return { sandbox, memory, chat, requests, vectorCalls, eventBindings, directorCaptures, dispatchedEvents, getState: () => state, setEnabled: (value) => { enabled = value; } };
 }
 
 test('story director performs a private tool loop and stores the next card', async () => {
@@ -413,8 +414,8 @@ test('a changed assistant branch invalidates its card and a disabled director ca
     assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), false);
 });
 
-test('failed director runs do not commit a staged ledger update', async () => {
-    const { memory, getState } = createSandbox();
+test('failed director runs do not commit a staged ledger update and emit a global error event', async () => {
+    const { memory, dispatchedEvents, getState } = createSandbox();
     let ledgerUpdated = false;
     memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
         const offeredTool = getOfferedToolName(tools);
@@ -429,8 +430,12 @@ test('failed director runs do not commit a staged ledger update', async () => {
     const result = await memory.StoryDirectorRuntime.runDirector(memory.StoryDirectorRuntime.getLatestAssistantAnchor());
 
     assert.equal(result.success, false);
+    assert.equal(result.errorNotified, true);
     assert.equal(getState().storyDirector.ledger, '旧账本');
     assert.equal(getState().storyDirector.status, 'error');
+    const errorEvents = dispatchedEvents.filter((event) => event.type === 'yzm-story-director-error');
+    assert.equal(errorEvents.length, 1);
+    assert.match(errorEvents[0].detail.error, /超过最大工具调用轮数/);
 });
 
 test('runtime event bindings are deduplicated', () => {
@@ -446,7 +451,7 @@ test('runtime event bindings are deduplicated', () => {
 });
 
 test('aborted director runs return to idle without changing the ledger', async () => {
-    const { memory, getState } = createSandbox();
+    const { memory, dispatchedEvents, getState } = createSandbox();
     memory.LlmClient.requestAgentWithTavern = async (_messages, _tools, options) => new Promise((resolve, reject) => {
         options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
     });
@@ -458,6 +463,7 @@ test('aborted director runs return to idle without changing the ledger', async (
     assert.equal(result.aborted, true);
     assert.equal(getState().storyDirector.ledger, '旧账本');
     assert.equal(getState().storyDirector.status, 'idle');
+    assert.equal(dispatchedEvents.some((event) => event.type === 'yzm-story-director-error'), false);
 });
 
 test('manual replan after deleting the last assistant sees all visible dialogue and enabled tables', async () => {

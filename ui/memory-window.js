@@ -3692,7 +3692,7 @@
             showTaskToast(errorText, 'warning');
             return;
         }
-        openStoryDirectorErrorDialog(ensureRoot(), errorText);
+        if (result?.errorNotified !== true) openStoryDirectorErrorDialog(ensureRoot(), errorText);
     }
 
     function openStoryDirectorErrorDialog(root, errorText = '') {
@@ -8297,28 +8297,12 @@
         }
 
         const selectionHint = document.createElement('div');
-        selectionHint.className = 'yzm-scheme-editor-hint yzm-story-director-status';
+        selectionHint.className = 'yzm-scheme-editor-hint';
         const runtimeState = getState().storyDirector || {};
         const statusText = runtimeState.status === 'ready'
             ? '导演卡已就绪'
-            : (runtimeState.status === 'running' ? '导演正在后台运行' : (runtimeState.status === 'error' ? '上次运行失败' : '等待下一次助手正文'));
-        const statusCopy = document.createElement('span');
-        statusCopy.className = runtimeState.status === 'error'
-            ? 'yzm-story-director-status-copy yzm-story-director-status-error'
-            : 'yzm-story-director-status-copy';
-        statusCopy.textContent = `提示词与当前选择全局共享，不跟随记忆方案。${statusText}。`;
-        selectionHint.appendChild(statusCopy);
-        if (runtimeState.status === 'error') {
-            const errorDetail = createIconButton(
-                '查看失败详情',
-                'fa-solid fa-circle-exclamation',
-                'yzm-story-director-error-detail',
-            );
-            errorDetail.dataset.yzmStoryDirectorErrorDetail = 'true';
-            errorDetail.title = '查看剧情规划失败详情';
-            errorDetail.setAttribute('aria-label', '查看剧情规划失败详情');
-            selectionHint.appendChild(errorDetail);
-        }
+            : (runtimeState.status === 'running' ? '导演正在后台运行' : '等待下一次助手正文');
+        selectionHint.textContent = `提示词与当前选择全局共享，不跟随记忆方案。${statusText}。`;
         const selectionActions = createApiActions([
             ['新增', 'fa-solid fa-plus', 'yzm-api-button-primary', 'newStoryDirectorPrompt'],
             ['保存', 'fa-regular fa-floppy-disk', '', 'saveStoryDirectorPrompt'],
@@ -16727,13 +16711,6 @@
                 const historianPromptAction = target?.closest('[data-yzm-historian-prompt-action]');
                 const characterStatusPromptAction = target?.closest('[data-yzm-character-status-prompt-action]');
                 const storyDirectorPromptAction = target?.closest('[data-yzm-story-director-prompt-action]');
-                const storyDirectorErrorDetail = target?.closest('[data-yzm-story-director-error-detail]');
-                if (storyDirectorErrorDetail) {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    openStoryDirectorErrorDialog(root, getState().storyDirector?.lastError || '未知错误');
-                    return;
-                }
                 if (schemeIoAction) {
                     event.preventDefault();
                     event.stopPropagation();
@@ -17619,6 +17596,18 @@
         window.addEventListener('yzm-character-growth-tasks-completed', window.yzmCharacterGrowthCompletionHandler);
     }
 
+    function bindStoryDirectorErrorListener() {
+        const previousHandler = window.yzmStoryDirectorErrorHandler;
+        if (typeof previousHandler === 'function') {
+            window.removeEventListener('yzm-story-director-error', previousHandler);
+        }
+        window.yzmStoryDirectorErrorHandler = (event) => {
+            const errorText = String(event?.detail?.error || '').trim();
+            openStoryDirectorErrorDialog(ensureRoot(), errorText || '未知错误');
+        };
+        window.addEventListener('yzm-story-director-error', window.yzmStoryDirectorErrorHandler);
+    }
+
     function scheduleSessionWorkspaceRefresh(root, sessionId) {
         [650, 1300].forEach((delay) => {
             window.setTimeout(() => {
@@ -17824,6 +17813,7 @@
         bindChatContextRefresh();
         bindMemoryStateUpdateListener();
         bindCharacterGrowthCompletionListener();
+        bindStoryDirectorErrorListener();
         startManagedVectorBookNameSync();
         getVectorStore()?.whenReady?.().then(() => {
             const root = document.getElementById(ROOT_ID);
