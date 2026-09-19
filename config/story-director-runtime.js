@@ -30,6 +30,7 @@
         TOOL_NAMES.ledger,
     ]);
     const MAX_AGENT_TURNS = 8;
+    const MAX_MESSAGE_CARDS = 50;
     const RUN_DELAY_MS = 1800;
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     let bound = false;
@@ -134,6 +135,49 @@
         };
     }
 
+    function userAnchorsMatch(left, right) {
+        return !!left && !!right
+            && String(left.sessionId || '') === String(right.sessionId || '')
+            && Number(left.messageIndex) === Number(right.messageIndex)
+            && Number(left.swipeId || 0) === Number(right.swipeId || 0)
+            && String(left.signature || '') === String(right.signature || '');
+    }
+
+    function normalizeMessageCards(entries = []) {
+        return (Array.isArray(entries) ? entries : []).map((entry) => {
+            const user = entry?.user && typeof entry.user === 'object' ? entry.user : null;
+            const card = String(entry?.card || '').trim();
+            if (!user || !card || !String(user.sessionId || '') || !String(user.signature || '')) return null;
+            const messageIndex = Number(user.messageIndex);
+            if (!Number.isInteger(messageIndex) || messageIndex < 0) return null;
+            return {
+                user: {
+                    sessionId: String(user.sessionId || ''),
+                    messageIndex,
+                    role: 'user',
+                    swipeId: Math.max(0, Math.round(Number(user.swipeId) || 0)),
+                    signature: String(user.signature || ''),
+                    createdAt: Math.max(0, Math.round(Number(user.createdAt) || 0)),
+                },
+                card,
+                updatedAt: Math.max(0, Math.round(Number(entry?.updatedAt) || 0)),
+            };
+        }).filter(Boolean).slice(-MAX_MESSAGE_CARDS);
+    }
+
+    function upsertMessageCard(entries, user, card) {
+        const normalizedCard = String(card || '').trim();
+        if (!user || !normalizedCard) return normalizeMessageCards(entries);
+        const next = normalizeMessageCards(entries).filter((entry) => !userAnchorsMatch(entry.user, user));
+        next.push({ user: { ...user, role: 'user' }, card: normalizedCard, updatedAt: Date.now() });
+        return next.slice(-MAX_MESSAGE_CARDS);
+    }
+
+    function findMessageCard(entries, user) {
+        const match = normalizeMessageCards(entries).reverse().find((entry) => userAnchorsMatch(entry.user, user));
+        return String(match?.card || '').trim();
+    }
+
     function getLatestAssistantAnchor() {
         const context = getContext();
         const chat = Array.isArray(context?.chat) ? context.chat : [];
@@ -201,10 +245,14 @@
         if (!fallback || !sessionId) return false;
         const latest = YuzukiMemory.Storage?.loadState?.(fallback, sessionId);
         if (!latest) return false;
+        const messageCards = Object.prototype.hasOwnProperty.call(nextDirector || {}, 'messageCards')
+            ? normalizeMessageCards(nextDirector.messageCards)
+            : normalizeMessageCards(latest.storyDirector?.messageCards);
         latest.storyDirector = {
             ledger: String(nextDirector?.ledger || ''),
             pendingCard: String(nextDirector?.pendingCard || ''),
             source: nextDirector?.source && typeof nextDirector.source === 'object' ? { ...nextDirector.source } : null,
+            messageCards,
             status: String(nextDirector?.status || 'idle'),
             lastError: String(nextDirector?.lastError || ''),
             updatedAt: Date.now(),
@@ -611,10 +659,14 @@
                 }
                 if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
                 if (!sourceIsLatestDialogue(source)) throw new Error('导演完成前正文分支已经变化。');
+                const messageCards = source.role === 'user'
+                    ? upsertMessageCard(previousDirector.messageCards, source, card)
+                    : normalizeMessageCards(previousDirector.messageCards);
                 const saved = saveDirectorState(sessionId, {
                     ledger: runContext.stagedLedger,
                     pendingCard: card,
                     source,
+                    messageCards,
                     status: 'ready',
                     lastError: '',
                 });
@@ -784,41 +836,68 @@
         activeAbortController?.abort?.(reason);
     }
 
-    function getInjectableCard() {
+    function getGenerationTargetUser(generationType = 'normal') {
+        const normalizedType = String(generationType || 'normal').toLowerCase();
+        const chat = getContext()?.chat;
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        if (!Array.isArray(chat) || !sessionId) return null;
+        if (normalizedType === 'normal') {
+            for (let index = chat.length - 1; index >= 0; index -= 1) {
+                const message = chat[index];
+                if (!isDialogueMessage(message) || isPluginMessage(message)) continue;
+                return isUserMessage(message) ? buildUserAnchor(message, index, sessionId) : null;
+            }
+            return null;
+        }
+        if (normalizedType === 'regenerate') {
+            for (let index = chat.length - 1; index >= 0; index -= 1) {
+                const anchor = buildUserAnchor(chat[index], index, sessionId);
+                if (anchor) return anchor;
+            }
+        }
+        return null;
+    }
+
+    function pendingCardTargetsUser(director, user) {
+        if (!director?.pendingCard || !director?.source || !user) return false;
+        if (director.source.role === 'user') return userAnchorsMatch(director.source, user);
+        if (!sourceMatchesCurrentMessage(director.source)) return false;
+        const chat = getContext()?.chat;
+        if (!Array.isArray(chat)) return false;
+        for (let index = user.messageIndex - 1; index >= 0; index -= 1) {
+            if (!isDialogueMessage(chat[index]) || isPluginMessage(chat[index])) continue;
+            return index === getSourceIndex(director.source) && isAssistantMessage(chat[index]);
+        }
+        return false;
+    }
+
+    function resolveInjectableCard(options = {}) {
         if (!isStoryDirectorEnabled()) return '';
         if (!YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.()) return '';
+        const generationType = String(options.generationType || 'normal').toLowerCase();
+        if (!['normal', 'regenerate'].includes(generationType)) return '';
         clearInvalidPendingCard();
         const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
         const state = loadState(sessionId);
         const director = state?.storyDirector;
-        if (!director?.pendingCard || !sourceMatchesCurrentMessage(director.source)) return '';
-        const chat = getContext()?.chat;
-        if (!Array.isArray(chat)) return '';
-        let latestDialogueIndex = -1;
-        for (let index = chat.length - 1; index >= 0; index -= 1) {
-            if (!isDialogueMessage(chat[index]) || isPluginMessage(chat[index])) continue;
-            latestDialogueIndex = index;
-            break;
-        }
-        if (latestDialogueIndex < 0 || !isUserMessage(chat[latestDialogueIndex])) return '';
-        const sourceIndex = getSourceIndex(director.source);
-        if (director.source?.role === 'user' && latestDialogueIndex === sourceIndex) {
-            return String(director.pendingCard || '').trim();
-        }
-        for (let index = latestDialogueIndex - 1; index >= 0; index -= 1) {
-            if (!isDialogueMessage(chat[index]) || isPluginMessage(chat[index])) continue;
-            return index === sourceIndex
-                && (director.source?.role === 'user' ? isUserMessage(chat[index]) : isAssistantMessage(chat[index]))
-                ? String(director.pendingCard || '').trim()
-                : '';
-        }
-        return '';
+        const user = getGenerationTargetUser(generationType);
+        if (!director || !user) return null;
+        const boundCard = findMessageCard(director.messageCards, user);
+        if (boundCard) return { card: boundCard, user, origin: 'bound' };
+        if (generationType === 'regenerate' || !pendingCardTargetsUser(director, user)) return null;
+        const pendingCard = String(director.pendingCard || '').trim();
+        return pendingCard ? { card: pendingCard, user, origin: 'pending' } : null;
+    }
+
+    function getInjectableCard(options = {}) {
+        return String(resolveInjectableCard(options)?.card || '');
     }
 
     function injectDirectorCardForGeneration(chat, options = {}) {
-        if (String(options.generationType || 'normal').toLowerCase() !== 'normal') return false;
-        const card = getInjectableCard();
-        if (!card || !Array.isArray(chat)) return false;
+        const generationType = String(options.generationType || 'normal').toLowerCase();
+        const resolved = resolveInjectableCard({ generationType });
+        const card = String(resolved?.card || '');
+        if (!card || !resolved?.user || !Array.isArray(chat)) return false;
         let userIndex = -1;
         for (let index = chat.length - 1; index >= 0; index -= 1) {
             if (!isUserMessage(chat[index]) || chat[index]?.is_system === true || isPluginMessage(chat[index])) continue;
@@ -835,9 +914,19 @@
         setMessageText(clone, [clean, card].filter(Boolean).join('\n\n'));
         clone.isYuzukiStoryDirector = true;
         chat[userIndex] = clone;
+        const state = loadState(resolved.user.sessionId);
+        const director = state?.storyDirector;
+        if (director && findMessageCard(director.messageCards, resolved.user) !== card) {
+            saveDirectorState(resolved.user.sessionId, {
+                ...director,
+                messageCards: upsertMessageCard(director.messageCards, resolved.user, card),
+            }, 'story-director-bind-card');
+        }
         console.info('[yuzuki-Memory] 下轮导演卡已临时附加到用户请求副本。', {
             userIndex,
             cardLength: card.length,
+            generationType,
+            origin: resolved.origin,
         });
         return true;
     }

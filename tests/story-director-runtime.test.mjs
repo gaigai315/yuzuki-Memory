@@ -53,7 +53,7 @@ function createSandbox(options = {}) {
             character_profile: [{ id: 'hero', values: { 角色名: '甲' } }],
             hidden_table: [{ id: 'hidden', values: { 名称: '不应出现' } }],
         },
-        storyDirector: { ledger: '旧账本', pendingCard: '', source: null, status: 'idle', lastError: '', updatedAt: 0 },
+        storyDirector: { ledger: '旧账本', pendingCard: '', source: null, messageCards: [], status: 'idle', lastError: '', updatedAt: 0 },
         settings: {},
     };
     const chat = [
@@ -216,7 +216,68 @@ test('story director performs a private tool loop and stores the next card', asy
     assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
     assert.match(generationClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
     assert.equal(chat.at(-1).mes, '下一步怎么办？');
-    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'regenerate' }), false);
+    const regenerateClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(regenerateClone, { generationType: 'regenerate' }), true);
+    assert.match(regenerateClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
+});
+
+test('deleting or regenerating A2 reuses the card bound to U2 and manual planning replaces it', async () => {
+    const { memory, chat, getState } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    const setPlannerCard = (card) => {
+        memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
+            const offeredTool = getOfferedToolName(tools);
+            if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+            return {
+                success: true,
+                message: { role: 'assistant', content: card },
+                text: card,
+                toolCalls: [],
+            };
+        };
+    };
+
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+    chat.push({ is_user: true, mes: 'U2 的用户行动' });
+    const firstA2Request = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(firstA2Request, { generationType: 'normal' }), true);
+    assert.match(firstA2Request.at(-1).mes, /<下轮导演卡>推进支线。/);
+    assert.equal(getState().storyDirector.messageCards.length, 1);
+
+    chat.push({ is_user: false, mes: 'A2 的正文' });
+    setPlannerCard('<下轮导演卡>A2 后为 U3 准备的规划。</下轮导演卡>');
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+    assert.match(getState().storyDirector.pendingCard, /U3/);
+
+    const regenerateA2 = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(regenerateA2, { generationType: 'regenerate' }), true);
+    assert.match(regenerateA2.at(-2).mes, /<下轮导演卡>推进支线。/);
+    assert.doesNotMatch(regenerateA2.at(-2).mes, /U3/);
+
+    chat.pop();
+    const resendAfterDelete = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(resendAfterDelete, { generationType: 'normal' }), true);
+    assert.match(resendAfterDelete.at(-1).mes, /<下轮导演卡>推进支线。/);
+    assert.doesNotMatch(resendAfterDelete.at(-1).mes, /U3/);
+
+    const regenerateAfterDelete = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(regenerateAfterDelete, { generationType: 'regenerate' }), true);
+    assert.match(regenerateAfterDelete.at(-1).mes, /<下轮导演卡>推进支线。/);
+    assert.doesNotMatch(regenerateAfterDelete.at(-1).mes, /U3/);
+
+    setPlannerCard('<下轮导演卡>手动覆盖 U2 的新规划。</下轮导演卡>');
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.equal(getState().storyDirector.messageCards.length, 1);
+    assert.match(getState().storyDirector.messageCards[0].card, /手动覆盖 U2/);
+
+    const resendManual = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(resendManual, { generationType: 'normal' }), true);
+    assert.match(resendManual.at(-1).mes, /手动覆盖 U2/);
+    assert.doesNotMatch(resendManual.at(-1).mes, /推进支线/);
+
+    const regenerateManual = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(regenerateManual, { generationType: 'regenerate' }), true);
+    assert.match(regenerateManual.at(-1).mes, /手动覆盖 U2/);
 });
 
 test('director retrieves selected vector memories from visible chat and shows them in the request viewer', async () => {
@@ -382,7 +443,7 @@ test('manual replan after deleting the last assistant sees all visible dialogue 
     assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
     assert.match(generationClone.at(-1).mes, /最后的用户消息\n\n<下轮导演卡>/);
     chat.push({ is_user: true, mes: '后续用户行动' });
-    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), false);
     chat.at(-2).mes = '已编辑的原用户消息';
     assert.equal(runtime.getInjectableCard(), '');
     assert.equal(getState().storyDirector.pendingCard, '');

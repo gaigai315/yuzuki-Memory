@@ -197,6 +197,7 @@
                 ledger: '',
                 pendingCard: '',
                 source: null,
+                messageCards: [],
                 status: 'idle',
                 lastError: '',
                 updatedAt: 0,

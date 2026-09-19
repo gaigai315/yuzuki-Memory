@@ -658,6 +658,34 @@
         const source = rawValue && typeof rawValue === 'object' ? rawValue : {};
         const fallback = fallbackValue && typeof fallbackValue === 'object' ? fallbackValue : {};
         const anchor = source.source && typeof source.source === 'object' ? source.source : null;
+        const normalizeUserAnchor = (rawAnchor) => {
+            if (!rawAnchor || typeof rawAnchor !== 'object') return null;
+            const signature = String(rawAnchor.signature || '');
+            const sessionId = String(rawAnchor.sessionId || '');
+            const messageIndex = Number(rawAnchor.messageIndex);
+            if (!signature || !sessionId || !Number.isInteger(messageIndex) || messageIndex < 0) return null;
+            return {
+                sessionId,
+                messageIndex,
+                role: 'user',
+                swipeId: Math.max(0, Math.round(Number(rawAnchor.swipeId) || 0)),
+                signature,
+                createdAt: Math.max(0, Math.round(Number(rawAnchor.createdAt) || 0)),
+            };
+        };
+        const rawMessageCards = Array.isArray(source.messageCards)
+            ? source.messageCards
+            : (Array.isArray(fallback.messageCards) ? fallback.messageCards : []);
+        const messageCards = rawMessageCards.map((entry) => {
+            const user = normalizeUserAnchor(entry?.user);
+            const card = String(entry?.card || '').trim();
+            if (!user || !card) return null;
+            return {
+                user,
+                card,
+                updatedAt: Math.max(0, Math.round(Number(entry?.updatedAt) || 0)),
+            };
+        }).filter(Boolean).slice(-50);
         return {
             ledger: String(source.ledger ?? fallback.ledger ?? ''),
             pendingCard: String(source.pendingCard ?? fallback.pendingCard ?? ''),
@@ -670,6 +698,7 @@
                 signature: String(anchor.signature || ''),
                 createdAt: Math.max(0, Math.round(Number(anchor.createdAt) || 0)),
             } : null,
+            messageCards,
             status: String(source.status || fallback.status || 'idle'),
             lastError: String(source.lastError || ''),
             updatedAt: Math.max(0, Math.round(Number(source.updatedAt) || 0)),
