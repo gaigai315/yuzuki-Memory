@@ -253,16 +253,69 @@ test('aborted director runs return to idle without changing the ledger', async (
     assert.equal(getState().storyDirector.status, 'idle');
 });
 
-test('manual replan rejects when the latest dialogue is not an assistant message', async () => {
+test('manual replan after deleting the last assistant sees all visible dialogue and enabled tables', async () => {
+    const { memory, chat, requests, getState } = createSandbox();
+    chat.splice(2, 2,
+        { is_user: true, mes: '第一条可见用户消息' },
+        { is_user: false, mes: '可见助手正文' },
+        { is_user: true, mes: '最后的用户消息' },
+        { is_user: false, mes: '被删除的助手正文' },
+    );
+    chat.pop();
+    const originalChat = structuredClone(chat);
+
+    const runtime = memory.StoryDirectorRuntime;
+    const result = await runtime.replanLatest();
+
+    assert.equal(result.success, true);
+    assert.equal(getState().storyDirector.source.role, 'user');
+    assert.equal(getState().storyDirector.source.messageIndex, 4);
+    assert.match(requests[0][1].content, /最新用户消息/);
+    const toolMessages = requests[1].filter((message) => message.role === 'tool');
+    const tables = JSON.parse(toolMessages.find((message) => message.tool_call_id === 'tables').content);
+    assert.deepEqual(tables.tables.map((table) => table.name), ['记忆总结', '角色档案']);
+    assert.equal(tables.tables[0].records[0].values.总结内容, '前100楼总结');
+    const visibleChat = JSON.parse(toolMessages.find((message) => message.tool_call_id === 'chat').content);
+    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.floor), [2, 3, 4]);
+    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.role), ['user', 'assistant', 'user']);
+    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.content),
+        ['第一条可见用户消息', '可见助手正文', '最后的用户消息']);
+    assert.deepEqual(chat, originalChat);
+
+    const generationClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
+    assert.match(generationClone.at(-1).mes, /最后的用户消息\n\n<下轮导演卡>/);
+    chat.push({ is_user: true, mes: '后续用户行动' });
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+    chat.at(-2).mes = '已编辑的原用户消息';
+    assert.equal(runtime.getInjectableCard(), '');
+    assert.equal(getState().storyDirector.pendingCard, '');
+});
+
+test('manual replan rejects an empty dialogue', async () => {
     const { memory, chat, requests } = createSandbox();
-    chat.push({ is_user: true, mes: '尚未收到正文的新输入' });
+    chat.splice(0);
 
     const result = await memory.StoryDirectorRuntime.replanLatest();
 
-    assert.equal(result.success, false);
-    assert.equal(result.reason, 'no-latest-assistant');
-    assert.match(result.error, /最新消息不是助手正文/);
+    assert.equal(result.reason, 'no-latest-dialogue');
     assert.equal(requests.length, 0);
+});
+
+test('a manual card anchored to a user message is not reused after another assistant reply', async () => {
+    const { sandbox, memory, chat, requests } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    chat.pop();
+    let scheduled;
+    sandbox.window.setTimeout = (callback) => { scheduled = callback; return 1; };
+    runtime.scheduleDirector('assistant-updated', 0);
+    await scheduled();
+    assert.equal(requests.length, 0);
+
+    assert.equal((await runtime.replanLatest()).success, true);
+    chat.push({ is_user: false, mes: '后来新增的助手正文' });
+    chat.push({ is_user: true, mes: '新一轮用户行动' });
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), false);
 });
 
 test('manual replan rejects while foreground or memory work is busy', async () => {

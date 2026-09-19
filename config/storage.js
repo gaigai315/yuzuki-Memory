@@ -664,6 +664,8 @@
             source: anchor ? {
                 sessionId: String(anchor.sessionId || ''),
                 assistantIndex: Number.isInteger(Number(anchor.assistantIndex)) ? Number(anchor.assistantIndex) : -1,
+                messageIndex: Number.isInteger(Number(anchor.messageIndex)) ? Number(anchor.messageIndex) : -1,
+                role: anchor.role === 'user' ? 'user' : 'assistant',
                 swipeId: Math.max(0, Math.round(Number(anchor.swipeId) || 0)),
                 signature: String(anchor.signature || ''),
                 createdAt: Math.max(0, Math.round(Number(anchor.createdAt) || 0)),

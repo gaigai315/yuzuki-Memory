@@ -113,6 +113,21 @@
         };
     }
 
+    function buildUserAnchor(message, index, sessionId) {
+        if (!isUserMessage(message) || isHiddenDialogueMessage(message) || isPluginMessage(message)) return null;
+        const text = getMessageText(message);
+        if (!text.trim()) return null;
+        const swipeId = Math.max(0, Math.round(Number(message?.swipe_id) || 0));
+        return {
+            sessionId: String(sessionId || ''),
+            messageIndex: index,
+            role: 'user',
+            swipeId,
+            signature: hashText(`${swipeId}\n${text}`),
+            createdAt: Date.now(),
+        };
+    }
+
     function getLatestAssistantAnchor() {
         const context = getContext();
         const chat = Array.isArray(context?.chat) ? context.chat : [];
@@ -125,14 +140,34 @@
         return null;
     }
 
+    function getLatestManualAnchor() {
+        const chat = getContext()?.chat;
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        if (!Array.isArray(chat) || !sessionId) return null;
+        for (let index = chat.length - 1; index >= 0; index -= 1) {
+            const message = chat[index];
+            if (!isDialogueMessage(message) || isPluginMessage(message)) continue;
+            return isUserMessage(message)
+                ? buildUserAnchor(message, index, sessionId)
+                : buildAssistantAnchor(message, index, sessionId);
+        }
+        return null;
+    }
+
+    function getSourceIndex(source) {
+        return Number(source?.role === 'user' ? source.messageIndex : source?.assistantIndex);
+    }
+
     function sourceMatchesCurrentMessage(source) {
         if (!source || typeof source !== 'object') return false;
         const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
         if (!sessionId || String(source.sessionId || '') !== sessionId) return false;
         const chat = getContext()?.chat;
-        const index = Number(source.assistantIndex);
+        const index = getSourceIndex(source);
         if (!Array.isArray(chat) || !Number.isInteger(index) || index < 0 || index >= chat.length) return false;
-        const current = buildAssistantAnchor(chat[index], index, sessionId);
+        const current = source.role === 'user'
+            ? buildUserAnchor(chat[index], index, sessionId)
+            : buildAssistantAnchor(chat[index], index, sessionId);
         return !!current && current.signature === String(source.signature || '') && current.swipeId === Number(source.swipeId || 0);
     }
 
@@ -143,7 +178,8 @@
         for (let index = chat.length - 1; index >= 0; index -= 1) {
             const message = chat[index];
             if (!isDialogueMessage(message) || isPluginMessage(message)) continue;
-            return index === Number(source.assistantIndex) && isAssistantMessage(message);
+            return index === getSourceIndex(source)
+                && (source.role === 'user' ? isUserMessage(message) : isAssistantMessage(message));
         }
         return false;
     }
@@ -443,7 +479,9 @@
             const snapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.('storyDirector') || { mode: 'tavern', preset: null };
             const messages = [
                 { role: 'system', content: String(promptEntry.prompt || '').trim() },
-                { role: 'user', content: '请为最新完成的助手正文生成下一轮导演卡。先按要求调用工具读取数据。' },
+                { role: 'user', content: source.role === 'user'
+                    ? '请根据最新用户消息及此前剧情生成下一轮导演卡。先按要求调用工具读取数据。'
+                    : '请为最新完成的助手正文生成下一轮导演卡。先按要求调用工具读取数据。' },
             ];
             const usedTools = new Set();
             for (let turn = 0; turn < MAX_AGENT_TURNS; turn += 1) {
@@ -494,7 +532,7 @@
                 });
                 if (!saved) throw new Error('导演卡保存失败。');
                 console.info('[yuzuki-Memory] 下轮导演卡已生成。', {
-                    assistantIndex: source.assistantIndex,
+                    messageIndex: getSourceIndex(source),
                     cardLength: card.length,
                     toolCalls: [...usedTools],
                 });
@@ -571,18 +609,18 @@
                 error: '填表或总结仍在执行，请等待完成后再规划。',
             };
         }
-        const source = getLatestAssistantAnchor();
+        const source = getLatestManualAnchor();
         if (!source || !sourceIsLatestDialogue(source)) {
             return {
                 success: false,
                 skipped: true,
-                reason: 'no-latest-assistant',
-                error: '当前最新消息不是助手正文，无法重新规划。',
+                reason: 'no-latest-dialogue',
+                error: '当前没有可用于规划的最新对话。',
             };
         }
         window.clearTimeout(runTimer);
         runTimer = null;
-        console.info('[yuzuki-Memory] 手动剧情规划开始运行。', { assistantIndex: source.assistantIndex });
+        console.info('[yuzuki-Memory] 手动剧情规划开始运行。', { messageIndex: getSourceIndex(source) });
         return runDirector(source);
     }
 
@@ -675,9 +713,14 @@
             break;
         }
         if (latestDialogueIndex < 0 || !isUserMessage(chat[latestDialogueIndex])) return '';
+        const sourceIndex = getSourceIndex(director.source);
+        if (director.source?.role === 'user' && latestDialogueIndex === sourceIndex) {
+            return String(director.pendingCard || '').trim();
+        }
         for (let index = latestDialogueIndex - 1; index >= 0; index -= 1) {
             if (!isDialogueMessage(chat[index]) || isPluginMessage(chat[index])) continue;
-            return index === Number(director.source?.assistantIndex) && isAssistantMessage(chat[index])
+            return index === sourceIndex
+                && (director.source?.role === 'user' ? isUserMessage(chat[index]) : isAssistantMessage(chat[index]))
                 ? String(director.pendingCard || '').trim()
                 : '';
         }

@@ -3611,7 +3611,7 @@
             'fa-solid fa-clapperboard',
             'yzm-top-action-button yzm-top-story-director',
         );
-        storyDirectorButton.title = '根据最新助手正文重新生成下一轮导演卡';
+        storyDirectorButton.title = '根据最新对话和记忆重新生成下一轮导演卡';
         storyDirectorButton.dataset.yzmStoryDirectorReplan = 'true';
 
         const characterGraphButton = createIconButton(
