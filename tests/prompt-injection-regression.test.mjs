@@ -6,6 +6,7 @@ import vm from 'node:vm';
 const promptReadySource = fs.readFileSync(new URL('../config/prompt-ready-injector.js', import.meta.url), 'utf8');
 const variableInjectorSource = fs.readFileSync(new URL('../config/variable-injector.js', import.meta.url), 'utf8');
 const promptLibrarySource = fs.readFileSync(new URL('../config/prompt-library.js', import.meta.url), 'utf8');
+const plotSummarySource = fs.readFileSync(new URL('../config/plot-summary.js', import.meta.url), 'utf8');
 
 function createBaseSandbox() {
     const localValues = new Map();
@@ -209,4 +210,34 @@ test('branch summaries for one character share one injected message across floor
     await memory.VariableInjector.processBody(anchored);
     assert.equal(anchored.messages.filter((message) => message.content.includes('【支线总结：江栖年】')).length, 1);
     assert.equal(state.records.memory_summary.length, 5, 'injection must not rewrite stored records');
+});
+
+test('injected summary timelines keep one line per explicit date without changing stored text', () => {
+    const sandbox = createBaseSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    vm.runInContext(plotSummarySource, sandbox, { filename: 'plot-summary.js' });
+    vm.runInContext(variableInjectorSource, sandbox, { filename: 'variable-injector.js' });
+    const original = '2044年03月17日,07:48-08:08 [警局] 第一件事。\n08:18-08:30 [停车场] 第二件事。\n2044年3月17日,08:34-08:45 [老宅] 第三件事。\n2044年03月18日,00:05-00:20 [老宅] 次日事件。\n00:30-00:50 [老宅] 次日后续。';
+    const state = {
+        tables: [{ id: 'memory_summary', name: '记忆总结', columns: ['总结标题', '核心角色', '楼层数', '总结内容'] }],
+        records: { memory_summary: [
+            { id: 'main', values: { 总结标题: '主线总结（1）', 总结内容: original } },
+            { id: 'branch', values: { 总结标题: '支线总结（1）', 核心角色: '江栖年', 总结内容: '' }, summarySegments: [
+                { floor: '0-19', summary: '大明永乐十二年九月初八日,09:00-09:30 [府邸] 支线起点。\n09:40-10:00 [府邸] 支线进展。' },
+                { floor: '20-39', summary: '大明永乐十二年九月初八日,10:10-10:30 [府邸] 同日后续。' },
+                { floor: '40-59', summary: '大明永乐十二年九月初九日,08:00-08:30 [府邸] 次日事件。' },
+            ] },
+            { id: 'uncertain', values: { 总结标题: '主线总结（2）', 总结内容: '日期待确认。\n10:45-11:00 [街道] 不明日期事件。' } },
+        ] },
+    };
+
+    const messages = memory.VariableInjector.buildSummaryMessages(state);
+    const main = messages.find((message) => message.content.includes('第一件事'));
+    const branch = messages.find((message) => message.content.includes('支线起点'));
+    assert.match(main.content, /第一件事。 08:18-08:30 .*第二件事。 08:34-08:45 .*第三件事。\n2044年03月18日/);
+    assert.match(main.content, /次日事件。 00:30-00:50 .*次日后续。/);
+    assert.match(branch.content, /支线起点。 09:40-10:00 .*支线进展。 10:10-10:30 .*同日后续。\n大明永乐十二年九月初九日/);
+    assert.match(messages.find((message) => message.content.includes('日期待确认')).content, /日期待确认。\n10:45-11:00/);
+    assert.equal(state.records.memory_summary[0].values.总结内容, original);
+    assert.match(memory.VariableInjector.buildSpecificSummaryText(state, 'branch'), /支线起点。 09:40-10:00/);
 });

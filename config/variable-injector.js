@@ -651,14 +651,49 @@
         return names.length ? names.join('、') : '（当前暂无已有支线核心角色）';
     }
 
+    function formatSummaryDaysForInjection(text) {
+        const output = [];
+        let currentDate = '';
+        let previousWasTimeline = false;
+        let blankLines = 0;
+        String(text || '').split(/\r?\n/).forEach((rawLine) => {
+            const line = rawLine.trim();
+            if (!line) {
+                blankLines += 1;
+                return;
+            }
+            const dateMatch = YuzukiMemory.PlotSummary?.getDateTokenMatches?.(line)?.find((match) => match.index === 0);
+            const dateParts = dateMatch ? YuzukiMemory.PlotSummary?.parseDateToken?.(dateMatch.token) : null;
+            const datedEvent = dateParts && /^[\s,，]*\d{1,2}[:：]\d{2}/.test(line.slice(dateMatch.length));
+            const timedEvent = /^\d{1,2}[:：]\d{2}(?:\s*[-~－—至到]\s*\d{1,2}[:：]\d{2})?/.test(line);
+            const nextDate = datedEvent
+                ? [dateParts.style === 'ancient' ? dateParts.era : '', dateParts.year, dateParts.month, dateParts.day].join(':')
+                : '';
+            const joinSameDay = previousWasTimeline && currentDate
+                && (datedEvent ? nextDate === currentDate : timedEvent);
+            if (joinSameDay) {
+                const continuation = datedEvent
+                    ? line.slice(dateMatch.length).replace(/^[\s,，]+/, '')
+                    : line;
+                output[output.length - 1] += ` ${continuation}`;
+            } else {
+                if (output.length && blankLines && !datedEvent) output.push(...Array(blankLines).fill(''));
+                output.push(line);
+            }
+            blankLines = 0;
+            previousWasTimeline = !!(datedEvent || timedEvent);
+            currentDate = datedEvent ? nextDate : (timedEvent ? currentDate : '');
+        });
+        return output.join('\n');
+    }
+
     function buildSummaryInjectionContent(record, summaryContent) {
         const segments = Array.isArray(record?.summarySegments) ? record.summarySegments : [];
         const segmentText = segments
             .map((segment) => String(segment?.summary || '').trim())
             .filter(Boolean)
             .join('\n\n');
-        if (segmentText) return segmentText;
-        return String(summaryContent || '').trim();
+        return formatSummaryDaysForInjection(segmentText || summaryContent);
     }
 
     function summaryRecordToText(table, record, summarySegments = null) {
@@ -817,7 +852,7 @@
         const sameBranchCharacter = first.character && /支[线線]/.test(String(first.title || ''))
             && entries.every((entry) => String(entry.character || '').trim().toLowerCase() === String(first.character).trim().toLowerCase());
         const blocks = sameBranchCharacter
-            ? [compactLines([getSummaryEntryHeading(first), entries.map((entry) => entry.text).filter(Boolean).join('\n\n')])]
+            ? [compactLines([getSummaryEntryHeading(first), formatSummaryDaysForInjection(entries.map((entry) => entry.text).filter(Boolean).join('\n\n'))])]
             : entries.map(summaryEntryToText).filter(Boolean);
         if (!blocks.length) return null;
         return {
