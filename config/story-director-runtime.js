@@ -240,6 +240,46 @@
         return YuzukiMemory.Storage?.loadState?.(fallback, sessionId) || null;
     }
 
+    function normalizeLedgerHeading(line = '') {
+        let heading = String(line || '').trim().replace(/^#{1,6}\s*/, '');
+        const bracketMatch = heading.match(/^【\s*(.*?)\s*】\s*$/);
+        if (bracketMatch) heading = bracketMatch[1];
+        return heading.replace(/[：:]\s*$/, '').trim();
+    }
+
+    function isRemovedLedgerSectionHeading(line = '') {
+        const trimmed = String(line || '').trim();
+        if (!trimmed || /^[-*+>]\s+/.test(trimmed)) return false;
+        return /^剧情节点\s*(?:与|和|及)\s*(?:人物)?履历$/.test(normalizeLedgerHeading(trimmed));
+    }
+
+    function isLedgerSectionHeading(line = '') {
+        const trimmed = String(line || '').trim();
+        if (!trimmed) return false;
+        if (/^【[^】\r\n]{1,80}】\s*$/.test(trimmed)) return true;
+        if (/^#{1,6}\s+\S/.test(trimmed)) return true;
+        return /^[^#\s\-*+>][^：:\r\n]{0,40}[：:]\s*$/.test(trimmed);
+    }
+
+    function sanitizeDirectorLedger(text = '') {
+        const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+        const kept = [];
+        let removingSection = false;
+        lines.forEach((line) => {
+            if (isRemovedLedgerSectionHeading(line)) {
+                removingSection = true;
+                while (kept.at(-1) === '') kept.pop();
+                return;
+            }
+            if (removingSection) {
+                if (!isLedgerSectionHeading(line)) return;
+                removingSection = false;
+            }
+            kept.push(line);
+        });
+        return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+
     function saveDirectorState(sessionId, nextDirector, source = 'story-director') {
         const fallback = getFallbackState();
         if (!fallback || !sessionId) return false;
@@ -249,7 +289,7 @@
             ? normalizeMessageCards(nextDirector.messageCards)
             : normalizeMessageCards(latest.storyDirector?.messageCards);
         latest.storyDirector = {
-            ledger: String(nextDirector?.ledger || ''),
+            ledger: sanitizeDirectorLedger(nextDirector?.ledger),
             pendingCard: String(nextDirector?.pendingCard || ''),
             source: nextDirector?.source && typeof nextDirector.source === 'object' ? { ...nextDirector.source } : null,
             messageCards,
@@ -358,7 +398,7 @@
                 type: 'function',
                 function: {
                     name: TOOL_NAMES.ledger,
-                    description: '读取剧情导演自己的长期支线账本。',
+                    description: '读取剧情导演自己的长期调度账本。账本不包含剧情节点与人物履历。',
                     parameters: { type: 'object', properties: {}, additionalProperties: false },
                 },
             },
@@ -366,11 +406,11 @@
                 type: 'function',
                 function: {
                     name: TOOL_NAMES.updateLedger,
-                    description: '用完整的新账本内容覆盖剧情导演账本。',
+                    description: '用完整的新账本内容覆盖剧情导演账本。只保存跨轮调度状态，不得包含剧情节点、人物履历或已发生剧情复述。',
                     parameters: {
                         type: 'object',
                         properties: {
-                            content: { type: 'string', description: '完整的新导演账本。' },
+                            content: { type: 'string', description: '完整的新导演账本，不含剧情节点、人物履历和已发生剧情复述。' },
                         },
                         required: ['content'],
                         additionalProperties: false,
@@ -454,18 +494,19 @@
                 window.clearTimeout(timeoutId);
             }
         });
-        register(TOOL_NAMES.ledger, '读取剧情导演账本。', { type: 'object', properties: {}, additionalProperties: false }, () => {
+        register(TOOL_NAMES.ledger, '读取剧情导演调度账本，不含剧情节点与人物履历。', { type: 'object', properties: {}, additionalProperties: false }, () => {
             assertActive();
+            runContext.stagedLedger = sanitizeDirectorLedger(runContext.stagedLedger);
             return runContext.stagedLedger || '（当前暂无导演账本）';
         });
-        register(TOOL_NAMES.updateLedger, '覆盖剧情导演账本。', {
+        register(TOOL_NAMES.updateLedger, '覆盖剧情导演调度账本，不得写入剧情节点、人物履历或已发生剧情复述。', {
             type: 'object',
             properties: { content: { type: 'string' } },
             required: ['content'],
             additionalProperties: false,
         }, (parameters = {}) => {
             assertActive();
-            runContext.stagedLedger = String(parameters.content || '').slice(0, 100000);
+            runContext.stagedLedger = sanitizeDirectorLedger(parameters.content).slice(0, 100000);
             return '导演账本已暂存，将与本轮导演卡一起提交。';
         });
         return manager;
@@ -591,7 +632,7 @@
             sessionId,
             source,
             signal: controller.signal,
-            stagedLedger: String(previousDirector.ledger || ''),
+            stagedLedger: sanitizeDirectorLedger(previousDirector.ledger),
         };
         let manager = null;
         try {
@@ -610,7 +651,7 @@
                 { role: 'system', content: String(promptEntry.prompt || '').trim() },
                 {
                     role: 'user',
-                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文。`,
+                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。`,
                 },
             ];
             const usedTools = new Set();

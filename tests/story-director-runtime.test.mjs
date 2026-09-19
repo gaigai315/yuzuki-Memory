@@ -42,6 +42,7 @@ function createSandbox(options = {}) {
     let enabled = Object.hasOwn(options, 'enabled') ? options.enabled : true;
     const vectorBooks = Array.isArray(options.vectorBooks) ? options.vectorBooks : [];
     const vectorCalls = [];
+    const initialLedger = Object.hasOwn(options, 'initialLedger') ? String(options.initialLedger || '') : '旧账本';
     let state = {
         tables: [
             { id: 'memory_summary', name: '记忆总结', columns: ['总结内容'], hidden: false },
@@ -53,7 +54,7 @@ function createSandbox(options = {}) {
             character_profile: [{ id: 'hero', values: { 角色名: '甲' } }],
             hidden_table: [{ id: 'hidden', values: { 名称: '不应出现' } }],
         },
-        storyDirector: { ledger: '旧账本', pendingCard: '', source: null, messageCards: [], status: 'idle', lastError: '', updatedAt: 0 },
+        storyDirector: { ledger: initialLedger, pendingCard: '', source: null, messageCards: [], status: 'idle', lastError: '', updatedAt: 0 },
         settings: {},
     };
     const chat = [
@@ -219,6 +220,55 @@ test('story director performs a private tool loop and stores the next card', asy
     const regenerateClone = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(regenerateClone, { generationType: 'regenerate' }), true);
     assert.match(regenerateClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
+});
+
+test('director ledger removes plot history sections while preserving later scheduling sections', async () => {
+    const oldLedger = `【模块轮换】
+- 上轮 Module 2
+
+【剧情节点与履历】
+- 已发生剧情复述
+- 人物经历
+
+【角色冷却】
+- 甲：2轮`;
+    const updatedLedger = `## 模块轮换
+- 本轮 Module 3
+
+## 剧情节点和履历
+- 另一段剧情复述
+- 另一段人物经历
+
+## 信息隔离
+- 乙不知道密信内容`;
+    const { memory, requests, getState } = createSandbox({ initialLedger: oldLedger });
+    let ledgerUpdated = false;
+    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+        requests.push(structuredClone(messages));
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
+            ledgerUpdated = true;
+            return createToolResponse(offeredTool, JSON.stringify({ content: updatedLedger }));
+        }
+        return {
+            success: true,
+            message: { role: 'assistant', content: '<下轮导演卡>继续推进。</下轮导演卡>' },
+            text: '<下轮导演卡>继续推进。</下轮导演卡>',
+            toolCalls: [],
+        };
+    };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+
+    const readLedger = findRequestWithToolResult(requests, 'ledger')
+        .find((message) => message.tool_call_id === 'ledger').content;
+    assert.match(readLedger, /模块轮换/);
+    assert.match(readLedger, /角色冷却/);
+    assert.doesNotMatch(readLedger, /剧情节点与履历|已发生剧情复述|人物经历/);
+    assert.match(getState().storyDirector.ledger, /模块轮换/);
+    assert.match(getState().storyDirector.ledger, /信息隔离/);
+    assert.doesNotMatch(getState().storyDirector.ledger, /剧情节点和履历|另一段剧情复述|另一段人物经历/);
 });
 
 test('deleting or regenerating A2 reuses the card bound to U2 and manual planning replaces it', async () => {
