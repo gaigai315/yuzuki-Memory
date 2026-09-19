@@ -162,3 +162,51 @@ test('switching built-in schemes keeps the realtime prompt with existing plot re
     assert.match(withPlot, /主线\/支线摘要最高级禁令/);
     assert.equal(state.records.plot_summary.length, 1);
 });
+
+test('branch summaries for one character share one injected message across floor ranges', async () => {
+    const sandbox = createBaseSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    const scope = { id: 'chapter-one' };
+    const state = {
+        tables: [{ id: 'memory_summary', name: '记忆总结', columns: ['总结标题', '核心角色', '楼层数', '总结内容'] }],
+        records: {
+            memory_summary: [
+                { id: 'main-1', floorScope: scope, values: { 总结标题: '主线总结（1）', 楼层数: '0-19', 总结内容: '主线第一段' } },
+                {
+                    id: 'branch-1', floorScope: scope,
+                    values: { 总结标题: '支线总结（1）', 核心角色: '江栖年', 楼层数: '0-19\n20-39', 总结内容: '支线第一段\n支线第二段' },
+                    summarySegments: [
+                        { floor: '0-19', summary: '支线第一段', floorScope: scope },
+                        { floor: '20-39', summary: '支线第二段', floorScope: scope },
+                    ],
+                },
+                { id: 'main-2', floorScope: scope, values: { 总结标题: '主线总结（2）', 楼层数: '20-39', 总结内容: '主线第二段' } },
+                { id: 'branch-2', floorScope: scope, values: { 总结标题: '支线总结（2）', 核心角色: '江栖年', 楼层数: '40-59', 总结内容: '支线第三段' } },
+                { id: 'branch-3', floorScope: scope, values: { 总结标题: '支线总结（3）', 核心角色: '另一角色', 楼层数: '0-19', 总结内容: '另一条支线' } },
+            ],
+        },
+    };
+    memory.GlobalSettings = { get: (_key, fallback) => fallback };
+    memory.Storage = { loadState: () => state };
+    vm.runInContext(variableInjectorSource, sandbox, { filename: 'variable-injector.js' });
+
+    const messages = memory.VariableInjector.buildSummaryMessages(state);
+    assert.equal(messages.length, 4, 'two main ranges and two distinct characters');
+    const branch = messages.find((message) => message.content.includes('【支线总结：江栖年】'));
+    assert.ok(branch);
+    assert.equal(branch.content.match(/【支线总结：江栖年】/g)?.length, 1);
+    assert.equal(branch.yzmMemorySummaryId, 'branch-1,branch-2');
+    for (const text of ['支线第一段', '支线第二段', '支线第三段']) assert.ok(branch.content.includes(text));
+    assert.equal(messages.filter((message) => message.content.includes('【支线总结：另一角色】')).length, 1);
+    assert.equal(messages.filter((message) => message.content.includes('主线第一段')).length, 1);
+    assert.equal(messages.filter((message) => message.content.includes('主线第二段')).length, 1);
+
+    const fallback = { messages: [{ role: 'user', content: '继续' }] };
+    await memory.VariableInjector.processBody(fallback);
+    assert.equal(fallback.messages.filter((message) => message.content.includes('【支线总结：江栖年】')).length, 1);
+
+    const anchored = { messages: [{ role: 'system', content: '{{MEMORY_SUMMARY}}' }, { role: 'user', content: '继续' }] };
+    await memory.VariableInjector.processBody(anchored);
+    assert.equal(anchored.messages.filter((message) => message.content.includes('【支线总结：江栖年】')).length, 1);
+    assert.equal(state.records.memory_summary.length, 5, 'injection must not rewrite stored records');
+});

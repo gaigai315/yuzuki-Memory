@@ -753,6 +753,12 @@
 
     function getSummaryEntryFloorGroupKey(entry) {
         if (entry?.floorGroupKey) return entry.floorGroupKey;
+        if (/支[线線]/.test(String(entry?.title || ''))) {
+            const character = String(entry?.character || '').trim();
+            return character
+                ? `branch:${character.toLowerCase()}`
+                : `branch:record:${String(entry?.record?.id || entry?.number || 'unknown')}`;
+        }
         const record = entry?.record || {};
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const segments = Array.isArray(record.summarySegments) ? record.summarySegments : [];
@@ -774,6 +780,7 @@
     }
 
     function getSummaryEntryParts(entry) {
+        if (/支[线線]/.test(String(entry?.title || ''))) return [entry];
         const segments = Array.isArray(entry?.record?.summarySegments)
             ? entry.record.summarySegments.filter((segment) => String(segment?.summary || '').trim())
             : [];
@@ -807,9 +814,11 @@
         const entries = Array.isArray(groupEntries) ? groupEntries.filter(Boolean) : [];
         if (!entries.length) return null;
         const first = entries[0];
-        const blocks = entries
-            .map(summaryEntryToText)
-            .filter(Boolean);
+        const sameBranchCharacter = first.character && /支[线線]/.test(String(first.title || ''))
+            && entries.every((entry) => String(entry.character || '').trim().toLowerCase() === String(first.character).trim().toLowerCase());
+        const blocks = sameBranchCharacter
+            ? [compactLines([getSummaryEntryHeading(first), entries.map((entry) => entry.text).filter(Boolean).join('\n\n')])]
+            : entries.map(summaryEntryToText).filter(Boolean);
         if (!blocks.length) return null;
         return {
             role: 'system',
