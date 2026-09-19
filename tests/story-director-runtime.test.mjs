@@ -6,6 +6,8 @@ import vm from 'node:vm';
 const source = fs.readFileSync(new URL('../config/story-director-runtime.js', import.meta.url), 'utf8');
 
 const TOOL_CALL_IDS = {
+    yzm_story_read_profiles: 'profiles',
+    yzm_story_read_worldbooks: 'worldbooks',
     yzm_story_search_vectors: 'vectors',
     yzm_story_read_tables: 'tables',
     yzm_story_read_visible_chat: 'chat',
@@ -55,7 +57,11 @@ function createSandbox(options = {}) {
             hidden_table: [{ id: 'hidden', values: { 名称: '不应出现' } }],
         },
         storyDirector: { ledger: initialLedger, pendingCard: '', source: null, messageCards: [], status: 'idle', lastError: '', updatedAt: 0 },
-        settings: {},
+        settings: {
+            worldbookSelection: options.worldbookEnabled === false
+                ? { enabled: false, initialized: true, ids: [] }
+                : { enabled: true, initialized: true, ids: ['selected-worldbook'] },
+        },
     };
     const chat = [
         { is_user: true, mes: '很久以前', is_system: true, is_yzm_hidden_floor: true },
@@ -85,6 +91,17 @@ function createSandbox(options = {}) {
         chat,
         name1: '用户',
         name2: '角色',
+        persona: '用户卡中的背景资料',
+        characterId: 0,
+        characters: [{
+            name: '角色',
+            description: '角色卡中的人物描述',
+            personality: '冷静而谨慎',
+            scenario: '角色卡中的故事背景',
+            first_mes: '角色卡开场消息',
+            mes_example: '角色卡对话示例',
+            creatorcomment: '角色卡作者备注',
+        }],
         ToolManager: toolManager,
         eventSource: { on(name, handler) { eventBindings.push({ name, handler }); } },
         eventTypes: {
@@ -123,6 +140,17 @@ function createSandbox(options = {}) {
             async search(query, bookIds, searchOptions) {
                 vectorCalls.push(structuredClone({ query, bookIds, searchOptions }));
                 return [{ source: '启用的剧情书 #3', text: '向量中保存的历史线索', score: 0.92 }];
+            },
+        },
+        WorldbookManager: {
+            async buildWorldbookMessage(currentState) {
+                const selection = currentState?.settings?.worldbookSelection;
+                if (selection?.enabled !== true || !selection?.ids?.length) return null;
+                return {
+                    role: 'system',
+                    content: '【世界书/角色书信息】\n【已勾选世界书】\n世界书中的已选条目',
+                    name: 'SYSTEM (世界书)',
+                };
             },
         },
         StoryDirectorSettings: {
@@ -198,18 +226,26 @@ test('story director performs a private tool loop and stores the next card', asy
     assert.equal(getState().storyDirector.status, 'ready');
     const finalRequest = requests.at(-1);
     const toolMessages = finalRequest.filter((message) => message.role === 'tool');
-    assert.equal(toolMessages.length, 4);
+    assert.equal(toolMessages.length, 6);
+    assert.match(toolMessages.find((message) => message.tool_call_id === 'profiles').content, /用户卡中的背景资料/);
+    assert.match(toolMessages.find((message) => message.tool_call_id === 'profiles').content, /角色卡中的人物描述/);
+    assert.match(toolMessages.find((message) => message.tool_call_id === 'worldbooks').content, /世界书中的已选条目/);
     assert.match(toolMessages.find((message) => message.tool_call_id === 'tables').content, /前100楼总结/);
     assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'tables').content, /不应出现/);
     assert.match(toolMessages.find((message) => message.tool_call_id === 'chat').content, /当前行动/);
     assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'chat').content, /很久以前/);
     assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'chat').content, /<Memory>/);
-    assert.equal(directorCaptures.length, 5);
+    assert.equal(directorCaptures.length, 7);
+    const profileResultCapture = findCaptureWithToolResult(directorCaptures, '读取角色卡与用户卡');
+    assert.match(profileResultCapture.body.messages.find((message) => message.name?.includes('读取角色卡与用户卡')).content, /冷静而谨慎/);
+    const worldbookResultCapture = findCaptureWithToolResult(directorCaptures, '读取记忆插件勾选的世界书');
+    assert.match(worldbookResultCapture.body.messages.find((message) => message.name?.includes('读取记忆插件勾选的世界书')).content, /世界书中的已选条目/);
     const tableResultCapture = findCaptureWithToolResult(directorCaptures, '读取全部启用表格');
     assert.equal(tableResultCapture.options.storyDirector, true);
-    assert.equal(tableResultCapture.options.agentTurn, 2);
+    assert.equal(tableResultCapture.options.agentTurn, 4);
     assert.equal(tableResultCapture.options.sessionId, 'chat:test');
-    assert.match(tableResultCapture.body.messages.find((message) => message.yzmAgentTraceType === 'tool-call').content, /yzm_story_read_tables/);
+    assert.match(tableResultCapture.body.messages.find((message) => message.yzmAgentTraceType === 'tool-call'
+        && message.content.includes('yzm_story_read_tables')).content, /yzm_story_read_tables/);
     assert.match(tableResultCapture.body.messages.find((message) => message.name?.includes('读取全部启用表格')).content, /前100楼总结/);
     assert.ok(tableResultCapture.body.messages.some((message) => message.yzmAgentTraceType === 'tool-schema'));
 
@@ -341,14 +377,16 @@ test('director retrieves selected vector memories from visible chat and shows th
     assert.deepEqual(vectorCalls[0].bookIds, ['selected-book']);
     assert.equal(vectorCalls[0].searchOptions.ignoreInjectionSetting, true);
     assert.equal(vectorCalls[0].query, '当前行动\n最新正文');
-    assert.match(requests[0][1].content, /检索当前启用的向量书/);
+    assert.match(requests[0][1].content, /读取角色卡与用户卡 → 读取记忆插件勾选的世界书 → 检索当前启用的向量书/);
     assert.deepEqual(chat.map((message) => message.mes), ['很久以前', '旧回复', '当前行动', '最新正文<Memory><!-- hidden --></Memory>']);
     const resultMessage = findRequestWithToolResult(requests, 'vectors').find((message) => message.tool_call_id === 'vectors');
     const vectorResult = JSON.parse(resultMessage.content);
     assert.deepEqual(Array.from(vectorResult.matches, (match) => match.text), ['向量中保存的历史线索']);
     assert.equal(vectorResult.matches[0].source, '启用的剧情书 #3');
     assert.match(findCaptureWithToolResult(directorCaptures, '检索当前启用的向量书').body.messages.find((message) => message.name?.includes('检索当前启用的向量书')).content, /向量中保存的历史线索/);
-    assert.match(directorCaptures[0].body.messages.find((message) => message.yzmAgentTraceType === 'tool-schema').content, /yzm_story_search_vectors/);
+    const vectorSchemaCapture = directorCaptures.find((capture) => capture.body.messages.some((message) => message.yzmAgentTraceType === 'tool-schema'
+        && message.content.includes('yzm_story_search_vectors')));
+    assert.ok(vectorSchemaCapture);
 });
 
 test('director reports missing embeddings but still plans with tables and chat', async () => {
@@ -367,7 +405,7 @@ test('vector search failure is visible to the director without losing the planne
     assert.match(findRequestWithToolResult(requests, 'vectors').find((message) => message.tool_call_id === 'vectors').content, /向量服务暂时不可用/);
 });
 
-test('director enforces vector, tables, visible chat, then ledger even after an out-of-order call', async () => {
+test('director enforces profiles, worldbooks, vectors, tables, visible chat, then ledger even after an out-of-order call', async () => {
     const { memory, requests, directorCaptures, vectorCalls } = createSandbox({ vectorBooks: ['selected-book'] });
     let turn = 0;
     const offeredTools = [];
@@ -383,10 +421,12 @@ test('director enforces vector, tables, visible chat, then ledger even after an 
         return { success: true, message: { role: 'assistant', content: '<下轮导演卡>继续。</下轮导演卡>' }, text: '<下轮导演卡>继续。</下轮导演卡>', toolCalls: [] };
     };
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    assert.equal(turn, 6);
+    assert.equal(turn, 8);
     assert.equal(vectorCalls.length, 1);
     assert.deepEqual(offeredTools, [
-        'yzm_story_search_vectors',
+        'yzm_story_read_profiles',
+        'yzm_story_read_profiles',
+        'yzm_story_read_worldbooks',
         'yzm_story_search_vectors',
         'yzm_story_read_tables',
         'yzm_story_read_visible_chat',
@@ -395,6 +435,18 @@ test('director enforces vector, tables, visible chat, then ledger even after an 
     ]);
     assert.match(findRequestWithToolResult(requests, 'tables').find((message) => message.tool_call_id === 'tables').content, /本阶段不允许调用/);
     assert.match(directorCaptures[1].body.messages.find((message) => message.name?.includes('读取全部启用表格')).content, /本阶段不允许调用/);
+});
+
+test('director still calls the worldbook tool when no worldbook is enabled', async () => {
+    const { memory, requests, directorCaptures } = createSandbox({ worldbookEnabled: false });
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    const worldbookResult = findRequestWithToolResult(requests, 'worldbooks')
+        .find((message) => message.tool_call_id === 'worldbooks').content;
+    assert.match(worldbookResult, /当前未启用或未勾选世界书/);
+    assert.match(findCaptureWithToolResult(directorCaptures, '读取记忆插件勾选的世界书')
+        .body.messages.find((message) => message.name?.includes('读取记忆插件勾选的世界书')).content,
+    /当前未启用或未勾选世界书/);
 });
 
 test('a changed assistant branch invalidates its card and a disabled director cannot inject', async () => {

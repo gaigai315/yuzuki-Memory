@@ -11,6 +11,8 @@
     const CARD_GLOBAL_PATTERN = /\n*<下轮导演卡>[\s\S]*?<\/下轮导演卡>\s*/gi;
     const MEMORY_TAG_PATTERN = /<(Memory|GaigaiMemory|memory|tableEdit|gaigaimemory|tableedit)>[\s\S]*?<\/\1>/gi;
     const TOOL_NAMES = Object.freeze({
+        profiles: 'yzm_story_read_profiles',
+        worldbooks: 'yzm_story_read_worldbooks',
         tables: 'yzm_story_read_tables',
         chat: 'yzm_story_read_visible_chat',
         vectors: 'yzm_story_search_vectors',
@@ -18,6 +20,8 @@
         updateLedger: 'yzm_story_update_ledger',
     });
     const TOOL_LABELS = Object.freeze({
+        [TOOL_NAMES.profiles]: '读取角色卡与用户卡',
+        [TOOL_NAMES.worldbooks]: '读取记忆插件勾选的世界书',
         [TOOL_NAMES.tables]: '读取全部启用表格',
         [TOOL_NAMES.chat]: '读取全部未隐藏聊天楼层',
         [TOOL_NAMES.vectors]: '检索当前启用的向量书',
@@ -25,6 +29,8 @@
         [TOOL_NAMES.updateLedger]: '更新导演账本',
     });
     const BASE_READ_TOOL_ORDER = Object.freeze([
+        TOOL_NAMES.profiles,
+        TOOL_NAMES.worldbooks,
         TOOL_NAMES.tables,
         TOOL_NAMES.chat,
         TOOL_NAMES.ledger,
@@ -333,6 +339,79 @@
         return JSON.stringify({ tables });
     }
 
+    function firstTextValue(sources, keys = []) {
+        for (const source of Array.isArray(sources) ? sources : [sources]) {
+            if (!source || typeof source !== 'object') continue;
+            for (const key of keys) {
+                const value = source[key];
+                if (typeof value === 'string' && value.trim()) return value.trim();
+            }
+        }
+        return '';
+    }
+
+    function getCurrentCharacters(context = getContext() || {}) {
+        const characters = Array.isArray(context.characters) ? context.characters : [];
+        if (!characters.length) return [];
+        if (context.groupId !== undefined && context.groupId !== null && String(context.groupId) !== '') {
+            const group = (Array.isArray(context.groups) ? context.groups : [])
+                .find((item) => String(item?.id) === String(context.groupId));
+            const getMemberId = (member) => String(typeof member === 'object'
+                ? (member?.avatar || member?.name || member?.id || '')
+                : (member || '')).trim();
+            const memberIds = new Set((Array.isArray(group?.members) ? group.members : []).map(getMemberId).filter(Boolean));
+            const disabledIds = new Set((Array.isArray(group?.disabled_members) ? group.disabled_members : []).map(getMemberId).filter(Boolean));
+            return characters.filter((character) => {
+                const aliases = [character?.avatar, character?.name, character?.data?.avatar, character?.data?.name]
+                    .map((value) => String(value || '').trim())
+                    .filter(Boolean);
+                return aliases.some((alias) => memberIds.has(alias)) && !aliases.some((alias) => disabledIds.has(alias));
+            });
+        }
+        const character = characters[context.characterId];
+        return character ? [character] : [];
+    }
+
+    function serializeProfiles() {
+        const context = getContext() || {};
+        const persona = firstTextValue([
+            context,
+            context.power_user,
+        ], ['persona', 'userPersona', 'persona_description', 'user_description']);
+        const characters = getCurrentCharacters(context).map((character) => {
+            const sources = [character, character?.data];
+            return {
+                name: firstTextValue(sources, ['name']) || String(context.name2 || context.characterName || 'Character'),
+                description: firstTextValue(sources, ['description', 'desc']),
+                personality: firstTextValue(sources, ['personality']),
+                scenario: firstTextValue(sources, ['scenario', 'world_scenario']),
+                firstMessage: firstTextValue(sources, ['first_mes', 'first_message', 'firstMessage']),
+                exampleDialogue: firstTextValue(sources, ['mes_example', 'example_dialogue']),
+                creatorNotes: firstTextValue(sources, ['creatorcomment', 'creator_comment', 'creator_notes', 'comment', 'notes']),
+            };
+        });
+        return JSON.stringify({
+            user: {
+                name: String(context.name1 || context.userName || context.playerName || 'User'),
+                persona,
+            },
+            characters,
+        });
+    }
+
+    async function serializeSelectedWorldbooks(state) {
+        try {
+            const message = await YuzukiMemory.WorldbookManager?.buildWorldbookMessage?.(state, {
+                includeEntries: true,
+            });
+            const content = String(message?.content || '').trim();
+            return content || '（当前未启用或未勾选世界书）';
+        } catch (error) {
+            console.warn('[yuzuki-Memory] 剧情导演读取世界书失败:', error);
+            return `（读取已勾选世界书失败：${String(error?.message || error || '未知错误')}）`;
+        }
+    }
+
     function collectVisibleChatMessages() {
         const context = getContext() || {};
         const chat = Array.isArray(context.chat) ? context.chat : [];
@@ -366,6 +445,22 @@
 
     function getToolDefinitions(includeVectors = false, allowedNames = null) {
         const definitions = [
+            {
+                type: 'function',
+                function: {
+                    name: TOOL_NAMES.profiles,
+                    description: '读取当前用户卡及当前单人角色或群聊启用成员的角色卡信息。',
+                    parameters: { type: 'object', properties: {}, additionalProperties: false },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: TOOL_NAMES.worldbooks,
+                    description: '读取记忆插件中已启用并勾选的世界书条目。未选择时返回明确提示。',
+                    parameters: { type: 'object', properties: {}, additionalProperties: false },
+                },
+            },
             {
                 type: 'function',
                 function: {
@@ -424,9 +519,9 @@
     }
 
     function getReadToolOrder(includeVectors = false) {
-        return includeVectors
-            ? [TOOL_NAMES.vectors, ...BASE_READ_TOOL_ORDER]
-            : [...BASE_READ_TOOL_ORDER];
+        const order = [...BASE_READ_TOOL_ORDER];
+        if (includeVectors) order.splice(2, 0, TOOL_NAMES.vectors);
+        return order;
     }
 
     function registerRuntimeTools(runContext, includeVectors = false) {
@@ -448,6 +543,16 @@
             action,
             shouldRegister: () => false,
             stealth: true,
+        });
+        register(TOOL_NAMES.profiles, '读取当前角色卡与用户卡。', { type: 'object', properties: {}, additionalProperties: false }, () => {
+            assertActive();
+            return serializeProfiles();
+        });
+        register(TOOL_NAMES.worldbooks, '读取记忆插件中已勾选的世界书。', { type: 'object', properties: {}, additionalProperties: false }, async () => {
+            assertActive();
+            const result = await serializeSelectedWorldbooks(loadState(runContext.sessionId));
+            assertActive();
+            return result;
         });
         register(TOOL_NAMES.tables, '读取当前全部启用表格。', { type: 'object', properties: {}, additionalProperties: false }, () => {
             assertActive();
