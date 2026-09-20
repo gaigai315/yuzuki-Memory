@@ -659,6 +659,24 @@ test('manual replan after deleting the last assistant sees all visible dialogue 
     assert.equal(getState().storyDirector.pendingCard, '');
 });
 
+test('director keeps SillyTavern floor zero and accepts summary-compatible dialogue roles', async () => {
+    const { memory, chat, requests } = createSandbox();
+    chat.splice(0, 2,
+        { role: 'model', mes: '第0楼角色开场', is_system: false },
+        { role: 'human', mes: '第1楼用户输入', is_system: false },
+    );
+
+    const result = await memory.StoryDirectorRuntime.replanLatest();
+
+    assert.equal(result.success, true);
+    const toolMessages = requests.at(-1).filter((message) => message.role === 'tool');
+    const visibleChat = JSON.parse(toolMessages.find((message) => message.tool_call_id === 'chat').content);
+    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.floor), [0, 1, 2, 3]);
+    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.role), ['assistant', 'user', 'user', 'assistant']);
+    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.content),
+        ['第0楼角色开场', '第1楼用户输入', '当前行动', '最新正文']);
+});
+
 test('manual replan rejects an empty dialogue', async () => {
     const { memory, chat, requests } = createSandbox();
     chat.splice(0);

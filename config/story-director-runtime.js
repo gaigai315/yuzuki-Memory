@@ -83,15 +83,24 @@
         if (!message || typeof message !== 'object') return false;
         if (message.is_user === true || message.is_user === false) return true;
         const role = String(message.role || '').toLowerCase();
-        return role === 'user' || role === 'assistant';
+        if (role === 'system' || role === 'tool' || role === 'function') return false;
+        if (role === 'user' || role === 'human' || role === 'assistant' || role === 'model' || role === 'ai') return true;
+        return ['mes', 'content', 'text'].some((key) => typeof message[key] === 'string')
+            || Array.isArray(message.swipes);
     }
 
     function isUserMessage(message) {
-        return message?.is_user === true || String(message?.role || '').toLowerCase() === 'user';
+        const role = String(message?.role || '').toLowerCase();
+        return message?.is_user === true || role === 'user' || role === 'human';
     }
 
     function isAssistantMessage(message) {
-        return message?.is_user === false || String(message?.role || '').toLowerCase() === 'assistant';
+        const role = String(message?.role || '').toLowerCase();
+        return message?.is_user === false
+            || role === 'assistant'
+            || role === 'model'
+            || role === 'ai'
+            || (isDialogueMessage(message) && !isUserMessage(message));
     }
 
     function isHiddenDialogueMessage(message) {
