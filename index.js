@@ -67,7 +67,7 @@ import { extension_settings } from '../../../extensions.js';
 
     globalThis.yuzukiMemoryGenerateInterceptor = async function (chat, _contextSize, _abort, type = 'normal') {
         const generationType = String(type || 'normal').trim().toLowerCase();
-        if (!['normal', 'regenerate'].includes(generationType)) return;
+        if (!['normal', 'regenerate', 'swipe'].includes(generationType)) return;
         await readyPromise;
         return window[NAMESPACE]?.StoryDirectorRuntime?.injectDirectorCardForGeneration?.(chat, {
             generationType,

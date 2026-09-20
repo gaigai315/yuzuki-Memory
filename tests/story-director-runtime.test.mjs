@@ -359,7 +359,7 @@ test('director ledger removes plot history sections while preserving later sched
     assert.doesNotMatch(getState().storyDirector.ledger, /剧情节点和履历|另一段剧情复述|另一段人物经历/);
 });
 
-test('deleting or regenerating A2 reuses the card bound to U2 and manual planning replaces it', async () => {
+test('deleting, regenerating, or swiping A2 reuses the card bound to U2 and manual planning replaces it', async () => {
     const { memory, chat, getState } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
     const setPlannerCard = (card) => {
@@ -392,6 +392,11 @@ test('deleting or regenerating A2 reuses the card bound to U2 and manual plannin
     assert.match(regenerateA2.at(-2).mes, /<下轮导演卡>推进支线。/);
     assert.doesNotMatch(regenerateA2.at(-2).mes, /U3/);
 
+    const swipeA2 = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(swipeA2, { generationType: 'swipe' }), true);
+    assert.match(swipeA2.at(-2).mes, /<下轮导演卡>推进支线。/);
+    assert.doesNotMatch(swipeA2.at(-2).mes, /U3/);
+
     chat.pop();
     const resendAfterDelete = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(resendAfterDelete, { generationType: 'normal' }), true);
@@ -416,6 +421,11 @@ test('deleting or regenerating A2 reuses the card bound to U2 and manual plannin
     const regenerateManual = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(regenerateManual, { generationType: 'regenerate' }), true);
     assert.match(regenerateManual.at(-1).mes, /手动覆盖 U2/);
+
+    const swipeManual = [...structuredClone(chat), { is_user: false, mes: '待 Swipe 的 A2 正文' }];
+    assert.equal(runtime.injectDirectorCardForGeneration(swipeManual, { generationType: 'swipe' }), true);
+    assert.match(swipeManual.at(-2).mes, /手动覆盖 U2/);
+    assert.doesNotMatch(swipeManual.at(-2).mes, /推进支线/);
 });
 
 test('director retrieves selected vector memories from visible chat and shows them in the request viewer', async () => {

@@ -1005,7 +1005,7 @@
             }
             return null;
         }
-        if (normalizedType === 'regenerate') {
+        if (normalizedType === 'regenerate' || normalizedType === 'swipe') {
             for (let index = chat.length - 1; index >= 0; index -= 1) {
                 const anchor = buildUserAnchor(chat[index], index, sessionId);
                 if (anchor) return anchor;
@@ -1031,7 +1031,7 @@
         if (!isStoryDirectorEnabled()) return '';
         if (!YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.()) return '';
         const generationType = String(options.generationType || 'normal').toLowerCase();
-        if (!['normal', 'regenerate'].includes(generationType)) return '';
+        if (!['normal', 'regenerate', 'swipe'].includes(generationType)) return '';
         clearInvalidPendingCard();
         const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
         const state = loadState(sessionId);
@@ -1040,7 +1040,7 @@
         if (!director || !user) return null;
         const boundCard = findMessageCard(director.messageCards, user);
         if (boundCard) return { card: boundCard, user, origin: 'bound' };
-        if (generationType === 'regenerate' || !pendingCardTargetsUser(director, user)) return null;
+        if (generationType === 'regenerate' || generationType === 'swipe' || !pendingCardTargetsUser(director, user)) return null;
         const pendingCard = String(director.pendingCard || '').trim();
         return pendingCard ? { card: pendingCard, user, origin: 'pending' } : null;
     }
