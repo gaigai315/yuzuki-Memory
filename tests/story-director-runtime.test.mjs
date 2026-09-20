@@ -91,16 +91,21 @@ function createSandbox(options = {}) {
         chat,
         name1: '用户',
         name2: '角色',
-        persona: '用户卡中的背景资料',
+        powerUserSettings: {
+            persona_description: '用户卡中的背景资料',
+        },
         characterId: 0,
         characters: [{
             name: '角色',
-            description: '角色卡中的人物描述',
-            personality: '冷静而谨慎',
-            scenario: '角色卡中的故事背景',
-            first_mes: '角色卡开场消息',
-            mes_example: '角色卡对话示例',
-            creatorcomment: '角色卡作者备注',
+            data: {
+                name: '角色',
+                description: '角色卡中的人物描述',
+                personality: '冷静而谨慎',
+                scenario: '角色卡中的故事背景',
+                first_mes: '角色卡开场消息',
+                mes_example: '角色卡对话示例',
+                creator_notes: '角色卡作者备注',
+            },
         }],
         ToolManager: toolManager,
         eventSource: { on(name, handler) { eventBindings.push({ name, handler }); } },
@@ -227,8 +232,14 @@ test('story director performs a private tool loop and stores the next card', asy
     const finalRequest = requests.at(-1);
     const toolMessages = finalRequest.filter((message) => message.role === 'tool');
     assert.equal(toolMessages.length, 6);
-    assert.match(toolMessages.find((message) => message.tool_call_id === 'profiles').content, /用户卡中的背景资料/);
-    assert.match(toolMessages.find((message) => message.tool_call_id === 'profiles').content, /角色卡中的人物描述/);
+    const profileToolMessage = toolMessages.find((message) => message.tool_call_id === 'profiles');
+    assert.match(profileToolMessage.content, /用户卡中的背景资料/);
+    assert.match(profileToolMessage.content, /角色卡中的人物描述/);
+    assert.match(profileToolMessage.content, /冷静而谨慎/);
+    assert.match(profileToolMessage.content, /角色卡中的故事背景/);
+    assert.match(profileToolMessage.content, /角色卡开场消息/);
+    assert.match(profileToolMessage.content, /角色卡对话示例/);
+    assert.match(profileToolMessage.content, /角色卡作者备注/);
     assert.match(toolMessages.find((message) => message.tool_call_id === 'worldbooks').content, /世界书中的已选条目/);
     assert.match(toolMessages.find((message) => message.tool_call_id === 'tables').content, /前100楼总结/);
     assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'tables').content, /不应出现/);
@@ -237,7 +248,11 @@ test('story director performs a private tool loop and stores the next card', asy
     assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'chat').content, /<Memory>/);
     assert.equal(directorCaptures.length, 7);
     const profileResultCapture = findCaptureWithToolResult(directorCaptures, '读取角色卡与用户卡');
-    assert.match(profileResultCapture.body.messages.find((message) => message.name?.includes('读取角色卡与用户卡')).content, /冷静而谨慎/);
+    const capturedProfileResult = profileResultCapture.body.messages.find((message) => message.name?.includes('读取角色卡与用户卡')).content;
+    assert.match(capturedProfileResult, /用户卡中的背景资料/);
+    assert.match(capturedProfileResult, /角色卡中的人物描述/);
+    assert.match(capturedProfileResult, /冷静而谨慎/);
+    assert.match(capturedProfileResult, /角色卡中的故事背景/);
     const worldbookResultCapture = findCaptureWithToolResult(directorCaptures, '读取记忆插件勾选的世界书');
     assert.match(worldbookResultCapture.body.messages.find((message) => message.name?.includes('读取记忆插件勾选的世界书')).content, /世界书中的已选条目/);
     const tableResultCapture = findCaptureWithToolResult(directorCaptures, '读取全部启用表格');

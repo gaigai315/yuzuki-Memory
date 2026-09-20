@@ -637,7 +637,8 @@
         const ctx = getContext() || {};
         const names = getRuntimeNames();
         const character = getRuntimeCharacter() || {};
-        const persona = ctx.persona || ctx.userPersona || ctx.persona_description || ctx.user_description || ctx.power_user?.persona_description || '';
+        const powerUser = ctx.powerUserSettings || ctx.power_user || {};
+        const persona = ctx.persona || ctx.userPersona || ctx.persona_description || ctx.user_description || powerUser.persona_description || '';
         const chatMetadata = ctx.chatMetadata && typeof ctx.chatMetadata === 'object' ? ctx.chatMetadata : {};
         const includeCharacterGreeting = getPluginSettings().includeCharacterGreetingInTasks;
         const chatMetadataKeys = options.includeChatSummary === false

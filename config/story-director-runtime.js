@@ -374,9 +374,10 @@
 
     function serializeProfiles() {
         const context = getContext() || {};
+        const powerUser = context.powerUserSettings || context.power_user || {};
         const persona = firstTextValue([
             context,
-            context.power_user,
+            powerUser,
         ], ['persona', 'userPersona', 'persona_description', 'user_description']);
         const characters = getCurrentCharacters(context).map((character) => {
             const sources = [character, character?.data];
