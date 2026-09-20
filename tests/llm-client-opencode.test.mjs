@@ -66,6 +66,14 @@ const openCodeConfig = {
     stream: false,
 };
 
+test('assistant prefill detection tolerates an unavailable Tavern config', () => {
+    const { client } = createClient(async () => createResponse({}));
+
+    assert.equal(client.supportsAssistantPrefill(null), false);
+    assert.equal(client.supportsAssistantPrefill(undefined), false);
+    assert.equal(client.supportsAssistantPrefill({ source: 'openai', model: 'gemini-2.5-pro' }), true);
+});
+
 test('OpenCode Go proxy requests carry a stable opaque session header per chat', async () => {
     const requests = [];
     const { client, setSessionId } = createClient(async (url, init) => {
