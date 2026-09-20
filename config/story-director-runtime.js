@@ -752,15 +752,12 @@
             const instruction = source.role === 'user'
                 ? '请根据最新用户消息及此前剧情生成下一轮导演卡。'
                 : '请为最新完成的助手正文生成下一轮导演卡。';
-            const timelineRule = source.role === 'user'
-                ? '【轨道A时序锚点】最后一条有效消息是 User，且尚未有 Assistant 回应。轨道A应规划当前交互角色对这条 User 消息的首次回应，不得假定回应已经发生。'
-                : '【轨道A时序锚点】最后一条有效消息是 Assistant，上一条 User 的动作、情绪和诉求已经得到回应。轨道A必须从最新 Assistant 正文结束时的角色位置、动作、情绪和局面继续，只安排此后尚未发生的新动作；严禁复述、重演或再次回应上一条 User 消息。';
             const readOrderText = readToolOrder.map((name) => TOOL_LABELS[name] || name).join(' → ');
             const messages = [
                 { role: 'system', content: String(promptEntry.prompt || '').trim() },
                 {
                     role: 'user',
-                    content: `${instruction}\n${timelineRule}\n轨道A的“剧情推进”只写当前交互角色的状态与下一步行为，不得预设 User 下一步会有什么反应；后续真实 User 输入与旧导演卡冲突时，以真实 User 输入为准。请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。`,
+                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。`,
                 },
             ];
             const usedTools = new Set();
@@ -777,7 +774,6 @@
                 messages.push(assistantMessage);
                 const toolCalls = Array.isArray(result.toolCalls) ? result.toolCalls : [];
                 if (toolCalls.length) {
-                    let ledgerUpdated = false;
                     for (const call of toolCalls) {
                         const name = String(call?.function?.name || '');
                         let toolResult;
@@ -788,17 +784,10 @@
                         }
                         if (toolResult instanceof Error) throw toolResult;
                         if (name === pendingReadTool) usedTools.add(name);
-                        if (name === TOOL_NAMES.updateLedger) ledgerUpdated = true;
                         messages.push({
                             role: 'tool',
                             tool_call_id: String(call.id || ''),
                             content: String(toolResult || ''),
-                        });
-                    }
-                    if (ledgerUpdated) {
-                        messages.push({
-                            role: 'user',
-                            content: `${timelineRule}\n现在输出导演卡。轨道A只写当前交互角色在该时序锚点之后的状态与新行为，不得预设 User 下一步反应。`,
                         });
                     }
                     continue;
