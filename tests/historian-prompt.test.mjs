@@ -46,6 +46,10 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.equal(director.id, library.getDefaultStoryDirectorPromptId());
     assert.equal(director.builtin, true);
     assert.match(director.prompt, /<下轮导演卡>/);
+    assert.match(director.prompt, /若最后一条为 User/);
+    assert.match(director.prompt, /若最后一条为 Assistant/);
+    assert.match(director.prompt, /严禁再次处理上一条 User 已被回应的动作、情绪或诉求/);
+    assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
 });
 
 test('prompt scheme export strips historian while legacy imports preserve it for migration', () => {

@@ -229,7 +229,13 @@ test('story director performs a private tool loop and stores the next card', asy
     assert.equal(getState().storyDirector.ledger, '新账本');
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>推进支线。</下轮导演卡>');
     assert.equal(getState().storyDirector.status, 'ready');
+    assert.match(requests[0][1].content, /最后一条有效消息是 Assistant/);
+    assert.match(requests[0][1].content, /上一条 User 的动作、情绪和诉求已经得到回应/);
+    assert.match(requests[0][1].content, /严禁复述、重演或再次回应上一条 User 消息/);
+    assert.match(requests[0][1].content, /不得预设 User 下一步会有什么反应/);
     const finalRequest = requests.at(-1);
+    assert.match(finalRequest.at(-1).content, /最后一条有效消息是 Assistant/);
+    assert.match(finalRequest.at(-1).content, /当前交互角色在该时序锚点之后的状态与新行为/);
     const toolMessages = finalRequest.filter((message) => message.role === 'tool');
     assert.equal(toolMessages.length, 6);
     const profileToolMessage = toolMessages.find((message) => message.tool_call_id === 'profiles');
@@ -634,6 +640,12 @@ test('manual replan after deleting the last assistant sees all visible dialogue 
     assert.equal(getState().storyDirector.source.role, 'user');
     assert.equal(getState().storyDirector.source.messageIndex, 4);
     assert.match(requests[0][1].content, /最新用户消息/);
+    assert.match(requests[0][1].content, /最后一条有效消息是 User/);
+    assert.match(requests[0][1].content, /尚未有 Assistant 回应/);
+    assert.match(requests[0][1].content, /对这条 User 消息的首次回应/);
+    assert.doesNotMatch(requests[0][1].content, /上一条 User 的动作、情绪和诉求已经得到回应/);
+    assert.match(requests.at(-1).at(-1).content, /最后一条有效消息是 User/);
+    assert.match(requests.at(-1).at(-1).content, /对这条 User 消息的首次回应/);
     const toolMessages = requests.at(-1).filter((message) => message.role === 'tool');
     const tables = JSON.parse(toolMessages.find((message) => message.tool_call_id === 'tables').content);
     assert.deepEqual(tables.tables.map((table) => table.name), ['记忆总结', '角色档案']);
