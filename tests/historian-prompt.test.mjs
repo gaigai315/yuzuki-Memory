@@ -50,6 +50,10 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /若最后一条为 Assistant/);
     assert.match(director.prompt, /严禁再次处理上一条 User 已被回应的动作、情绪或诉求/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
+    assert.match(director.prompt, /模块轮换记录（最近10轮）/);
+    assert.match(director.prompt, /超过10轮时只删除最旧一轮/);
+    assert.match(director.prompt, /优先选择出现次数最少的模块/);
+    assert.match(director.prompt, /连续4轮未出现/);
 });
 
 test('prompt scheme export strips historian while legacy imports preserve it for migration', () => {
