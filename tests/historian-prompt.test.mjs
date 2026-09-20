@@ -5,8 +5,19 @@ import vm from 'node:vm';
 
 const promptLibrarySource = fs.readFileSync(new URL('../config/prompt-library.js', import.meta.url), 'utf8');
 const promptSchemeIoSource = fs.readFileSync(new URL('../config/prompt-scheme-io.js', import.meta.url), 'utf8');
+const storyDirectorSettingsSource = fs.readFileSync(new URL('../config/story-director-settings.js', import.meta.url), 'utf8');
+const memoryWindowSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
+
+function getFunctionSource(source, name, nextName) {
+    const start = source.indexOf(`function ${name}(`);
+    const end = source.indexOf(`function ${nextName}(`, start + 1);
+    assert.notEqual(start, -1, `${name} should exist`);
+    assert.notEqual(end, -1, `${nextName} should follow ${name}`);
+    return source.slice(start, end);
+}
 
 function createSandbox() {
+    const globalSettings = new Map();
     const sandbox = {
         Blob,
         Date,
@@ -14,12 +25,21 @@ function createSandbox() {
         URL,
         structuredClone,
         window: {
-            YuzukiMemory: {},
+            YuzukiMemory: {
+                GlobalSettings: {
+                    get: (key, fallback) => globalSettings.has(key) ? structuredClone(globalSettings.get(key)) : fallback,
+                    set: (key, value) => {
+                        globalSettings.set(key, structuredClone(value));
+                        return structuredClone(value);
+                    },
+                },
+            },
             setTimeout() {},
         },
     };
     vm.createContext(sandbox);
     vm.runInContext(promptLibrarySource, sandbox, { filename: 'prompt-library.js' });
+    vm.runInContext(storyDirectorSettingsSource, sandbox, { filename: 'story-director-settings.js' });
     vm.runInContext(promptSchemeIoSource, sandbox, { filename: 'prompt-scheme-io.js' });
     return sandbox;
 }
@@ -53,6 +73,41 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
     assert.match(director.prompt, /所属模块：\[Module 1 \/ 2 \/ 3 \/ 4\]/);
     assert.match(director.prompt, /生成三个不同的具体事件推进/);
+});
+
+test('story director settings keep the selected custom prompt active', () => {
+    const sandbox = createSandbox();
+    const settings = sandbox.window.YuzukiMemory.StoryDirectorSettings;
+    const custom = {
+        id: 'custom-story-director',
+        name: 'Custom Director',
+        prompt: 'CUSTOM_DIRECTOR_PROMPT',
+        builtin: false,
+    };
+
+    settings.savePrompts([custom]);
+    settings.setActivePromptId(custom.id);
+
+    assert.equal(settings.getActivePromptId(), custom.id);
+    assert.equal(settings.getActivePrompt().prompt, custom.prompt);
+});
+
+test('changing or saving a story director prompt does not automatically run the agent', () => {
+    const selectionHandler = getFunctionSource(
+        memoryWindowSource,
+        'applyStoryDirectorPromptSelection',
+        'startNewStoryDirectorPrompt',
+    );
+    const saveHandler = getFunctionSource(
+        memoryWindowSource,
+        'saveActiveStoryDirectorPrompt',
+        'deleteActiveStoryDirectorPrompt',
+    );
+
+    assert.doesNotMatch(selectionHandler, /scheduleDirector/);
+    assert.doesNotMatch(saveHandler, /scheduleDirector/);
+    assert.match(selectionHandler, /cancelActiveRun/);
+    assert.match(saveHandler, /cancelActiveRun/);
 });
 
 test('prompt scheme export strips historian while legacy imports preserve it for migration', () => {

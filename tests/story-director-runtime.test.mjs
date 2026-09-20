@@ -42,6 +42,7 @@ function findCaptureWithToolResult(captures, label) {
 
 function createSandbox(options = {}) {
     let enabled = Object.hasOwn(options, 'enabled') ? options.enabled : true;
+    let activePrompt = options.activePrompt || { id: 'director', prompt: 'DEFAULT_STORY_DIRECTOR_PROMPT' };
     const vectorBooks = Array.isArray(options.vectorBooks) ? options.vectorBooks : [];
     const vectorCalls = [];
     const initialLedger = Object.hasOwn(options, 'initialLedger') ? String(options.initialLedger || '') : '旧账本';
@@ -159,7 +160,7 @@ function createSandbox(options = {}) {
             },
         },
         StoryDirectorSettings: {
-            getActivePrompt: () => ({ id: 'director', prompt: '必须调用工具并输出导演卡。' }),
+            getActivePrompt: () => activePrompt,
         },
         RequestProbe: {
             captureFromBody(body, url, options) {
@@ -216,7 +217,19 @@ function createSandbox(options = {}) {
     sandbox.window.window = sandbox.window;
     vm.createContext(sandbox);
     vm.runInContext(source, sandbox, { filename: 'story-director-runtime.js' });
-    return { sandbox, memory, chat, requests, vectorCalls, eventBindings, directorCaptures, dispatchedEvents, getState: () => state, setEnabled: (value) => { enabled = value; } };
+    return {
+        sandbox,
+        memory,
+        chat,
+        requests,
+        vectorCalls,
+        eventBindings,
+        directorCaptures,
+        dispatchedEvents,
+        getState: () => state,
+        setEnabled: (value) => { enabled = value; },
+        setActivePrompt: (prompt) => { activePrompt = prompt; },
+    };
 }
 
 test('story director performs a private tool loop and stores the next card', async () => {
@@ -274,6 +287,17 @@ test('story director performs a private tool loop and stores the next card', asy
     const regenerateClone = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(regenerateClone, { generationType: 'regenerate' }), true);
     assert.match(regenerateClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
+});
+
+test('manual replan uses the currently selected story director prompt', async () => {
+    const { memory, requests, setActivePrompt } = createSandbox();
+    setActivePrompt({ id: 'custom-director', prompt: 'CUSTOM_STORY_DIRECTOR_PROMPT' });
+
+    const result = await memory.StoryDirectorRuntime.replanLatest();
+
+    assert.equal(result.success, true);
+    assert.equal(requests[0][0].role, 'system');
+    assert.equal(requests[0][0].content, 'CUSTOM_STORY_DIRECTOR_PROMPT');
 });
 
 test('director card coexists with timed prompt tags across duplicate message text fields', async () => {

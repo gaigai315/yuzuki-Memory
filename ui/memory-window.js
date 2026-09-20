@@ -9198,7 +9198,6 @@
         activeStoryDirectorPromptDraft = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
         YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('prompt selection changed');
         YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.(promptId ? 'idle' : 'disabled');
-        YuzukiMemory.StoryDirectorRuntime?.scheduleDirector?.('prompt-selection', 300);
         renderPromptSchemeWorkspace(root);
     }
 
@@ -9244,7 +9243,6 @@
         activeStoryDirectorPromptDraft = { ...nextPrompt };
         YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('prompt saved');
         YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.('idle');
-        YuzukiMemory.StoryDirectorRuntime?.scheduleDirector?.('prompt-saved', 300);
         renderPromptSchemeWorkspace(root);
         showTaskToast('剧情导演提示词已保存。', 'success');
     }
