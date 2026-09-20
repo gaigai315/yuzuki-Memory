@@ -35,7 +35,7 @@
         TOOL_NAMES.chat,
         TOOL_NAMES.ledger,
     ]);
-    const MAX_AGENT_TURNS = 8;
+    const MAX_AGENT_TURNS = 16;
     const MAX_MESSAGE_CARDS = 50;
     const RUN_DELAY_MS = 1800;
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';

@@ -437,6 +437,43 @@ test('director enforces profiles, worldbooks, vectors, tables, visible chat, the
     assert.match(directorCaptures[1].body.messages.find((message) => message.name?.includes('读取全部启用表格')).content, /本阶段不允许调用/);
 });
 
+test('director can recover after eight turns and finish within the sixteen-turn limit', async () => {
+    const { memory, requests, getState } = createSandbox({ vectorBooks: ['selected-book'] });
+    let turn = 0;
+    let ledgerUpdated = false;
+    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+        requests.push(structuredClone(messages));
+        turn += 1;
+        if (turn <= 4) {
+            return {
+                success: true,
+                message: { role: 'assistant', content: '暂未调用工具。' },
+                text: '暂未调用工具。',
+                toolCalls: [],
+            };
+        }
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
+            ledgerUpdated = true;
+            return createToolResponse(offeredTool, '{"content":"延迟完成后的账本"}');
+        }
+        return {
+            success: true,
+            message: { role: 'assistant', content: '<下轮导演卡>十二轮后完成。</下轮导演卡>' },
+            text: '<下轮导演卡>十二轮后完成。</下轮导演卡>',
+            toolCalls: [],
+        };
+    };
+
+    const result = await memory.StoryDirectorRuntime.replanLatest();
+
+    assert.equal(result.success, true);
+    assert.equal(turn, 12);
+    assert.equal(getState().storyDirector.ledger, '延迟完成后的账本');
+    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>十二轮后完成。</下轮导演卡>');
+});
+
 test('director still calls the worldbook tool when no worldbook is enabled', async () => {
     const { memory, requests, directorCaptures } = createSandbox({ worldbookEnabled: false });
 
