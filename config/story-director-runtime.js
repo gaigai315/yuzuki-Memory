@@ -73,10 +73,35 @@
 
     function setMessageText(message, text) {
         const value = String(text || '');
-        if (typeof message?.mes === 'string') message.mes = value;
-        else if (typeof message?.content === 'string') message.content = value;
-        else if (typeof message?.text === 'string') message.text = value;
-        else message.mes = value;
+        if (!message || typeof message !== 'object') return;
+        let written = false;
+        const swipeId = Math.max(0, Math.round(Number(message.swipe_id) || 0));
+        if (Array.isArray(message.swipes) && typeof message.swipes[swipeId] === 'string') {
+            message.swipes[swipeId] = value;
+            written = true;
+        }
+        for (const key of ['mes', 'content', 'text']) {
+            if (typeof message[key] !== 'string') continue;
+            message[key] = value;
+            written = true;
+        }
+        if (Array.isArray(message.parts)) {
+            const index = message.parts.findIndex((part) => part && typeof part.text === 'string');
+            if (index >= 0) message.parts[index] = { ...message.parts[index], text: value };
+            else message.parts.unshift({ text: value });
+            written = true;
+        }
+        if (Array.isArray(message.content)) {
+            const index = message.content.findIndex((part) => typeof part === 'string' || typeof part?.text === 'string');
+            if (index >= 0) {
+                const part = message.content[index];
+                message.content[index] = typeof part === 'string' ? value : { ...part, text: value };
+            } else {
+                message.content.unshift({ type: 'text', text: value });
+            }
+            written = true;
+        }
+        if (!written) message.mes = value;
     }
 
     function isDialogueMessage(message) {

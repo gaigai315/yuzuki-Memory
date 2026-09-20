@@ -87,6 +87,40 @@ test('prompt-ready cleanup preserves mixed world-info prompt containers', () => 
     });
 });
 
+test('timed prompt injection preserves an existing director card on the same user message', () => {
+    const sandbox = createBaseSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    const contextChat = [{ role: 'user', is_user: true, mes: '继续行动' }];
+    sandbox.SillyTavern = { getContext: () => ({ chat: contextChat }) };
+    memory.Storage = {
+        loadState: () => ({}),
+        getCurrentSessionId: () => 'test-session',
+    };
+    memory.VariableInjector = {
+        createDefaultState: () => ({}),
+        getTimedPromptInjection: () => ({
+            enabled: true,
+            rules: [{ id: 'timed-1', name: '阶段提醒', enabled: true, interval: 1, content: '检查当前阶段目标' }],
+        }),
+        resolveRuntimeVariables: (text) => text,
+    };
+
+    vm.runInContext(promptReadySource, sandbox, { filename: 'prompt-ready-injector.js' });
+    const chat = [{
+        role: 'user',
+        is_user: true,
+        content: '继续行动\n\n<下轮导演卡>推进支线。</下轮导演卡>',
+    }];
+
+    assert.equal(memory.PromptReadyInjector.processTimedPromptInjection(chat), 1);
+    assert.match(chat[0].content, /<下轮导演卡>推进支线。<\/下轮导演卡>/);
+    assert.match(chat[0].content, /<定时提醒>[\s\S]*检查当前阶段目标[\s\S]*<\/定时提醒>/);
+
+    assert.equal(memory.PromptReadyInjector.processTimedPromptInjection(chat), 1);
+    assert.equal((chat[0].content.match(/<下轮导演卡>/g) || []).length, 1);
+    assert.equal((chat[0].content.match(/<定时提醒>/g) || []).length, 1);
+});
+
 test('request probe keeps summaries in the memory color group without the legacy preface', async () => {
     const sandbox = createBaseSandbox();
     sandbox.CustomEvent = class CustomEvent {

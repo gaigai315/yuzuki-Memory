@@ -276,6 +276,36 @@ test('story director performs a private tool loop and stores the next card', asy
     assert.match(regenerateClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
 });
 
+test('director card coexists with timed prompt tags across duplicate message text fields', async () => {
+    const { memory, chat } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+
+    const userText = '继续行动\n\n<定时提醒>检查当前阶段目标</定时提醒>';
+    chat.push({
+        is_user: true,
+        mes: userText,
+        content: userText,
+        text: userText,
+        swipe_id: 0,
+        swipes: [userText],
+    });
+    const generationClone = structuredClone(chat);
+
+    assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
+    const injected = generationClone.at(-1);
+    for (const value of [injected.mes, injected.content, injected.text, injected.swipes[0]]) {
+        assert.match(value, /<定时提醒>检查当前阶段目标<\/定时提醒>/);
+        assert.match(value, /<下轮导演卡>推进支线。<\/下轮导演卡>/);
+        assert.equal((value.match(/<定时提醒>/g) || []).length, 1);
+        assert.equal((value.match(/<下轮导演卡>/g) || []).length, 1);
+    }
+
+    assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
+    assert.equal((generationClone.at(-1).mes.match(/<定时提醒>/g) || []).length, 1);
+    assert.equal((generationClone.at(-1).mes.match(/<下轮导演卡>/g) || []).length, 1);
+});
+
 test('current director card prefers the latest pending card and never falls back to a completed old round', async () => {
     const { memory, chat } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
