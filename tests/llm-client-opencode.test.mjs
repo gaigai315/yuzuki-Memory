@@ -36,6 +36,8 @@ function createClient(fetchImpl, options = {}) {
         window: {
             crypto: globalThis.crypto,
             getRequestHeaders: () => ({ 'X-CSRF-Token': 'csrf-test' }),
+            setTimeout: options.setTimeout || globalThis.setTimeout,
+            clearTimeout: options.clearTimeout || globalThis.clearTimeout,
             YuzukiMemory: {
                 Storage: { getCurrentSessionId: () => currentSessionId },
             },
@@ -269,4 +271,147 @@ test('agent response accepts array-based assistant content', () => {
     assert.equal(result.success, true);
     assert.equal(result.text, '<下轮导演卡>推进支线。</下轮导演卡>');
     assert.equal(result.message.content, result.text);
+});
+
+test('agent retries HTTP 200 empty responses with exponential backoff', async () => {
+    const requests = [];
+    const delays = [];
+    const emptyResponse = {
+        choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '', tool_calls: null } }],
+        usage: { completion_tokens: 0, prompt_tokens: 7786, total_tokens: 7786 },
+    };
+    const { client } = createClient(async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        if (requests.length < 3) return createResponse(emptyResponse);
+        return createResponse({
+            choices: [{
+                message: {
+                    content: '',
+                    tool_calls: [{
+                        id: 'call-after-retry',
+                        type: 'function',
+                        function: { name: 'read_state', arguments: '{}' },
+                    }],
+                },
+            }],
+        });
+    }, {
+        setTimeout(callback, delay) {
+            delays.push(delay);
+            callback();
+            return delays.length;
+        },
+        clearTimeout() {},
+    });
+    const tools = [{
+        type: 'function',
+        function: { name: 'read_state', description: 'read', parameters: { type: 'object', properties: {} } },
+    }];
+
+    const result = await client.requestAgentWithCustom(openCodeConfig, [
+        { role: 'user', content: 'test empty response retry' },
+    ], tools);
+
+    assert.equal(result.success, true);
+    assert.equal(result.toolCalls[0].function.name, 'read_state');
+    assert.equal(requests.length, 3);
+    assert.deepEqual(delays, [1000, 2000]);
+});
+
+test('agent stops after two HTTP 200 empty-response retries', async () => {
+    let requestCount = 0;
+    const delays = [];
+    const { client } = createClient(async () => {
+        requestCount += 1;
+        return createResponse({
+            choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '', tool_calls: null } }],
+        });
+    }, {
+        setTimeout(callback, delay) {
+            delays.push(delay);
+            callback();
+            return delays.length;
+        },
+        clearTimeout() {},
+    });
+    const tools = [{
+        type: 'function',
+        function: { name: 'read_state', description: 'read', parameters: { type: 'object', properties: {} } },
+    }];
+
+    const result = await client.requestAgentWithCustom(openCodeConfig, [
+        { role: 'user', content: 'test exhausted retry' },
+    ], tools);
+
+    assert.equal(result.success, false);
+    assert.equal(requestCount, 3);
+    assert.deepEqual(delays, [1000, 2000]);
+    assert.match(result.error, /HTTP 200 OK/);
+    assert.match(result.error, /已对空响应重试 2 次/);
+});
+
+test('agent empty-response retry does not retry HTTP errors', async () => {
+    let requestCount = 0;
+    let delayCount = 0;
+    const { client } = createClient(async () => {
+        requestCount += 1;
+        return createResponse('{"error":{"message":"rate limited"}}', {
+            ok: false,
+            status: 429,
+            statusText: 'Too Many Requests',
+        });
+    }, {
+        setTimeout() {
+            delayCount += 1;
+            return 1;
+        },
+        clearTimeout() {},
+    });
+    const tools = [{
+        type: 'function',
+        function: { name: 'read_state', description: 'read', parameters: { type: 'object', properties: {} } },
+    }];
+
+    const result = await client.requestAgentWithCustom(openCodeConfig, [
+        { role: 'user', content: 'test non-empty HTTP error' },
+    ], tools);
+
+    assert.equal(result.success, false);
+    assert.equal(requestCount, 1);
+    assert.equal(delayCount, 0);
+    assert.match(result.error, /HTTP 429 Too Many Requests/);
+});
+
+test('aborting during empty-response backoff cancels the retry', async () => {
+    let requestCount = 0;
+    let scheduledCallback;
+    const controller = new AbortController();
+    const { client } = createClient(async () => {
+        requestCount += 1;
+        return createResponse({
+            choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: '', tool_calls: null } }],
+        });
+    }, {
+        setTimeout(callback) {
+            scheduledCallback = callback;
+            return 1;
+        },
+        clearTimeout() {},
+    });
+    const tools = [{
+        type: 'function',
+        function: { name: 'read_state', description: 'read', parameters: { type: 'object', properties: {} } },
+    }];
+
+    const pending = client.requestAgentWithCustom(openCodeConfig, [
+        { role: 'user', content: 'test abort during retry' },
+    ], tools, { signal: controller.signal });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(typeof scheduledCallback, 'function');
+    controller.abort();
+    const result = await pending;
+
+    assert.equal(result.success, false);
+    assert.equal(result.aborted, true);
+    assert.equal(requestCount, 1);
 });

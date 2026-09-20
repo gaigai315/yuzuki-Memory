@@ -7,6 +7,8 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const SETTINGS_CACHE_TTL = 30000;
+    const AGENT_EMPTY_RESPONSE_MAX_RETRIES = 2;
+    const AGENT_EMPTY_RESPONSE_RETRY_BASE_MS = 1000;
     const OPENCODE_GO_PROVIDER = 'opencode_go';
     const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1';
     const OPENCODE_SESSION_SALT_STORAGE_KEY = 'yzm_memory_opencode_session_salt';
@@ -1074,6 +1076,28 @@
         return [message, status, preview].filter(Boolean).join('\n');
     }
 
+    function isEmptyAgentResponseError(error) {
+        return String(error?.message || error || '').trim() === 'Agent API 未返回文本或工具调用';
+    }
+
+    async function waitForAgentRetry(delayMs, signal) {
+        if (signal?.aborted) return false;
+        return new Promise((resolve) => {
+            let settled = false;
+            let timerId;
+            const finish = (value) => {
+                if (settled) return;
+                settled = true;
+                if (timerId !== undefined) window.clearTimeout?.(timerId);
+                signal?.removeEventListener?.('abort', onAbort);
+                resolve(value);
+            };
+            const onAbort = () => finish(false);
+            signal?.addEventListener?.('abort', onAbort, { once: true });
+            timerId = window.setTimeout(() => finish(true), Math.max(0, Number(delayMs) || 0));
+        });
+    }
+
     async function parseGenerateResponse(response, stream = false) {
         if (response.body && stream) {
             try {
@@ -1240,35 +1264,53 @@
             signal: options.signal,
         });
 
-        let response = await send(false);
-        if (!response.ok) {
-            let text = await response.text().catch(() => '');
-            if (isUnauthorized(response.status, text)) {
-                response = await send(true);
-                if (!response.ok) text = await response.text().catch(() => '');
-            }
+        for (let attempt = 0; attempt <= AGENT_EMPTY_RESPONSE_MAX_RETRIES; attempt += 1) {
+            if (options.signal?.aborted) return { success: false, error: '已中断发送', aborted: true };
+            let response = await send(false);
             if (!response.ok) {
+                let text = await response.text().catch(() => '');
+                if (isUnauthorized(response.status, text)) {
+                    response = await send(true);
+                    if (!response.ok) text = await response.text().catch(() => '');
+                }
+                if (!response.ok) {
+                    return {
+                        success: false,
+                        error: createUpstreamError(response.status, text, response.statusText),
+                        status: response.status,
+                        statusText: response.statusText,
+                        upstreamBody: text,
+                    };
+                }
+            }
+
+            const text = await response.text().catch(() => '');
+            try {
+                return parseAgentResponsePayload(text);
+            } catch (error) {
+                const retryableEmptyResponse = response.status === 200
+                    && isEmptyAgentResponseError(error)
+                    && attempt < AGENT_EMPTY_RESPONSE_MAX_RETRIES;
+                if (retryableEmptyResponse) {
+                    const delayMs = AGENT_EMPTY_RESPONSE_RETRY_BASE_MS * (2 ** attempt);
+                    const shouldContinue = await waitForAgentRetry(delayMs, options.signal);
+                    if (!shouldContinue) return { success: false, error: '已中断发送', aborted: true };
+                    continue;
+                }
+                const retryNote = response.status === 200
+                    && isEmptyAgentResponseError(error)
+                    && attempt >= AGENT_EMPTY_RESPONSE_MAX_RETRIES
+                    ? `\n\n已对空响应重试 ${AGENT_EMPTY_RESPONSE_MAX_RETRIES} 次。`
+                    : '';
                 return {
                     success: false,
-                    error: createUpstreamError(response.status, text, response.statusText),
+                    error: `${formatResponseParseError(error, response, text)}${retryNote}`,
                     status: response.status,
                     statusText: response.statusText,
-                    upstreamBody: text,
                 };
             }
         }
-
-        const text = await response.text().catch(() => '');
-        try {
-            return parseAgentResponsePayload(text);
-        } catch (error) {
-            return {
-                success: false,
-                error: formatResponseParseError(error, response, text),
-                status: response.status,
-                statusText: response.statusText,
-            };
-        }
+        return { success: false, error: 'Agent API 空响应重试结束。' };
     }
 
     async function requestAgentWithTavern(messages, tools, options = {}) {
