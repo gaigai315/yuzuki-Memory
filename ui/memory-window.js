@@ -2808,7 +2808,7 @@
         YuzukiMemory.CharacterGraphWindow?.close?.();
         const root = ensureRoot();
         const host = getGlobalModalHost(root);
-        const current = YuzukiMemory.StoryDirectorRuntime?.getCurrentTurnDirectorCard?.();
+        const current = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
         const content = String(current?.content || '').trim();
         const abortController = new AbortController();
 
@@ -2832,7 +2832,7 @@
         body.className = content
             ? 'yzm-story-director-card-content'
             : 'yzm-story-director-card-content yzm-story-director-card-empty';
-        body.textContent = content || '当前最后一条助手回复没有使用已注入的导演卡';
+        body.textContent = content || '当前导演卡尚未生成';
 
         sheet.append(closeButton, body);
         overlay.appendChild(sheet);
@@ -11268,7 +11268,7 @@
             createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
             createPluginConfigRow('剧情规划', '开启后在正文与记忆任务完成时规划下一轮；关闭后不运行导演，也不注入导演卡。', 'fa-solid fa-clapperboard', createConfigSwitch(settings.enableStoryDirector, 'enableStoryDirector')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
-            createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标；单击打开记忆，双击打开角色图谱，长按查看最后一条助手回复使用的导演卡。图标样式和拖动位置都会记住。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon'), createFloatingIconStylePicker(settings.floatingIconStyle)),
+            createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标；单击打开记忆，双击打开角色图谱，长按查看当前最新导演卡。图标样式和拖动位置都会记住。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon'), createFloatingIconStylePicker(settings.floatingIconStyle)),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
             createPluginConfigRow('首楼常驻', '开启后，酒馆第 0 楼始终保持显示；仅影响隐藏楼层，不改变填表、总结和优化任务的取材范围。', 'fa-solid fa-thumbtack', createConfigSwitch(settings.keepFirstFloorVisible, 'keepFirstFloorVisible')),
             createPluginConfigRow('任务包含角色卡开场白', '开启后，填表、总结和优化任务会额外注入角色卡的默认开场白；默认关闭，关闭时仅使用任务楼层范围内的实际聊天内容。', 'fa-solid fa-message', createConfigSwitch(settings.includeCharacterGreetingInTasks, 'includeCharacterGreetingInTasks')),

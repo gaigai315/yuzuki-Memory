@@ -274,24 +274,40 @@ test('story director performs a private tool loop and stores the next card', asy
     assert.match(regenerateClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
 });
 
-test('current turn card returns the card bound to the latest user round without wrapper tags', async () => {
+test('current director card prefers the latest pending card and never falls back to a completed old round', async () => {
     const { memory, chat } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
     await runtime.runDirector(runtime.getLatestAssistantAnchor());
 
+    const pendingBeforeSend = runtime.getCurrentDirectorCard();
+    assert.equal(pendingBeforeSend.card, '<下轮导演卡>推进支线。</下轮导演卡>');
+    assert.equal(pendingBeforeSend.content, '推进支线。');
+    assert.equal(pendingBeforeSend.origin, 'pending');
+    assert.equal(pendingBeforeSend.assistantIndex, 3);
+
     chat.push({ is_user: true, mes: '执行这一轮行动' });
     const generationClone = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
+
+    const boundWhileWaiting = runtime.getCurrentDirectorCard();
+    assert.equal(boundWhileWaiting.content, '推进支线。');
+    assert.equal(boundWhileWaiting.origin, 'bound');
+    assert.equal(boundWhileWaiting.userIndex, 4);
+
     chat.push({ is_user: false, mes: '这一轮生成的助手正文' });
+    assert.equal(runtime.getCurrentDirectorCard(), null);
 
-    const current = runtime.getCurrentTurnDirectorCard();
-    assert.equal(current.card, '<下轮导演卡>推进支线。</下轮导演卡>');
-    assert.equal(current.content, '推进支线。');
-    assert.equal(current.userIndex, 4);
-    assert.equal(current.assistantIndex, 5);
+    await runtime.runDirector(runtime.getLatestAssistantAnchor());
+    const latestPending = runtime.getCurrentDirectorCard();
+    assert.equal(latestPending.content, '推进支线。');
+    assert.equal(latestPending.origin, 'pending');
+    assert.equal(latestPending.assistantIndex, 5);
 
-    chat.push({ is_user: true, mes: '尚未生成助手回复的新一轮' });
-    assert.equal(runtime.getCurrentTurnDirectorCard().content, '推进支线。');
+    chat.push({ is_user: true, mes: '尚未发送的新一轮输入' });
+    assert.equal(runtime.getCurrentDirectorCard(), null);
+    const nextGenerationClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(nextGenerationClone, { generationType: 'normal' }), true);
+    assert.equal(runtime.getCurrentDirectorCard().origin, 'bound');
 });
 
 test('director ledger removes plot history sections while preserving later scheduling sections', async () => {

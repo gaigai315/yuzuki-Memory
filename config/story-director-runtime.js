@@ -1056,39 +1056,48 @@
         return String(matched?.[1] ?? text).trim();
     }
 
-    function getCurrentTurnDirectorCard() {
+    function buildDirectorCardView(card, source, origin) {
+        const context = getContext() || {};
+        const chat = Array.isArray(context.chat) ? context.chat : [];
+        let userIndex = source?.role === 'user' ? Number(source.messageIndex) : -1;
+        const assistantIndex = source?.role === 'user' ? -1 : Number(source?.assistantIndex);
+        if (userIndex < 0 && Number.isInteger(assistantIndex)) {
+            const sessionId = String(source?.sessionId || '');
+            for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+                if (buildUserAnchor(chat[index], index, sessionId)) {
+                    userIndex = index;
+                    break;
+                }
+            }
+        }
+        return {
+            card,
+            content: unwrapDirectorCard(card),
+            source: source ? { ...source } : null,
+            origin,
+            userIndex,
+            assistantIndex: Number.isInteger(assistantIndex) ? assistantIndex : -1,
+        };
+    }
+
+    function getCurrentDirectorCard() {
         const context = getContext() || {};
         const chat = Array.isArray(context.chat) ? context.chat : [];
         const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
         if (!chat.length || !sessionId) return null;
 
-        let assistantIndex = -1;
-        for (let index = chat.length - 1; index >= 0; index -= 1) {
-            if (buildAssistantAnchor(chat[index], index, sessionId)) {
-                assistantIndex = index;
-                break;
-            }
-        }
-        if (assistantIndex < 0) return null;
-
-        let user = null;
-        for (let index = assistantIndex - 1; index >= 0; index -= 1) {
-            user = buildUserAnchor(chat[index], index, sessionId);
-            if (user) break;
-        }
-        if (!user) return null;
-
         const director = loadState(sessionId)?.storyDirector;
-        const card = findMessageCard(director?.messageCards, user);
-        if (!card) return null;
+        const pendingCard = String(director?.pendingCard || '').trim();
+        if (pendingCard && sourceIsLatestDialogue(director?.source)) {
+            return buildDirectorCardView(pendingCard, director.source, 'pending');
+        }
 
-        return {
-            card,
-            content: unwrapDirectorCard(card),
-            user,
-            userIndex: user.messageIndex,
-            assistantIndex,
-        };
+        const latest = getLatestManualAnchor();
+        if (latest?.role === 'user') {
+            const boundCard = findMessageCard(director?.messageCards, latest);
+            if (boundCard) return buildDirectorCardView(boundCard, latest, 'bound');
+        }
+        return null;
     }
 
     function injectDirectorCardForGeneration(chat, options = {}) {
@@ -1178,7 +1187,8 @@
         sourceMatchesCurrentMessage,
         getInjectableCard,
         unwrapDirectorCard,
-        getCurrentTurnDirectorCard,
+        getCurrentDirectorCard,
+        getCurrentTurnDirectorCard: getCurrentDirectorCard,
         injectDirectorCardForGeneration,
         clearPendingCard,
         scheduleDirector,
