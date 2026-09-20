@@ -66,13 +66,13 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.equal(director.id, library.getDefaultStoryDirectorPromptId());
     assert.equal(director.builtin, true);
     assert.match(director.prompt, /<下轮导演卡>/);
-    assert.match(director.prompt, /若最后一条为 User/);
-    assert.match(director.prompt, /若最后一条为 Assistant/);
-    assert.match(director.prompt, /严禁再次处理上一条 User内容/);
-    assert.match(director.prompt, /最少3条不同方向的推演/);
+    assert.match(director.prompt, /若最新输入为 User/);
+    assert.match(director.prompt, /若最新输入为 Assistant/);
+    assert.match(director.prompt, /严禁再次复述上一轮已发生的声明与事实/);
+    assert.match(director.prompt, /3 条不同博弈方向的推演/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
     assert.match(director.prompt, /所属模块：\[Module 1 \/ 2 \/ 3 \/ 4\]/);
-    assert.match(director.prompt, /生成三个不同的具体事件推进/);
+    assert.match(director.prompt, /签发三个不同的具体既成事件推进备选项/);
 });
 
 test('story director settings keep the selected custom prompt active', () => {
