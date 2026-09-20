@@ -274,6 +274,26 @@ test('story director performs a private tool loop and stores the next card', asy
     assert.match(regenerateClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
 });
 
+test('current turn card returns the card bound to the latest user round without wrapper tags', async () => {
+    const { memory, chat } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    await runtime.runDirector(runtime.getLatestAssistantAnchor());
+
+    chat.push({ is_user: true, mes: '执行这一轮行动' });
+    const generationClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
+    chat.push({ is_user: false, mes: '这一轮生成的助手正文' });
+
+    const current = runtime.getCurrentTurnDirectorCard();
+    assert.equal(current.card, '<下轮导演卡>推进支线。</下轮导演卡>');
+    assert.equal(current.content, '推进支线。');
+    assert.equal(current.userIndex, 4);
+    assert.equal(current.assistantIndex, 5);
+
+    chat.push({ is_user: true, mes: '尚未生成助手回复的新一轮' });
+    assert.equal(runtime.getCurrentTurnDirectorCard().content, '推进支线。');
+});
+
 test('director ledger removes plot history sections while preserving later scheduling sections', async () => {
     const oldLedger = `【模块轮换】
 - 上轮 Module 2

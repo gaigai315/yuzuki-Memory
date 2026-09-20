@@ -1049,6 +1049,48 @@
         return String(resolveInjectableCard(options)?.card || '');
     }
 
+    function unwrapDirectorCard(card = '') {
+        const text = String(card || '').trim();
+        if (!text) return '';
+        const matched = text.match(/^\s*<下轮导演卡>\s*([\s\S]*?)\s*<\/下轮导演卡>\s*$/i);
+        return String(matched?.[1] ?? text).trim();
+    }
+
+    function getCurrentTurnDirectorCard() {
+        const context = getContext() || {};
+        const chat = Array.isArray(context.chat) ? context.chat : [];
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        if (!chat.length || !sessionId) return null;
+
+        let assistantIndex = -1;
+        for (let index = chat.length - 1; index >= 0; index -= 1) {
+            if (buildAssistantAnchor(chat[index], index, sessionId)) {
+                assistantIndex = index;
+                break;
+            }
+        }
+        if (assistantIndex < 0) return null;
+
+        let user = null;
+        for (let index = assistantIndex - 1; index >= 0; index -= 1) {
+            user = buildUserAnchor(chat[index], index, sessionId);
+            if (user) break;
+        }
+        if (!user) return null;
+
+        const director = loadState(sessionId)?.storyDirector;
+        const card = findMessageCard(director?.messageCards, user);
+        if (!card) return null;
+
+        return {
+            card,
+            content: unwrapDirectorCard(card),
+            user,
+            userIndex: user.messageIndex,
+            assistantIndex,
+        };
+    }
+
     function injectDirectorCardForGeneration(chat, options = {}) {
         const generationType = String(options.generationType || 'normal').toLowerCase();
         const resolved = resolveInjectableCard({ generationType });
@@ -1135,6 +1177,8 @@
         getLatestAssistantAnchor,
         sourceMatchesCurrentMessage,
         getInjectableCard,
+        unwrapDirectorCard,
+        getCurrentTurnDirectorCard,
         injectDirectorCardForGeneration,
         clearPendingCard,
         scheduleDirector,
