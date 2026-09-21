@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
+const globalSettingsSource = fs.readFileSync(new URL('../config/global-settings.js', import.meta.url), 'utf8');
 const promptLibrarySource = fs.readFileSync(new URL('../config/prompt-library.js', import.meta.url), 'utf8');
 const promptSchemeIoSource = fs.readFileSync(new URL('../config/prompt-scheme-io.js', import.meta.url), 'utf8');
 const storyDirectorSettingsSource = fs.readFileSync(new URL('../config/story-director-settings.js', import.meta.url), 'utf8');
@@ -14,6 +15,55 @@ function getFunctionSource(source, name, nextName) {
     assert.notEqual(start, -1, `${name} should exist`);
     assert.notEqual(end, -1, `${nextName} should follow ${name}`);
     return source.slice(start, end);
+}
+
+function createLocalStorage(initial = {}) {
+    const values = new Map(Object.entries(initial).map(([key, value]) => [key, JSON.stringify(value)]));
+    return {
+        getItem: (key) => values.has(key) ? values.get(key) : null,
+        setItem: (key, value) => values.set(key, String(value)),
+        removeItem: (key) => values.delete(key),
+    };
+}
+
+function createPersistentStoryDirectorSandbox({ extension = {}, local = {} } = {}) {
+    const localStorage = createLocalStorage(local);
+    const extensionSettings = { yuzukiMemory: structuredClone(extension) };
+    let immediateSaveCalls = 0;
+    let debouncedSaveCalls = 0;
+    const sandbox = {
+        Blob,
+        Date,
+        JSON,
+        URL,
+        console,
+        localStorage,
+        structuredClone,
+        window: {
+            YuzukiMemory: {
+                settingsBridge: {
+                    extensionSettings,
+                    saveSettings: () => {
+                        immediateSaveCalls += 1;
+                    },
+                    saveSettingsDebounced: () => {
+                        debouncedSaveCalls += 1;
+                    },
+                },
+            },
+        },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(globalSettingsSource, sandbox, { filename: 'global-settings.js' });
+    vm.runInContext(promptLibrarySource, sandbox, { filename: 'prompt-library.js' });
+    vm.runInContext(storyDirectorSettingsSource, sandbox, { filename: 'story-director-settings.js' });
+    return {
+        sandbox,
+        extensionSettings,
+        localStorage,
+        getImmediateSaveCalls: () => immediateSaveCalls,
+        getDebouncedSaveCalls: () => debouncedSaveCalls,
+    };
 }
 
 function createSandbox() {
@@ -69,7 +119,7 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /若最新输入为 User/);
     assert.match(director.prompt, /若最新输入为 Assistant/);
     assert.match(director.prompt, /严禁复述上一轮已发生事实/);
-    assert.match(director.prompt, /仅签发 3 个纯策略倾向标签/);
+    assert.match(director.prompt, /3类反馈策略（积极\/中立\/对立）/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
     assert.match(director.prompt, /所属模块：\[Module 1 \/ 2 \/ 3 \/ 4\]/);
     assert.match(director.prompt, /签发三个宏观事件推进备选标签/);
@@ -90,6 +140,136 @@ test('story director settings keep the selected custom prompt active', () => {
 
     assert.equal(settings.getActivePromptId(), custom.id);
     assert.equal(settings.getActivePrompt().prompt, custom.prompt);
+});
+
+test('story director settings migrate legacy browser data into extension settings once', async () => {
+    const custom = {
+        id: 'legacy-browser-director',
+        name: 'Legacy Browser Director',
+        prompt: 'LEGACY_BROWSER_PROMPT',
+        builtin: false,
+    };
+    const promptsKey = 'yzm_memory_global_story_director_prompts';
+    const activeKey = 'yzm_memory_global_story_director_prompt_active';
+    const migrationKey = 'yzm_memory_global_story_director_extension_migrated_v1';
+    const {
+        sandbox,
+        extensionSettings,
+        localStorage,
+        getImmediateSaveCalls,
+        getDebouncedSaveCalls,
+    } = createPersistentStoryDirectorSandbox({
+        extension: {
+            [promptsKey]: [],
+            [activeKey]: '',
+        },
+        local: {
+            [promptsKey]: [custom],
+            [activeKey]: custom.id,
+        },
+    });
+
+    const store = extensionSettings.yuzukiMemory;
+    const settings = sandbox.window.YuzukiMemory.StoryDirectorSettings;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(store[promptsKey].length, 1);
+    assert.equal(store[promptsKey][0].id, custom.id);
+    assert.equal(store[activeKey], custom.id);
+    assert.equal(store[migrationKey], true);
+    assert.equal(settings.getActivePromptId(), custom.id);
+    assert.equal(localStorage.getItem(promptsKey), null);
+    assert.equal(localStorage.getItem(activeKey), null);
+    assert.equal(getImmediateSaveCalls(), 1);
+    assert.equal(getDebouncedSaveCalls(), 0);
+});
+
+test('story director settings do not restore stale browser prompts after migration', () => {
+    const stale = {
+        id: 'deleted-browser-director',
+        name: 'Deleted Browser Director',
+        prompt: 'SHOULD_STAY_DELETED',
+        builtin: false,
+    };
+    const promptsKey = 'yzm_memory_global_story_director_prompts';
+    const activeKey = 'yzm_memory_global_story_director_prompt_active';
+    const migrationKey = 'yzm_memory_global_story_director_extension_migrated_v1';
+    const { sandbox, localStorage } = createPersistentStoryDirectorSandbox({
+        extension: {
+            [promptsKey]: [],
+            [activeKey]: '',
+            [migrationKey]: true,
+        },
+        local: {
+            [promptsKey]: [stale],
+            [activeKey]: stale.id,
+        },
+    });
+
+    const settings = sandbox.window.YuzukiMemory.StoryDirectorSettings;
+    assert.equal(settings.getPrompts().some((prompt) => prompt.id === stale.id), false);
+    assert.equal(settings.getActivePromptId(), '');
+    assert.equal(localStorage.getItem(promptsKey), null);
+    assert.equal(localStorage.getItem(activeKey), null);
+});
+
+test('story director migration keeps extension content when browser cache has the same id', async () => {
+    const promptsKey = 'yzm_memory_global_story_director_prompts';
+    const activeKey = 'yzm_memory_global_story_director_prompt_active';
+    const customId = 'shared-story-director-id';
+    const { sandbox, extensionSettings, localStorage } = createPersistentStoryDirectorSandbox({
+        extension: {
+            [promptsKey]: [{
+                id: customId,
+                name: 'Extension Director',
+                prompt: 'EXTENSION_IS_AUTHORITATIVE',
+                builtin: false,
+            }],
+            [activeKey]: '',
+        },
+        local: {
+            [promptsKey]: [{
+                id: customId,
+                name: 'Stale Browser Director',
+                prompt: 'STALE_BROWSER_VALUE',
+                builtin: false,
+            }],
+            [activeKey]: customId,
+        },
+    });
+
+    await sandbox.window.YuzukiMemory.StoryDirectorSettings.whenReady();
+    const store = extensionSettings.yuzukiMemory;
+    assert.equal(store[promptsKey][0].name, 'Extension Director');
+    assert.equal(store[promptsKey][0].prompt, 'EXTENSION_IS_AUTHORITATIVE');
+    assert.equal(store[activeKey], '');
+    assert.equal(localStorage.getItem(promptsKey), null);
+    assert.equal(localStorage.getItem(activeKey), null);
+});
+
+test('new story director saves stay out of browser storage', async () => {
+    const promptsKey = 'yzm_memory_global_story_director_prompts';
+    const activeKey = 'yzm_memory_global_story_director_prompt_active';
+    const migrationKey = 'yzm_memory_global_story_director_extension_migrated_v1';
+    const { sandbox, extensionSettings, localStorage } = createPersistentStoryDirectorSandbox({
+        extension: { [migrationKey]: true },
+    });
+    const settings = sandbox.window.YuzukiMemory.StoryDirectorSettings;
+    const custom = {
+        id: 'extension-only-director',
+        name: 'Extension Only Director',
+        prompt: 'EXTENSION_ONLY_PROMPT',
+        builtin: false,
+    };
+
+    settings.savePrompts([custom]);
+    settings.setActivePromptId(custom.id);
+    await settings.flushPersistence();
+
+    const store = extensionSettings.yuzukiMemory;
+    assert.equal(store[promptsKey][0].id, custom.id);
+    assert.equal(store[activeKey], custom.id);
+    assert.equal(localStorage.getItem(promptsKey), null);
+    assert.equal(localStorage.getItem(activeKey), null);
 });
 
 test('changing or saving a story director prompt does not automatically run the agent', () => {

@@ -13,7 +13,12 @@
         'yzm_memory_global_prompt_scheme_active',
         'yzm_memory_global_prompt_scheme_character_bindings',
         'yzm_memory_global_timed_prompt_injection',
+        'yzm_memory_global_story_director_prompts',
+        'yzm_memory_global_story_director_prompt_active',
+        'yzm_memory_global_story_director_extension_migrated_v1',
     ]);
+    let immediateSavePending = false;
+    let immediateSaveQueue = Promise.resolve();
 
     function getContext() {
         return typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
@@ -40,20 +45,66 @@
         return windowSettings[NAMESPACE] || null;
     }
 
-    function persist() {
+    function callSave(save, label) {
+        try {
+            const result = save();
+            if (result && typeof result.catch === 'function') {
+                result.catch((error) => {
+                    console.error(`[yuzuki-Memory] ${label} failed.`, error);
+                });
+            }
+            return true;
+        } catch (error) {
+            console.error(`[yuzuki-Memory] ${label} failed.`, error);
+            return false;
+        }
+    }
+
+    function scheduleImmediateSave(save, label) {
+        if (immediateSavePending) return true;
+        immediateSavePending = true;
+        Promise.resolve().then(() => {
+            immediateSavePending = false;
+            const operation = immediateSaveQueue
+                .catch(() => undefined)
+                .then(() => save());
+            immediateSaveQueue = operation;
+            operation.catch((error) => {
+                console.error(`[yuzuki-Memory] ${label} failed.`, error);
+            });
+        });
+        return true;
+    }
+
+    function flushPersistence() {
+        return Promise.resolve().then(() => immediateSaveQueue);
+    }
+
+    function persist(options = {}) {
+        if (options.immediate === true) {
+            const bridgeSave = YuzukiMemory.settingsBridge?.saveSettings;
+            if (typeof bridgeSave === 'function') {
+                return scheduleImmediateSave(bridgeSave, 'Immediate SillyTavern settings save');
+            }
+            const context = getContext();
+            if (typeof context?.saveSettings === 'function') {
+                return scheduleImmediateSave(() => context.saveSettings(), 'Immediate SillyTavern context settings save');
+            }
+            if (typeof window.saveSettings === 'function') {
+                return scheduleImmediateSave(() => window.saveSettings(), 'Immediate SillyTavern window settings save');
+            }
+        }
+
         const bridgeSave = YuzukiMemory.settingsBridge?.saveSettingsDebounced;
         if (typeof bridgeSave === 'function') {
-            bridgeSave();
-            return true;
+            return callSave(bridgeSave, 'Debounced SillyTavern settings save');
         }
         const context = getContext();
         if (typeof context?.saveSettingsDebounced === 'function') {
-            context.saveSettingsDebounced();
-            return true;
+            return callSave(() => context.saveSettingsDebounced(), 'Debounced SillyTavern context settings save');
         }
         if (typeof window.saveSettingsDebounced === 'function') {
-            window.saveSettingsDebounced();
-            return true;
+            return callSave(() => window.saveSettingsDebounced(), 'Debounced SillyTavern window settings save');
         }
         console.error('[yuzuki-Memory] SillyTavern settings save function is unavailable.');
         return false;
@@ -98,6 +149,22 @@
         }
     }
 
+    function getExtension(key, fallback) {
+        const resolvedFallback = arguments.length >= 2 ? fallback : null;
+        const store = getExtensionSettings(false);
+        if (!store || !Object.prototype.hasOwnProperty.call(store, key)) return clone(resolvedFallback);
+        return clone(store[key]);
+    }
+
+    function getLocalFallback(key, fallback) {
+        const resolvedFallback = arguments.length >= 2 ? fallback : null;
+        return clone(parseLocalStorage(key, resolvedFallback));
+    }
+
+    function removeLocalFallback(key) {
+        removeLocalStorage(key);
+    }
+
     function get(key, fallback = null, options = {}) {
         const extensionOnly = EXTENSION_ONLY_KEYS.has(key);
         const localValue = parseLocalStorage(key, undefined);
@@ -131,11 +198,23 @@
 
     function set(key, value, options = {}) {
         const extensionOnly = EXTENSION_ONLY_KEYS.has(key);
+        const requirePersistent = options.requirePersistent === true;
         const cloned = clone(value);
         const store = getExtensionSettings(true);
-        if (store) {
+        if (!store) {
+            if (requirePersistent) {
+                throw new Error(`SillyTavern extension_settings is unavailable for ${key}.`);
+            }
+        } else {
+            const hadPreviousValue = Object.prototype.hasOwnProperty.call(store, key);
+            const previousValue = hadPreviousValue ? clone(store[key]) : undefined;
             store[key] = cloned;
-            persist();
+            const persistScheduled = persist({ immediate: options.immediate === true });
+            if (requirePersistent && !persistScheduled) {
+                if (hadPreviousValue) store[key] = previousValue;
+                else delete store[key];
+                throw new Error(`SillyTavern settings persistence is unavailable for ${key}.`);
+            }
         }
         if (!extensionOnly && options.localFallback !== false) {
             try {
@@ -164,8 +243,12 @@
     YuzukiMemory.GlobalSettings = Object.assign(YuzukiMemory.GlobalSettings || {}, {
         namespace: NAMESPACE,
         get,
+        getExtension,
+        getLocalFallback,
+        removeLocalFallback,
         set,
         remove,
         persist,
+        flushPersistence,
     });
 })();

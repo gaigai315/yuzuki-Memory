@@ -9446,15 +9446,28 @@
         showTaskToast('史官破限已删除。', 'success');
     }
 
-    function applyStoryDirectorPromptSelection(root, promptId) {
-        YuzukiMemory.StoryDirectorSettings?.setActivePromptId?.(promptId);
+    function reportStoryDirectorPromptSaveError(error) {
+        console.error('[yuzuki-Memory] 剧情导演提示词保存失败。', error);
+        const message = String(error?.message || error || '未知错误');
+        showTaskToast(`剧情导演提示词未能写入酒馆设置：${message}`, 'error');
+    }
+
+    async function applyStoryDirectorPromptSelection(root, promptId) {
+        try {
+            YuzukiMemory.StoryDirectorSettings?.setActivePromptId?.(promptId);
+            await YuzukiMemory.StoryDirectorSettings?.flushPersistence?.();
+        } catch (error) {
+            reportStoryDirectorPromptSaveError(error);
+            renderPromptSchemeWorkspace(root);
+            return;
+        }
         activeStoryDirectorPromptDraft = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
         YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('prompt selection changed');
         YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.(promptId ? 'idle' : 'disabled');
         renderPromptSchemeWorkspace(root);
     }
 
-    function startNewStoryDirectorPrompt(root) {
+    async function startNewStoryDirectorPrompt(root) {
         const name = String(window.prompt('请输入剧情导演提示词名称：', '') || '').trim();
         if (!name) return;
         const settings = YuzukiMemory.StoryDirectorSettings;
@@ -9464,13 +9477,19 @@
             prompt: '',
             builtin: false,
         };
-        settings?.savePrompts?.([...getStoryDirectorPrompts(), prompt]);
-        settings?.setActivePromptId?.(prompt.id);
+        try {
+            settings?.savePrompts?.([...getStoryDirectorPrompts(), prompt]);
+            settings?.setActivePromptId?.(prompt.id);
+            await settings?.flushPersistence?.();
+        } catch (error) {
+            reportStoryDirectorPromptSaveError(error);
+            return;
+        }
         activeStoryDirectorPromptDraft = { ...prompt };
         renderPromptSchemeWorkspace(root);
     }
 
-    function saveActiveStoryDirectorPrompt(root) {
+    async function saveActiveStoryDirectorPrompt(root) {
         const draft = getActiveStoryDirectorPromptDraft();
         if (!draft) {
             window.alert('请先新增或选择一套剧情导演提示词。');
@@ -9491,8 +9510,14 @@
         const nextPrompt = { id: draft.id, name, prompt: String(draft.prompt || ''), builtin: false };
         if (index >= 0) prompts[index] = nextPrompt;
         else prompts.push(nextPrompt);
-        settings?.savePrompts?.(prompts);
-        settings?.setActivePromptId?.(nextPrompt.id);
+        try {
+            settings?.savePrompts?.(prompts);
+            settings?.setActivePromptId?.(nextPrompt.id);
+            await settings?.flushPersistence?.();
+        } catch (error) {
+            reportStoryDirectorPromptSaveError(error);
+            return;
+        }
         activeStoryDirectorPromptDraft = { ...nextPrompt };
         YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('prompt saved');
         YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.('idle');
@@ -9500,7 +9525,7 @@
         showTaskToast('剧情导演提示词已保存。', 'success');
     }
 
-    function deleteActiveStoryDirectorPrompt(root) {
+    async function deleteActiveStoryDirectorPrompt(root) {
         const draft = getActiveStoryDirectorPromptDraft();
         if (!draft) return;
         if (draft.builtin) {
@@ -9509,8 +9534,14 @@
         }
         if (!window.confirm(`确定删除剧情导演提示词「${draft.name}」吗？`)) return;
         const settings = YuzukiMemory.StoryDirectorSettings;
-        settings?.savePrompts?.(getStoryDirectorPrompts().filter((entry) => entry.id !== draft.id));
-        settings?.setActivePromptId?.('');
+        try {
+            settings?.savePrompts?.(getStoryDirectorPrompts().filter((entry) => entry.id !== draft.id));
+            settings?.setActivePromptId?.('');
+            await settings?.flushPersistence?.();
+        } catch (error) {
+            reportStoryDirectorPromptSaveError(error);
+            return;
+        }
         activeStoryDirectorPromptDraft = null;
         YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('prompt deleted');
         YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.('disabled');
@@ -17165,9 +17196,9 @@
                     event.preventDefault();
                     event.stopPropagation();
                     const action = storyDirectorPromptAction.dataset.yzmStoryDirectorPromptAction || '';
-                    if (action === 'newStoryDirectorPrompt') startNewStoryDirectorPrompt(root);
-                    if (action === 'saveStoryDirectorPrompt') saveActiveStoryDirectorPrompt(root);
-                    if (action === 'deleteStoryDirectorPrompt') deleteActiveStoryDirectorPrompt(root);
+                    if (action === 'newStoryDirectorPrompt') void startNewStoryDirectorPrompt(root);
+                    if (action === 'saveStoryDirectorPrompt') void saveActiveStoryDirectorPrompt(root);
+                    if (action === 'deleteStoryDirectorPrompt') void deleteActiveStoryDirectorPrompt(root);
                     return;
                 }
                 if (timedPromptToggle) {
@@ -17305,7 +17336,7 @@
                     return;
                 }
                 if (target?.matches?.('[data-yzm-story-director-prompt-select]')) {
-                    applyStoryDirectorPromptSelection(root, target.value);
+                    void applyStoryDirectorPromptSelection(root, target.value);
                     return;
                 }
                 if (!target?.matches?.('[data-yzm-scheme-select]')) return;
