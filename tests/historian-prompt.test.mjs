@@ -68,11 +68,11 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /<下轮导演卡>/);
     assert.match(director.prompt, /若最新输入为 User/);
     assert.match(director.prompt, /若最新输入为 Assistant/);
-    assert.match(director.prompt, /严禁再次复述上一轮已发生的声明与事实/);
-    assert.match(director.prompt, /3 条不同博弈方向的推演/);
+    assert.match(director.prompt, /严禁复述上一轮已发生事实/);
+    assert.match(director.prompt, /仅签发 3 个纯策略倾向标签/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
     assert.match(director.prompt, /所属模块：\[Module 1 \/ 2 \/ 3 \/ 4\]/);
-    assert.match(director.prompt, /签发三个不同的具体既成事件推进备选项/);
+    assert.match(director.prompt, /签发三个宏观事件推进备选标签/);
 });
 
 test('story director settings keep the selected custom prompt active', () => {

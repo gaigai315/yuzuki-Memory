@@ -9,6 +9,7 @@ let storedState = null;
 let nextTimerId = 1;
 let swipeRollbackPending = false;
 let applyRollbackPending = false;
+let branchBusy = false;
 let monitorHandler = null;
 const timers = new Map();
 const eventHandlers = new Map();
@@ -87,8 +88,8 @@ window.YuzukiMemory.BranchSnapshot = {
         return pending;
     },
     setProcessedMessageSignature() {},
-    isGenerationBusy: () => false,
-    isBranchMutationActive: () => false,
+    isGenerationBusy: () => branchBusy,
+    isBranchMutationActive: () => branchBusy,
     resetSnapshotHistory() {},
 };
 window.YuzukiMemory.Storage = {
@@ -437,6 +438,42 @@ test('camelCase SillyTavern delete event replays state after its message disappe
 
     assert.deepEqual(storedState.records.character_profile, []);
     assert.deepEqual(storedState.floorLedger.activeEntries, []);
+});
+
+test('explicit delete event replays plot and character state despite a stale generation flag', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    storedState = parser.createDefaultState();
+    chat = [assistantMemoryMessage([
+        '#主线摘要',
+        '[2026年9月21日,10:00-10:10] | 内容: 爱丽丝进入遗迹。',
+        '#角色状态',
+        '[爱丽丝] | 好感度: 12 | 疲劳值: 8',
+    ].join('\n'))];
+
+    const applied = parser.applyMemoryText(chat[0].mes, { floor: 0, dispatch: false });
+
+    assert.equal(applied.success, true);
+    assert.match(storedState.records.plot_summary[0].values.主线, /爱丽丝进入遗迹/);
+    assert.equal(storedState.records.character_status[0].values.好感度, '12');
+
+    timers.clear();
+    chat = [];
+    branchBusy = true;
+    try {
+        eventSource.emit(context.eventTypes.MESSAGE_DELETED, 0);
+        const scheduled = timers.entries().next().value;
+        assert.ok(scheduled, 'delete event should schedule ledger reconciliation');
+        const [timerId, handler] = scheduled;
+        timers.delete(timerId);
+        handler();
+
+        assert.deepEqual(storedState.records.plot_summary, []);
+        assert.deepEqual(storedState.records.character_status, []);
+        assert.deepEqual(storedState.floorLedger.activeEntries, []);
+    } finally {
+        branchBusy = false;
+        timers.clear();
+    }
 });
 
 test('swipe processing consumes both rollback guards', () => {

@@ -895,8 +895,10 @@
             if (pendingReason) scheduleReconcile(pendingReason, 350);
         });
         bindEvents([eventTypes.MESSAGE_DELETED, 'message_deleted'], () => {
+            lastChatFingerprint = getChatFingerprint();
             scheduleReconcile('message_deleted', 180, {
                 pruneRemoved: true,
+                force: true,
             });
         });
         bindEvents([eventTypes.MESSAGE_SWIPED, 'message_swiped'], () => scheduleReconcile('message_swiped', 650));
