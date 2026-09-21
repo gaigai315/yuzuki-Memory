@@ -11,27 +11,25 @@
     const CARD_GLOBAL_PATTERN = /\n*<下轮导演卡>[\s\S]*?<\/下轮导演卡>\s*/gi;
     const MEMORY_TAG_PATTERN = /<(Memory|GaigaiMemory|memory|tableEdit|gaigaimemory|tableedit)>[\s\S]*?<\/\1>/gi;
     const TOOL_NAMES = Object.freeze({
-        profiles: 'yzm_story_read_profiles',
-        worldbooks: 'yzm_story_read_worldbooks',
-        tables: 'yzm_story_read_tables',
+        context: 'yzm_story_read_context',
         chat: 'yzm_story_read_visible_chat',
-        vectors: 'yzm_story_search_vectors',
         ledger: 'yzm_story_read_ledger',
         updateLedger: 'yzm_story_update_ledger',
     });
+    const LEGACY_TOOL_NAMES = Object.freeze([
+        'yzm_story_read_profiles',
+        'yzm_story_read_worldbooks',
+        'yzm_story_read_tables',
+        'yzm_story_search_vectors',
+    ]);
     const TOOL_LABELS = Object.freeze({
-        [TOOL_NAMES.profiles]: '读取角色卡与用户卡',
-        [TOOL_NAMES.worldbooks]: '读取记忆插件勾选的世界书',
-        [TOOL_NAMES.tables]: '读取全部启用表格',
+        [TOOL_NAMES.context]: '读取角色卡、世界书、表格与向量记忆',
         [TOOL_NAMES.chat]: '读取全部未隐藏聊天楼层',
-        [TOOL_NAMES.vectors]: '检索当前启用的向量书',
         [TOOL_NAMES.ledger]: '读取导演账本',
         [TOOL_NAMES.updateLedger]: '更新导演账本',
     });
     const BASE_READ_TOOL_ORDER = Object.freeze([
-        TOOL_NAMES.profiles,
-        TOOL_NAMES.worldbooks,
-        TOOL_NAMES.tables,
+        TOOL_NAMES.context,
         TOOL_NAMES.chat,
         TOOL_NAMES.ledger,
     ]);
@@ -478,30 +476,51 @@
         return collectVisibleChatMessages().slice(-depth).map((message) => message.content).join('\n').slice(-6000);
     }
 
-    function getToolDefinitions(includeVectors = false, allowedNames = null) {
+    async function searchVectorMemories(parameters = {}) {
+        const store = YuzukiMemory.VectorStore;
+        const activeBooks = store?.getActiveBooks?.() || [];
+        const query = String(parameters.query || getDefaultVectorQuery()).trim().slice(-6000);
+        if (!activeBooks.length || !query) {
+            return { query, matches: [], note: '当前没有启用的向量书或可检索的对话。' };
+        }
+        if (YuzukiMemory.EmbeddingClient?.loadSettings?.()?.enabled !== true) {
+            return { query, matches: [], note: 'Embedding 未启用，无法检索向量书。' };
+        }
+        let timeoutId;
+        try {
+            const results = await Promise.race([
+                store.search(query, activeBooks, { ignoreInjectionSetting: true }),
+                new Promise((_, reject) => {
+                    timeoutId = window.setTimeout(() => reject(new Error('向量检索超时')), 20000);
+                }),
+            ]);
+            return {
+                query,
+                matches: (Array.isArray(results) ? results : []).map((item) => ({
+                    source: String(item.source || ''),
+                    text: String(item.text || ''),
+                    score: Number(item.score) || 0,
+                })),
+            };
+        } catch (error) {
+            return { query, matches: [], error: String(error?.message || error || '向量检索失败') };
+        } finally {
+            window.clearTimeout(timeoutId);
+        }
+    }
+
+    function getToolDefinitions(allowedNames = null) {
         const definitions = [
             {
                 type: 'function',
                 function: {
-                    name: TOOL_NAMES.profiles,
-                    description: '读取当前用户卡及当前单人角色或群聊启用成员的角色卡信息。',
-                    parameters: { type: 'object', properties: {}, additionalProperties: false },
-                },
-            },
-            {
-                type: 'function',
-                function: {
-                    name: TOOL_NAMES.worldbooks,
-                    description: '读取记忆插件中已启用并勾选的世界书条目。未选择时返回明确提示。',
-                    parameters: { type: 'object', properties: {}, additionalProperties: false },
-                },
-            },
-            {
-                type: 'function',
-                function: {
-                    name: TOOL_NAMES.tables,
-                    description: '读取当前会话全部启用表格及其全部可用记录，包括记忆总结。',
-                    parameters: { type: 'object', properties: {}, additionalProperties: false },
+                    name: TOOL_NAMES.context,
+                    description: '一次读取用户卡、当前角色卡、已勾选世界书、全部启用表格及当前向量召回结果。',
+                    parameters: {
+                        type: 'object',
+                        properties: { query: { type: 'string', description: '可选的向量检索词；留空时使用最近未隐藏正文。' } },
+                        additionalProperties: false,
+                    },
                 },
             },
             {
@@ -512,18 +531,6 @@
                     parameters: { type: 'object', properties: {}, additionalProperties: false },
                 },
             },
-            ...(includeVectors ? [{
-                type: 'function',
-                function: {
-                    name: TOOL_NAMES.vectors,
-                    description: '检索当前会话已启用的向量书，返回相关历史片段。query 留空时使用最近的未隐藏对话。',
-                    parameters: {
-                        type: 'object',
-                        properties: { query: { type: 'string', description: '可选的剧情检索词。' } },
-                        additionalProperties: false,
-                    },
-                },
-            }] : []),
             {
                 type: 'function',
                 function: {
@@ -553,18 +560,17 @@
         return definitions.filter((definition) => allowed.has(definition?.function?.name));
     }
 
-    function getReadToolOrder(includeVectors = false) {
-        const order = [...BASE_READ_TOOL_ORDER];
-        if (includeVectors) order.splice(2, 0, TOOL_NAMES.vectors);
-        return order;
+    function getReadToolOrder() {
+        return [...BASE_READ_TOOL_ORDER];
     }
 
-    function registerRuntimeTools(runContext, includeVectors = false) {
+    function registerRuntimeTools(runContext) {
         const manager = getContext()?.ToolManager;
         if (!manager?.registerFunctionTool || !manager?.invokeFunctionTool) {
             throw new Error('当前 SillyTavern 未提供 ToolManager。');
         }
-        Object.values(TOOL_NAMES).forEach((name) => manager.unregisterFunctionTool?.(name));
+        [...Object.values(TOOL_NAMES), ...LEGACY_TOOL_NAMES]
+            .forEach((name) => manager.unregisterFunctionTool?.(name));
         const assertActive = () => {
             if (runContext.signal.aborted) throw new DOMException('Aborted', 'AbortError');
             if (runContext.sessionId !== YuzukiMemory.Storage?.getCurrentSessionId?.()) throw new Error('聊天已切换。');
@@ -579,60 +585,28 @@
             shouldRegister: () => false,
             stealth: true,
         });
-        register(TOOL_NAMES.profiles, '读取当前角色卡与用户卡。', { type: 'object', properties: {}, additionalProperties: false }, () => {
-            assertActive();
-            return serializeProfiles();
-        });
-        register(TOOL_NAMES.worldbooks, '读取记忆插件中已勾选的世界书。', { type: 'object', properties: {}, additionalProperties: false }, async () => {
-            assertActive();
-            const result = await serializeSelectedWorldbooks(loadState(runContext.sessionId));
-            assertActive();
-            return result;
-        });
-        register(TOOL_NAMES.tables, '读取当前全部启用表格。', { type: 'object', properties: {}, additionalProperties: false }, () => {
-            assertActive();
-            return serializeTables(loadState(runContext.sessionId));
-        });
-        register(TOOL_NAMES.chat, '读取当前全部未隐藏聊天楼层。', { type: 'object', properties: {}, additionalProperties: false }, () => {
-            assertActive();
-            return serializeVisibleChat();
-        });
-        if (includeVectors) register(TOOL_NAMES.vectors, '检索当前启用的向量书。', {
+        register(TOOL_NAMES.context, '读取角色卡、世界书、表格与向量记忆。', {
             type: 'object',
             properties: { query: { type: 'string' } },
             additionalProperties: false,
         }, async (parameters = {}) => {
             assertActive();
-            const store = YuzukiMemory.VectorStore;
-            const activeBooks = store?.getActiveBooks?.() || [];
-            const query = String(parameters.query || getDefaultVectorQuery()).trim().slice(-6000);
-            if (!activeBooks.length || !query) return JSON.stringify({ query, matches: [], note: '当前没有启用的向量书或可检索的对话。' });
-            if (YuzukiMemory.EmbeddingClient?.loadSettings?.()?.enabled !== true) {
-                return JSON.stringify({ query, matches: [], note: 'Embedding 未启用，无法检索向量书。' });
-            }
-            let timeoutId;
-            try {
-                const results = await Promise.race([
-                    store.search(query, activeBooks, { ignoreInjectionSetting: true }),
-                    new Promise((_, reject) => {
-                        timeoutId = window.setTimeout(() => reject(new Error('向量检索超时')), 20000);
-                    }),
-                ]);
-                assertActive();
-                return JSON.stringify({
-                    query,
-                    matches: (Array.isArray(results) ? results : []).map((item) => ({
-                        source: String(item.source || ''),
-                        text: String(item.text || ''),
-                        score: Number(item.score) || 0,
-                    })),
-                });
-            } catch (error) {
-                assertActive();
-                return JSON.stringify({ query, matches: [], error: String(error?.message || error || '向量检索失败') });
-            } finally {
-                window.clearTimeout(timeoutId);
-            }
+            const state = loadState(runContext.sessionId);
+            const [worldbooks, vectors] = await Promise.all([
+                serializeSelectedWorldbooks(state),
+                searchVectorMemories(parameters),
+            ]);
+            assertActive();
+            return JSON.stringify({
+                profiles: JSON.parse(serializeProfiles()),
+                worldbooks,
+                tables: JSON.parse(serializeTables(state)).tables,
+                vectors,
+            });
+        });
+        register(TOOL_NAMES.chat, '读取当前全部未隐藏聊天楼层。', { type: 'object', properties: {}, additionalProperties: false }, () => {
+            assertActive();
+            return serializeVisibleChat();
         });
         register(TOOL_NAMES.ledger, '读取剧情导演调度账本，不含剧情节点与人物履历。', { type: 'object', properties: {}, additionalProperties: false }, () => {
             assertActive();
@@ -653,7 +627,8 @@
     }
 
     function unregisterRuntimeTools(manager) {
-        Object.values(TOOL_NAMES).forEach((name) => manager?.unregisterFunctionTool?.(name));
+        [...Object.values(TOOL_NAMES), ...LEGACY_TOOL_NAMES]
+            .forEach((name) => manager?.unregisterFunctionTool?.(name));
     }
 
     function formatProbeJson(value) {
@@ -779,9 +754,8 @@
             const store = YuzukiMemory.VectorStore;
             await store?.whenReady?.();
             if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
-            const includeVectors = (store?.getActiveBooks?.() || []).length > 0;
-            manager = registerRuntimeTools(runContext, includeVectors);
-            const readToolOrder = getReadToolOrder(includeVectors);
+            manager = registerRuntimeTools(runContext);
+            const readToolOrder = getReadToolOrder();
             const snapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.('storyDirector') || { mode: 'tavern', preset: null };
             const instruction = source.role === 'user'
                 ? '请根据最新用户消息及此前剧情生成下一轮导演卡。'
@@ -799,7 +773,7 @@
                 if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
                 const pendingReadTool = readToolOrder.find((name) => !usedTools.has(name)) || '';
                 const allowedToolNames = pendingReadTool ? [pendingReadTool] : [TOOL_NAMES.updateLedger];
-                const tools = getToolDefinitions(includeVectors, allowedToolNames);
+                const tools = getToolDefinitions(allowedToolNames);
                 captureDirectorRequest(snapshot, messages, tools, turn + 1, sessionId);
                 const result = await requestAgentTurn(snapshot, messages, tools, controller.signal);
                 if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
