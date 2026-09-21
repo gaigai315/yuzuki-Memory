@@ -4,6 +4,7 @@
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const STORAGE_PREFIX = 'yzm_memory_chat_state:';
     const CHAT_METADATA_KEY = 'yuzukiMemory';
+    const GLOBAL_TABLE_COLUMNS_STORAGE_KEY = 'yzm_memory_global_table_columns';
     const VERSION = 1;
     const FLOOR_SCOPE_VERSION = 1;
     const SESSION_POLL_MS = 800;
@@ -534,6 +535,137 @@
         return name ? `${modifiers}${name}` : '';
     }
 
+    function normalizeGlobalTableColumnEntry(rawEntry, fallbackIndex = 0) {
+        const source = typeof rawEntry === 'string'
+            ? { definition: rawEntry, index: fallbackIndex }
+            : (rawEntry && typeof rawEntry === 'object' ? rawEntry : {});
+        const definition = normalizeColumnDefinition(source.definition ?? source.column ?? source.name);
+        if (!definition) return null;
+        const index = Number(source.index);
+        const section = Number(source.section);
+        const sectionIndex = Number(source.sectionIndex);
+        return {
+            definition,
+            index: Number.isInteger(index) && index >= 0 ? index : fallbackIndex,
+            ...(Number.isInteger(section) && section >= 0 && section <= 3 ? { section } : {}),
+            ...(Number.isInteger(sectionIndex) && sectionIndex >= 0 ? { sectionIndex } : {}),
+        };
+    }
+
+    function normalizeGlobalTableColumnsMap(rawValue = {}) {
+        const source = rawValue && typeof rawValue === 'object' && !Array.isArray(rawValue) ? rawValue : {};
+        return Object.fromEntries(Object.entries(source).map(([tableId, rawEntries]) => {
+            const seen = new Set();
+            const entries = (Array.isArray(rawEntries) ? rawEntries : [])
+                .map(normalizeGlobalTableColumnEntry)
+                .filter((entry) => {
+                    const name = cleanColumnName(entry?.definition);
+                    if (!name || seen.has(name)) return false;
+                    seen.add(name);
+                    return true;
+                });
+            return [String(tableId || '').trim(), entries];
+        }).filter(([tableId, entries]) => tableId && entries.length));
+    }
+
+    function getGlobalTableColumnsMap() {
+        try {
+            const rawValue = YuzukiMemory.GlobalSettings?.get?.(GLOBAL_TABLE_COLUMNS_STORAGE_KEY, {})
+                ?? JSON.parse(localStorage.getItem(GLOBAL_TABLE_COLUMNS_STORAGE_KEY) || '{}');
+            return normalizeGlobalTableColumnsMap(rawValue);
+        } catch (_error) {
+            return {};
+        }
+    }
+
+    function getGlobalTableColumns(tableId) {
+        const id = String(tableId || '').trim();
+        return clone(getGlobalTableColumnsMap()[id] || []);
+    }
+
+    function setGlobalTableColumns(tableId, entries = []) {
+        const id = String(tableId || '').trim();
+        if (!id) return [];
+        const normalized = normalizeGlobalTableColumnsMap({ [id]: entries })[id] || [];
+        const next = getGlobalTableColumnsMap();
+        if (normalized.length) next[id] = normalized;
+        else delete next[id];
+        if (YuzukiMemory.GlobalSettings?.set) {
+            YuzukiMemory.GlobalSettings.set(GLOBAL_TABLE_COLUMNS_STORAGE_KEY, next);
+        } else {
+            try {
+                localStorage.setItem(GLOBAL_TABLE_COLUMNS_STORAGE_KEY, JSON.stringify(next));
+            } catch (_error) {
+                // Global columns remain available for the current session if persistence is blocked.
+            }
+        }
+        return clone(normalized);
+    }
+
+    function normalizeDirectCharacterStatusBreaks(table, columnCount) {
+        if (table?.id !== 'character_status') return null;
+        const breaks = Array.isArray(table?.characterStatusBreaks)
+            ? table.characterStatusBreaks.map(Number)
+            : [];
+        if (breaks.length !== 3 || !breaks.every(Number.isInteger)) return null;
+        const [headerEnd, overviewEnd, attributeEnd] = breaks;
+        if (headerEnd < 1 || overviewEnd < headerEnd || attributeEnd < overviewEnd || attributeEnd > columnCount) return null;
+        return [headerEnd, overviewEnd, attributeEnd];
+    }
+
+    function mergeGlobalTableColumns(table, columns, characterStatusBreaks = null) {
+        const definitions = [];
+        const seen = new Set();
+        (Array.isArray(columns) ? columns : []).map(normalizeColumnDefinition).filter(Boolean).forEach((definition) => {
+            const name = cleanColumnName(definition);
+            if (!name || seen.has(name)) return;
+            seen.add(name);
+            definitions.push(definition);
+        });
+        const entries = getGlobalTableColumns(table?.id).sort((left, right) => left.index - right.index);
+        const breaks = Array.isArray(characterStatusBreaks) ? [...characterStatusBreaks] : null;
+
+        entries.forEach((entry) => {
+            const name = cleanColumnName(entry.definition);
+            const existingIndex = definitions.findIndex((definition) => cleanColumnName(definition) === name);
+            if (existingIndex >= 0) {
+                definitions[existingIndex] = entry.definition;
+                return;
+            }
+
+            let insertIndex = Math.min(Math.max(0, entry.index), definitions.length);
+            if (table?.id === 'character_status' && breaks && Number.isInteger(entry.section)) {
+                const starts = [0, breaks[0], breaks[1], breaks[2]];
+                const ends = [breaks[0], breaks[1], breaks[2], definitions.length];
+                const section = entry.section;
+                const offset = Math.min(Math.max(0, Number(entry.sectionIndex) || 0), Math.max(0, ends[section] - starts[section]));
+                insertIndex = starts[section] + offset;
+                for (let index = section; index < breaks.length; index += 1) breaks[index] += 1;
+            }
+            definitions.splice(insertIndex, 0, entry.definition);
+        });
+
+        return {
+            columns: definitions,
+            characterStatusBreaks: breaks,
+        };
+    }
+
+    function applyGlobalTableColumnsToState(state) {
+        if (!state || !Array.isArray(state.tables)) return state;
+        state.tables = state.tables.map((table) => {
+            if (!table || !table.id) return table;
+            const currentBreaks = normalizeDirectCharacterStatusBreaks(table, Array.isArray(table.columns) ? table.columns.length : 0);
+            const merged = mergeGlobalTableColumns(table, table.columns, currentBreaks);
+            return {
+                ...table,
+                columns: merged.columns,
+                ...(merged.characterStatusBreaks ? { characterStatusBreaks: merged.characterStatusBreaks } : {}),
+            };
+        });
+        return state;
+    }
+
     function getSummaryFieldAliases(field) {
         const aliases = {
             总结标题: ['总结标题', '标题', 'title', 'name'],
@@ -595,7 +727,16 @@
         if (!fallbackTable) return rawColumns;
 
         const fallbackColumns = Array.isArray(fallbackTable.columns) ? fallbackTable.columns : [];
-        if (String(table?.id || '').startsWith('custom_') && fallbackColumns.length) return [...fallbackColumns];
+        if (String(table?.id || '').startsWith('custom_') && fallbackColumns.length) {
+            const mergedColumns = [...rawColumns];
+            fallbackColumns.map(normalizeColumnDefinition).filter(Boolean).forEach((definition, fallbackIndex) => {
+                const name = cleanColumnName(definition);
+                const existingIndex = mergedColumns.findIndex((column) => cleanColumnName(column) === name);
+                if (existingIndex >= 0) mergedColumns[existingIndex] = definition;
+                else mergedColumns.splice(Math.min(fallbackIndex, mergedColumns.length), 0, definition);
+            });
+            return mergedColumns;
+        }
         const legacyCharacterStatusColumns = ['角色名', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'];
         const usesLegacyCharacterStatusDefault = table?.id === 'character_status'
             && Number(options.rawDefaultRevision || 1) < 16
@@ -709,11 +850,11 @@
         const fallback = clone(fallbackState);
         if (!rawState || typeof rawState !== 'object') {
             const currentFloorScope = getCurrentFloorScope(fallback?.sessionId || getCurrentSessionId());
-            return {
+            return applyGlobalTableColumnsToState({
                 ...fallback,
                 floorScopeVersion: FLOOR_SCOPE_VERSION,
                 currentFloorScope,
-            };
+            });
         }
 
         const defaultRevision = Number(fallback.defaultRevision || 1);
@@ -725,8 +866,11 @@
                 .map((table, index) => {
                     const id = String(table.id || `table_${index}_${Date.now()}`);
                     const fallbackTable = fallback.tables?.find((entry) => entry.id === id) || null;
-                    const columns = normalizeTableColumns(table, fallback, { rawDefaultRevision });
-                    const characterStatusBreaks = normalizeCharacterStatusBreaks(table, columns, fallbackTable);
+                    const storedColumns = normalizeTableColumns(table, fallback, { rawDefaultRevision });
+                    const storedBreaks = normalizeCharacterStatusBreaks(table, storedColumns, fallbackTable);
+                    const merged = mergeGlobalTableColumns({ ...table, id }, storedColumns, storedBreaks);
+                    const columns = merged.columns;
+                    const characterStatusBreaks = merged.characterStatusBreaks;
                     return {
                         id,
                         name: String((id.startsWith('custom_') && fallbackTable?.name) || table.name || `未命名表${index + 1}`),
@@ -741,14 +885,17 @@
         const fallbackTables = Array.isArray(fallback.tables) ? fallback.tables : [];
         fallbackTables.forEach((table, fallbackIndex) => {
             if (!table?.id || tableIds.has(table.id)) return;
+            const merged = mergeGlobalTableColumns(
+                table,
+                Array.isArray(table.columns) ? table.columns : ['名称', '内容'],
+                normalizeDirectCharacterStatusBreaks(table, Array.isArray(table.columns) ? table.columns.length : 2),
+            );
             const normalizedTable = {
                 id: String(table.id),
                 name: String(table.name || `未命名表${tables.length + 1}`),
                 icon: String(table.icon || 'summary'),
-                columns: Array.isArray(table.columns) ? [...table.columns] : ['名称', '内容'],
-                ...(Array.isArray(table.characterStatusBreaks)
-                    ? { characterStatusBreaks: [...table.characterStatusBreaks] }
-                    : {}),
+                columns: merged.columns,
+                ...(merged.characterStatusBreaks ? { characterStatusBreaks: merged.characterStatusBreaks } : {}),
                 hidden: !!table.hidden,
             };
             const nextDefaultTable = fallbackTables
@@ -987,6 +1134,9 @@
         formatFloorScopeLabel,
         getRecordFloorScope,
         ensureRecordFloorScope,
+        getGlobalTableColumns,
+        setGlobalTableColumns,
+        applyGlobalTableColumnsToState,
         loadState,
         saveState,
         bindSessionChange,

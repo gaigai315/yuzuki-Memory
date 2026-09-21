@@ -18,6 +18,9 @@
     const DISPLAY_NAME = '柚月の记忆';
     const THEME_STORAGE_KEY = 'yzm_memory_theme';
     const LAYOUT_STORAGE_KEY = 'yzm_memory_layout_widths';
+    const DESKTOP_SHELL_VIEWPORT_GAP = 8;
+    const DESKTOP_SHELL_MIN_WIDTH = 560;
+    const DESKTOP_SHELL_MIN_HEIGHT = 360;
     const FLOATING_POSITION_STORAGE_KEY = 'yzm_memory_global_floating_icon_position';
     const FLOATING_ICON_DEFAULT_STYLE = 'xftb1';
     const FLOATING_ICON_STYLES = Object.freeze([
@@ -485,6 +488,17 @@
         return saveGlobalCustomTables(loadGlobalCustomTables().filter((table) => table.id !== id));
     }
 
+    function mergeGlobalCustomTableColumns(localColumns = [], globalColumns = []) {
+        const merged = uniqueNormalizedColumns(localColumns);
+        uniqueNormalizedColumns(globalColumns).forEach((definition, globalIndex) => {
+            const name = cleanColumnName(definition);
+            const existingIndex = merged.findIndex((column) => cleanColumnName(column) === name);
+            if (existingIndex >= 0) merged[existingIndex] = definition;
+            else merged.splice(Math.min(globalIndex, merged.length), 0, definition);
+        });
+        return merged;
+    }
+
     function syncGlobalCustomTablesIntoState(state, options = {}) {
         if (!state || !Array.isArray(state.tables)) return false;
         const deletedIds = loadDeletedCustomTableIds();
@@ -508,7 +522,7 @@
                 ...table,
                 name: globalTable.name,
                 icon: globalTable.icon,
-                columns: [...globalTable.columns],
+                columns: mergeGlobalCustomTableColumns(table.columns, globalTable.columns),
             };
             if (JSON.stringify(nextTable) !== JSON.stringify(table)) changed = true;
             return nextTable;
@@ -619,6 +633,7 @@
         const nextState = state || createDefaultState();
         migrateSessionCustomTablesToGlobal(nextState);
         syncGlobalCustomTablesIntoState(nextState);
+        getStorage()?.applyGlobalTableColumnsToState?.(nextState);
         return nextState;
     }
 
@@ -4000,6 +4015,22 @@
         return clampNumber(Number(value) || limits.value, limits.min, limits.max);
     }
 
+    function normalizeDesktopShellGeometry(value) {
+        if (!value || typeof value !== 'object') return null;
+        const x = Number(value.x);
+        const y = Number(value.y);
+        const width = Number(value.width);
+        const height = Number(value.height);
+        if (![x, y, width, height].every(Number.isFinite)) return null;
+        if (width < 1 || height < 1) return null;
+        return {
+            x: Math.round(x),
+            y: Math.round(y),
+            width: Math.round(width),
+            height: Math.round(height),
+        };
+    }
+
     function getSavedLayoutWidths() {
         const fallback = {
             desktop: {
@@ -4018,6 +4049,7 @@
                 desktop: {
                     sidebar: normalizeLayoutWidth('desktop', 'sidebar', parsed.desktop?.sidebar ?? fallback.desktop.sidebar),
                     primary: normalizeLayoutWidth('desktop', 'primary', parsed.desktop?.primary ?? fallback.desktop.primary),
+                    shell: normalizeDesktopShellGeometry(parsed.desktop?.shell),
                 },
                 mobile: {
                     sidebar: normalizeLayoutWidth('mobile', 'sidebar', parsed.mobile?.sidebar ?? fallback.mobile.sidebar),
@@ -4059,6 +4091,205 @@
         shell.classList.toggle('yzm-primary-icon-mode', !!iconLimits.primary && widths[mode].primary <= iconLimits.primary);
         shell.classList.toggle('yzm-primary-compact-mode', widths[mode].primary <= (LAYOUT_PRIMARY_COMPACT_AT[mode] || 0));
         shell.classList.toggle('yzm-primary-tight-mode', widths[mode].primary <= (LAYOUT_PRIMARY_TIGHT_AT[mode] || 0));
+    }
+
+    function getDesktopShellViewport() {
+        return {
+            width: window.innerWidth || document.documentElement.clientWidth || 0,
+            height: window.innerHeight || document.documentElement.clientHeight || 0,
+        };
+    }
+
+    function isDesktopShellGeometryEnabled() {
+        return !isMobileLayout() && window.matchMedia?.('(pointer: fine)').matches;
+    }
+
+    function getDesktopShellSizeLimits(x = DESKTOP_SHELL_VIEWPORT_GAP, y = DESKTOP_SHELL_VIEWPORT_GAP) {
+        const viewport = getDesktopShellViewport();
+        const maxWidth = Math.max(320, viewport.width - Math.max(x, DESKTOP_SHELL_VIEWPORT_GAP) - DESKTOP_SHELL_VIEWPORT_GAP);
+        const maxHeight = Math.max(240, viewport.height - Math.max(y, DESKTOP_SHELL_VIEWPORT_GAP) - DESKTOP_SHELL_VIEWPORT_GAP);
+        return {
+            minWidth: Math.min(DESKTOP_SHELL_MIN_WIDTH, maxWidth),
+            minHeight: Math.min(DESKTOP_SHELL_MIN_HEIGHT, maxHeight),
+            maxWidth,
+            maxHeight,
+        };
+    }
+
+    function clampDesktopShellGeometry(geometry) {
+        const viewport = getDesktopShellViewport();
+        const outerMaxWidth = Math.max(320, viewport.width - (DESKTOP_SHELL_VIEWPORT_GAP * 2));
+        const outerMaxHeight = Math.max(240, viewport.height - (DESKTOP_SHELL_VIEWPORT_GAP * 2));
+        const minWidth = Math.min(DESKTOP_SHELL_MIN_WIDTH, outerMaxWidth);
+        const minHeight = Math.min(DESKTOP_SHELL_MIN_HEIGHT, outerMaxHeight);
+        const width = clampNumber(Number(geometry.width) || minWidth, minWidth, outerMaxWidth);
+        const height = clampNumber(Number(geometry.height) || minHeight, minHeight, outerMaxHeight);
+        const maxX = Math.max(DESKTOP_SHELL_VIEWPORT_GAP, viewport.width - width - DESKTOP_SHELL_VIEWPORT_GAP);
+        const maxY = Math.max(DESKTOP_SHELL_VIEWPORT_GAP, viewport.height - height - DESKTOP_SHELL_VIEWPORT_GAP);
+        return {
+            x: Math.round(clampNumber(Number(geometry.x) || DESKTOP_SHELL_VIEWPORT_GAP, DESKTOP_SHELL_VIEWPORT_GAP, maxX)),
+            y: Math.round(clampNumber(Number(geometry.y) || DESKTOP_SHELL_VIEWPORT_GAP, DESKTOP_SHELL_VIEWPORT_GAP, maxY)),
+            width: Math.round(width),
+            height: Math.round(height),
+        };
+    }
+
+    function setDesktopShellGeometryStyles(shell, geometry) {
+        if (!shell || !geometry) return;
+        shell.style.position = 'fixed';
+        shell.style.left = `${geometry.x}px`;
+        shell.style.top = `${geometry.y}px`;
+        shell.style.width = `${geometry.width}px`;
+        shell.style.height = `${geometry.height}px`;
+        shell.classList.add('yzm-shell-custom-geometry');
+    }
+
+    function clearDesktopShellGeometryStyles(shell) {
+        if (!shell) return;
+        ['position', 'left', 'top', 'width', 'height'].forEach((property) => shell.style.removeProperty(property));
+        shell.classList.remove('yzm-shell-custom-geometry', 'yzm-shell-moving', 'yzm-shell-resizing');
+    }
+
+    function getCurrentDesktopShellGeometry(shell) {
+        const rect = shell.getBoundingClientRect();
+        return clampDesktopShellGeometry({
+            x: rect.left,
+            y: rect.top,
+            width: rect.width,
+            height: rect.height,
+        });
+    }
+
+    function saveDesktopShellGeometry(shell) {
+        if (!shell || !isDesktopShellGeometryEnabled()) return;
+        try {
+            const widths = getSavedLayoutWidths();
+            widths.desktop.shell = getCurrentDesktopShellGeometry(shell);
+            localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(widths));
+        } catch (_error) {
+            // Window geometry persistence is optional if browser storage is blocked.
+        }
+    }
+
+    function applySavedDesktopShellGeometry(shell) {
+        if (!shell) return;
+        if (!isDesktopShellGeometryEnabled()) {
+            clearDesktopShellGeometryStyles(shell);
+            return;
+        }
+        const geometry = getSavedLayoutWidths().desktop.shell;
+        if (!geometry) {
+            clearDesktopShellGeometryStyles(shell);
+            return;
+        }
+        setDesktopShellGeometryStyles(shell, clampDesktopShellGeometry(geometry));
+    }
+
+    function resizeDesktopShellFromOrigin(geometry, width, height) {
+        const limits = getDesktopShellSizeLimits(geometry.x, geometry.y);
+        return {
+            x: geometry.x,
+            y: geometry.y,
+            width: Math.round(clampNumber(width, limits.minWidth, limits.maxWidth)),
+            height: Math.round(clampNumber(height, limits.minHeight, limits.maxHeight)),
+        };
+    }
+
+    function bindDesktopShellGeometry(shell, moveHandle, resizeHandle) {
+        if (!shell || !moveHandle || !resizeHandle || shell.dataset.yzmShellGeometryBound === 'true') return;
+        shell.dataset.yzmShellGeometryBound = 'true';
+        let interaction = null;
+
+        const beginInteraction = (event, mode, handle) => {
+            if (!isDesktopShellGeometryEnabled() || event.button !== 0) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const hadSavedGeometry = !!getSavedLayoutWidths().desktop.shell;
+            const geometry = getCurrentDesktopShellGeometry(shell);
+            setDesktopShellGeometryStyles(shell, geometry);
+            interaction = {
+                mode,
+                handle,
+                pointerId: event.pointerId,
+                startX: event.clientX,
+                startY: event.clientY,
+                geometry,
+                hadSavedGeometry,
+                moved: false,
+            };
+            handle.setPointerCapture?.(event.pointerId);
+            shell.classList.add(mode === 'move' ? 'yzm-shell-moving' : 'yzm-shell-resizing');
+        };
+
+        const updateInteraction = (event) => {
+            if (!interaction || event.pointerId !== interaction.pointerId) return;
+            const deltaX = event.clientX - interaction.startX;
+            const deltaY = event.clientY - interaction.startY;
+            if (Math.abs(deltaX) > 1 || Math.abs(deltaY) > 1) interaction.moved = true;
+            const nextGeometry = interaction.mode === 'move'
+                ? clampDesktopShellGeometry({
+                    ...interaction.geometry,
+                    x: interaction.geometry.x + deltaX,
+                    y: interaction.geometry.y + deltaY,
+                })
+                : resizeDesktopShellFromOrigin(
+                    interaction.geometry,
+                    interaction.geometry.width + deltaX,
+                    interaction.geometry.height + deltaY,
+                );
+            setDesktopShellGeometryStyles(shell, nextGeometry);
+            event.preventDefault();
+        };
+
+        const finishInteraction = (event, cancelled = false) => {
+            if (!interaction || event.pointerId !== interaction.pointerId) return;
+            const finished = interaction;
+            interaction = null;
+            shell.classList.remove('yzm-shell-moving', 'yzm-shell-resizing');
+            try {
+                finished.handle.releasePointerCapture?.(event.pointerId);
+            } catch (_error) {
+                // Pointer capture may already be released by the browser.
+            }
+            if (cancelled) {
+                if (finished.hadSavedGeometry) {
+                    applySavedDesktopShellGeometry(shell);
+                } else {
+                    clearDesktopShellGeometryStyles(shell);
+                }
+            } else if (finished.moved) {
+                saveDesktopShellGeometry(shell);
+            } else if (!finished.hadSavedGeometry) {
+                clearDesktopShellGeometryStyles(shell);
+            }
+            event.preventDefault();
+            event.stopPropagation();
+        };
+
+        const handleGeometryKey = (event, mode) => {
+            if (!isDesktopShellGeometryEnabled() || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+            event.preventDefault();
+            event.stopPropagation();
+            const step = event.shiftKey ? 4 : 16;
+            const deltaX = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
+            const deltaY = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
+            const geometry = getCurrentDesktopShellGeometry(shell);
+            const nextGeometry = mode === 'move'
+                ? clampDesktopShellGeometry({ ...geometry, x: geometry.x + deltaX, y: geometry.y + deltaY })
+                : resizeDesktopShellFromOrigin(geometry, geometry.width + deltaX, geometry.height + deltaY);
+            setDesktopShellGeometryStyles(shell, nextGeometry);
+            saveDesktopShellGeometry(shell);
+        };
+
+        moveHandle.addEventListener('pointerdown', (event) => beginInteraction(event, 'move', moveHandle));
+        resizeHandle.addEventListener('pointerdown', (event) => beginInteraction(event, 'resize', resizeHandle));
+        [moveHandle, resizeHandle].forEach((handle) => {
+            handle.addEventListener('pointermove', updateInteraction);
+            handle.addEventListener('pointerup', (event) => finishInteraction(event));
+            handle.addEventListener('pointercancel', (event) => finishInteraction(event, true));
+        });
+        moveHandle.addEventListener('keydown', (event) => handleGeometryKey(event, 'move'));
+        resizeHandle.addEventListener('keydown', (event) => handleGeometryKey(event, 'resize'));
     }
 
     function updateThemeButton(themeButton, theme) {
@@ -14126,6 +14357,8 @@
         const list = document.createElement('ul');
         [
             '新增剧情规划功能。',
+            '新增电脑端可移动/缩放面板。',
+            '优化表格结构编辑：支持使用 [列名]、#[列名]、*[列名] 将列全局同步到所有会话。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -14218,7 +14451,21 @@
         return null;
     }
 
-    function createStructureColumnsField(labelText, columns = []) {
+    function getGlobalStructureColumnNames(tableId) {
+        return new Set((getStorage()?.getGlobalTableColumns?.(tableId) || [])
+            .map((entry) => cleanColumnName(entry?.definition))
+            .filter(Boolean));
+    }
+
+    function formatStructureColumnForEditor(column, globalNames) {
+        const definition = normalizeColumnDefinition(column);
+        const name = cleanColumnName(definition);
+        if (!definition || !name || !globalNames?.has(name)) return definition;
+        const modifiers = definition.slice(0, definition.length - name.length);
+        return `${modifiers}[${name}]`;
+    }
+
+    function createStructureColumnsField(labelText, columns = [], tableId = '') {
         const field = document.createElement('label');
         field.className = 'yzm-record-field yzm-record-field-wide';
         const label = document.createElement('span');
@@ -14226,26 +14473,63 @@
         label.textContent = labelText;
         const textarea = document.createElement('textarea');
         textarea.className = 'yzm-structure-columns-input';
-        textarea.value = columns.join(', ');
+        const globalNames = getGlobalStructureColumnNames(tableId);
+        textarea.value = columns.map((column) => formatStructureColumnForEditor(column, globalNames)).join(', ');
         textarea.setAttribute('aria-label', labelText);
         textarea.dataset.yzmStructureColumns = labelText;
         field.append(label, textarea);
         return field;
     }
 
-    function parseStructureColumnsText(value) {
+    function parseStructureColumnToken(value) {
+        const source = String(value || '').trim();
+        if (!source) return null;
+        const globalMatch = source.match(/^([#*]*)\s*\[\s*([#*]*)\s*([^\]]+?)\s*\]$/);
+        if (globalMatch) {
+            const definition = normalizeColumnDefinition(`${globalMatch[1]}${globalMatch[2]}${globalMatch[3]}`);
+            return definition ? { definition, global: true } : null;
+        }
+        const definition = normalizeColumnDefinition(source);
+        return definition ? { definition, global: false } : null;
+    }
+
+    function parseStructureColumnsDetailed(value) {
         return String(value || '')
             .split(/[,，\n]/)
-            .map(normalizeColumnDefinition)
+            .map(parseStructureColumnToken)
             .filter(Boolean);
     }
 
-    function readStructureColumns(textarea) {
-        return parseStructureColumnsText(textarea?.value);
+    function uniqueStructureColumnEntries(entries = []) {
+        const byName = new Map();
+        entries.forEach((entry) => {
+            const name = cleanColumnName(entry?.definition);
+            if (!name) return;
+            const existing = byName.get(name);
+            if (!existing) {
+                byName.set(name, { definition: entry.definition, global: entry.global === true });
+            } else if (entry.global === true) {
+                existing.definition = entry.definition;
+                existing.global = true;
+            }
+        });
+        return [...byName.values()];
+    }
+
+    function readStructureColumnEntries(textarea) {
+        return uniqueStructureColumnEntries(parseStructureColumnsDetailed(textarea?.value));
+    }
+
+    function createGlobalStructureColumnEntries(columns, entries) {
+        const globalNames = new Set(entries.filter((entry) => entry.global).map((entry) => cleanColumnName(entry.definition)));
+        return columns.map((definition, index) => ({ definition, index }))
+            .filter((entry) => globalNames.has(cleanColumnName(entry.definition)));
     }
 
     function formatCharacterStatusStructure(table) {
         const definitions = (table?.columns || []).map(normalizeColumnDefinition).filter(Boolean);
+        const globalNames = getGlobalStructureColumnNames(table?.id);
+        const formatGroup = (group) => group.map((column) => formatStructureColumnForEditor(column, globalNames)).join(', ');
         const breaks = getCharacterStatusBreaks(table, definitions.length);
         if (breaks) {
             return [
@@ -14253,7 +14537,7 @@
                 definitions.slice(breaks[0], breaks[1]),
                 definitions.slice(breaks[1], breaks[2]),
                 definitions.slice(breaks[2]),
-            ].map((group) => group.join(', ')).join('；');
+            ].map(formatGroup).join('；');
         }
 
         const layout = inferCharacterStatusColumnLayout(table);
@@ -14264,7 +14548,7 @@
             toDefinitions(layout.overviewColumns),
             toDefinitions(layout.attributeColumns),
             toDefinitions(layout.transactionColumns),
-        ].map((group) => group.join(', ')).join('；');
+        ].map(formatGroup).join('；');
     }
 
     function readCharacterStatusStructure(textarea) {
@@ -14272,16 +14556,34 @@
         if (segments.length !== 4) return null;
 
         const seen = new Set();
-        const groups = segments.map((segment) => parseStructureColumnsText(segment).filter((column) => {
-            const name = cleanColumnName(column);
+        const groups = segments.map((segment) => parseStructureColumnsDetailed(segment).filter((entry) => {
+            const name = cleanColumnName(entry?.definition);
             if (!name || seen.has(name)) return false;
             seen.add(name);
             return true;
         }));
         if (!groups[0].length) return null;
 
+        const columns = groups.flat().map((entry) => entry.definition);
+        const globalColumns = [];
+        let absoluteIndex = 0;
+        groups.forEach((group, section) => {
+            group.forEach((entry, sectionIndex) => {
+                if (entry.global) {
+                    globalColumns.push({
+                        definition: entry.definition,
+                        index: absoluteIndex,
+                        section,
+                        sectionIndex,
+                    });
+                }
+                absoluteIndex += 1;
+            });
+        });
+
         return {
-            columns: groups.flat(),
+            columns,
+            globalColumns,
             breaks: [
                 groups[0].length,
                 groups[0].length + groups[1].length,
@@ -14330,7 +14632,7 @@
         columnsWrap.className = 'yzm-record-fields';
         if (specialSets) {
             specialSets.forEach((set) => {
-                const field = createStructureColumnsField(set.label, set.columns);
+                const field = createStructureColumnsField(set.label, set.columns, table.id);
                 field.querySelector('textarea').dataset.yzmStructureKind = set.key;
                 columnsWrap.appendChild(field);
             });
@@ -14339,7 +14641,9 @@
             columnsInput.className = 'yzm-structure-columns-input';
             columnsInput.value = table.id === 'character_status'
                 ? formatCharacterStatusStructure(table)
-                : table.columns.join(', ');
+                : table.columns
+                    .map((column) => formatStructureColumnForEditor(column, getGlobalStructureColumnNames(table.id)))
+                    .join(', ');
             columnsInput.setAttribute('aria-label', '列名列表');
             columnsWrap.appendChild(columnsInput);
         }
@@ -14358,8 +14662,8 @@
         const hint = document.createElement('div');
         hint.className = 'yzm-structure-hint';
         hint.textContent = table.id === 'character_status'
-            ? '用三个分号分为头部信息；状态总览；基础属性；事务。头部信息最多显示三个字段，各段列名用逗号分隔。# 表示自动更新时追加，* 表示仅在单元格为空时写入。'
-            : '列名用逗号分隔；# 表示自动更新时追加，* 表示自动更新只在该单元格为空时写入，用户手动修改不受限制。';
+            ? '用三个分号分为头部信息；状态总览；基础属性；事务。头部信息最多显示三个字段。# 表示追加，* 表示仅空值写入；[列名] 表示全局新增，也支持 #[列名]、*[列名]。未加方括号的新增列仅当前会话生效。'
+            : '列名用逗号分隔；# 表示自动更新时追加，* 表示仅空值写入；[列名] 表示全局新增，也支持 #[列名]、*[列名]。未加方括号的新增列仅当前会话生效。';
 
         const actions = document.createElement('div');
         actions.className = 'yzm-structure-actions';
@@ -14387,6 +14691,7 @@
             const characterStatusStructure = table.id === 'character_status'
                 ? readCharacterStatusStructure(columnsInput)
                 : null;
+            let globalColumns = [];
             if (table.id === 'character_status' && !characterStatusStructure) {
                 window.alert('角色状态结构需要使用三个分号，依次分隔头部信息、状态总览、基础属性和事务。');
                 return;
@@ -14394,22 +14699,33 @@
             table.name = nextName;
             table.icon = nextIcon;
             if (specialSets) {
-                const mainColumns = readStructureColumns(columnsWrap.querySelector('[data-yzm-structure-kind="main"]'));
-                const branchColumns = readStructureColumns(columnsWrap.querySelector('[data-yzm-structure-kind="branch"]'));
+                const mainEntries = readStructureColumnEntries(columnsWrap.querySelector('[data-yzm-structure-kind="main"]'));
+                const branchEntries = readStructureColumnEntries(columnsWrap.querySelector('[data-yzm-structure-kind="branch"]'));
+                const mainColumns = mainEntries.map((entry) => entry.definition);
+                const branchColumns = branchEntries.map((entry) => entry.definition);
                 table.columns = table.id === 'memory_summary'
                     ? uniqueNormalizedColumns([
                         ...ensureMemorySummaryColumns(mainColumns, 'main'),
                         ...ensureMemorySummaryColumns(branchColumns, 'branch'),
                     ])
                     : uniqueNormalizedColumns([...mainColumns, ...branchColumns]);
+                globalColumns = createGlobalStructureColumnEntries(table.columns, [...mainEntries, ...branchEntries]);
             } else if (characterStatusStructure) {
                 table.columns = characterStatusStructure.columns;
                 table.characterStatusBreaks = characterStatusStructure.breaks;
+                globalColumns = characterStatusStructure.globalColumns;
             } else {
-                table.columns = readStructureColumns(columnsInput);
+                const entries = readStructureColumnEntries(columnsInput);
+                table.columns = entries.map((entry) => entry.definition);
+                globalColumns = createGlobalStructureColumnEntries(table.columns, entries);
             }
+            getStorage()?.setGlobalTableColumns?.(table.id, globalColumns);
             if (!isBuiltInTable(table.id)) {
-                upsertGlobalCustomTable(table);
+                const globalTable = loadGlobalCustomTables().find((entry) => entry.id === table.id);
+                upsertGlobalCustomTable({
+                    ...table,
+                    columns: globalTable?.columns?.length ? globalTable.columns : table.columns,
+                });
             }
 
             item.querySelector('[data-yzm-table-name]')?.replaceChildren(createTableIcon(table), document.createTextNode(nextName));
@@ -17543,7 +17859,6 @@
         shell.dataset.yzmTheme = getSavedTheme();
         shell.setAttribute('aria-label', DISPLAY_NAME);
         applyLayoutWidths(shell);
-        window.addEventListener('resize', () => updateLayoutModeClasses(shell));
 
         const bar = document.createElement('div');
         bar.className = 'yzm-shell-bar';
@@ -17570,11 +17885,28 @@
 
         const body = createPanelBody();
 
+        const moveHandle = createButton('', 'yzm-shell-move-handle');
+        moveHandle.title = '拖动窗口位置';
+        moveHandle.setAttribute('aria-label', '拖动窗口位置；聚焦后可用方向键移动');
+        moveHandle.innerHTML = '<span class="yzm-shell-move-glyph" aria-hidden="true"><i></i><i></i><i></i><i></i></span>';
+
+        const resizeHandle = createButton('', 'yzm-shell-resize-handle');
+        resizeHandle.title = '调整窗口大小';
+        resizeHandle.setAttribute('aria-label', '调整窗口大小；聚焦后可用方向键调整');
+        resizeHandle.innerHTML = '<span class="yzm-shell-resize-glyph" aria-hidden="true"><i></i><i></i><i></i></span>';
+
         actions.append(topActions, close);
         bar.append(brand, actions);
-        shell.append(bar, body);
+        shell.append(bar, body, moveHandle, resizeHandle);
         root.append(shell);
         document.body.appendChild(root);
+
+        bindDesktopShellGeometry(shell, moveHandle, resizeHandle);
+        applySavedDesktopShellGeometry(shell);
+        window.addEventListener('resize', () => {
+            updateLayoutModeClasses(shell);
+            applySavedDesktopShellGeometry(shell);
+        }, { passive: true });
 
         close.addEventListener('click', () => {
             blurPluginFocus(shell);
@@ -17743,7 +18075,10 @@
         }
         shell.hidden = forceOpen ? false : !shell.hidden;
         updateFloatingIconVisibility();
-        if (!shell.hidden) maybeShowUpdateNotice(root);
+        if (!shell.hidden) {
+            applySavedDesktopShellGeometry(shell);
+            maybeShowUpdateNotice(root);
+        }
     }
 
     function getExtensionMenuHost() {
