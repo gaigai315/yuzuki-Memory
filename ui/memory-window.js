@@ -3746,11 +3746,11 @@
     }
 
     async function runManualStoryDirector(button) {
-        if (!(button instanceof HTMLButtonElement) || button.disabled) return;
+        if (!(button instanceof HTMLButtonElement) || button.disabled) return null;
         const runtime = YuzukiMemory.StoryDirectorRuntime;
         if (typeof runtime?.replanLatest !== 'function') {
             showTaskToast('剧情导演模块尚未加载。', 'error');
-            return;
+            return { success: false, error: '剧情导演模块尚未加载。' };
         }
 
         const icon = button.querySelector('i');
@@ -3780,19 +3780,28 @@
 
         if (result?.success) {
             showTaskToast('剧情规划完成', 'success');
-            return;
+            return result;
         }
         const errorText = String(result?.error || '剧情规划失败，请稍后重试。');
         if (result?.skipped) {
             showTaskToast(errorText, 'warning');
-            return;
+            return result;
         }
         if (result?.errorNotified !== true) openStoryDirectorErrorDialog(ensureRoot(), errorText);
+        return result;
     }
 
     function openStoryDirectorErrorDialog(root, errorText = '') {
         const modalHost = getGlobalModalHost(root);
-        removeGlobalModal(root, '.yzm-story-director-error-modal');
+        const normalizedError = String(errorText || '').trim() || '未知错误';
+        const existingOverlay = modalHost.querySelector('.yzm-story-director-error-modal');
+        const existingContent = existingOverlay?.querySelector('.yzm-story-director-error-content');
+        if (existingContent) {
+            existingContent.textContent = normalizedError;
+            existingContent.scrollTop = 0;
+            return;
+        }
+        removePluginElement(existingOverlay);
 
         const overlay = document.createElement('div');
         overlay.className = 'yzm-structure-modal yzm-story-director-error-modal';
@@ -3820,13 +3829,14 @@
 
         const content = document.createElement('pre');
         content.className = 'yzm-story-director-error-content';
-        content.textContent = String(errorText || '').trim() || '未知错误';
+        content.textContent = normalizedError;
 
         const actions = document.createElement('div');
         actions.className = 'yzm-structure-actions yzm-story-director-error-actions';
         const copy = createIconButton('复制', 'fa-regular fa-copy', 'yzm-api-button yzm-story-director-error-copy');
+        const retry = createIconButton('重试', 'fa-solid fa-rotate-right', 'yzm-api-button yzm-api-button-primary yzm-story-director-error-retry');
         const confirm = createButton('关闭', 'yzm-add-table-confirm');
-        actions.append(copy, confirm);
+        actions.append(copy, retry, confirm);
 
         dialog.append(header, content, actions);
         overlay.appendChild(dialog);
@@ -3843,6 +3853,18 @@
         };
         close.onclick = closeDialog;
         confirm.onclick = closeDialog;
+        retry.onclick = async () => {
+            const result = await runManualStoryDirector(retry);
+            if (result?.success) {
+                closeDialog();
+                return;
+            }
+            const retryError = String(result?.error || '').trim();
+            if (retryError && content.isConnected) {
+                content.textContent = retryError;
+                content.scrollTop = 0;
+            }
+        };
         copy.onclick = async () => {
             const copied = await writeTextToClipboard(content.textContent || '');
             const icon = copy.querySelector('i');

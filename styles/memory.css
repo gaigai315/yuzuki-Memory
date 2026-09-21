@@ -3754,6 +3754,12 @@
     gap: 8px;
 }
 
+#yzm-memory-global-modal-root .yzm-story-director-error-retry:disabled,
+#yzm-memory-global-modal-root .yzm-story-director-error-retry.yzm-top-story-director-loading {
+    cursor: wait;
+    opacity: 0.62;
+}
+
 #yzm-memory-root .yzm-scheme-textarea {
     width: 100%;
     min-height: 170px;
