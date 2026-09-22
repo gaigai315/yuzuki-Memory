@@ -505,7 +505,7 @@
 }
 
 #yzm-memory-root .yzm-top-story-director:disabled,
-#yzm-memory-root .yzm-top-story-director-loading {
+#yzm-memory-root .yzm-story-director-loading {
     cursor: wait;
     opacity: 0.62;
 }
@@ -3755,7 +3755,7 @@
 }
 
 #yzm-memory-global-modal-root .yzm-story-director-error-retry:disabled,
-#yzm-memory-global-modal-root .yzm-story-director-error-retry.yzm-top-story-director-loading {
+#yzm-memory-global-modal-root .yzm-story-director-error-retry.yzm-story-director-loading {
     cursor: wait;
     opacity: 0.62;
 }
@@ -12136,22 +12136,30 @@
 
 #yzm-memory-global-modal-root .yzm-story-director-card-sheet {
     position: relative;
-    width: min(760px, calc(100vw - 28px), calc((100dvh - 28px) * 0.75));
+    width: min(760px, calc(100vw - 28px), calc((100dvh - 28px) * 0.75245));
     max-width: 100%;
     max-height: 100%;
-    aspect-ratio: 1086 / 1448;
+    aspect-ratio: 1076 / 1430;
     margin: auto;
-    overflow: hidden;
+    overflow: visible;
     color: #3e2e21;
-    background-image: url("../ui/dykbj.png");
-    background-position: center;
-    background-repeat: no-repeat;
-    background-size: 100% 100%;
+    background: transparent;
     border: 0;
-    border-radius: 6px;
-    box-shadow: 0 24px 70px rgba(31, 21, 13, 0.42);
+    border-radius: 0;
+    box-shadow: none;
     box-sizing: border-box;
+    isolation: isolate;
     pointer-events: auto;
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-sheet::before {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    content: "";
+    background: url("../ui/dykbj.png") center / contain no-repeat;
+    filter: drop-shadow(0 20px 28px rgba(31, 21, 13, 0.38));
+    pointer-events: none;
 }
 
 #yzm-memory-global-modal-root .yzm-story-director-card-close {
@@ -12187,9 +12195,10 @@
 
 #yzm-memory-global-modal-root .yzm-story-director-card-content {
     position: absolute;
+    z-index: 1;
     top: 28.5%;
     right: 10.5%;
-    bottom: 9.5%;
+    bottom: 10.5%;
     left: 10.5%;
     min-width: 0;
     min-height: 0;
@@ -12229,6 +12238,45 @@
     text-align: center;
 }
 
+#yzm-memory-global-modal-root .yzm-story-director-card-replan {
+    position: absolute;
+    right: 50%;
+    bottom: 5.2%;
+    z-index: 3;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    padding: 0;
+    color: #66503d;
+    background: rgba(248, 242, 230, 0.64);
+    border: 1px solid rgba(96, 70, 49, 0.2);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(75, 51, 33, 0.1);
+    box-sizing: border-box;
+    cursor: pointer;
+    font: inherit;
+    font-size: 17px;
+    line-height: 1;
+    touch-action: manipulation;
+    transform: translateX(50%);
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-replan:hover,
+#yzm-memory-global-modal-root .yzm-story-director-card-replan:focus-visible {
+    color: #2e2118;
+    background: rgba(255, 252, 245, 0.94);
+    border-color: rgba(96, 70, 49, 0.38);
+    outline: 0;
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-replan:disabled,
+#yzm-memory-global-modal-root .yzm-story-director-card-replan.yzm-story-director-loading {
+    cursor: wait;
+    opacity: 0.62;
+}
+
 @media (max-width: 760px) {
     #yzm-memory-global-modal-root.yzm-story-director-card-host-open {
         position: fixed !important;
@@ -12247,9 +12295,12 @@
     }
 
     #yzm-memory-global-modal-root .yzm-story-director-card-sheet {
-        width: min(calc(100vw - 8px), calc((100dvh - 8px) * 0.75));
+        width: min(calc(100vw - 8px), calc((100dvh - 8px) * 0.75245));
         max-height: calc(100dvh - 8px);
-        border-radius: 4px;
+    }
+
+    #yzm-memory-global-modal-root .yzm-story-director-card-sheet::before {
+        filter: drop-shadow(0 12px 18px rgba(31, 21, 13, 0.34));
     }
 
     #yzm-memory-global-modal-root .yzm-story-director-card-close {
@@ -12260,10 +12311,17 @@
 
     #yzm-memory-global-modal-root .yzm-story-director-card-content {
         right: 9.5%;
+        bottom: 12.5%;
         left: 9.5%;
         padding: 6px 8px 14px;
         font-size: 13px;
         line-height: 1.68;
+    }
+
+    #yzm-memory-global-modal-root .yzm-story-director-card-replan {
+        width: 34px;
+        height: 34px;
+        font-size: 15px;
     }
 }
 

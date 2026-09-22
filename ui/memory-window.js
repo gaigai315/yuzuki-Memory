@@ -2849,13 +2849,34 @@
             : 'yzm-story-director-card-content yzm-story-director-card-empty';
         body.textContent = content || '当前导演卡尚未生成';
 
-        sheet.append(closeButton, body);
+        const replanButton = document.createElement('button');
+        replanButton.type = 'button';
+        replanButton.className = 'yzm-story-director-card-replan';
+        replanButton.title = '重新剧情规划';
+        replanButton.setAttribute('aria-label', replanButton.title);
+        replanButton.innerHTML = '<i class="fa-solid fa-clapperboard" aria-hidden="true"></i>';
+
+        const refreshCardContent = () => {
+            const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
+            const latestContent = String(latest?.content || '').trim();
+            body.classList.toggle('yzm-story-director-card-empty', !latestContent);
+            body.textContent = latestContent || '当前导演卡尚未生成';
+            body.scrollTop = 0;
+        };
+
+        sheet.append(closeButton, body, replanButton);
         overlay.appendChild(sheet);
         host.appendChild(overlay);
         host.classList.add('yzm-story-director-card-host-open');
         activeStoryDirectorCardWindow = { host, overlay, abortController };
 
         closeButton.addEventListener('click', closeStoryDirectorCard, { signal: abortController.signal });
+        replanButton.addEventListener('click', async (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const result = await runManualStoryDirector(replanButton);
+            if (result?.success && body.isConnected) refreshCardContent();
+        }, { signal: abortController.signal });
         overlay.addEventListener('pointerdown', (event) => {
             if (event.target === overlay) closeStoryDirectorCard();
         }, { signal: abortController.signal });
@@ -3758,7 +3779,7 @@
         const originalIconClass = icon?.className || 'fa-solid fa-clapperboard';
         const originalLabel = label?.textContent || '剧情规划';
         button.disabled = true;
-        button.classList.add('yzm-top-story-director-loading');
+        button.classList.add('yzm-story-director-loading');
         button.setAttribute('aria-busy', 'true');
         if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
         if (label) label.textContent = '规划中';
@@ -3771,7 +3792,7 @@
         } finally {
             if (button.isConnected) {
                 button.disabled = false;
-                button.classList.remove('yzm-top-story-director-loading');
+                button.classList.remove('yzm-story-director-loading');
                 button.removeAttribute('aria-busy');
             }
             if (icon?.isConnected) icon.className = originalIconClass;

@@ -304,6 +304,20 @@ test('changing or saving a story director prompt does not automatically run the 
     assert.match(saveHandler, /cancelActiveRun/);
 });
 
+test('director card can replan through the shared runner and refresh in place', () => {
+    const openHandler = getFunctionSource(
+        memoryWindowSource,
+        'openStoryDirectorCard',
+        'bindShellOpenInteractionGuard',
+    );
+
+    assert.match(openHandler, /yzm-story-director-card-replan/);
+    assert.match(openHandler, /runManualStoryDirector\(replanButton\)/);
+    assert.match(openHandler, /getCurrentDirectorCard/);
+    assert.match(openHandler, /body\.classList\.toggle\('yzm-story-director-card-empty'/);
+    assert.match(openHandler, /body\.scrollTop = 0/);
+});
+
 test('prompt scheme export strips historian while legacy imports preserve it for migration', () => {
     const sandbox = createSandbox();
     const io = sandbox.window.YuzukiMemory.PromptSchemeIO;
