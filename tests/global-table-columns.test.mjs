@@ -27,9 +27,27 @@ function createLocalStorage() {
     };
 }
 
-function createStorageSandbox() {
+function createStorageSandbox(options = {}) {
     const settings = new Map();
     const localStorage = createLocalStorage();
+    const windowObject = {
+        YuzukiMemory: {
+            GlobalSettings: {
+                get: (key, fallback) => settings.has(key) ? structuredClone(settings.get(key)) : structuredClone(fallback),
+                set: (key, value) => {
+                    settings.set(key, structuredClone(value));
+                    return structuredClone(value);
+                },
+            },
+        },
+        setTimeout: () => 1,
+        clearTimeout() {},
+        setInterval: () => 1,
+        clearInterval() {},
+        addEventListener() {},
+    };
+    if (options.windowChatMetadata) windowObject.chat_metadata = options.windowChatMetadata;
+    if (options.saveChatConditional) windowObject.saveChatConditional = options.saveChatConditional;
     const sandbox = {
         console,
         Date,
@@ -43,26 +61,12 @@ function createStorageSandbox() {
         encodeURIComponent,
         decodeURIComponent,
         localStorage,
-        window: {
-            YuzukiMemory: {
-                GlobalSettings: {
-                    get: (key, fallback) => settings.has(key) ? structuredClone(settings.get(key)) : structuredClone(fallback),
-                    set: (key, value) => {
-                        settings.set(key, structuredClone(value));
-                        return structuredClone(value);
-                    },
-                },
-            },
-            setTimeout: () => 1,
-            clearTimeout() {},
-            setInterval: () => 1,
-            clearInterval() {},
-            addEventListener() {},
-        },
+        SillyTavern: { getContext: () => options.context || null },
+        window: windowObject,
     };
     vm.createContext(sandbox);
     vm.runInContext(storageSource, sandbox, { filename: 'storage.js' });
-    return { storage: sandbox.window.YuzukiMemory.Storage, localStorage };
+    return { storage: sandbox.window.YuzukiMemory.Storage, localStorage, sandbox };
 }
 
 function createFallbackState() {
@@ -153,6 +157,51 @@ test('global columns merge into new and existing sessions while local columns st
 
     const otherSession = storage.loadState(fallback, 'chat:other');
     assert.equal(otherSession.tables[0].columns.includes('仅当前会话'), false);
+});
+
+test('cloud chat metadata outranks browser cache and receives current-state saves', () => {
+    const fallback = createFallbackState();
+    const sessionId = 'char:0:cloud-chat';
+    const remoteState = structuredClone(fallback);
+    remoteState.sessionId = sessionId;
+    remoteState.sessionAliases = [sessionId, 'chat:cloud-chat'];
+    remoteState.updatedAt = 10;
+    remoteState.records.character_profile = [{
+        id: 'remote_record',
+        values: { 角色名: '远端角色', 待办事项: '', 约定: '远端数据' },
+    }];
+    const windowChatMetadata = {
+        file_name: 'cloud-chat',
+        yuzukiMemory: remoteState,
+    };
+    let saveCalls = 0;
+    const { storage, localStorage } = createStorageSandbox({
+        context: {
+            characterId: 0,
+            characters: [{ avatar: 'cloud.png', name: '云角色' }],
+        },
+        windowChatMetadata,
+        saveChatConditional: () => {
+            saveCalls += 1;
+        },
+    });
+    const staleLocalState = structuredClone(remoteState);
+    staleLocalState.updatedAt = 999;
+    staleLocalState.records.character_profile[0].values.约定 = '浏览器旧缓存';
+    localStorage.setItem(storage.getStorageKey(sessionId), JSON.stringify(staleLocalState));
+
+    assert.equal(storage.getCurrentSessionId(), sessionId);
+    const loaded = storage.loadState(fallback);
+    assert.equal(loaded.records.character_profile[0].values.约定, '远端数据');
+
+    loaded.records.character_profile[0].values.约定 = '删楼对账后的远端数据';
+    assert.equal(storage.saveState(loaded, fallback, undefined, {
+        force: true,
+        immediate: true,
+        saveOrigin: 'floor-ledger',
+    }), true);
+    assert.equal(windowChatMetadata.yuzukiMemory.records.character_profile[0].values.约定, '删楼对账后的远端数据');
+    assert.equal(saveCalls, 1);
 });
 
 test('global character-status columns preserve their selected section', () => {

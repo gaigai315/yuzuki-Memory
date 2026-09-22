@@ -34,10 +34,29 @@
             });
     }
 
+    function getChatMetadataSources(context = getContext()) {
+        const sources = [];
+        const append = (metadata) => {
+            if (!metadata || typeof metadata !== 'object' || sources.includes(metadata)) return;
+            sources.push(metadata);
+        };
+        append(context?.chatMetadata);
+        append(window.chat_metadata);
+        return sources;
+    }
+
+    function getChatMetadataValue(name, context = getContext()) {
+        for (const metadata of getChatMetadataSources(context)) {
+            const value = metadata?.[name];
+            if (value !== undefined && value !== null && String(value).trim() !== '') return value;
+        }
+        return undefined;
+    }
+
     function getCurrentSessionParts(context = getContext()) {
         if (!context) return null;
 
-        const chatId = context.chatMetadata?.file_name || context.chatId || context.chat?.file_name;
+        const chatId = getChatMetadataValue('file_name', context) || context.chatId || context.chat?.file_name;
         if (!chatId) return null;
 
         const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
@@ -274,44 +293,52 @@
 
     function readChatMetadataState() {
         const context = getContext();
-        const state = context?.chatMetadata?.[CHAT_METADATA_KEY];
-        return state && typeof state === 'object' ? state : null;
+        return pickNewestState(getChatMetadataSources(context)
+            .map((metadata) => metadata?.[CHAT_METADATA_KEY])
+            .filter((state) => state && typeof state === 'object'));
     }
 
-    function getChatMetadataForWrite(context = getContext()) {
-        if (!context) return null;
-        const metadata = context.chatMetadata;
-        if (metadata && typeof metadata === 'object') return metadata;
-        if (window.chat_metadata && typeof window.chat_metadata === 'object') return window.chat_metadata;
+    function getChatMetadataTargets(context = getContext()) {
+        const sources = getChatMetadataSources(context);
+        if (sources.length || !context) return sources;
 
         try {
             context.chatMetadata = {};
-            return context.chatMetadata && typeof context.chatMetadata === 'object' ? context.chatMetadata : null;
+            return getChatMetadataSources(context);
         } catch (error) {
             console.warn('[yuzuki-Memory] Chat metadata is not assignable in this SillyTavern build.', error);
-            return null;
+            return [];
         }
     }
 
     function saveChatMetadataNow(context = getContext()) {
-        if (!context) return;
         try {
-            if (typeof context.saveChat === 'function') {
-                context.saveChat();
+            if (typeof context?.saveChat === 'function') {
+                Promise.resolve(context.saveChat()).catch((error) => {
+                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
+                });
                 return;
             }
             if (typeof window.saveChatConditional === 'function') {
-                window.saveChatConditional();
+                Promise.resolve(window.saveChatConditional()).catch((error) => {
+                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
+                });
                 return;
             }
             if (typeof window.saveChat === 'function') {
-                window.saveChat();
+                Promise.resolve(window.saveChat()).catch((error) => {
+                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
+                });
                 return;
             }
-            if (typeof context.saveMetadata === 'function') {
-                context.saveMetadata();
+            if (typeof context?.saveMetadata === 'function') {
+                Promise.resolve(context.saveMetadata()).catch((error) => {
+                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
+                });
             } else if (typeof window.saveMetadataDebounced === 'function') {
-                window.saveMetadataDebounced();
+                Promise.resolve(window.saveMetadataDebounced()).catch((error) => {
+                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
+                });
             }
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
@@ -319,7 +346,6 @@
     }
 
     function scheduleChatSave(context = getContext(), immediate = false) {
-        if (!context) return;
         window.clearTimeout(chatSaveTimer);
         if (immediate) {
             saveChatMetadataNow(context);
@@ -330,10 +356,11 @@
 
     function writeChatMetadataState(state, options = {}) {
         const context = getContext();
-        if (!context) return false;
-        const metadata = getChatMetadataForWrite(context);
-        if (!metadata) return false;
-        metadata[CHAT_METADATA_KEY] = state;
+        const metadataTargets = getChatMetadataTargets(context);
+        if (!metadataTargets.length) return false;
+        metadataTargets.forEach((metadata) => {
+            metadata[CHAT_METADATA_KEY] = state;
+        });
         scheduleChatSave(context, !!options.immediate);
         return true;
     }
@@ -431,7 +458,7 @@
         if (!sessionId || sessionId !== getCurrentSessionId()) return [];
         const context = getContext();
         const parts = getCurrentSessionParts(context);
-        const parentChatId = String(context?.chatMetadata?.main_chat || '').trim();
+        const parentChatId = String(getChatMetadataValue('main_chat', context) || '').trim();
         if (!parts || !parentChatId || parentChatId === parts.chatId) return [];
         return getSessionAliases({ ...parts, chatId: parentChatId });
     }

@@ -253,16 +253,51 @@
         if (!ledger) return [];
         const seen = new Set();
         const active = [];
+        const signatureEntries = new Map();
+        Object.values(ledger.entries || {}).forEach((entry) => {
+            const signature = String(entry?.signature || '');
+            if (!signature) return;
+            if (!signatureEntries.has(signature)) signatureEntries.set(signature, []);
+            signatureEntries.get(signature).push(entry);
+        });
+        let repairedMarkerCount = 0;
         (Array.isArray(chat) ? chat : []).forEach((message, floor) => {
-            const marker = getMarker(message);
-            if (!marker || String(marker.ledgerId || '') !== ledger.id) return;
-            const entryId = String(marker.entryId || '').trim();
             const currentSwipe = Math.max(0, Math.round(Number(message?.swipe_id) || 0));
-            const markerSwipe = Math.max(0, Math.round(Number(marker.swipe) || 0));
-            if (!entryId || seen.has(entryId) || markerSwipe !== currentSwipe || !ledger.entries[entryId]) return;
+            let marker = getMarker(message);
+            let entryId = String(marker?.entryId || '').trim();
+            const markerSwipe = Math.max(0, Math.round(Number(marker?.swipe) || 0));
+            const markerMatches = marker
+                && String(marker.ledgerId || '') === ledger.id
+                && entryId
+                && !seen.has(entryId)
+                && markerSwipe === currentSwipe
+                && ledger.entries[entryId];
+            if (!markerMatches) {
+                const signature = getMessageSignature(message);
+                const candidates = (signatureEntries.get(signature) || []).filter((entry) => (
+                    !seen.has(entry.id) && entry.swipe === currentSwipe
+                ));
+                if (candidates.length !== 1) return;
+                entryId = candidates[0].id;
+                marker = {
+                    version: LEDGER_VERSION,
+                    ledgerId: ledger.id,
+                    entryId,
+                    swipe: currentSwipe,
+                };
+                setMarker(message, marker);
+                repairedMarkerCount += 1;
+            }
             seen.add(entryId);
             active.push({ id: entryId, floor });
         });
+        if (repairedMarkerCount) {
+            scheduleChatSave();
+            console.info('[yuzuki-Memory FloorLedger] repaired missing message markers', {
+                ledgerId: ledger.id,
+                repairedMarkerCount,
+            });
+        }
         return active;
     }
 
@@ -297,9 +332,17 @@
             const context = getContext();
             try {
                 if (typeof context?.saveChat === 'function') {
-                    void context.saveChat();
+                    Promise.resolve(context.saveChat()).catch((error) => {
+                        console.warn('[yuzuki-Memory FloorLedger] failed to save message marker', error);
+                    });
+                } else if (typeof window.saveChatConditional === 'function') {
+                    Promise.resolve(window.saveChatConditional()).catch((error) => {
+                        console.warn('[yuzuki-Memory FloorLedger] failed to save message marker', error);
+                    });
                 } else if (typeof window.saveChat === 'function') {
-                    void window.saveChat();
+                    Promise.resolve(window.saveChat()).catch((error) => {
+                        console.warn('[yuzuki-Memory FloorLedger] failed to save message marker', error);
+                    });
                 }
             } catch (error) {
                 console.warn('[yuzuki-Memory FloorLedger] failed to save message marker', error);

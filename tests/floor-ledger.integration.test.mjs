@@ -440,6 +440,53 @@ test('camelCase SillyTavern delete event replays state after its message disappe
     assert.deepEqual(storedState.floorLedger.activeEntries, []);
 });
 
+test('cloud chat fallback persists floor markers through saveChatConditional', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    storedState = parser.createDefaultState();
+    chat = [assistantMemoryMessage('#角色档案\n[云端角色] | 身份: 侍卫')];
+    const previousContextSaveChat = context.saveChat;
+    const previousWindowSaveChatConditional = window.saveChatConditional;
+    let saveCalls = 0;
+    context.saveChat = undefined;
+    window.saveChatConditional = () => {
+        saveCalls += 1;
+    };
+
+    try {
+        assert.equal(parser.applyMemoryText(chat[0].mes, { floor: 0, dispatch: false }).success, true);
+        assert.ok(chat[0].extra.yzm_memory_floor_delta?.entryId);
+        flushTimers();
+        assert.equal(saveCalls, 1);
+    } finally {
+        context.saveChat = previousContextSaveChat;
+        window.saveChatConditional = previousWindowSaveChatConditional;
+        timers.clear();
+    }
+});
+
+test('markerless cloud chat recovers active floors by signature before deletion replay', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        assistantMemoryMessage('#角色档案\n[云端角色] | 身份: 侍卫'),
+        assistantMemoryMessage('#角色档案\n[云端角色] | 当前位置: 后院'),
+    ];
+
+    assert.equal(parser.applyMemoryText(chat[0].mes, { floor: 0, dispatch: false }).success, true);
+    assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false }).success, true);
+    delete chat[0].extra.yzm_memory_floor_delta;
+    delete chat[1].extra.yzm_memory_floor_delta;
+    chat.splice(1, 1);
+
+    assert.equal(ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true }).changed, true);
+    const record = storedState.records.character_profile[0];
+    assert.equal(record.values.身份, '侍卫');
+    assert.equal(record.values.当前位置, '');
+    assert.ok(chat[0].extra.yzm_memory_floor_delta?.entryId, 'existing cloud floor should regain its marker');
+    assert.equal(storedState.floorLedger.activeEntries.length, 1);
+});
+
 test('explicit delete event replays plot and character state despite a stale generation flag', () => {
     const parser = window.YuzukiMemory.MemoryTagParser;
     storedState = parser.createDefaultState();
