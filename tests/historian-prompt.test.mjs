@@ -318,6 +318,25 @@ test('director card can replan through the shared runner and refresh in place', 
     assert.match(openHandler, /body\.scrollTop = 0/);
 });
 
+test('story director progress indicator follows the live runtime lifecycle', () => {
+    const ensureIndicator = getFunctionSource(
+        memoryWindowSource,
+        'ensureStoryDirectorProgressIndicator',
+        'updateStoryDirectorProgressIndicator',
+    );
+    const bindIndicator = getFunctionSource(
+        memoryWindowSource,
+        'bindStoryDirectorProgressListener',
+        'scheduleSessionWorkspaceRefresh',
+    );
+
+    assert.match(ensureIndicator, /yzm-story-director-progress/);
+    assert.match(ensureIndicator, /正在剧情规划/);
+    assert.match(bindIndicator, /yzmStoryDirectorProgressHandler/);
+    assert.match(bindIndicator, /event\?\.detail\?\.running === true/);
+    assert.match(bindIndicator, /updateStoryDirectorProgressIndicator\(\)/);
+});
+
 test('prompt scheme export strips historian while legacy imports preserve it for migration', () => {
     const sandbox = createSandbox();
     const io = sandbox.window.YuzukiMemory.PromptSchemeIO;

@@ -9,6 +9,8 @@
     const GLOBAL_MODAL_ROOT_ID = 'yzm-memory-global-modal-root';
     const FLOATING_ROOT_ID = 'yzm-memory-floating-root';
     const FLOATING_BUTTON_ID = 'yzm-memory-floating-button';
+    const STORY_DIRECTOR_PROGRESS_ID = 'yzm-story-director-progress';
+    const STORY_DIRECTOR_RUN_STATE_EVENT = 'yzm-story-director-run-state';
     const FLOATING_LONG_PRESS_MS = 650;
     const FLOATING_DOUBLE_TAP_MS = 360;
     const TEXT_CONTROL_SELECTOR = [
@@ -3057,6 +3059,48 @@
         return !!shell && !shell.hidden;
     }
 
+    function ensureStoryDirectorProgressIndicator(root = ensureRoot()) {
+        let indicator = document.getElementById(STORY_DIRECTOR_PROGRESS_ID);
+        if (indicator) return indicator;
+
+        indicator = document.createElement('div');
+        indicator.id = STORY_DIRECTOR_PROGRESS_ID;
+        indicator.className = 'yzm-story-director-progress';
+        indicator.hidden = true;
+        indicator.setAttribute('role', 'status');
+        indicator.setAttribute('aria-live', 'polite');
+        indicator.setAttribute('aria-atomic', 'true');
+        indicator.setAttribute('aria-label', '正在剧情规划，请稍候');
+
+        const spinner = document.createElement('span');
+        spinner.className = 'yzm-story-director-progress-spinner';
+        spinner.setAttribute('aria-hidden', 'true');
+        spinner.innerHTML = '<i class="fa-solid fa-clapperboard"></i>';
+
+        const label = document.createElement('span');
+        label.className = 'yzm-story-director-progress-label';
+        label.textContent = '正在剧情规划';
+
+        const dots = document.createElement('span');
+        dots.className = 'yzm-story-director-progress-dots';
+        dots.setAttribute('aria-hidden', 'true');
+        dots.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
+
+        indicator.append(spinner, label, dots);
+        root.appendChild(indicator);
+        return indicator;
+    }
+
+    function updateStoryDirectorProgressIndicator(running = YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true) {
+        const root = document.getElementById(ROOT_ID);
+        if (!root) return false;
+        const indicator = ensureStoryDirectorProgressIndicator(root);
+        const visible = running === true;
+        indicator.hidden = !visible;
+        indicator.setAttribute('aria-hidden', String(!visible));
+        return visible;
+    }
+
     function updateFloatingIconVisibility() {
         const button = document.getElementById(FLOATING_BUTTON_ID);
         if (!button) return;
@@ -4349,6 +4393,8 @@
     function setTheme(shell, theme, options = {}) {
         const nextTheme = theme === 'dark' ? 'dark' : 'light';
         shell.dataset.yzmTheme = nextTheme;
+        const memoryRoot = document.getElementById(ROOT_ID);
+        if (memoryRoot) memoryRoot.dataset.yzmTheme = nextTheme;
         const globalModalHost = document.getElementById(GLOBAL_MODAL_ROOT_ID);
         if (globalModalHost) globalModalHost.dataset.yzmTheme = nextTheme;
         updateThemeButton(shell.querySelector('.yzm-theme-button'), nextTheme);
@@ -17919,12 +17965,15 @@
         let root = document.getElementById(ROOT_ID);
         if (root) {
             applyHostCompatibilityClasses(root);
+            root.dataset.yzmTheme = root.querySelector('.yzm-shell')?.dataset?.yzmTheme || getSavedTheme();
+            ensureStoryDirectorProgressIndicator(root);
             return root;
         }
 
         root = document.createElement('div');
         root.id = ROOT_ID;
         root.className = 'yzm-root';
+        root.dataset.yzmTheme = getSavedTheme();
         applyHostCompatibilityClasses(root);
 
         const shell = document.createElement('section');
@@ -17973,6 +18022,7 @@
         bar.append(brand, actions);
         shell.append(bar, body, moveHandle, resizeHandle);
         root.append(shell);
+        ensureStoryDirectorProgressIndicator(root);
         document.body.appendChild(root);
 
         bindDesktopShellGeometry(shell, moveHandle, resizeHandle);
@@ -18091,6 +18141,18 @@
             openStoryDirectorErrorDialog(ensureRoot(), errorText || '未知错误');
         };
         window.addEventListener('yzm-story-director-error', window.yzmStoryDirectorErrorHandler);
+    }
+
+    function bindStoryDirectorProgressListener() {
+        const previousHandler = window.yzmStoryDirectorProgressHandler;
+        if (typeof previousHandler === 'function') {
+            window.removeEventListener(STORY_DIRECTOR_RUN_STATE_EVENT, previousHandler);
+        }
+        window.yzmStoryDirectorProgressHandler = (event) => {
+            updateStoryDirectorProgressIndicator(event?.detail?.running === true);
+        };
+        window.addEventListener(STORY_DIRECTOR_RUN_STATE_EVENT, window.yzmStoryDirectorProgressHandler);
+        updateStoryDirectorProgressIndicator();
     }
 
     function scheduleSessionWorkspaceRefresh(root, sessionId) {
@@ -18302,6 +18364,7 @@
         bindMemoryStateUpdateListener();
         bindCharacterGrowthCompletionListener();
         bindStoryDirectorErrorListener();
+        bindStoryDirectorProgressListener();
         startManagedVectorBookNameSync();
         getVectorStore()?.whenReady?.().then(() => {
             const root = document.getElementById(ROOT_ID);

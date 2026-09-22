@@ -57,6 +57,7 @@
     pointer-events: none;
 }
 
+#yzm-memory-root[data-yzm-theme="dark"],
 #yzm-memory-root .yzm-shell[data-yzm-theme="dark"],
 #yzm-memory-global-modal-root[data-yzm-theme="dark"] {
     --yzm-bg: rgba(8, 15, 35, 0.92);
@@ -176,6 +177,141 @@
     -webkit-user-select: none;
     -webkit-touch-callout: none;
     -webkit-user-drag: none;
+}
+
+#yzm-memory-root .yzm-story-director-progress {
+    position: fixed;
+    top: 50%;
+    right: max(12px, env(safe-area-inset-right, 0px));
+    z-index: 30002;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 44px;
+    min-height: 188px;
+    padding: 12px 8px 14px;
+    color: var(--yzm-text);
+    background: var(--yzm-bg);
+    border: 1px solid var(--yzm-border);
+    border-radius: 11px;
+    box-shadow: var(--yzm-shadow);
+    box-shadow: 0 12px 32px color-mix(in srgb, var(--yzm-text) 18%, transparent);
+    box-sizing: border-box;
+    opacity: 1;
+    pointer-events: none;
+    transform: translateY(-50%);
+    animation: yzm-story-director-progress-enter 180ms ease-out both;
+    backdrop-filter: blur(12px) saturate(115%);
+    -webkit-backdrop-filter: blur(12px) saturate(115%);
+}
+
+#yzm-memory-root .yzm-story-director-progress::after {
+    position: absolute;
+    top: 12px;
+    right: -1px;
+    bottom: 12px;
+    width: 3px;
+    content: "";
+    background: currentColor;
+    border-radius: 3px 0 0 3px;
+    opacity: 0.22;
+}
+
+#yzm-memory-root .yzm-story-director-progress-spinner {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 27px;
+    height: 27px;
+    color: inherit;
+}
+
+#yzm-memory-root .yzm-story-director-progress-spinner::before {
+    position: absolute;
+    inset: 0;
+    content: "";
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    opacity: 0.55;
+    animation: yzm-story-director-progress-spin 900ms linear infinite;
+}
+
+#yzm-memory-root .yzm-story-director-progress-spinner i {
+    font-size: 11px;
+    line-height: 1;
+}
+
+#yzm-memory-root .yzm-story-director-progress-label {
+    display: block;
+    color: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1.35;
+    letter-spacing: 0;
+    text-orientation: upright;
+    white-space: nowrap;
+    writing-mode: vertical-rl;
+}
+
+#yzm-memory-root .yzm-story-director-progress-dots {
+    display: flex;
+    flex: 0 0 auto;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+}
+
+#yzm-memory-root .yzm-story-director-progress-dots i {
+    display: block;
+    width: 3px;
+    height: 3px;
+    background: currentColor;
+    border-radius: 50%;
+    opacity: 0.3;
+    animation: yzm-story-director-progress-dot 1200ms ease-in-out infinite;
+}
+
+#yzm-memory-root .yzm-story-director-progress-dots i:nth-child(2) {
+    animation-delay: 160ms;
+}
+
+#yzm-memory-root .yzm-story-director-progress-dots i:nth-child(3) {
+    animation-delay: 320ms;
+}
+
+@keyframes yzm-story-director-progress-enter {
+    from {
+        opacity: 0;
+        transform: translate(14px, -50%);
+    }
+    to {
+        opacity: 1;
+        transform: translate(0, -50%);
+    }
+}
+
+@keyframes yzm-story-director-progress-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+@keyframes yzm-story-director-progress-dot {
+    0%,
+    70%,
+    100% {
+        opacity: 0.24;
+        transform: scale(0.8);
+    }
+    35% {
+        opacity: 0.9;
+        transform: scale(1.15);
+    }
 }
 
 #yzm-memory-root .yzm-shell {
@@ -9497,6 +9633,28 @@
         height: 34px;
     }
 
+    #yzm-memory-root .yzm-story-director-progress {
+        right: max(4px, env(safe-area-inset-right, 0px));
+        gap: 8px;
+        width: 38px;
+        min-height: 164px;
+        padding: 10px 6px 12px;
+        border-radius: 9px;
+    }
+
+    #yzm-memory-root .yzm-story-director-progress-spinner {
+        width: 24px;
+        height: 24px;
+    }
+
+    #yzm-memory-root .yzm-story-director-progress-spinner i {
+        font-size: 10px;
+    }
+
+    #yzm-memory-root .yzm-story-director-progress-label {
+        font-size: 13px;
+    }
+
     #yzm-memory-root .yzm-shell {
         display: flex;
         flex-direction: column;
@@ -12116,6 +12274,14 @@
     z-index: 2147483647 !important;
     overflow: hidden;
     pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    #yzm-memory-root .yzm-story-director-progress,
+    #yzm-memory-root .yzm-story-director-progress-spinner::before,
+    #yzm-memory-root .yzm-story-director-progress-dots i {
+        animation: none;
+    }
 }
 
 #yzm-memory-global-modal-root .yzm-story-director-card-modal {

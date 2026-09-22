@@ -863,18 +863,26 @@ test('manual replan rejects while foreground or memory work is busy', async () =
 });
 
 test('manual replan rejects a concurrent director run', async () => {
-    const { memory } = createSandbox();
+    const { memory, dispatchedEvents } = createSandbox();
     memory.LlmClient.requestAgentWithTavern = async (_messages, _tools, options) => new Promise((resolve, reject) => {
         options.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
     });
 
     const activeRun = memory.StoryDirectorRuntime.replanLatest();
+    assert.equal(memory.StoryDirectorRuntime.isRunning(), true);
     const secondRun = await memory.StoryDirectorRuntime.replanLatest();
     assert.equal(secondRun.reason, 'director-busy');
 
     memory.StoryDirectorRuntime.cancelActiveRun('test complete');
     const result = await activeRun;
     assert.equal(result.aborted, true);
+    assert.equal(memory.StoryDirectorRuntime.isRunning(), false);
+    assert.deepEqual(
+        dispatchedEvents
+            .filter((event) => event.type === 'yzm-story-director-run-state')
+            .map((event) => event.detail.running),
+        [true, false],
+    );
 });
 
 test('manual replan can retry after a request failure and replace the director card', async () => {

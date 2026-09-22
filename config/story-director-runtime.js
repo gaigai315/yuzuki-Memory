@@ -39,6 +39,7 @@
     const TRACK_B_HISTORY_TITLE = '轨道B调用历史（近10轮）';
     const RUN_DELAY_MS = 1800;
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
+    const RUN_STATE_EVENT = 'yzm-story-director-run-state';
     let bound = false;
     let bindRetryTimer = null;
     let runTimer = null;
@@ -57,6 +58,19 @@
 
     function isStoryDirectorEnabled() {
         return YuzukiMemory.GlobalSettings?.get?.(PLUGIN_SETTINGS_KEY, {})?.enableStoryDirector === true;
+    }
+
+    function isRunning() {
+        return Boolean(activeRunSignature);
+    }
+
+    function dispatchRunState(running, sessionId = '') {
+        window.dispatchEvent(new CustomEvent(RUN_STATE_EVENT, {
+            detail: {
+                running: running === true,
+                sessionId: String(sessionId || ''),
+            },
+        }));
     }
 
     function getFallbackState() {
@@ -846,6 +860,7 @@
         const controller = new AbortController();
         activeAbortController = controller;
         activeRunSignature = source.signature;
+        dispatchRunState(true, sessionId);
         const runContext = {
             sessionId,
             source,
@@ -972,6 +987,7 @@
             unregisterRuntimeTools(manager);
             if (activeAbortController === controller) activeAbortController = null;
             if (activeRunSignature === source.signature) activeRunSignature = '';
+            dispatchRunState(false, sessionId);
         }
     }
 
@@ -1307,6 +1323,7 @@
         clearPendingCard,
         scheduleDirector,
         cancelActiveRun,
+        isRunning,
         runDirector,
         replanLatest,
         bind,
