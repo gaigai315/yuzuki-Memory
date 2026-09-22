@@ -3091,11 +3091,40 @@
         return indicator;
     }
 
+    function positionStoryDirectorProgressIndicator(indicator = document.getElementById(STORY_DIRECTOR_PROGRESS_ID)) {
+        if (!indicator?.isConnected) return false;
+
+        const viewport = window.visualViewport;
+        const viewportHeight = Number(viewport?.height)
+            || window.innerHeight
+            || document.documentElement.clientHeight
+            || 0;
+        const viewportWidth = Number(viewport?.width)
+            || window.innerWidth
+            || document.documentElement.clientWidth
+            || 0;
+        const offsetTop = Number.isFinite(Number(viewport?.offsetTop)) ? Number(viewport.offsetTop) : 0;
+        const offsetLeft = Number.isFinite(Number(viewport?.offsetLeft)) ? Number(viewport.offsetLeft) : 0;
+        const layoutWidth = window.innerWidth || document.documentElement.clientWidth || viewportWidth;
+        const rightOffset = Math.max(0, layoutWidth - (offsetLeft + viewportWidth));
+
+        indicator.style.setProperty(
+            '--yzm-story-director-progress-center-y',
+            `${Math.max(0, offsetTop + viewportHeight / 2)}px`,
+        );
+        indicator.style.setProperty(
+            '--yzm-story-director-progress-right-offset',
+            `${rightOffset}px`,
+        );
+        return true;
+    }
+
     function updateStoryDirectorProgressIndicator(running = YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true) {
         const root = document.getElementById(ROOT_ID);
         if (!root) return false;
         const indicator = ensureStoryDirectorProgressIndicator(root);
         const visible = running === true;
+        if (visible) positionStoryDirectorProgressIndicator(indicator);
         indicator.hidden = !visible;
         indicator.setAttribute('aria-hidden', String(!visible));
         return visible;
@@ -18148,6 +18177,13 @@
         if (typeof previousHandler === 'function') {
             window.removeEventListener(STORY_DIRECTOR_RUN_STATE_EVENT, previousHandler);
         }
+        window.yzmStoryDirectorProgressViewportController?.abort?.();
+        const viewportController = new AbortController();
+        window.yzmStoryDirectorProgressViewportController = viewportController;
+        const reposition = () => positionStoryDirectorProgressIndicator();
+        window.addEventListener('resize', reposition, { passive: true, signal: viewportController.signal });
+        window.visualViewport?.addEventListener?.('resize', reposition, { passive: true, signal: viewportController.signal });
+        window.visualViewport?.addEventListener?.('scroll', reposition, { passive: true, signal: viewportController.signal });
         window.yzmStoryDirectorProgressHandler = (event) => {
             updateStoryDirectorProgressIndicator(event?.detail?.running === true);
         };

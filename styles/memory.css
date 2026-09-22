@@ -181,8 +181,8 @@
 
 #yzm-memory-root .yzm-story-director-progress {
     position: fixed;
-    top: 50%;
-    right: max(12px, env(safe-area-inset-right, 0px));
+    top: var(--yzm-story-director-progress-center-y, 50dvh);
+    right: calc(var(--yzm-story-director-progress-right-offset, 0px) + max(12px, env(safe-area-inset-right, 0px)));
     z-index: 30002;
     display: flex;
     flex-direction: column;
@@ -9634,7 +9634,7 @@
     }
 
     #yzm-memory-root .yzm-story-director-progress {
-        right: max(4px, env(safe-area-inset-right, 0px));
+        right: calc(var(--yzm-story-director-progress-right-offset, 0px) + max(4px, env(safe-area-inset-right, 0px)));
         gap: 8px;
         width: 38px;
         min-height: 164px;

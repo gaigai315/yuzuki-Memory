@@ -332,7 +332,14 @@ test('story director progress indicator follows the live runtime lifecycle', () 
 
     assert.match(ensureIndicator, /yzm-story-director-progress/);
     assert.match(ensureIndicator, /正在剧情规划/);
+    assert.match(ensureIndicator, /visualViewport/);
+    assert.match(ensureIndicator, /offsetTop/);
+    assert.match(ensureIndicator, /viewportHeight \/ 2/);
+    assert.match(ensureIndicator, /yzm-story-director-progress-center-y/);
     assert.match(bindIndicator, /yzmStoryDirectorProgressHandler/);
+    assert.match(bindIndicator, /yzmStoryDirectorProgressViewportController/);
+    assert.match(bindIndicator, /visualViewport\?\.addEventListener\?\.\('resize'/);
+    assert.match(bindIndicator, /visualViewport\?\.addEventListener\?\.\('scroll'/);
     assert.match(bindIndicator, /event\?\.detail\?\.running === true/);
     assert.match(bindIndicator, /updateStoryDirectorProgressIndicator\(\)/);
 });
