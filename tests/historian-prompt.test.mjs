@@ -119,7 +119,14 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /若最新输入为 User/);
     assert.match(director.prompt, /若最新输入为 Assistant/);
     assert.match(director.prompt, /严禁复述上一轮已发生事实/);
-    assert.match(director.prompt, /3类反馈预案（积极\/中立\/对立）/);
+    assert.match(director.prompt, /最新的 User 输入是已经发生的既定行动/);
+    assert.match(director.prompt, /响应角色如何回应这条 User 输入的3类预案/);
+    assert.match(director.prompt, /每项必须以具体响应角色为主语/);
+    assert.match(director.prompt, /严禁替\{\{user\}\}补写、预测或安排动作、台词、选择、态度与心理/);
+    assert.match(director.prompt, /预案 1（响应角色采取积极回应）/);
+    assert.match(director.prompt, /预案 2（响应角色采取克制或中立回应）/);
+    assert.match(director.prompt, /预案 3（响应角色采取对抗回应）/);
+    assert.doesNotMatch(director.prompt, /当前角色正向：顺从\/接纳\/主动/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
     assert.match(director.prompt, /所属模块：\[Module 1 \/ 2 \/ 3 \/ 4\]/);
     assert.match(director.prompt, /四类模块调用权重相同/);
