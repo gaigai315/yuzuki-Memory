@@ -429,8 +429,11 @@ test('director automatically records the Track B module and NPCs from a successf
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
-    assert.match(requests[0][1].content, /近10轮调用历史/);
+    assert.match(requests[0][1].content, /近10次调用历史/);
+    assert.match(requests[0][1].content, /优先选择出现次数最少且不与上一次重复的模块/);
+    assert.match(requests[0][1].content, /连续4次未出现时强制补位/);
     assert.match(requests[0][1].content, /最近3次调用过的NPC或势力/);
+    assert.match(requests[0][1].content, /不得因当前商战、权谋或其他主线题材反复回落到同类推进/);
     assert.match(getState().storyDirector.ledger, /【轨道B调用历史（近10轮）】/);
     assert.match(getState().storyDirector.ledger, /- Module 2｜出场角色：林雪、赵衡/);
     assert.match(getState().storyDirector.ledger, /【信息隔离】/);

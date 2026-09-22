@@ -119,10 +119,17 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /若最新输入为 User/);
     assert.match(director.prompt, /若最新输入为 Assistant/);
     assert.match(director.prompt, /严禁复述上一轮已发生事实/);
-    assert.match(director.prompt, /3类反馈策略（积极\/中立\/对立）/);
+    assert.match(director.prompt, /3类反馈预案（积极\/中立\/对立）/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
     assert.match(director.prompt, /所属模块：\[Module 1 \/ 2 \/ 3 \/ 4\]/);
-    assert.match(director.prompt, /签发三个宏观事件推进备选标签/);
+    assert.match(director.prompt, /四类模块调用权重相同/);
+    assert.match(director.prompt, /优先选择出现次数最少且不与上一次重复的模块/);
+    assert.match(director.prompt, /连续4次未出现时必须强制补位/);
+    assert.match(director.prompt, /情感\/追求\/误会\/私心/);
+    assert.match(director.prompt, /敌对\/陷害\/野心\/博弈/);
+    assert.match(director.prompt, /不得因当前主线题材回落为同类推进/);
+    assert.match(director.prompt, /跳过轨道A并执行轨道B/);
+    assert.doesNotMatch(director.prompt, /跳过执行轨道B/);
 });
 
 test('story director settings keep the selected custom prompt active', () => {
