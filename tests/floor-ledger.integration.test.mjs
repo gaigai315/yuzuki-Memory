@@ -705,3 +705,68 @@ test('plot replay removes deleted realtime lines and keeps a manually added line
     assert.deepEqual(rebuiltRecord.plotItemMeta.main, [{ id: 'manual_plot', source: 'manual' }]);
     assert.deepEqual(rebuiltRecord.hiddenPlotItems.main, [true]);
 });
+
+test('table-shape migration keeps realtime plot summaries reversible after their floor is deleted', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('开始'),
+        assistantMemoryMessage('#主线摘要\n[2026年9月22日,18:00-19:30] | 内容: 张三进入大厅。'),
+    ];
+
+    assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false }).success, true);
+    assert.match(storedState.records.plot_summary[0].values.主线, /张三进入大厅/);
+
+    const profileTable = storedState.tables.find((table) => table.id === 'character_profile');
+    profileTable.columns.push('阵营');
+    assert.equal(ledger.reconcileNow({ reason: 'table-shape-changed', force: true }).changed, true);
+
+    chat = [chat[0]];
+    assert.equal(ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true }).changed, true);
+    assert.deepEqual(storedState.records.plot_summary, []);
+});
+
+test('legacy table-shape rebase removes an orphaned realtime plot summary after its floor is deleted', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('开始'),
+        assistantMemoryMessage('#主线摘要\n[2026年9月22日,18:00-19:30] | 内容: 张三进入大厅。'),
+    ];
+
+    assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false }).success, true);
+    ledger.rebaseState(storedState, { reason: 'table-shape-changed' });
+    chat = [chat[0]];
+
+    const result = ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
+    assert.equal(result.changed, true);
+    assert.equal(result.reason, 'table_shape_repaired');
+    assert.deepEqual(storedState.records.plot_summary, []);
+    assert.deepEqual(storedState.floorLedger.baselineRecords.plot_summary, []);
+});
+
+test('realtime apply migrates a changed table shape before replacing the same-floor plot summary', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('开始'),
+        assistantMemoryMessage('#主线摘要\n[2026年9月22日,18:00-19:30] | 内容: 张三进入大厅。'),
+    ];
+
+    assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false }).success, true);
+    storedState.tables.find((table) => table.id === 'character_profile').columns.push('阵营');
+    chat[1].mes = assistantMemoryMessage(
+        '#主线摘要\n[2026年9月22日,18:00-19:30] | 内容: 张三离开大厅。',
+    ).mes;
+
+    assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false }).success, true);
+    assert.doesNotMatch(storedState.records.plot_summary[0].values.主线, /进入大厅/);
+    assert.match(storedState.records.plot_summary[0].values.主线, /离开大厅/);
+
+    chat = [chat[0]];
+    assert.equal(ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true }).changed, true);
+    assert.deepEqual(storedState.records.plot_summary, []);
+});

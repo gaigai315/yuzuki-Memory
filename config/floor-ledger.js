@@ -176,6 +176,7 @@
         return {
             version: LEDGER_VERSION,
             id,
+            reason: String(rawLedger.reason || ''),
             tableShape: String(rawLedger.tableShape || ''),
             baselineRecords,
             entries,
@@ -201,10 +202,13 @@
 
     function ensureLedger(state, baselineRecords = cloneManagedRecords(state)) {
         const existing = normalizeLedger(state?.floorLedger);
-        if (!existing || existing.tableShape !== getTableShape(state)) {
+        if (!existing) {
             const next = createLedger(state, baselineRecords);
             state.floorLedger = next;
             return next;
+        }
+        if (existing.tableShape !== getTableShape(state)) {
+            return migrateLedgerTableShape(state, existing, baselineRecords);
         }
         state.floorLedger = existing;
         return existing;
@@ -710,6 +714,112 @@
         return rebuiltRecords;
     }
 
+    function migrateLedgerTableShape(state, ledger, currentRecords = cloneManagedRecords(state)) {
+        const previousEntries = normalizeActiveEntries(ledger?.activeEntries);
+        const expectedRecords = replayEntries(state, ledger, previousEntries);
+        const baselineRecords = replayEntries(state, ledger, []);
+        applyExternalOverlay(currentRecords, expectedRecords, baselineRecords, state?.tables);
+        ledger.tableShape = getTableShape(state);
+        ledger.baselineRecords = cloneManagedRecords(baselineRecords);
+        ledger.activeEntries = previousEntries;
+        ledger.updatedAt = Date.now();
+        state.floorLedger = ledger;
+        console.info('[yuzuki-Memory FloorLedger] table shape migrated without flattening active floors', {
+            ledgerId: ledger.id,
+            activeEntryCount: previousEntries.length,
+        });
+        return ledger;
+    }
+
+    function collectActivePlotLines(state, chat = getChat()) {
+        const table = (Array.isArray(state?.tables) ? state.tables : []).find((entry) => entry?.id === PLOT_TABLE_ID);
+        if (!table) return { main: new Set(), branch: new Set() };
+        const replayState = {
+            ...state,
+            tables: state.tables.map((entry) => ({ ...entry, hidden: false })),
+            records: {
+                ...(state.records && typeof state.records === 'object' ? state.records : {}),
+                [PLOT_TABLE_ID]: [],
+            },
+        };
+        (Array.isArray(chat) ? chat : []).forEach((message, floor) => {
+            if (!message || message.is_system || (message.is_user !== false && message.role !== 'assistant')) return;
+            const rows = YuzukiMemory.MemoryTagParser?.extractMemoryRows?.(getMessageText(message)) || [];
+            const plotRows = rows.filter((row) => {
+                const label = String(row?.table || '').replace(/[线線]/g, '线').trim();
+                return label === table.name || label === '剧情摘要' || label === '主线摘要' || label === '支线摘要';
+            });
+            if (!plotRows.length) return;
+            YuzukiMemory.MemoryTagParser?.applyRowsToState?.(replayState, plotRows, {
+                source: 'realtime',
+                floor,
+                range: { start: floor, end: floor + 1 },
+                floorScope: YuzukiMemory.Storage?.getCurrentFloorScope?.() || null,
+            });
+        });
+        const record = replayState.records?.[PLOT_TABLE_ID]?.[0];
+        return {
+            main: new Set(splitAppendValue(record?.values?.主线, table)),
+            branch: new Set(splitAppendValue(record?.values?.支线, table)),
+        };
+    }
+
+    function pruneFlattenedRealtimePlotItems(records, activeLines, table) {
+        const record = Array.isArray(records?.[PLOT_TABLE_ID]) ? records[PLOT_TABLE_ID][0] : null;
+        if (!record) return 0;
+        let removed = 0;
+        [
+            { kind: 'main', field: '主线' },
+            { kind: 'branch', field: '支线' },
+        ].forEach(({ kind, field }) => {
+            const lines = splitAppendValue(record.values?.[field], table);
+            const metadata = Array.isArray(record.plotItemMeta?.[kind]) ? record.plotItemMeta[kind] : [];
+            const hiddenStates = Array.isArray(record.hiddenPlotItems?.[kind]) ? record.hiddenPlotItems[kind] : [];
+            const keptLines = [];
+            const keptMetadata = [];
+            const keptHiddenStates = [];
+            lines.forEach((line, index) => {
+                const meta = metadata[index];
+                const orphaned = meta?.source === 'realtime'
+                    && !meta?.editedAt
+                    && !activeLines[kind].has(line);
+                if (orphaned) {
+                    removed += 1;
+                    return;
+                }
+                keptLines.push(line);
+                keptMetadata.push(meta || null);
+                keptHiddenStates.push(!!hiddenStates[index]);
+            });
+            record.values[field] = keptLines.join('\n');
+            record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+            record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+            record.plotItemMeta[kind] = keptMetadata;
+            record.hiddenPlotItems[kind] = keptHiddenStates;
+        });
+        if (isEmptyReplayRecord(record, table)) records[PLOT_TABLE_ID] = [];
+        return removed;
+    }
+
+    function repairFlattenedTableShapePlotState(state, ledger) {
+        if (ledger?.reason !== 'table-shape-changed'
+            || Object.keys(ledger.entries || {}).length
+            || normalizeActiveEntries(ledger.activeEntries).length) {
+            return 0;
+        }
+        const table = (Array.isArray(state?.tables) ? state.tables : []).find((entry) => entry?.id === PLOT_TABLE_ID);
+        if (!table) return 0;
+        const activeLines = collectActivePlotLines(state);
+        const removed = pruneFlattenedRealtimePlotItems(state.records, activeLines, table);
+        pruneFlattenedRealtimePlotItems(ledger.baselineRecords, activeLines, table);
+        if (!removed) return 0;
+        if (!state.records?.[PLOT_TABLE_ID]?.length) delete state.activeRecordIds?.[PLOT_TABLE_ID];
+        ledger.updatedAt = Date.now();
+        state.floorLedger = ledger;
+        console.info('[yuzuki-Memory FloorLedger] repaired flattened realtime plot summaries', { removed });
+        return removed;
+    }
+
     function replaceManagedRecords(state, records) {
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
         state.activeRecordIds = state.activeRecordIds && typeof state.activeRecordIds === 'object'
@@ -741,18 +851,35 @@
         if (reconcileRunning || YuzukiMemory.Storage?.isSessionSwitching?.()) return { changed: false, reason: 'busy' };
         if (isBranchBusy() && options.force !== true) return { changed: false, reason: 'branch_busy' };
         const state = loadState();
-        const ledger = normalizeLedger(state?.floorLedger);
+        let ledger = normalizeLedger(state?.floorLedger);
         if (!ledger) return { changed: false, reason: 'missing_ledger' };
+        let tableShapeMigrated = false;
         if (ledger.tableShape !== getTableShape(state)) {
-            rebaseState(state, { reason: 'table-shape-changed' });
-            return saveState(state)
-                ? { changed: true, reason: 'rebased' }
-                : { changed: false, reason: 'save_failed' };
+            ledger = migrateLedgerTableShape(state, ledger);
+            tableShapeMigrated = true;
         }
+        const repairedPlotItemCount = repairFlattenedTableShapePlotState(state, ledger);
 
         const previousEntries = normalizeActiveEntries(ledger.activeEntries);
         const nextEntries = scanActiveEntries(ledger);
-        if (activeEntriesEqual(previousEntries, nextEntries)) return { changed: false, reason: 'already_aligned' };
+        if (activeEntriesEqual(previousEntries, nextEntries)) {
+            if (!tableShapeMigrated && !repairedPlotItemCount) return { changed: false, reason: 'already_aligned' };
+            if (!saveState(state)) return { changed: false, reason: 'save_failed' };
+            if (repairedPlotItemCount) {
+                window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
+                    detail: {
+                        source: 'floor-ledger',
+                        reason: 'table_shape_repair',
+                        repairedPlotItemCount,
+                    },
+                }));
+            }
+            return {
+                changed: true,
+                reason: repairedPlotItemCount ? 'table_shape_repaired' : 'table_shape_migrated',
+                repairedPlotItemCount,
+            };
+        }
 
         reconcileRunning = true;
         try {
