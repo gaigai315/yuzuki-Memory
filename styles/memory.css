@@ -1861,7 +1861,7 @@
 
 #yzm-memory-root .yzm-vector-segment-header {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
     align-items: center;
     gap: 10px;
     flex: 0 0 auto;
@@ -1926,7 +1926,7 @@
 #yzm-memory-root .yzm-vector-segment-footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     flex: 0 0 auto;
     min-height: 42px;
     padding: 8px 12px;
@@ -10112,22 +10112,17 @@
         font-size: 13px;
     }
 
-    #yzm-memory-root .yzm-vector-segment-search {
-        grid-column: 1 / -1;
-        order: 3;
-    }
-
     #yzm-memory-root .yzm-vector-segment-row {
-        grid-template-columns: 52px minmax(0, 1fr) 58px;
+        grid-template-columns: 26px minmax(0, 1fr) 50px;
         min-height: 32px;
         padding: 0 4px;
-        gap: 6px;
+        gap: 4px;
         font-size: 10px;
     }
 
     #yzm-memory-root .yzm-vector-segment-row .yzm-vector-status {
         justify-self: end;
-        max-width: 56px;
+        max-width: 48px;
     }
 
     #yzm-memory-root .yzm-vector-segment-panel {
@@ -10143,12 +10138,9 @@
     }
 
     #yzm-memory-root .yzm-vector-segment-footer {
-        align-items: flex-start;
-        flex-direction: column;
-        gap: 6px;
+        align-items: center;
         min-height: 34px;
         padding: 7px 8px;
-        font-size: 10px;
     }
 
     #yzm-memory-root .yzm-vector-preview-dialog {

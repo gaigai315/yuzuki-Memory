@@ -551,6 +551,54 @@ test('bulk deleting every assistant floor clears all realtime rows while user fl
     assert.deepEqual(storedState.floorLedger.entries, {});
 });
 
+test('deleting a floor removes primary-only replay shells from every non-summary table', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    storedState.tables.push({
+        id: 'custom_notes',
+        name: '自定义记录',
+        icon: 'note',
+        columns: ['名称', '内容'],
+        hidden: false,
+    });
+    storedState.records.custom_notes = [];
+    chat = [assistantMemoryMessage([
+        '#主线摘要',
+        '[2026年9月22日,10:00-10:10] | 内容: 张三进入大厅。',
+        '#角色档案',
+        '[张三] | 身份: 侍卫',
+        '#角色状态',
+        '[张三] | 好感度: 10',
+        '#物品追踪',
+        '[钥匙] | 状态: 已获得',
+        '#世界设定',
+        '[大厅] | 类型: 地点',
+        '#自定义记录',
+        '[线索] | 内容: 墙上有暗门',
+    ].join('\n'))];
+
+    assert.equal(parser.applyMemoryText(chat[0].mes, { floor: 0, dispatch: false }).success, true);
+    const managedTables = storedState.tables.filter((table) => table.id !== 'memory_summary');
+    managedTables.forEach((table) => {
+        const records = storedState.records[table.id] || [];
+        assert.equal(records.length, 1, `${table.name} should contain the realtime record`);
+        storedState.activeRecordIds[table.id] = records[0].id;
+        const primary = parser.cleanColumnName(table.columns[0]);
+        Object.keys(records[0].values || {}).forEach((name) => {
+            if (table.id === 'plot_summary' || name !== primary) records[0].values[name] = '';
+        });
+    });
+
+    chat = [];
+    assert.equal(ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true }).changed, true);
+
+    managedTables.forEach((table) => {
+        assert.deepEqual(storedState.records[table.id], [], `${table.name} should not keep an empty replay shell`);
+        assert.equal(storedState.activeRecordIds[table.id], undefined, `${table.name} should clear its stale active record id`);
+    });
+});
+
 test('deleting assistant floors removes their append items but keeps later manual additions', () => {
     const parser = window.YuzukiMemory.MemoryTagParser;
     const ledger = window.YuzukiMemory.FloorLedger;

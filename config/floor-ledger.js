@@ -585,6 +585,32 @@
         });
     }
 
+    function hasStoredCellValue(value) {
+        return String(value ?? '').trim() !== '';
+    }
+
+    function hasPersistentRecordTombstone(record) {
+        return Array.isArray(record?.deletedTodoIdentities) && record.deletedTodoIdentities.length > 0;
+    }
+
+    function isEmptyReplayRecord(record, table) {
+        const values = record?.values && typeof record.values === 'object' ? record.values : {};
+        if (table?.id === PLOT_TABLE_ID) {
+            return !Object.values(values).some(hasStoredCellValue);
+        }
+
+        const primaryName = getPrimaryColumnName(table);
+        const definedColumns = (Array.isArray(table?.columns) ? table.columns : [])
+            .map(cleanColumnName)
+            .filter(Boolean);
+        if (!primaryName || !definedColumns.some((name) => name !== primaryName)) return false;
+        if (hasPersistentRecordTombstone(record)) return false;
+
+        return !Object.entries(values).some(([name, value]) => (
+            cleanColumnName(name) !== primaryName && hasStoredCellValue(value)
+        ));
+    }
+
     function alignPlotMetadata(currentRecord, rebuiltRecord) {
         if (!currentRecord || !rebuiltRecord) return;
         rebuiltRecord.plotItemMeta = rebuiltRecord.plotItemMeta && typeof rebuiltRecord.plotItemMeta === 'object'
@@ -630,6 +656,7 @@
             rebuiltRecords[table.id] = rebuiltList;
             const usedCurrent = new Set();
             const usedRebuilt = new Set();
+            const replayOverrideCandidates = new Set();
 
             expectedList.forEach((expectedRecord) => {
                 const currentMatch = findRecordMatch(currentList, table, expectedRecord, usedCurrent);
@@ -654,6 +681,7 @@
                         applyRecordPolicyOverlay(currentMatch.record, expectedRecord, overlayRecord);
                         if (table.id === PLOT_TABLE_ID) alignPlotMetadata(currentMatch.record, overlayRecord);
                         rebuiltList.push(overlayRecord);
+                        replayOverrideCandidates.add(overlayRecord);
                     }
                     return;
                 }
@@ -661,6 +689,7 @@
                 applyRecordValueOverlay(currentMatch.record, expectedRecord, rebuiltMatch.record, table);
                 applyRecordPolicyOverlay(currentMatch.record, expectedRecord, rebuiltMatch.record);
                 if (table.id === PLOT_TABLE_ID) alignPlotMetadata(currentMatch.record, rebuiltMatch.record);
+                if (hasValueOverride || hasPolicyOverride) replayOverrideCandidates.add(rebuiltMatch.record);
             });
 
             currentList.forEach((currentRecord, currentIndex) => {
@@ -668,6 +697,12 @@
                 const existing = findRecordMatch(rebuiltList, table, currentRecord, new Set());
                 if (!existing.record) rebuiltList.push(clone(currentRecord));
             });
+            for (let index = rebuiltList.length - 1; index >= 0; index -= 1) {
+                const record = rebuiltList[index];
+                if (replayOverrideCandidates.has(record) && isEmptyReplayRecord(record, table)) {
+                    rebuiltList.splice(index, 1);
+                }
+            }
             if (table.id === 'character_profile') {
                 rebuiltList.forEach((record) => YuzukiMemory.TodoManager?.applyDeletedTodoPolicy?.(record));
             }
@@ -677,9 +712,17 @@
 
     function replaceManagedRecords(state, records) {
         state.records = state.records && typeof state.records === 'object' ? state.records : {};
+        state.activeRecordIds = state.activeRecordIds && typeof state.activeRecordIds === 'object'
+            ? state.activeRecordIds
+            : {};
         (Array.isArray(state.tables) ? state.tables : []).forEach((table) => {
             if (!table?.id || table.id === SUMMARY_TABLE_ID) return;
-            state.records[table.id] = clone(Array.isArray(records?.[table.id]) ? records[table.id] : []);
+            const nextRecords = clone(Array.isArray(records?.[table.id]) ? records[table.id] : []);
+            state.records[table.id] = nextRecords;
+            const activeRecordId = String(state.activeRecordIds[table.id] || '');
+            if (activeRecordId && !nextRecords.some((record) => String(record?.id || '') === activeRecordId)) {
+                delete state.activeRecordIds[table.id];
+            }
         });
     }
 

@@ -5233,7 +5233,7 @@
 
         const header = document.createElement('div');
         header.className = 'yzm-vector-primary-header';
-        header.append(createIconNode('fa-solid fa-diagram-project', ''), document.createTextNode('我的书架'));
+        header.append(createIconNode('fa-solid fa-database', ''), document.createTextNode('我的书架'));
 
         const controls = document.createElement('div');
         controls.className = 'yzm-vector-primary-controls';
@@ -5410,8 +5410,8 @@
         const metrics = document.createElement('div');
         metrics.className = 'yzm-vector-detail-metrics';
         metrics.append(
-            createVectorMetric('向量维度', stats.dimension ? `${stats.dimension} 维` : '未生成'),
-            createVectorMetric('向量化进度', `${stats.progress}%`, true, stats.progress)
+            createVectorMetric('维度', stats.dimension ? String(stats.dimension) : '未生成'),
+            createVectorMetric('进度', `${stats.progress}%`, true, stats.progress)
         );
         info.append(title, metrics);
 
@@ -5513,7 +5513,7 @@
         panel.className = 'yzm-vector-segment-panel';
         const query = vectorUiState.segmentQuery.trim().toLowerCase();
         const segments = (book.chunks || []).map((text, index) => ({
-            id: String(index + 1).padStart(5, '0'),
+            id: String(index + 1),
             index,
             text,
             status: book.vectorized?.[index] ? 'done' : 'pending',
@@ -5529,7 +5529,7 @@
         if (searchInput) searchInput.value = vectorUiState.segmentQuery;
         const exportButton = createIconButton('导出', 'fa-solid fa-download', 'yzm-vector-export-button');
         exportButton.dataset.yzmVectorAction = 'export-current-book';
-        header.append(document.createTextNode('分段内容'), search, exportButton);
+        header.append(search, exportButton);
 
         const table = document.createElement('div');
         table.className = 'yzm-vector-segment-table';
@@ -5540,18 +5540,20 @@
             table.appendChild(createVectorEmptyState(segments.length ? '没有匹配的分段' : '暂无分段内容'));
         }
 
-        const footer = document.createElement('div');
-        footer.className = 'yzm-vector-segment-footer';
-        footer.append(document.createTextNode(`共 ${filteredSegments.length.toLocaleString()} 个分段`));
-        if (page.totalPages > 1) footer.appendChild(createVectorPager('segment', page.currentPage, page.totalPages));
-        panel.append(header, table, footer);
+        panel.append(header, table);
+        if (page.totalPages > 1) {
+            const footer = document.createElement('div');
+            footer.className = 'yzm-vector-segment-footer';
+            footer.appendChild(createVectorPager('segment', page.currentPage, page.totalPages));
+            panel.appendChild(footer);
+        }
         return panel;
     }
 
     function createVectorSegmentHead() {
         const row = document.createElement('div');
         row.className = 'yzm-vector-segment-row yzm-vector-segment-head';
-        ['分段 ID', '分段内容', '向量化状态'].forEach((text) => {
+        ['ID', '内容', '向量化状态'].forEach((text) => {
             const cell = document.createElement('span');
             cell.textContent = text;
             row.appendChild(cell);
@@ -5594,7 +5596,7 @@
 
         const dialog = document.createElement('section');
         dialog.className = 'yzm-structure-dialog yzm-vector-preview-dialog';
-        dialog.setAttribute('aria-label', `编辑分段 ${String(index + 1).padStart(5, '0')}`);
+        dialog.setAttribute('aria-label', `编辑分段 ${index + 1}`);
 
         const header = document.createElement('div');
         header.className = 'yzm-structure-header yzm-vector-preview-header';
@@ -5603,7 +5605,7 @@
         titleWrap.className = 'yzm-vector-preview-title-wrap';
         const title = document.createElement('strong');
         title.className = 'yzm-structure-title yzm-vector-preview-title';
-        title.textContent = `分段 ${String(index + 1).padStart(5, '0')}`;
+        title.textContent = `分段 ${index + 1}`;
         const meta = document.createElement('span');
         meta.className = 'yzm-vector-preview-meta';
         meta.textContent = `${book.name || '未命名书籍'} · ${text.length.toLocaleString()} 字`;
@@ -5618,7 +5620,7 @@
         const content = document.createElement('textarea');
         content.className = 'yzm-vector-preview-content yzm-vector-segment-editor';
         content.value = text;
-        content.setAttribute('aria-label', `分段 ${String(index + 1).padStart(5, '0')} 内容`);
+        content.setAttribute('aria-label', `分段 ${index + 1} 内容`);
 
         const actions = document.createElement('div');
         actions.className = 'yzm-record-actions yzm-vector-segment-actions';
@@ -5683,8 +5685,6 @@
         dialog.append(header, content, actions);
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
-        content.focus();
-        content.setSelectionRange(content.value.length, content.value.length);
     }
 
     async function ensureVectorStoreReady() {
