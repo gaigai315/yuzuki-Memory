@@ -13151,6 +13151,33 @@
             .filter((item) => item.text || item.dateTime);
     }
 
+    function parseCharacterAppointmentItems(text = '') {
+        const parsedItems = YuzukiMemory.TodoManager?.parseAppointmentItems?.(text);
+        if (Array.isArray(parsedItems)) return parsedItems;
+
+        return String(text || '')
+            .split(/\r?\n+|[；;]+/)
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .map((entry, sourceIndex) => {
+                const rawContent = entry.replace(/^(?:[（(〔\[]\s*\d+\s*[）)〕\]]|\d+\s*[）)〕\].、])\s*/, '').trim();
+                const detailMatch = rawContent.match(/^(\d{1,6}(?:年\s*\d{1,2}月\s*\d{1,2}日|[-/]\d{1,2}[-/]\d{1,2}))\s+(\d{1,2}[:：]\d{2})\s*[·・•:：]\s*(.+)$/);
+                if (!detailMatch) return { text: rawContent, dateTime: '', rawContent, sourceIndex };
+                return {
+                    text: detailMatch[3].trim(),
+                    dateTime: `${detailMatch[1]} ${detailMatch[2].replace('：', ':')}`,
+                    rawContent,
+                    sourceIndex,
+                };
+            });
+    }
+
+    function applyCharacterEntryDensity(list, itemCount) {
+        const count = Math.max(0, Number(itemCount) || 0);
+        list.dataset.yzmItemCount = String(count);
+        list.dataset.yzmDensity = count >= 7 ? 'dense' : count >= 4 ? 'compact' : 'comfortable';
+    }
+
     function createCharacterTodoItem(item, options = {}) {
         const priorityNames = { 高: 'high', 中: 'medium', 低: 'low' };
         const row = document.createElement('div');
@@ -13174,7 +13201,7 @@
         if (item.dateTime) {
             const dateTime = document.createElement('time');
             dateTime.className = 'yzm-character-todo-time';
-            dateTime.textContent = item.dateTime;
+            dateTime.append(createIconNode('fa-regular fa-clock', ''), document.createTextNode(item.dateTime));
             main.appendChild(dateTime);
         }
 
@@ -13196,24 +13223,63 @@
         return row;
     }
 
+    function createCharacterAppointmentItem(item) {
+        const row = document.createElement('div');
+        row.className = 'yzm-character-appointment-item';
+
+        const rail = document.createElement('span');
+        rail.className = 'yzm-character-appointment-marker';
+        rail.setAttribute('aria-hidden', 'true');
+
+        const main = document.createElement('div');
+        main.className = 'yzm-character-appointment-main';
+
+        const time = document.createElement(item.dateTime ? 'time' : 'span');
+        time.className = item.dateTime
+            ? 'yzm-character-appointment-time'
+            : 'yzm-character-appointment-time yzm-character-appointment-long-term';
+        time.append(
+            createIconNode(item.dateTime ? 'fa-regular fa-clock' : 'fa-solid fa-infinity', ''),
+            document.createTextNode(item.dateTime || '长期约定')
+        );
+
+        const description = document.createElement('div');
+        description.className = 'yzm-character-appointment-text';
+        description.textContent = item.text || item.rawContent || '';
+
+        main.append(time, description);
+        row.append(rail, main);
+        return row;
+    }
+
     function renderCharacterPanelBody(body, title, text = '', options = {}) {
-        if (title !== '待办事项') {
+        if (!['待办事项', '约定'].includes(title)) {
             body.textContent = formatCharacterPanelText(title, text);
             return;
         }
 
-        body.classList.add('yzm-character-todo-list');
-        const parsedItems = parseCharacterTodoItems(text);
-        const todoItems = YuzukiMemory.TodoManager?.sortTodoItemsChronologically?.(parsedItems) || parsedItems;
-        todoItems.forEach((item) => {
-            body.appendChild(createCharacterTodoItem(item, options));
-        });
+        body.classList.add('yzm-character-entry-list');
+        if (title === '待办事项') {
+            body.classList.add('yzm-character-todo-list');
+            const parsedItems = parseCharacterTodoItems(text);
+            const todoItems = YuzukiMemory.TodoManager?.sortTodoItemsChronologically?.(parsedItems) || parsedItems;
+            applyCharacterEntryDensity(body, todoItems.length);
+            todoItems.forEach((item) => body.appendChild(createCharacterTodoItem(item, options)));
+            return;
+        }
+
+        body.classList.add('yzm-character-appointment-list');
+        const parsedItems = parseCharacterAppointmentItems(text);
+        const appointmentItems = YuzukiMemory.TodoManager?.sortAppointmentItemsChronologically?.(parsedItems) || parsedItems;
+        applyCharacterEntryDensity(body, appointmentItems.length);
+        appointmentItems.forEach((item) => body.appendChild(createCharacterAppointmentItem(item)));
     }
 
     function createCharacterPanel(title, iconClassName, colorClassName, text = '', options = {}) {
         const panel = document.createElement('article');
         panel.className = `yzm-character-panel ${colorClassName}`;
         if (title === '待办事项') panel.classList.add('yzm-character-todo-panel');
+        if (title === '约定') panel.classList.add('yzm-character-appointment-panel');
 
         const header = document.createElement('div');
         header.className = 'yzm-character-panel-title';
@@ -14505,7 +14571,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '新增剧情规划功能。',
+            '新增剧情规划功能。请前往DC社区，下载更新全局世界书。',
             '新增电脑端可移动/缩放面板。',
             '优化表格结构编辑：支持使用 [列名]、#[列名]、*[列名] 将列全局同步到所有会话。',
         ].forEach((text) => {

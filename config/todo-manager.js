@@ -3,6 +3,7 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const CHARACTER_TABLE_ID = 'character_profile';
+    const APPOINTMENT_FIELD_NAME = '\u7ea6\u5b9a';
     const TODO_FIELD_NAME = '待办事项';
     const DELETED_TODO_IDENTITIES_FIELD = 'deletedTodoIdentities';
     const EXPIRY_DELAY_MINUTES = 10;
@@ -289,6 +290,66 @@
             .filter((item) => item.text || item.dateTime || item.rawContent);
     }
 
+    function normalizeAppointmentText(text = '') {
+        return String(text || '')
+            .trim()
+            .replace(/^(?:\s*[；;])+\s*/, '')
+            .replace(/(?:[；;]\s*)+$/, '')
+            .split(/\r?\n+|[；;]+/)
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .join('\n');
+    }
+
+    function parseAppointmentItems(text = '') {
+        const source = normalizeAppointmentText(text);
+        if (!source) return [];
+
+        return source
+            .split(/\n+/)
+            .map((entry) => entry.trim())
+            .filter(Boolean)
+            .map((entry, sourceIndex) => {
+                const rawContent = entry.replace(new RegExp(`^${TODO_MARKER_SOURCE}\\s*`), '').trim();
+                const dateMatch = getTodoDateMatchAtStart(rawContent);
+                const afterDate = dateMatch ? rawContent.slice(dateMatch.length).trimStart() : '';
+                const detailMatch = afterDate.match(/^(\d{1,2})\s*[:：]\s*(\d{2})\s*(?:[·・•:：]\s*|\s+)(.+)$/);
+
+                if (dateMatch && detailMatch) {
+                    const hour = Number(detailMatch[1]);
+                    const minute = Number(detailMatch[2]);
+                    const parts = { ...dateMatch.parts, hour, minute };
+                    const valid = dateMatch.calendar === 'ancient'
+                        ? isValidAncientDateTimeParts(parts.year, parts.month, parts.day, parts.hour, parts.minute)
+                        : isValidDateTimeParts(parts.year, parts.month, parts.day, parts.hour, parts.minute);
+                    if (valid) {
+                        const timeText = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+                        return {
+                            text: detailMatch[3].trim(),
+                            dateTime: `${dateMatch.dateText} ${timeText}`,
+                            rawContent,
+                            sourceIndex,
+                            dateTimeParts: parts,
+                            ordinalMinutes: dateMatch.calendar === 'ancient'
+                                ? toAncientOrdinalMinutes(parts)
+                                : toOrdinalMinutes(parts),
+                            calendar: dateMatch.calendar,
+                            era: dateMatch.era,
+                        };
+                    }
+                }
+
+                return {
+                    text: rawContent,
+                    dateTime: '',
+                    rawContent,
+                    sourceIndex,
+                    ordinalMinutes: null,
+                };
+            })
+            .filter((item) => item.text || item.dateTime || item.rawContent);
+    }
+
     function getTodoSortValue(item = {}) {
         if (Number.isFinite(item.ordinalMinutes)) return item.ordinalMinutes;
         if (Number.isFinite(item.ordinalDay)) return item.ordinalDay * 1440;
@@ -305,12 +366,23 @@
             .map(({ item }) => item);
     }
 
+    function sortAppointmentItemsChronologically(items = []) {
+        return sortTodoItemsChronologically(items);
+    }
+
     function serializeTodoItems(items = []) {
         return (Array.isArray(items) ? items : [])
             .map((item, index) => {
                 const content = String(item?.rawContent || '').trim();
                 return content ? `〔${index + 1}〕${content}` : '';
             })
+            .filter(Boolean)
+            .join(';');
+    }
+
+    function serializeAppointmentItems(items = []) {
+        return (Array.isArray(items) ? items : [])
+            .map((item) => String(item?.rawContent || '').trim())
             .filter(Boolean)
             .join(';');
     }
@@ -883,9 +955,32 @@
         return { changed: true, removed, kept, value: serializeTodoItems(kept) };
     }
 
+    function pruneAppointmentText(text = '', currentTime) {
+        const items = parseAppointmentItems(text);
+        const pruneTime = normalizeTodoPruneTime(currentTime);
+        if (!items.length || !pruneTime) {
+            return { changed: false, removed: [], kept: items, value: String(text || '') };
+        }
+
+        const removed = items.filter((item) => {
+            const itemOrdinalMinutes = getComparableTodoOrdinal(item, pruneTime, 'minutes');
+            return Number.isFinite(itemOrdinalMinutes)
+                && pruneTime.ordinalMinutes - itemOrdinalMinutes >= EXPIRY_DELAY_MINUTES;
+        });
+        if (!removed.length) return { changed: false, removed, kept: items, value: String(text || '') };
+        const kept = items.filter((item) => !removed.includes(item));
+        return { changed: true, removed, kept, value: serializeAppointmentItems(kept) };
+    }
+
     function cleanupExpiredTodos(options = {}) {
         if (cleaning || YuzukiMemory.Storage?.isSessionSwitching?.()) {
-            return { changed: false, removedCount: 0, duplicateCount: 0 };
+            return {
+                changed: false,
+                removedCount: 0,
+                todoRemovedCount: 0,
+                appointmentRemovedCount: 0,
+                duplicateCount: 0,
+            };
         }
         const storyTime = options.storyTime || getCurrentStoryTime();
         const canPruneExpired = !!storyTime && Number.isFinite(storyTime.ordinalMinutes);
@@ -894,7 +989,14 @@
         const createDefaultState = YuzukiMemory.MemoryTagParser?.createDefaultState;
         const sessionId = storage?.getCurrentSessionId?.();
         if (!storage?.loadState || !storage?.saveState || !createDefaultState || !sessionId) {
-            return { changed: false, removedCount: 0, duplicateCount: 0, reason: 'not_ready' };
+            return {
+                changed: false,
+                removedCount: 0,
+                todoRemovedCount: 0,
+                appointmentRemovedCount: 0,
+                duplicateCount: 0,
+                reason: 'not_ready',
+            };
         }
 
         cleaning = true;
@@ -904,7 +1006,8 @@
             const records = Array.isArray(state?.records?.[CHARACTER_TABLE_ID])
                 ? state.records[CHARACTER_TABLE_ID]
                 : [];
-            let removedCount = 0;
+            let todoRemovedCount = 0;
+            let appointmentRemovedCount = 0;
             let duplicateCount = 0;
             const changedRecordIds = [];
 
@@ -912,27 +1015,37 @@
                 const values = record?.values && typeof record.values === 'object' ? record.values : null;
                 if (!values) return;
                 const deduplication = getTodoDeduplicationResult(values[TODO_FIELD_NAME]);
-                let nextValue = deduplication.value;
+                let nextTodoValue = deduplication.value;
                 let recordChanged = deduplication.changed;
                 duplicateCount += deduplication.duplicateCount;
 
                 if (canPruneExpired) {
-                    const expiry = pruneTodoText(nextValue, storyTime);
-                    if (expiry.changed) {
-                        nextValue = expiry.value;
-                        removedCount += expiry.removed.length;
+                    const todoExpiry = pruneTodoText(nextTodoValue, storyTime);
+                    if (todoExpiry.changed) {
+                        nextTodoValue = todoExpiry.value;
+                        todoRemovedCount += todoExpiry.removed.length;
+                        recordChanged = true;
+                    }
+
+                    const appointmentExpiry = pruneAppointmentText(values[APPOINTMENT_FIELD_NAME], storyTime);
+                    if (appointmentExpiry.changed) {
+                        values[APPOINTMENT_FIELD_NAME] = appointmentExpiry.value;
+                        appointmentRemovedCount += appointmentExpiry.removed.length;
                         recordChanged = true;
                     }
                 }
                 if (!recordChanged) return;
-                values[TODO_FIELD_NAME] = nextValue;
+                values[TODO_FIELD_NAME] = nextTodoValue;
                 changedRecordIds.push(String(record.id || values['角色名'] || ''));
             });
 
+            const removedCount = todoRemovedCount + appointmentRemovedCount;
             if (!removedCount && !duplicateCount) {
                 return {
                     changed: false,
                     removedCount: 0,
+                    todoRemovedCount: 0,
+                    appointmentRemovedCount: 0,
                     duplicateCount: 0,
                     storyTime,
                     ...(!canPruneExpired ? { reason: 'missing_story_time' } : {}),
@@ -944,7 +1057,15 @@
                 saveOrigin: 'auto',
             });
             if (!saved) {
-                return { changed: false, removedCount: 0, duplicateCount: 0, reason: 'save_failed', storyTime };
+                return {
+                    changed: false,
+                    removedCount: 0,
+                    todoRemovedCount: 0,
+                    appointmentRemovedCount: 0,
+                    duplicateCount: 0,
+                    reason: 'save_failed',
+                    storyTime,
+                };
             }
 
             YuzukiMemory.BranchSnapshot?.captureCurrentStateSnapshot?.(state, { sessionId });
@@ -952,6 +1073,8 @@
                 detail: {
                     source: 'todo-manager',
                     removedCount,
+                    todoRemovedCount,
+                    appointmentRemovedCount,
                     duplicateCount,
                     changedRecordIds,
                     ...(storyTime ? {
@@ -959,12 +1082,22 @@
                     } : {}),
                 },
             }));
-            console.info('[yuzuki-Memory Todo] todo maintenance applied', {
+            console.info('[yuzuki-Memory Todo] schedule maintenance applied', {
                 removedCount,
+                todoRemovedCount,
+                appointmentRemovedCount,
                 duplicateCount,
                 storyTime: storyTime ? `${storyTime.date} ${storyTime.time}` : '',
             });
-            return { changed: true, removedCount, duplicateCount, changedRecordIds, storyTime };
+            return {
+                changed: true,
+                removedCount,
+                todoRemovedCount,
+                appointmentRemovedCount,
+                duplicateCount,
+                changedRecordIds,
+                storyTime,
+            };
         } finally {
             cleaning = false;
         }
@@ -1017,8 +1150,11 @@
         DELETED_TODO_IDENTITIES_FIELD,
         bind,
         parseTodoItems,
+        parseAppointmentItems,
         sortTodoItemsChronologically,
+        sortAppointmentItemsChronologically,
         serializeTodoItems,
+        serializeAppointmentItems,
         updateTodoItemAt,
         deleteTodoItemAt,
         fillMissingTodoDates,
@@ -1037,6 +1173,7 @@
         getStoryTimeForRange,
         getCurrentStoryTime,
         pruneTodoText,
+        pruneAppointmentText,
         cleanupExpiredTodos,
         scheduleCleanup,
         toOrdinalMinutes,

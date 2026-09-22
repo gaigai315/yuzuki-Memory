@@ -5,12 +5,19 @@ import vm from 'node:vm';
 
 const sandbox = {
     console,
+    CustomEvent: class CustomEvent {
+        constructor(type, options = {}) {
+            this.type = type;
+            this.detail = options.detail;
+        }
+    },
     SillyTavern: { getContext: () => null },
     window: {
         YuzukiMemory: {},
         setTimeout: () => 1,
         clearTimeout() {},
         addEventListener() {},
+        dispatchEvent() {},
     },
 };
 vm.createContext(sandbox);
@@ -119,6 +126,93 @@ test('timed todos are removed after the 10-minute expiry delay', () => {
     assert.equal(atExpiry.changed, true);
     assert.equal(atExpiry.removed.length, 1);
     assert.equal(atExpiry.value, '');
+});
+
+test('timed appointments expire after 10 minutes while long-term entries remain', () => {
+    const text = [
+        '2035-07-19 10:00·在钟楼会合',
+        '永远保护对方',
+        '旧格式约定：下次见面再商量',
+    ].join(';');
+    const scheduled = todoManager.parseAppointmentItems(text)[0];
+
+    const beforeExpiry = todoManager.pruneAppointmentText(text, scheduled.ordinalMinutes + 9);
+    assert.equal(beforeExpiry.changed, false);
+    assert.equal(beforeExpiry.value, text);
+
+    const atExpiry = todoManager.pruneAppointmentText(text, scheduled.ordinalMinutes + 10);
+    assert.equal(atExpiry.changed, true);
+    assert.equal(atExpiry.removed.length, 1);
+    assert.equal(atExpiry.value, '永远保护对方;旧格式约定：下次见面再商量');
+});
+
+test('appointment expiry compares across day, month, and year boundaries', () => {
+    const cases = [
+        ['2035-07-19 23:55·跨日会合', '2035-07-20 00:05'],
+        ['2035-07-31 23:55·跨月会合', '2035-08-01 00:05'],
+        ['2035-12-31 23:55·跨年会合', '2036-01-01 00:05'],
+    ];
+
+    cases.forEach(([appointment, current]) => {
+        const currentItem = todoManager.parseAppointmentItems(`${current}·当前时间锚点`)[0];
+        const result = todoManager.pruneAppointmentText(appointment, currentItem.ordinalMinutes);
+        assert.equal(result.changed, true, appointment);
+        assert.equal(result.value, '', appointment);
+    });
+});
+
+test('appointment pruning removes only expired timed entries', () => {
+    const text = [
+        '2035-12-31 23:55·已过期约定',
+        '2036-01-01 00:00·尚未到十分钟',
+        '2036-01-01 08:00·未来约定',
+        '长期共同遵守秘密原则',
+    ].join(';');
+    const current = todoManager.parseAppointmentItems('2036-01-01 00:05·当前时间锚点')[0];
+    const result = todoManager.pruneAppointmentText(text, current.ordinalMinutes);
+
+    assert.equal(result.changed, true);
+    assert.deepEqual(
+        Array.from(todoManager.parseAppointmentItems(result.value), (item) => item.text),
+        ['尚未到十分钟', '未来约定', '长期共同遵守秘密原则'],
+    );
+});
+
+test('scheduled maintenance cleans todos and appointments in one state save', () => {
+    const state = {
+        records: {
+            character_profile: [{
+                id: 'role-1',
+                values: {
+                    角色名: '测试角色',
+                    待办事项: '〔1〕2035-12-31 23:55·过期待办（高）',
+                    约定: '2035-12-31 23:55·过期约定;长期约定',
+                },
+            }],
+        },
+    };
+    let savedState = null;
+    sandbox.window.YuzukiMemory.Storage = {
+        isSessionSwitching: () => false,
+        getCurrentSessionId: () => 'test-session',
+        loadState: () => state,
+        saveState: (nextState) => {
+            savedState = nextState;
+            return true;
+        },
+    };
+    sandbox.window.YuzukiMemory.MemoryTagParser = { createDefaultState: () => ({ records: {} }) };
+    sandbox.window.YuzukiMemory.BranchSnapshot = { captureCurrentStateSnapshot() {} };
+    const storyTime = todoManager.parseStoryTimeText('<globalTime>2036-01-01 00:05</globalTime>');
+
+    const result = todoManager.cleanupExpiredTodos({ storyTime });
+
+    assert.equal(result.changed, true);
+    assert.equal(result.todoRemovedCount, 1);
+    assert.equal(result.appointmentRemovedCount, 1);
+    assert.equal(result.removedCount, 2);
+    assert.equal(savedState.records.character_profile[0].values.待办事项, '');
+    assert.equal(savedState.records.character_profile[0].values.约定, '长期约定');
 });
 
 test('multiple user-deleted todos stay excluded from later merges', () => {
