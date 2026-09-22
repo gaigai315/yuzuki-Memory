@@ -25,6 +25,15 @@ function createToolResponse(name, args = '{}') {
     };
 }
 
+function createTrackBCard(roles, module, plot = '推进支线') {
+    return `<下轮导演卡>
+【轨道B调度指令】
+出场角色：${roles}
+所属模块：${module}
+剧情推演：${plot}
+</下轮导演卡>`;
+}
+
 function getOfferedToolName(tools) {
     return String(tools?.[0]?.function?.name || '');
 }
@@ -406,6 +415,95 @@ test('director ledger removes plot history sections while preserving later sched
     assert.match(getState().storyDirector.ledger, /模块轮换/);
     assert.match(getState().storyDirector.ledger, /信息隔离/);
     assert.doesNotMatch(getState().storyDirector.ledger, /剧情节点和履历|另一段剧情复述|另一段人物经历/);
+});
+
+test('director automatically records the Track B module and NPCs from a successful card', async () => {
+    const { memory, requests, getState } = createSandbox({ initialLedger: '【信息隔离】\n- 林雪不知道密信内容' });
+    const card = createTrackBCard('[林雪、赵衡]', '[Module 2]');
+    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+        requests.push(structuredClone(messages));
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
+    };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+
+    assert.match(requests[0][1].content, /近10轮调用历史/);
+    assert.match(requests[0][1].content, /最近3次调用过的NPC或势力/);
+    assert.match(getState().storyDirector.ledger, /【轨道B调用历史（近10轮）】/);
+    assert.match(getState().storyDirector.ledger, /- Module 2｜出场角色：林雪、赵衡/);
+    assert.match(getState().storyDirector.ledger, /【信息隔离】/);
+});
+
+test('Track B history keeps the newest ten calls and survives a model ledger overwrite', async () => {
+    const history = Array.from({ length: 10 }, (_, index) => {
+        const number = index + 1;
+        return `- Module ${((index % 4) + 1)}｜出场角色：NPC${String(number).padStart(2, '0')}`;
+    }).join('\n');
+    const initialLedger = `【轨道B调用历史（近10轮）】\n${history}\n\n【角色冷却】\n- 旧状态`;
+    const { memory, getState } = createSandbox({ initialLedger });
+    const card = createTrackBCard('NPC11、北港商会', 'Module 3');
+    let ledgerUpdated = false;
+    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
+            ledgerUpdated = true;
+            return createToolResponse(offeredTool, JSON.stringify({ content: '【信息隔离】\n- 新状态' }));
+        }
+        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
+    };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+
+    const ledger = getState().storyDirector.ledger;
+    const entries = ledger.split('\n').filter((line) => /^- Module [1-4]｜出场角色：/.test(line));
+    assert.equal(entries.length, 10);
+    assert.doesNotMatch(ledger, /NPC01(?:\D|$)/);
+    assert.match(entries[0], /NPC02/);
+    assert.match(entries.at(-1), /Module 3｜出场角色：NPC11、北港商会/);
+    assert.match(ledger, /【信息隔离】\n- 新状态/);
+    assert.doesNotMatch(ledger, /【角色冷却】\n- 旧状态/);
+});
+
+test('the next director run reads the previous Track B module and NPC record', async () => {
+    const { memory, requests, getState } = createSandbox({ initialLedger: '' });
+    const cards = [
+        createTrackBCard('林雪', 'Module 1', '首次推进'),
+        createTrackBCard('陈舟', 'Module 4', '二次推进'),
+    ];
+    let cardIndex = 0;
+    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+        requests.push(structuredClone(messages));
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+        const card = cards[Math.min(cardIndex, cards.length - 1)];
+        cardIndex += 1;
+        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
+    };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+
+    const ledgerReads = requests.flatMap((messages) => messages)
+        .filter((message) => message.tool_call_id === 'ledger');
+    assert.equal(ledgerReads.length, 2);
+    assert.match(ledgerReads[1].content, /Module 1｜出场角色：林雪/);
+    assert.match(getState().storyDirector.ledger, /Module 1｜出场角色：林雪[\s\S]*Module 4｜出场角色：陈舟/);
+});
+
+test('placeholder or missing Track B fields do not create fake history entries', async () => {
+    const { memory, getState } = createSandbox({ initialLedger: '旧账本' });
+    const card = createTrackBCard('[指定具体NPC/势力，符合3轮冷却规则与阵营/性别平衡]', '[Module 1 / 2 / 3 / 4]');
+    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
+    };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(getState().storyDirector.ledger, '旧账本');
 });
 
 test('deleting, regenerating, or swiping A2 reuses the card bound to U2 and manual planning replaces it', async () => {

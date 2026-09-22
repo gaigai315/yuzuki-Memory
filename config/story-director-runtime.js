@@ -35,6 +35,8 @@
     ]);
     const MAX_AGENT_TURNS = 16;
     const MAX_MESSAGE_CARDS = 50;
+    const MAX_TRACK_B_HISTORY = 10;
+    const TRACK_B_HISTORY_TITLE = '轨道B调用历史（近10轮）';
     const RUN_DELAY_MS = 1800;
     const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     let bound = false;
@@ -318,6 +320,106 @@
         return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
     }
 
+    function isTrackBHistoryHeading(line = '') {
+        const heading = normalizeLedgerHeading(line).replace(/\s+/g, '').toLowerCase();
+        return heading === '轨道b调用历史（近10轮）' || heading === '轨道b调用历史(近10轮)';
+    }
+
+    function normalizeTrackBRoleText(value = '') {
+        let text = String(value || '').trim();
+        const bracketMatch = text.match(/^\[\s*([\s\S]*?)\s*\]$/);
+        if (bracketMatch) text = bracketMatch[1].trim();
+        if (!text
+            || /\{\{|\}\}/.test(text)
+            || /^(?:无|暂无|无(?:具体)?(?:npc|角色|势力)|不适用|n\/?a|none|待定|未指定|未调用|跳过|略|本轮(?:不调用|跳过|静默)|激活独处黑箱.*)$/i.test(text)
+            || /(?:指定具体|填写具体|符合.{0,20}冷却|npc\s*\/\s*势力)/i.test(text)) {
+            return '';
+        }
+        return text.replace(/\s*[；;]\s*$/, '').trim();
+    }
+
+    function normalizeTrackBModule(value = '') {
+        let text = String(value || '').trim();
+        const bracketMatch = text.match(/^\[\s*([\s\S]*?)\s*\]$/);
+        if (bracketMatch) text = bracketMatch[1].trim();
+        const match = text.match(/^module\s*([1-4])$/i);
+        return match ? `Module ${match[1]}` : '';
+    }
+
+    function parseTrackBCallFromCard(card = '') {
+        const text = String(card || '').replace(/^\s*<下轮导演卡>\s*/i, '').replace(/\s*<\/下轮导演卡>\s*$/i, '');
+        const trackB = text.match(/【\s*轨道\s*B\s*调度指令\s*】([\s\S]*?)(?=\n\s*【|$)/i);
+        const scope = trackB?.[1] || text;
+        const roles = normalizeTrackBRoleText(scope.match(/^\s*(?:[-*+]\s*)?出场角色\s*[：:]\s*(.*?)\s*$/mi)?.[1]);
+        const module = normalizeTrackBModule(scope.match(/^\s*(?:[-*+]\s*)?所属模块\s*[：:]\s*(.*?)\s*$/mi)?.[1]);
+        return roles && module ? { module, roles } : null;
+    }
+
+    function parseTrackBHistoryLine(line = '') {
+        const match = String(line || '').match(/^\s*[-*+]\s*(Module\s*[1-4])\s*(?:｜|\|)\s*出场角色\s*[：:]\s*(.*?)\s*$/i);
+        if (!match) return null;
+        const module = normalizeTrackBModule(match[1]);
+        const roles = normalizeTrackBRoleText(match[2]);
+        return module && roles ? { module, roles } : null;
+    }
+
+    function readTrackBCallHistory(ledger = '') {
+        const lines = sanitizeDirectorLedger(ledger).replace(/\r\n?/g, '\n').split('\n');
+        const history = [];
+        let reading = false;
+        lines.forEach((line) => {
+            if (isTrackBHistoryHeading(line)) {
+                reading = true;
+                return;
+            }
+            if (!reading) return;
+            if (isLedgerSectionHeading(line)) {
+                reading = false;
+                return;
+            }
+            const entry = parseTrackBHistoryLine(line);
+            if (entry) history.push(entry);
+        });
+        return history.slice(-MAX_TRACK_B_HISTORY);
+    }
+
+    function removeTrackBHistorySections(ledger = '') {
+        const lines = sanitizeDirectorLedger(ledger).replace(/\r\n?/g, '\n').split('\n');
+        const kept = [];
+        let removing = false;
+        lines.forEach((line) => {
+            if (isTrackBHistoryHeading(line)) {
+                removing = true;
+                while (kept.at(-1) === '') kept.pop();
+                return;
+            }
+            if (removing) {
+                if (!isLedgerSectionHeading(line)) return;
+                removing = false;
+            }
+            kept.push(line);
+        });
+        return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    function writeTrackBCallHistory(ledger = '', history = []) {
+        const base = removeTrackBHistorySections(ledger);
+        const entries = (Array.isArray(history) ? history : []).slice(-MAX_TRACK_B_HISTORY);
+        if (!entries.length) return base;
+        const section = `【${TRACK_B_HISTORY_TITLE}】\n${entries.map((entry) => `- ${entry.module}｜出场角色：${entry.roles}`).join('\n')}`;
+        return [base, section].filter(Boolean).join('\n\n').trim();
+    }
+
+    function preserveTrackBCallHistory(currentLedger = '', nextLedger = '') {
+        return writeTrackBCallHistory(nextLedger, readTrackBCallHistory(currentLedger));
+    }
+
+    function appendTrackBCallHistory(ledger = '', card = '') {
+        const entry = parseTrackBCallFromCard(card);
+        if (!entry) return sanitizeDirectorLedger(ledger);
+        return writeTrackBCallHistory(ledger, [...readTrackBCallHistory(ledger), entry]);
+    }
+
     function saveDirectorState(sessionId, nextDirector, source = 'story-director') {
         const fallback = getFallbackState();
         if (!fallback || !sessionId) return false;
@@ -535,7 +637,7 @@
                 type: 'function',
                 function: {
                     name: TOOL_NAMES.ledger,
-                    description: '读取剧情导演自己的长期调度账本。账本不包含剧情节点与人物履历。',
+                    description: '读取剧情导演自己的长期调度账本。账本不包含剧情节点与人物履历；其中轨道B近10轮模块与NPC调用历史由插件自动维护。',
                     parameters: { type: 'object', properties: {}, additionalProperties: false },
                 },
             },
@@ -543,11 +645,11 @@
                 type: 'function',
                 function: {
                     name: TOOL_NAMES.updateLedger,
-                    description: '用完整的新账本内容覆盖剧情导演账本。只保存跨轮调度状态，不得包含剧情节点、人物履历或已发生剧情复述。',
+                    description: '用完整的新账本内容覆盖剧情导演账本。只保存跨轮调度状态，不得包含剧情节点、人物履历或已发生剧情复述；不得删除或改写插件维护的轨道B调用历史。',
                     parameters: {
                         type: 'object',
                         properties: {
-                            content: { type: 'string', description: '完整的新导演账本，不含剧情节点、人物履历和已发生剧情复述。' },
+                            content: { type: 'string', description: '完整的新导演账本，不含剧情节点、人物履历和已发生剧情复述，也不必重写插件维护的轨道B调用历史。' },
                         },
                         required: ['content'],
                         additionalProperties: false,
@@ -608,19 +710,20 @@
             assertActive();
             return serializeVisibleChat();
         });
-        register(TOOL_NAMES.ledger, '读取剧情导演调度账本，不含剧情节点与人物履历。', { type: 'object', properties: {}, additionalProperties: false }, () => {
+        register(TOOL_NAMES.ledger, '读取剧情导演调度账本；轨道B近10轮模块与NPC调用历史由插件自动维护。', { type: 'object', properties: {}, additionalProperties: false }, () => {
             assertActive();
             runContext.stagedLedger = sanitizeDirectorLedger(runContext.stagedLedger);
             return runContext.stagedLedger || '（当前暂无导演账本）';
         });
-        register(TOOL_NAMES.updateLedger, '覆盖剧情导演调度账本，不得写入剧情节点、人物履历或已发生剧情复述。', {
+        register(TOOL_NAMES.updateLedger, '覆盖剧情导演调度账本，不得写入剧情节点、人物履历或改写插件维护的轨道B调用历史。', {
             type: 'object',
             properties: { content: { type: 'string' } },
             required: ['content'],
             additionalProperties: false,
         }, (parameters = {}) => {
             assertActive();
-            runContext.stagedLedger = sanitizeDirectorLedger(parameters.content).slice(0, 100000);
+            const nextLedger = sanitizeDirectorLedger(parameters.content).slice(0, 100000);
+            runContext.stagedLedger = preserveTrackBCallHistory(runContext.stagedLedger, nextLedger);
             return '导演账本已暂存，将与本轮导演卡一起提交。';
         });
         return manager;
@@ -765,7 +868,7 @@
                 { role: 'system', content: String(promptEntry.prompt || '').trim() },
                 {
                     role: 'user',
-                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。`,
+                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。轨道B必须填写具体的“出场角色”和“所属模块（Module 1-4）”，依据账本中插件维护的近10轮调用历史轮换模块，并避开最近3次调用过的NPC或势力；该历史会由插件根据最终导演卡自动追加，不得删除或改写。`,
                 },
             ];
             const usedTools = new Set();
@@ -814,6 +917,7 @@
                 }
                 if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
                 if (!sourceIsLatestDialogue(source)) throw new Error('导演完成前正文分支已经变化。');
+                runContext.stagedLedger = appendTrackBCallHistory(runContext.stagedLedger, card);
                 const messageCards = source.role === 'user'
                     ? upsertMessageCard(previousDirector.messageCards, source, card)
                     : normalizeMessageCards(previousDirector.messageCards);
@@ -1191,6 +1295,8 @@
     YuzukiMemory.StoryDirectorRuntime = Object.assign(YuzukiMemory.StoryDirectorRuntime || {}, {
         toolNames: TOOL_NAMES,
         extractDirectorCard,
+        parseTrackBCallFromCard,
+        appendTrackBCallHistory,
         getLatestAssistantAnchor,
         sourceMatchesCurrentMessage,
         getInjectableCard,
