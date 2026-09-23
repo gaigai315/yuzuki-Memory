@@ -664,6 +664,15 @@
         }
     }
 
+    function filterDirectorChatContent(text = '') {
+        const withoutMemoryTags = String(text || '').replace(MEMORY_TAG_PATTERN, '');
+        const filterByTags = YuzukiMemory.TaskRunner?.filterContentByTags;
+        const filtered = typeof filterByTags === 'function'
+            ? filterByTags(withoutMemoryTags)
+            : withoutMemoryTags;
+        return String(filtered || '').trim();
+    }
+
     function collectVisibleChatMessages() {
         const context = getContext() || {};
         const chat = Array.isArray(context.chat) ? context.chat : [];
@@ -673,7 +682,7 @@
         const messages = [];
         chat.forEach((message, index) => {
             if (!isDialogueMessage(message) || isPluginMessage(message) || isHiddenDialogueMessage(message)) return;
-            const content = getMessageText(message).replace(MEMORY_TAG_PATTERN, '').trim();
+            const content = filterDirectorChatContent(getMessageText(message));
             if (!content) return;
             const user = isUserMessage(message);
             messages.push({

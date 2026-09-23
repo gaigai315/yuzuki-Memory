@@ -44,6 +44,7 @@ function createSandbox(options = {}) {
     let activePrompt = options.activePrompt || { id: 'director', prompt: 'DEFAULT_STORY_DIRECTOR_PROMPT' };
     const vectorBooks = Array.isArray(options.vectorBooks) ? options.vectorBooks : [];
     const vectorCalls = [];
+    const tagFilterCalls = [];
     const initialLedger = Object.hasOwn(options, 'initialLedger') ? String(options.initialLedger || '') : '旧账本';
     let state = {
         tables: [
@@ -164,6 +165,11 @@ function createSandbox(options = {}) {
             createLlmRequestSnapshot: () => ({ mode: 'tavern', preset: null }),
             isForegroundGenerationBusy: () => false,
             isBackgroundWorkPending: () => false,
+            filterContentByTags(content) {
+                const sourceText = String(content || '');
+                tagFilterCalls.push(sourceText);
+                return typeof options.tagFilter === 'function' ? options.tagFilter(sourceText) : sourceText;
+            },
         },
         LlmClient: {
             async requestAgentWithTavern(messages, availableTools, options) {
@@ -206,6 +212,7 @@ function createSandbox(options = {}) {
         requests,
         requestOptions,
         vectorCalls,
+        tagFilterCalls,
         eventBindings,
         directorCaptures,
         dispatchedEvents,
@@ -271,6 +278,36 @@ test('director prepares all data before request one and saves only the reviewed 
     const regenerateClone = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(regenerateClone, { generationType: 'regenerate' }), true);
     assert.match(regenerateClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
+});
+
+test('director reads the same blacklist and whitelist filtered chat used by memory tasks', async () => {
+    const { memory, chat, requests, vectorCalls, tagFilterCalls } = createSandbox({
+        vectorBooks: ['selected-book'],
+        tagFilter(content) {
+            return String(content || '')
+                .replace(/<thinking>[\s\S]*?<\/thinking>/gi, '')
+                .replace(/<content>([\s\S]*?)<\/content>/gi, '$1')
+                .trim();
+        },
+    });
+    chat.splice(2, 2,
+        { is_user: true, mes: '<thinking>用户隐藏推理</thinking><content>过滤后的用户正文</content>' },
+        {
+            is_user: false,
+            mes: '<thinking>助手隐藏推理</thinking><Memory><!-- 不发送的填表内容 --></Memory><content>过滤后的助手正文</content>',
+            swipe_id: 0,
+        },
+    );
+    const originalChat = structuredClone(chat);
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.deepEqual(readContext(requests[0]).chat.messages.map((message) => message.content),
+        ['过滤后的用户正文', '过滤后的助手正文']);
+    assert.equal(vectorCalls[0].query, '过滤后的用户正文\n过滤后的助手正文');
+    assert.ok(tagFilterCalls.some((content) => content.includes('用户隐藏推理')));
+    assert.ok(tagFilterCalls.some((content) => content.includes('助手隐藏推理')));
+    assert.equal(tagFilterCalls.some((content) => content.includes('不发送的填表内容')), false);
+    assert.deepEqual(chat, originalChat);
 });
 
 test('manual replan uses the currently selected story director prompt', async () => {
