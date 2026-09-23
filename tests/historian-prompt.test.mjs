@@ -117,8 +117,8 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.equal(director.id, library.getDefaultStoryDirectorPromptId());
     assert.equal(director.builtin, true);
     assert.match(director.prompt, /<下轮导演卡>/);
-    assert.match(director.prompt, /最后一条发言为user方输出分支A/);
-    assert.match(director.prompt, /最后一条发言为Assistant方输出分支B/);
+    assert.match(director.prompt, /最后一条发言为user方仅输出分支A/);
+    assert.match(director.prompt, /最后一条发言为Assistant方仅输出分支B/);
     assert.match(director.prompt, /预案仅输出除\{\{user\}\}以外的角色如何回应或行动/);
     assert.match(director.prompt, /严禁替\{\{user\}\}决定动作、台词、选择、态度或心理/);
     assert.match(director.prompt, /预案\s*1[（(]采取积极回应[）)]/);
