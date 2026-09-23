@@ -132,7 +132,8 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /四类模块调用权重相同/);
     assert.match(director.prompt, /优先选择出现次数最少且不与上一次重复的模块/);
     assert.match(director.prompt, /连续4次未出现时必须强制补位/);
-    assert.match(director.prompt, /轨道B调用历史中的“场景事件”记录近期导演候选/);
+    assert.match(director.prompt, /轨道B调用历史中的“实际事件”只能依据已完成的酒馆助手正文记录/);
+    assert.match(director.prompt, /严禁把导演卡签发的三个候选方向直接当成已发生事件/);
     assert.match(director.prompt, /严禁复用近期相同或高度相似的地点、行为和事件主题/);
     assert.match(director.prompt, /情感\/追求\/误会\/私心/);
     assert.match(director.prompt, /敌对\/陷害\/野心\/博弈/);

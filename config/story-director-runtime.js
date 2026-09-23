@@ -14,6 +14,7 @@
         context: 'yzm_story_read_context',
         chat: 'yzm_story_read_visible_chat',
         ledger: 'yzm_story_read_ledger',
+        recordActualTrackB: 'yzm_story_record_actual_track_b',
         updateLedger: 'yzm_story_update_ledger',
     });
     const LEGACY_TOOL_NAMES = Object.freeze([
@@ -26,6 +27,7 @@
         [TOOL_NAMES.context]: '读取角色卡、世界书、表格与向量记忆',
         [TOOL_NAMES.chat]: '读取全部未隐藏聊天楼层',
         [TOOL_NAMES.ledger]: '读取导演账本',
+        [TOOL_NAMES.recordActualTrackB]: '记录正文实际发生的轨道B事件',
         [TOOL_NAMES.updateLedger]: '更新导演账本',
     });
     const BASE_READ_TOOL_ORDER = Object.freeze([
@@ -406,11 +408,17 @@
         const match = String(line || '').match(/^\s*[-*+]\s*(Module\s*[1-4])\s*(?:｜|\|)\s*出场角色\s*[：:]\s*(.*?)\s*$/i);
         if (!match) return null;
         const module = normalizeTrackBModule(match[1]);
-        const details = match[2];
-        const eventMatch = details.match(/^([\s\S]*?)\s*(?:｜|\|)\s*(?:场景事件|事件摘要|剧情推演)\s*[：:]\s*([\s\S]*?)\s*$/i);
+        const sourceMatch = match[2].match(/^([\s\S]*?)\s*(?:｜|\|)\s*正文来源\s*[：:]\s*(\d+)\/(\d+)\/([^｜|\s]+)\s*$/i);
+        const details = sourceMatch?.[1] || match[2];
+        const eventMatch = details.match(/^([\s\S]*?)\s*(?:｜|\|)\s*(?:实际事件|场景事件|事件摘要|剧情推演)\s*[：:]\s*([\s\S]*?)\s*$/i);
         const roles = normalizeTrackBRoleText(eventMatch?.[1] || details);
         const event = normalizeTrackBEventText(eventMatch?.[2] || '');
-        return module && roles ? { module, roles, event } : null;
+        const source = sourceMatch ? {
+            assistantIndex: Number(sourceMatch[2]),
+            swipeId: Number(sourceMatch[3]),
+            signature: String(sourceMatch[4] || ''),
+        } : null;
+        return module && roles ? { module, roles, event, source } : null;
     }
 
     function readTrackBCallHistory(ledger = '') {
@@ -458,19 +466,98 @@
         if (!entries.length) return base;
         const section = `【${TRACK_B_HISTORY_TITLE}】\n${entries.map((entry) => {
             const event = normalizeTrackBEventText(entry?.event);
-            return `- ${entry.module}｜出场角色：${entry.roles}${event ? `｜场景事件：${event}` : ''}`;
+            const source = entry?.source && Number.isInteger(Number(entry.source.assistantIndex))
+                && String(entry.source.signature || '')
+                ? `｜正文来源：${Number(entry.source.assistantIndex)}/${Math.max(0, Math.round(Number(entry.source.swipeId) || 0))}/${String(entry.source.signature)}`
+                : '';
+            return `- ${entry.module}｜出场角色：${entry.roles}${event ? `｜实际事件：${event}` : ''}${source}`;
         }).join('\n')}`;
         return [base, section].filter(Boolean).join('\n\n').trim();
     }
 
-    function preserveTrackBCallHistory(currentLedger = '', nextLedger = '') {
-        return writeTrackBCallHistory(nextLedger, readTrackBCallHistory(currentLedger));
+    function getRuntimeTrackBHistory(ledger = '') {
+        return readTrackBCallHistory(ledger).map((entry) => entry.source
+            ? entry
+            : { ...entry, event: '' });
     }
 
-    function appendTrackBCallHistory(ledger = '', card = '') {
-        const entry = parseTrackBCallFromCard(card);
-        if (!entry) return sanitizeDirectorLedger(ledger);
-        return writeTrackBCallHistory(ledger, [...readTrackBCallHistory(ledger), entry]);
+    function preserveTrackBCallHistory(currentLedger = '', nextLedger = '') {
+        return writeTrackBCallHistory(nextLedger, getRuntimeTrackBHistory(currentLedger));
+    }
+
+    function trackBSourceMatchesCurrentMessage(source) {
+        if (!source || typeof source !== 'object') return false;
+        const chat = getContext()?.chat;
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        const index = Number(source.assistantIndex);
+        if (!Array.isArray(chat) || !sessionId || !Number.isInteger(index) || index < 0 || index >= chat.length) return false;
+        const current = buildAssistantAnchor(chat[index], index, sessionId);
+        return !!current
+            && current.signature === String(source.signature || '')
+            && current.swipeId === Math.max(0, Math.round(Number(source.swipeId) || 0));
+    }
+
+    function reconcileTrackBCallHistory(ledger = '') {
+        const history = getRuntimeTrackBHistory(ledger)
+            .filter((entry) => !entry.source || trackBSourceMatchesCurrentMessage(entry.source));
+        return writeTrackBCallHistory(ledger, history);
+    }
+
+    function hasTrackBHistorySource(ledger = '', source = null) {
+        return !!source && getRuntimeTrackBHistory(ledger).some((entry) => entry.source
+            && Number(entry.source.assistantIndex) === Number(source.assistantIndex)
+            && Number(entry.source.swipeId || 0) === Number(source.swipeId || 0)
+            && String(entry.source.signature || '') === String(source.signature || ''));
+    }
+
+    function appendActualTrackBHistory(ledger = '', entry = {}) {
+        const module = normalizeTrackBModule(entry.module);
+        const roles = normalizeTrackBRoleText(entry.roles);
+        const event = normalizeTrackBEventText(entry.event);
+        const source = entry.source && typeof entry.source === 'object' ? {
+            assistantIndex: Number(entry.source.assistantIndex),
+            swipeId: Math.max(0, Math.round(Number(entry.source.swipeId) || 0)),
+            signature: String(entry.source.signature || ''),
+        } : null;
+        if (!module || !roles || !event || !source || !Number.isInteger(source.assistantIndex) || !source.signature) {
+            return sanitizeDirectorLedger(ledger);
+        }
+        const history = getRuntimeTrackBHistory(ledger).filter((item) => !item.source
+            || Number(item.source.assistantIndex) !== source.assistantIndex);
+        history.push({ module, roles, event, source });
+        return writeTrackBCallHistory(ledger, history);
+    }
+
+    function findRespondedUserAnchor(source) {
+        if (!source || source.role === 'user') return null;
+        const chat = getContext()?.chat;
+        const sessionId = String(source.sessionId || '');
+        if (!Array.isArray(chat) || !sessionId) return null;
+        for (let index = Number(source.assistantIndex) - 1; index >= 0; index -= 1) {
+            const message = chat[index];
+            if (!isDialogueMessage(message) || isPluginMessage(message)) continue;
+            return isUserMessage(message) ? buildUserAnchor(message, index, sessionId) : null;
+        }
+        return null;
+    }
+
+    function buildActualTrackBReview(director, source, ledger = '') {
+        const user = findRespondedUserAnchor(source);
+        if (!user || hasTrackBHistorySource(ledger, source)) return null;
+        const card = findMessageCard(director?.messageCards, user);
+        const call = parseTrackBCallFromCard(card);
+        if (!card || !call) return null;
+        return {
+            source: {
+                assistantIndex: Number(source.assistantIndex),
+                swipeId: Math.max(0, Math.round(Number(source.swipeId) || 0)),
+                signature: String(source.signature || ''),
+            },
+            user,
+            card,
+            module: call.module,
+            plannedRoles: call.roles,
+        };
     }
 
     function saveDirectorState(sessionId, nextDirector, source = 'story-director') {
@@ -690,8 +777,25 @@
                 type: 'function',
                 function: {
                     name: TOOL_NAMES.ledger,
-                    description: '读取剧情导演自己的长期调度账本。账本不包含剧情节点与人物履历；其中轨道B近10轮模块、NPC与场景事件候选历史由插件自动维护。',
+                    description: '读取剧情导演自己的长期调度账本。账本不包含剧情节点与人物履历；其中轨道B近10轮模块、出场角色与正文实际事件由插件自动维护。',
                     parameters: { type: 'object', properties: {}, additionalProperties: false },
+                },
+            },
+            {
+                type: 'function',
+                function: {
+                    name: TOOL_NAMES.recordActualTrackB,
+                    description: '根据刚读取的指定助手正文，记录上一轮导演卡实际落地的轨道B事件；不得抄写三个候选方向。',
+                    parameters: {
+                        type: 'object',
+                        properties: {
+                            occurred: { type: 'boolean', description: '该助手正文是否实际写出了上一轮导演卡的轨道B场景。' },
+                            roles: { type: 'string', description: '正文中实际参与该轨道B事件的具体NPC或势力；未发生时留空。' },
+                            event: { type: 'string', description: '只依据正文概括实际发生的地点、行为和事件结果；未发生时留空。' },
+                        },
+                        required: ['occurred', 'roles', 'event'],
+                        additionalProperties: false,
+                    },
                 },
             },
             {
@@ -763,10 +867,44 @@
             assertActive();
             return serializeVisibleChat();
         });
-        register(TOOL_NAMES.ledger, '读取剧情导演调度账本；轨道B近10轮模块、NPC与场景事件候选历史由插件自动维护。', { type: 'object', properties: {}, additionalProperties: false }, () => {
+        register(TOOL_NAMES.ledger, '读取剧情导演调度账本；轨道B近10轮模块、出场角色与正文实际事件由插件自动维护。', { type: 'object', properties: {}, additionalProperties: false }, () => {
             assertActive();
-            runContext.stagedLedger = sanitizeDirectorLedger(runContext.stagedLedger);
+            runContext.stagedLedger = reconcileTrackBCallHistory(runContext.stagedLedger);
             return runContext.stagedLedger || '（当前暂无导演账本）';
+        });
+        register(TOOL_NAMES.recordActualTrackB, '根据指定助手正文记录上一轮实际发生的轨道B事件，不得记录导演卡中的三个候选方向。', {
+            type: 'object',
+            properties: {
+                occurred: { type: 'boolean' },
+                roles: { type: 'string' },
+                event: { type: 'string' },
+            },
+            required: ['occurred', 'roles', 'event'],
+            additionalProperties: false,
+        }, (parameters = {}) => {
+            assertActive();
+            const review = runContext.actualTrackBReview;
+            if (!review) {
+                runContext.actualTrackBHandled = true;
+                return '当前没有需要核验的上一轮轨道B正文。';
+            }
+            if (parameters.occurred !== true) {
+                runContext.actualTrackBHandled = true;
+                return `已核验第 ${review.source.assistantIndex} 楼助手正文：未实际写出上一轮轨道B事件，本轮不追加调用历史。`;
+            }
+            const roles = normalizeTrackBRoleText(parameters.roles) || review.plannedRoles;
+            const event = normalizeTrackBEventText(parameters.event);
+            if (!roles || !event) {
+                return '记录失败：occurred=true 时必须根据助手正文提供实际出场角色和实际事件摘要，请重新调用。';
+            }
+            runContext.stagedLedger = appendActualTrackBHistory(runContext.stagedLedger, {
+                module: review.module,
+                roles,
+                event,
+                source: review.source,
+            });
+            runContext.actualTrackBHandled = true;
+            return `已从第 ${review.source.assistantIndex} 楼助手正文记录实际轨道B：${review.module}｜出场角色：${roles}｜实际事件：${event}`;
         });
         register(TOOL_NAMES.updateLedger, '覆盖剧情导演调度账本，不得写入剧情节点、人物履历或改写插件维护的轨道B调用历史。', {
             type: 'object',
@@ -900,11 +1038,15 @@
         activeAbortController = controller;
         activeRunSignature = source.signature;
         dispatchRunState(true, sessionId);
+        const stagedLedger = reconcileTrackBCallHistory(previousDirector.ledger);
         const runContext = {
             sessionId,
             source,
             signal: controller.signal,
-            stagedLedger: sanitizeDirectorLedger(previousDirector.ledger),
+            stagedLedger,
+            actualTrackBReview: buildActualTrackBReview(previousDirector, source, stagedLedger),
+            actualTrackBHandled: false,
+            actualTrackBPrompted: false,
         };
         let manager = null;
         try {
@@ -922,14 +1064,25 @@
                 { role: 'system', content: resolveDirectorVariables(promptEntry.prompt).trim() },
                 {
                     role: 'user',
-                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。轨道B必须填写具体的“出场角色”和“所属模块（Module 1-4）”。依据账本中插件维护的近10次调用历史，优先选择出现次数最少且不与上一次重复的模块；任一模块连续4次未出现时强制补位，并避开最近3次调用过的NPC或势力。轨道B历史中的“场景事件”是近期导演候选，剧情总结、表格和最新正文是实际发生事实；生成前必须同时对照两类信息，避免复用近期相同或高度相似的地点、行为与事件主题，跨日时尤其不得让角色回到上一日地点重复同一活动。所选模块必须落实为对应类型的事件，不得因当前商战、权谋或其他主线题材反复回落到同类推进。该历史会由插件根据最终导演卡自动追加，不得删除或改写。`,
+                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。轨道B必须填写具体的“出场角色”和“所属模块（Module 1-4）”。依据账本中插件维护的近10次实际调用历史，优先选择出现次数最少且不与上一次重复的模块；任一模块连续4次未出现时强制补位，并避开最近3次调用过的NPC或势力。轨道B历史中的“实际事件”只来自已完成的酒馆助手正文，不得把导演卡签发的三个候选方向直接当成已发生事件；生成前必须对照总结、表格、最新正文和实际事件历史，避免复用近期相同或高度相似的地点、行为与事件主题，跨日时尤其不得让角色回到上一日地点重复同一活动。所选模块必须落实为对应类型的事件，不得因当前商战、权谋或其他主线题材反复回落到同类推进。实际调用历史由插件在读取下一篇助手正文后维护，不得删除或改写。`,
                 },
             ];
             const usedTools = new Set();
             for (let turn = 0; turn < MAX_AGENT_TURNS; turn += 1) {
                 if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
                 const pendingReadTool = readToolOrder.find((name) => !usedTools.has(name)) || '';
-                const allowedToolNames = pendingReadTool ? [pendingReadTool] : [TOOL_NAMES.updateLedger];
+                const pendingActualTrackB = !pendingReadTool && runContext.actualTrackBReview && !runContext.actualTrackBHandled;
+                if (pendingActualTrackB && !runContext.actualTrackBPrompted) {
+                    const review = runContext.actualTrackBReview;
+                    messages.push({
+                        role: 'user',
+                        content: `现在核验第 ${review.source.assistantIndex} 楼助手正文实际落实的上一轮轨道B。上一轮绑定导演卡如下：\n${review.card}\n必须只依据刚读取的酒馆聊天正文判断实际采用了哪个事件，不得抄录导演卡中的三个候选方向。若正文没有实际写出轨道B，occurred=false。请调用 ${TOOL_NAMES.recordActualTrackB}。`,
+                    });
+                    runContext.actualTrackBPrompted = true;
+                }
+                const allowedToolNames = pendingReadTool
+                    ? [pendingReadTool]
+                    : (pendingActualTrackB ? [TOOL_NAMES.recordActualTrackB] : [TOOL_NAMES.updateLedger]);
                 const tools = getToolDefinitions(allowedToolNames);
                 captureDirectorRequest(snapshot, messages, tools, turn + 1, sessionId);
                 const result = await requestAgentTurn(snapshot, messages, tools, controller.signal);
@@ -964,6 +1117,13 @@
                     });
                     continue;
                 }
+                if (pendingActualTrackB) {
+                    messages.push({
+                        role: 'user',
+                        content: `当前必须调用 ${TOOL_NAMES.recordActualTrackB}，根据第 ${runContext.actualTrackBReview.source.assistantIndex} 楼助手正文完成实际轨道B核验后才能继续。`,
+                    });
+                    continue;
+                }
                 const extractedCard = extractDirectorCard(result.text || assistantMessage.content || '');
                 if (!extractedCard) {
                     messages.push({ role: 'user', content: '请只输出完整的 <下轮导演卡>...</下轮导演卡>。' });
@@ -972,7 +1132,6 @@
                 const card = resolveDirectorVariables(extractedCard);
                 if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
                 if (!sourceIsLatestDialogue(source)) throw new Error('导演完成前正文分支已经变化。');
-                runContext.stagedLedger = appendTrackBCallHistory(runContext.stagedLedger, card);
                 const messageCards = source.role === 'user'
                     ? upsertMessageCard(previousDirector.messageCards, source, card)
                     : normalizeMessageCards(previousDirector.messageCards);
@@ -1353,7 +1512,7 @@
         toolNames: TOOL_NAMES,
         extractDirectorCard,
         parseTrackBCallFromCard,
-        appendTrackBCallHistory,
+        appendActualTrackBHistory,
         getLatestAssistantAnchor,
         sourceMatchesCurrentMessage,
         getInjectableCard,
