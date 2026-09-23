@@ -822,7 +822,7 @@
         return matchesFallback ? fallbackBreaks : null;
     }
 
-    function normalizeStoryDirectorState(rawValue, fallbackValue = {}) {
+    function normalizeStoryDirectorState(rawValue, fallbackValue = {}, options = {}) {
         const source = rawValue && typeof rawValue === 'object' ? rawValue : {};
         const fallback = fallbackValue && typeof fallbackValue === 'object' ? fallbackValue : {};
         const anchor = source.source && typeof source.source === 'object' ? source.source : null;
@@ -855,6 +855,9 @@
             };
         }).filter(Boolean).slice(-50);
         return {
+            enabled: typeof source.enabled === 'boolean'
+                ? source.enabled
+                : (options.legacyEnabled === true || fallback.enabled === true),
             ledger: String(source.ledger ?? fallback.ledger ?? ''),
             pendingCard: String(source.pendingCard ?? fallback.pendingCard ?? ''),
             source: anchor ? {
@@ -1001,7 +1004,10 @@
                     : hasLegacyHistorianPromptSelection,
             } : {}),
             characterStatusPromptId: String(rawState.characterStatusPromptId ?? fallback.characterStatusPromptId ?? ''),
-            storyDirector: normalizeStoryDirectorState(rawState.storyDirector, fallback.storyDirector),
+            storyDirector: normalizeStoryDirectorState(rawState.storyDirector, fallback.storyDirector, {
+                legacyEnabled: typeof rawState.storyDirector?.enabled !== 'boolean'
+                    && YuzukiMemory.GlobalSettings?.get?.('yzm_memory_global_plugin_settings', {})?.enableStoryDirector === true,
+            }),
             settings: Object.assign({}, fallback.settings || {}, rawState.settings || {}),
         };
     }
@@ -1025,6 +1031,8 @@
             const branchParentState = compatibleMetadata ? null : loadBranchParentState(sessionId);
             const sourceState = compatibleMetadata || branchParentState || pickBestState(localStates);
             const normalized = normalizeState(sourceState ? stampSession(sourceState, sessionId) : null, fallbackState);
+            const storyDirectorEnabledNeedsMigration = !!sourceState
+                && typeof sourceState.storyDirector?.enabled !== 'boolean';
             const metadataNeedsMigration = compatibleMetadata
                 && !isCompatibleStateSession(compatibleMetadata, sessionId)
                 && sessionId === getCurrentSessionId();
@@ -1039,6 +1047,13 @@
                 saveState(normalized, fallbackState, sessionId, {
                     force: true,
                     saveOrigin: 'branch-inheritance',
+                    immediate: true,
+                    allowDuringSwitch: true,
+                });
+            } else if (storyDirectorEnabledNeedsMigration) {
+                saveState(normalized, fallbackState, sessionId, {
+                    force: true,
+                    saveOrigin: 'story-director-setting-migration',
                     immediate: true,
                     allowDuringSwitch: true,
                 });

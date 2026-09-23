@@ -64,7 +64,16 @@ function createSandbox(options = {}) {
             character_profile: [{ id: 'hero', values: { 角色名: '甲' } }],
             hidden_table: [{ id: 'hidden', values: { 名称: '不应出现' } }],
         },
-        storyDirector: { ledger: initialLedger, pendingCard: '', source: null, messageCards: [], status: 'idle', lastError: '', updatedAt: 0 },
+        storyDirector: {
+            ...(enabled === null ? {} : { enabled: enabled === true }),
+            ledger: initialLedger,
+            pendingCard: '',
+            source: null,
+            messageCards: [],
+            status: 'idle',
+            lastError: '',
+            updatedAt: 0,
+        },
         settings: {
             worldbookSelection: options.worldbookEnabled === false
                 ? { enabled: false, initialized: true, ids: [] }
@@ -132,7 +141,7 @@ function createSandbox(options = {}) {
         GlobalSettings: {
             get(key, fallback) {
                 if (key === 'yzm_memory_global_plugin_settings') {
-                    return enabled === null ? {} : { enableStoryDirector: enabled };
+                    return { enableStoryDirector: enabled !== true };
                 }
                 return fallback;
             },
@@ -234,7 +243,11 @@ function createSandbox(options = {}) {
         directorCaptures,
         dispatchedEvents,
         getState: () => state,
-        setEnabled: (value) => { enabled = value; },
+        setEnabled: (value) => {
+            enabled = value;
+            if (value === null) delete state.storyDirector.enabled;
+            else state.storyDirector.enabled = value === true;
+        },
         setActivePrompt: (prompt) => { activePrompt = prompt; },
     };
 }

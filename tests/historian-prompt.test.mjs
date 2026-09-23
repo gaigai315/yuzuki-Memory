@@ -116,11 +116,11 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.equal(director.id, library.getDefaultStoryDirectorPromptId());
     assert.equal(director.builtin, true);
     assert.match(director.prompt, /<下轮导演卡>/);
-    assert.match(director.prompt, /若最新输入为\s*User/);
+    assert.match(director.prompt, /若最新输入为\{\{user\}\}/);
     assert.match(director.prompt, /若最新输入为\s*Assistant/);
     assert.match(director.prompt, /严禁复述上一轮已发生事实/);
-    assert.match(director.prompt, /最新的\s*User\s*输入是已经发生的既定行动/);
-    assert.match(director.prompt, /响应角色如何回应这条\s*User\s*输入的3类预案/);
+    assert.match(director.prompt, /最新的\{\{user\}\}输入是已经发生的既定行动/);
+    assert.match(director.prompt, /响应角色如何回应这条\{\{user\}\}输入的3类预案/);
     assert.match(director.prompt, /每项必须以具体响应角色为主语/);
     assert.match(director.prompt, /严禁替\{\{user\}\}补写、预测或安排动作、台词、选择、态度与心理/);
     assert.match(director.prompt, /预案\s*1[（(]响应角色采取积极回应[）)]/);
@@ -128,16 +128,17 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /预案\s*3[（(]响应角色采取对抗回应[）)]/);
     assert.doesNotMatch(director.prompt, /当前角色正向：顺从\/接纳\/主动/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
-    assert.match(director.prompt, /所属模块：\[Module\s*1\s*\/\s*2\s*\/\s*3\s*\/\s*4\]/);
-    assert.match(director.prompt, /四类模块调用权重相同/);
-    assert.match(director.prompt, /优先选择出现次数最少且不与上一次重复的模块/);
-    assert.match(director.prompt, /连续4次未出现时必须强制补位/);
-    assert.match(director.prompt, /轨道B调用历史中的“实际事件”只能依据已完成的酒馆助手正文记录/);
-    assert.match(director.prompt, /严禁把导演卡签发的三个候选方向直接当成已发生事件/);
-    assert.match(director.prompt, /严禁复用近期相同或高度相似的地点、行为和事件主题/);
+    assert.match(director.prompt, /所属模块：\[仅填写Module1、Module2、Module3或Module4中的一个\]/);
+    assert.match(director.prompt, /四大模块类型权重相同/);
+    assert.match(director.prompt, /近10轮中出现次数最少且不与上轮重复的模块/);
+    assert.match(director.prompt, /连续4轮未出现时强制补位/);
+    assert.match(director.prompt, /核对近10轮账本中的正文实际事件/);
+    assert.match(director.prompt, /禁止复用相同或高度相似的地点、行为和事件主题/);
+    assert.match(director.prompt, /出场角色：\[备选1角色\/势力\].*\[备选2角色\/势力\].*\[备选3角色\/势力\]/);
+    assert.match(director.prompt, /备选1\(\[具体角色\/势力\]｜\[所属模块内子类型\]\)/);
     assert.match(director.prompt, /情感\/追求\/误会\/私心/);
     assert.match(director.prompt, /敌对\/陷害\/野心\/博弈/);
-    assert.match(director.prompt, /不得因为当前主线[^\n]*压制情感、社交、日常或第三方支线/);
+    assert.match(director.prompt, /严禁因为当前主线[^\n]*压制情感、社交、日常或第三方支线/);
     assert.match(director.prompt, /跳过轨道A并执行轨道B/);
     assert.doesNotMatch(director.prompt, /跳过执行轨道B/);
 });
@@ -305,6 +306,26 @@ test('changing or saving a story director prompt does not automatically run the 
     assert.doesNotMatch(saveHandler, /scheduleDirector/);
     assert.match(selectionHandler, /cancelActiveRun/);
     assert.match(saveHandler, /cancelActiveRun/);
+});
+
+test('story director switch is stored in the current chat state instead of global plugin settings', () => {
+    const updateHandler = getFunctionSource(
+        memoryWindowSource,
+        'updateStoryDirectorEnabled',
+        'saveFillModeSetting',
+    );
+    const configPanel = getFunctionSource(
+        memoryWindowSource,
+        'createPluginConfigPanel',
+        'createFloatingIconStylePicker',
+    );
+
+    assert.ok(updateHandler.includes('state.storyDirector = {'));
+    assert.ok(updateHandler.includes('saveState({ force: true })'));
+    assert.doesNotMatch(updateHandler, /GlobalSettings|updatePluginSetting/);
+    assert.ok(configPanel.includes('getStoryDirectorEnabled()'));
+    assert.match(configPanel, /storyDirectorEnabled/);
+    assert.ok(!configPanel.includes('settings.enableStoryDirector'));
 });
 
 test('director card can replan through the shared runner and refresh in place', () => {

@@ -40,7 +40,6 @@
     const MAX_TRACK_B_HISTORY = 10;
     const TRACK_B_HISTORY_TITLE = '轨道B调用历史（近10轮）';
     const RUN_DELAY_MS = 1800;
-    const PLUGIN_SETTINGS_KEY = 'yzm_memory_global_plugin_settings';
     const RUN_STATE_EVENT = 'yzm-story-director-run-state';
     let bound = false;
     let bindRetryTimer = null;
@@ -70,8 +69,8 @@
             .replace(/\{\{char\}\}/gi, () => characterName);
     }
 
-    function isStoryDirectorEnabled() {
-        return YuzukiMemory.GlobalSettings?.get?.(PLUGIN_SETTINGS_KEY, {})?.enableStoryDirector === true;
+    function isStoryDirectorEnabled(sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.()) {
+        return loadState(sessionId)?.storyDirector?.enabled === true;
     }
 
     function isRunning() {
@@ -569,6 +568,7 @@
             ? normalizeMessageCards(nextDirector.messageCards)
             : normalizeMessageCards(latest.storyDirector?.messageCards);
         latest.storyDirector = {
+            enabled: latest.storyDirector?.enabled === true,
             ledger: sanitizeDirectorLedger(nextDirector?.ledger),
             pendingCard: String(nextDirector?.pendingCard || ''),
             source: nextDirector?.source && typeof nextDirector.source === 'object' ? { ...nextDirector.source } : null,
@@ -1018,7 +1018,7 @@
     }
 
     async function runDirector(source) {
-        if (!isStoryDirectorEnabled()) return { skipped: true, reason: 'disabled' };
+        if (!isStoryDirectorEnabled(source?.sessionId)) return { skipped: true, reason: 'disabled' };
         const promptEntry = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
         if (!promptEntry || !String(promptEntry.prompt || '').trim()) return { skipped: true, reason: 'disabled' };
         if (!sourceIsLatestDialogue(source)) return { skipped: true, reason: 'stale-source' };
@@ -1052,7 +1052,7 @@
         try {
             const store = YuzukiMemory.VectorStore;
             await store?.whenReady?.();
-            if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
+            if (controller.signal.aborted || !isStoryDirectorEnabled(sessionId)) throw new DOMException('Aborted', 'AbortError');
             manager = registerRuntimeTools(runContext);
             const readToolOrder = getReadToolOrder();
             const snapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.('storyDirector') || { mode: 'tavern', preset: null };
@@ -1069,7 +1069,7 @@
             ];
             const usedTools = new Set();
             for (let turn = 0; turn < MAX_AGENT_TURNS; turn += 1) {
-                if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
+                if (controller.signal.aborted || !isStoryDirectorEnabled(sessionId)) throw new DOMException('Aborted', 'AbortError');
                 const pendingReadTool = readToolOrder.find((name) => !usedTools.has(name)) || '';
                 const pendingActualTrackB = !pendingReadTool && runContext.actualTrackBReview && !runContext.actualTrackBHandled;
                 if (pendingActualTrackB && !runContext.actualTrackBPrompted) {
@@ -1086,7 +1086,7 @@
                 const tools = getToolDefinitions(allowedToolNames);
                 captureDirectorRequest(snapshot, messages, tools, turn + 1, sessionId);
                 const result = await requestAgentTurn(snapshot, messages, tools, controller.signal);
-                if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
+                if (controller.signal.aborted || !isStoryDirectorEnabled(sessionId)) throw new DOMException('Aborted', 'AbortError');
                 if (!result?.success) throw new Error(result?.error || '剧情导演请求失败。');
                 const assistantMessage = result.message || { role: 'assistant', content: result.text || '' };
                 messages.push(assistantMessage);
@@ -1130,7 +1130,7 @@
                     continue;
                 }
                 const card = resolveDirectorVariables(extractedCard);
-                if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
+                if (controller.signal.aborted || !isStoryDirectorEnabled(sessionId)) throw new DOMException('Aborted', 'AbortError');
                 if (!sourceIsLatestDialogue(source)) throw new Error('导演完成前正文分支已经变化。');
                 const messageCards = source.role === 'user'
                     ? upsertMessageCard(previousDirector.messageCards, source, card)
@@ -1160,7 +1160,7 @@
                     ledger: String(previousDirector.ledger || ''),
                     pendingCard: '',
                     source: null,
-                    status: isStoryDirectorEnabled() ? 'idle' : 'disabled',
+                    status: isStoryDirectorEnabled(sessionId) ? 'idle' : 'disabled',
                     lastError: '',
                 }, 'story-director-abort');
             } else if (sourceMatchesCurrentMessage(source)) {
@@ -1523,6 +1523,7 @@
         clearPendingCard,
         scheduleDirector,
         cancelActiveRun,
+        isStoryDirectorEnabled,
         isRunning,
         runDirector,
         replanLatest,

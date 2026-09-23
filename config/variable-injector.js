@@ -194,6 +194,7 @@
             },
             promptPresetId: '',
             storyDirector: {
+                enabled: false,
                 ledger: '',
                 pendingCard: '',
                 source: null,

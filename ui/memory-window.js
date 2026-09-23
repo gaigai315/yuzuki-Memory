@@ -191,6 +191,7 @@
     const DEFAULT_PLUGIN_SETTINGS = {
         injectMemoryTable: true,
         injectVectorMemory: false,
+        // Legacy global value is retained only to migrate existing chat states.
         enableStoryDirector: false,
         smartCalculationLinkage: false,
         hideFloorsEnabled: false,
@@ -383,6 +384,7 @@
             promptPresetId: '',
             characterStatusPromptId: '',
             storyDirector: {
+                enabled: false,
                 ledger: '',
                 pendingCard: '',
                 source: null,
@@ -2631,11 +2633,39 @@
         if (key === 'floatingIconStyle') {
             updateFloatingIconImage();
         }
-        if (key === 'enableStoryDirector' && nextSettings.enableStoryDirector === false) {
-            YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('story director disabled');
-            YuzukiMemory.StoryDirectorRuntime?.clearPendingCard?.('disabled');
-        }
         return nextSettings;
+    }
+
+    function getStoryDirectorEnabled() {
+        return getState().storyDirector?.enabled === true;
+    }
+
+    function updateStoryDirectorEnabled(value) {
+        const enabled = value === true;
+        const state = getState();
+        const director = state.storyDirector && typeof state.storyDirector === 'object'
+            ? state.storyDirector
+            : {};
+        if (!enabled) YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('story director disabled');
+        state.storyDirector = {
+            ...director,
+            enabled,
+            pendingCard: enabled ? String(director.pendingCard || '') : '',
+            source: enabled && director.source && typeof director.source === 'object' ? director.source : null,
+            status: enabled
+                ? (director.status === 'disabled' ? 'idle' : String(director.status || 'idle'))
+                : 'disabled',
+            lastError: enabled ? String(director.lastError || '') : '',
+        };
+        const saved = saveState({ force: true });
+        if (!saved) {
+            memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
+            return false;
+        }
+        window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
+            detail: { source: 'story-director-toggle' },
+        }));
+        return true;
     }
 
     function saveFillModeSetting(mode) {
@@ -11644,7 +11674,7 @@
             createPluginConfigHeader(),
             createPluginConfigRow('注入记忆', '处理 {{MEMORY}}、{{MEMORY_TABLE_表名}}、{{MEMORY_SUMMARY_标题或序号}} 等变量，并按表/总结分消息注入。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
             createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
-            createPluginConfigRow('剧情规划', '开启后在正文与记忆任务完成时规划下一轮；关闭后不运行导演，也不注入导演卡。', 'fa-solid fa-clapperboard', createConfigSwitch(settings.enableStoryDirector, 'enableStoryDirector')),
+            createPluginConfigRow('剧情规划', '仅对当前会话生效。开启后在正文与记忆任务完成时规划下一轮；关闭后不运行导演，也不注入导演卡。', 'fa-solid fa-clapperboard', createConfigSwitch(getStoryDirectorEnabled(), 'storyDirectorEnabled')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
             createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标；单击打开记忆，双击打开角色图谱，长按查看当前最新导演卡。图标样式和拖动位置都会记住。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon'), createFloatingIconStylePicker(settings.floatingIconStyle)),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
@@ -17799,7 +17829,12 @@
                     const isOn = toggleConfigSwitch(configSwitch);
                     const autoSummarySettingKey = configSwitch.dataset.yzmAutoSummarySetting;
                     const pluginSettingKey = configSwitch.dataset.yzmPluginSetting;
-                    if (pluginSettingKey === 'taskWorldbookEnabled') {
+                    if (pluginSettingKey === 'storyDirectorEnabled') {
+                        if (!updateStoryDirectorEnabled(isOn)) {
+                            setConfigSwitchState(configSwitch, !isOn);
+                            showTaskToast('当前会话尚未就绪，剧情规划开关未保存。', 'error');
+                        }
+                    } else if (pluginSettingKey === 'taskWorldbookEnabled') {
                         saveTaskWorldbookSelection({ enabled: isOn, initialized: getTaskWorldbookSelection().initialized });
                         void refreshTaskWorldbookList(root);
                     } else if (autoSummarySettingKey) {

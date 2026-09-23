@@ -28,7 +28,7 @@ function createLocalStorage() {
 }
 
 function createStorageSandbox(options = {}) {
-    const settings = new Map();
+    const settings = new Map(Object.entries(options.globalSettings || {}));
     const localStorage = createLocalStorage();
     const windowObject = {
         YuzukiMemory: {
@@ -92,6 +92,16 @@ function createFallbackState() {
         activeTableId: 'character_profile',
         activeRecordIds: {},
         records: {},
+        storyDirector: {
+            enabled: false,
+            ledger: '',
+            pendingCard: '',
+            source: null,
+            messageCards: [],
+            status: 'idle',
+            lastError: '',
+            updatedAt: 0,
+        },
         settings: {},
     };
 }
@@ -157,6 +167,34 @@ test('global columns merge into new and existing sessions while local columns st
 
     const otherSession = storage.loadState(fallback, 'chat:other');
     assert.equal(otherSession.tables[0].columns.includes('仅当前会话'), false);
+});
+
+test('story director enabled state is isolated per session and legacy global value only migrates existing chats', () => {
+    const { storage, localStorage } = createStorageSandbox({
+        globalSettings: {
+            yzm_memory_global_plugin_settings: { enableStoryDirector: true },
+        },
+    });
+    const fallback = createFallbackState();
+    const legacySessionId = 'chat:legacy-director';
+    const legacyState = structuredClone(fallback);
+    legacyState.sessionId = legacySessionId;
+    delete legacyState.storyDirector.enabled;
+    localStorage.setItem(storage.getStorageKey(legacySessionId), JSON.stringify(legacyState));
+
+    const migrated = storage.loadState(fallback, legacySessionId);
+    assert.equal(migrated.storyDirector.enabled, true);
+    assert.equal(JSON.parse(localStorage.getItem(storage.getStorageKey(legacySessionId))).storyDirector.enabled, true);
+
+    const newSession = storage.loadState(fallback, 'chat:new-director');
+    assert.equal(newSession.storyDirector.enabled, false);
+
+    const disabledSessionId = 'chat:disabled-director';
+    const disabledState = structuredClone(fallback);
+    disabledState.sessionId = disabledSessionId;
+    disabledState.storyDirector.enabled = false;
+    localStorage.setItem(storage.getStorageKey(disabledSessionId), JSON.stringify(disabledState));
+    assert.equal(storage.loadState(fallback, disabledSessionId).storyDirector.enabled, false);
 });
 
 test('cloud chat metadata outranks browser cache and receives current-state saves', () => {
