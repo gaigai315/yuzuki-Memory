@@ -530,7 +530,9 @@ test('a generated Track B card is not recorded as an actual event before正文 u
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
-    assert.match(requests[0][1].content, /近10次实际调用历史/);
+    assert.match(requests[0][1].content, /严禁调用以下轨道B已经发生过的历史（近10轮）/);
+    assert.match(requests[0][1].content, /硬性排除清单，只能用于避重/);
+    assert.match(requests[0][1].content, /严禁照抄、改写、同义替换、换角色换地点或换皮复用/);
     assert.match(requests[0][1].content, /优先选择出现次数最少且不与上一次重复的模块/);
     assert.match(requests[0][1].content, /连续4次未出现时强制补位/);
     assert.match(requests[0][1].content, /最近3次调用过的NPC或势力/);
@@ -547,15 +549,22 @@ test('Track B history survives a model ledger overwrite without adding unused ca
         return `- Module ${((index % 4) + 1)}｜出场角色：NPC${String(number).padStart(2, '0')}`;
     }).join('\n');
     const initialLedger = `【轨道B调用历史（近10轮）】\n${history}\n\n【角色冷却】\n- 旧状态`;
-    const { memory, getState } = createSandbox({ initialLedger });
+    const { memory, getState, requests } = createSandbox({ initialLedger });
     const card = createTrackBCard('NPC11、北港商会', 'Module 3');
-    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({
-        card,
-        ledger: '【信息隔离】\n- 新状态\n\n【轨道B调用历史（近10轮）】\n- Module 3｜出场角色：NPC11',
-    });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        requests.push(structuredClone(messages));
+        return createPlanResponse({
+            card,
+            ledger: '【信息隔离】\n- 新状态\n\n【轨道B调用历史（近10轮）】\n- Module 3｜出场角色：NPC11',
+        });
+    };
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
+    const modelLedger = readContext(requests[0]).ledger;
+    assert.match(modelLedger, /【严禁调用以下轨道B已经发生过的历史（近10轮）】/);
+    assert.doesNotMatch(modelLedger, /【轨道B调用历史（近10轮）】/);
+    assert.match(modelLedger, /Module 1｜出场角色：NPC01/);
     const ledger = getState().storyDirector.ledger;
     const entries = ledger.split('\n').filter((line) => /^- Module [1-4]｜出场角色：/.test(line));
     assert.equal(entries.length, 10);
@@ -608,6 +617,14 @@ test('two-pass planning records only the reviewed body event once and invalidate
     assert.match(ledger, /Module 1｜出场角色：林雪｜实际事件：林雪在城西马场短暂休整后返回府邸｜正文来源：5\/0\//);
     assert.equal((ledger.match(/正文来源/g) || []).length, 1);
     assert.doesNotMatch(ledger, /第一轮误写|候选A|候选B|候选C|马会观赛|马术训练/);
+    const sourceSignature = ledger.match(/正文来源：5\/0\/([^｜|\s]+)/)?.[1] || '';
+    assert.ok(sourceSignature);
+    const modelLedger = readContext(requests[4]).ledger;
+    assert.match(modelLedger, /【严禁调用以下轨道B已经发生过的历史（近10轮）】/);
+    assert.match(modelLedger, /Module 1｜出场角色：林雪｜实际事件：林雪在城西马场短暂休整后返回府邸/);
+    assert.doesNotMatch(modelLedger, /正文来源/);
+    assert.equal(modelLedger.includes(sourceSignature), false);
+    assert.equal(readContext(requests[5]).ledger, modelLedger);
 
     chat[5].swipes = [chat[5].mes, '新分支只继续用户所在场景，没有描写林雪或轨道B。'];
     chat[5].swipe_id = 1;

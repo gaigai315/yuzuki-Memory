@@ -17,6 +17,7 @@
     const MAX_MESSAGE_CARDS = 50;
     const MAX_TRACK_B_HISTORY = 10;
     const TRACK_B_HISTORY_TITLE = '轨道B调用历史（近10轮）';
+    const MODEL_TRACK_B_HISTORY_TITLE = '严禁调用以下轨道B已经发生过的历史（近10轮）';
     const RUN_DELAY_MS = 1800;
     const RUN_STATE_EVENT = 'yzm-story-director-run-state';
     const VECTOR_RECALL_TIMEOUT_MS = 20000;
@@ -329,7 +330,10 @@
 
     function isTrackBHistoryHeading(line = '') {
         const heading = normalizeLedgerHeading(line).replace(/\s+/g, '').toLowerCase();
-        return heading === '轨道b调用历史（近10轮）' || heading === '轨道b调用历史(近10轮)';
+        return heading === '轨道b调用历史（近10轮）'
+            || heading === '轨道b调用历史(近10轮)'
+            || heading === '严禁调用以下轨道b已经发生过的历史（近10轮）'
+            || heading === '严禁调用以下轨道b已经发生过的历史(近10轮)';
     }
 
     function normalizeTrackBRoleText(value = '') {
@@ -450,6 +454,17 @@
                 ? `｜正文来源：${Number(entry.source.assistantIndex)}/${Math.max(0, Math.round(Number(entry.source.swipeId) || 0))}/${String(entry.source.signature)}`
                 : '';
             return `- ${entry.module}｜出场角色：${entry.roles}${event ? `｜实际事件：${event}` : ''}${source}`;
+        }).join('\n')}`;
+        return [base, section].filter(Boolean).join('\n\n').trim();
+    }
+
+    function serializeDirectorLedgerForModel(ledger = '') {
+        const base = removeTrackBHistorySections(ledger);
+        const entries = getRuntimeTrackBHistory(ledger).slice(-MAX_TRACK_B_HISTORY);
+        if (!entries.length) return base;
+        const section = `【${MODEL_TRACK_B_HISTORY_TITLE}】\n${entries.map((entry) => {
+            const event = normalizeTrackBEventText(entry?.event);
+            return `- ${entry.module}｜出场角色：${entry.roles}${event ? `｜实际事件：${event}` : ''}`;
         }).join('\n')}`;
         return [base, section].filter(Boolean).join('\n\n').trim();
     }
@@ -890,7 +905,8 @@
         const chat = JSON.parse(serializeVisibleChat(visibleChat));
         const worldbooks = await serializeSelectedWorldbooks(state);
         return {
-            profiles, worldbooks, tables, vectors: Array.isArray(vectors) ? vectors : [], chat, ledger,
+            profiles, worldbooks, tables, vectors: Array.isArray(vectors) ? vectors : [], chat,
+            ledger: serializeDirectorLedgerForModel(ledger),
             anchor: { floor: getSourceIndex(source), role: source.role === 'user' ? 'user' : 'assistant' },
             actualTrackBReview: actualTrackBReview ? {
                 assistantFloor: actualTrackBReview.source.assistantIndex,
@@ -917,7 +933,7 @@
                     '账本只保存跨轮调度状态，不得替代总结、表格或最新正文；不得创建或保留剧情节点与履历章节。',
                     '只有 actualTrackBReview 指定的助手正文才可核验上一轮轨道B；根据 chat 中对应原始楼层判断，不得把导演卡签发的三个候选方向直接当成已发生事件。无待核验正文或未实际发生时，occurred=false 且 roles、event 留空。',
                     '核验发生时，roles 和 event 只能来自该正文，不能使用计划角色兜底；模块及正文来源由插件绑定，模型不得改写。新的 card 候选不得计入实际事件。',
-                    '轨道B近10次实际调用历史由插件维护，不得在 ledger 中新增、删除或改写这段历史。定稿时应结合本次核验的实际事件规划后续。',
+                    `ledger 中的【${MODEL_TRACK_B_HISTORY_TITLE}】是硬性排除清单，只能用于避重。严禁照抄、改写、同义替换、换角色换地点或换皮复用其中的地点、行为、冲突结构与事件主题，也不得把任何一条当作下一轮候选素材。该清单由插件维护，模型不得在输出 ledger 中新增、删除或改写。`,
                     '轨道B填写具体出场角色和所属模块。优先选择出现次数最少且不与上一次重复的模块；任一模块连续4次未出现时强制补位，并避开最近3次调用过的NPC或势力。',
                     '对照总结、表格、最新正文与实际事件历史，避免复用近期相同或高度相似的地点、行为与事件主题，跨日不得让角色回到上一日地点重复同一活动。',
                     '所选模块必须落实为对应类型的事件，不得因当前商战、权谋或其他主线题材反复回落到同类推进。',
@@ -945,7 +961,7 @@
             content: [
                 '第二轮：审查与定稿。重新对照以上同一份完整资料，检查第一轮三个字段并直接提交修正后的完整结果。这是最后一轮，不再调用读取工具或请求后续轮次。',
                 '1. 事实核验：上一轮事件是否确实出现在指定助手正文；是否把未采用候选、计划角色或草案误当事实。可以推翻第一轮核验，未发生则 occurred=false 并清空 roles、event。',
-                '2. 事件去重：对照总结、表格、正文和近10轮实际事件，排除地点、行为、主题的同义重复，尤其核对跨日角色状态。',
+                `2. 事件去重：把【${MODEL_TRACK_B_HISTORY_TITLE}】视为硬性禁用清单；不得照抄、同义改写、换角色换地点或换皮复刻其中的地点、行为、冲突结构与事件主题，尤其核对跨日角色状态。`,
                 '3. 时空及信息：检查人物位置、时间推进、交通与到达锁、角色知情范围，纠正矛盾和信息泄漏。',
                 '4. 轨道A与用户自主权：从最后有效楼层继续，不重演已有回应，不替用户决定行为；DSIP 和其他剧情规则遵守所选提示词。',
                 '5. 调度与账本：核对模块轮换、角色冷却、人物表现和实际事件的关系；账本仅保存调度状态，不将新卡候选或草案写成已发生历史。',
