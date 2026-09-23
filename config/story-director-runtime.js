@@ -19,6 +19,8 @@
     const TRACK_B_HISTORY_TITLE = '轨道B调用历史（近10轮）';
     const RUN_DELAY_MS = 1800;
     const RUN_STATE_EVENT = 'yzm-story-director-run-state';
+    const VECTOR_RECALL_TIMEOUT_MS = 20000;
+    const VECTOR_LOG_PREFIX = '[yuzuki-Memory Story Director Vector]';
     let bound = false;
     let bindRetryTimer = null;
     let runTimer = null;
@@ -695,33 +697,103 @@
         return messages;
     }
 
-    function serializeVisibleChat() {
-        return JSON.stringify({ messages: collectVisibleChatMessages() });
+    function serializeVisibleChat(messages = collectVisibleChatMessages()) {
+        return JSON.stringify({ messages });
     }
 
-    function getDefaultVectorQuery() {
-        const depth = Math.max(1, Math.round(Number(YuzukiMemory.EmbeddingClient?.loadSettings?.()?.contextDepth) || 2));
-        return collectVisibleChatMessages().slice(-depth).map((message) => message.content).join('\n').slice(-6000);
+    function logVectorRecall(message, detail = null, level = 'info') {
+        const method = level === 'warn' ? 'warn' : 'info';
+        if (detail === null || detail === undefined) {
+            console[method](`${VECTOR_LOG_PREFIX} ${message}`);
+        } else {
+            console[method](`${VECTOR_LOG_PREFIX} ${message}`, detail);
+        }
     }
 
-    async function searchVectorMemories() {
+    function getDefaultVectorQuery(messages, settings = {}) {
+        const depth = Math.max(1, Math.round(Number(settings.contextDepth) || 2));
+        const selected = (Array.isArray(messages) ? messages : []).slice(-depth);
+        return {
+            depth,
+            messageCount: selected.length,
+            text: selected.map((message) => message.content).join('\n').trim(),
+        };
+    }
+
+    async function searchVectorMemories(visibleChat) {
         const store = YuzukiMemory.VectorStore;
-        const activeBooks = store?.getActiveBooks?.() || [];
-        const query = getDefaultVectorQuery();
-        if (!activeBooks.length || !query || YuzukiMemory.EmbeddingClient?.loadSettings?.()?.enabled !== true) return [];
+        const embeddingClient = YuzukiMemory.EmbeddingClient;
+        if (!store || typeof store.search !== 'function' || typeof embeddingClient?.loadSettings !== 'function') {
+            logVectorRecall('跳过：向量模块未加载', null, 'warn');
+            return [];
+        }
+
         let timeoutId;
         try {
+            await store.whenReady?.();
+            const settings = embeddingClient.loadSettings() || {};
+            if (settings.enabled !== true) {
+                logVectorRecall('跳过：Embedding 召回未启用');
+                return [];
+            }
+            const activeBooks = typeof store.getActiveBooks === 'function' ? store.getActiveBooks() : [];
+            if (!activeBooks.length) {
+                logVectorRecall('跳过：当前会话未绑定向量书');
+                return [];
+            }
+            const query = getDefaultVectorQuery(visibleChat, settings);
+            if (!query.text) {
+                logVectorRecall('跳过：没有可用于检索的过滤后正文', {
+                    boundBooks: activeBooks.length,
+                    contextDepth: query.depth,
+                });
+                return [];
+            }
+            const rerankSettings = YuzukiMemory.RerankClient?.loadSettings?.() || { enabled: false };
+            logVectorRecall('开始统一检索', {
+                boundBooks: activeBooks.length,
+                queryLength: query.text.length,
+                queryMessages: query.messageCount,
+                contextDepth: query.depth,
+                threshold: settings.threshold,
+                recallLimit: settings.recallLimit,
+                rerank: rerankSettings.enabled === true,
+            });
+            const timeoutError = new Error('向量检索超时');
+            timeoutError.name = 'VectorRecallTimeoutError';
             const results = await Promise.race([
-                store.search(query, activeBooks, { ignoreInjectionSetting: true }),
+                store.search(query.text, activeBooks, { ignoreInjectionSetting: true }),
                 new Promise((_, reject) => {
-                    timeoutId = window.setTimeout(() => reject(new Error('向量检索超时')), 20000);
+                    timeoutId = window.setTimeout(() => reject(timeoutError), VECTOR_RECALL_TIMEOUT_MS);
                 }),
             ]);
-            return (Array.isArray(results) ? results : [])
+            const texts = (Array.isArray(results) ? results : [])
                 .map((item) => String(item.text || '').trim())
                 .filter(Boolean);
+            if (!texts.length) {
+                logVectorRecall('检索完成：没有命中内容', {
+                    boundBooks: activeBooks.length,
+                    threshold: settings.threshold,
+                    recallLimit: settings.recallLimit,
+                    rerank: rerankSettings.enabled === true,
+                });
+                return [];
+            }
+            logVectorRecall('检索完成', {
+                boundBooks: activeBooks.length,
+                hitCount: texts.length,
+                contentLength: texts.reduce((total, text) => total + text.length, 0),
+                rerank: rerankSettings.enabled === true,
+            });
+            return texts;
         } catch (error) {
-            console.warn('[yuzuki-Memory] 剧情导演向量召回失败:', error);
+            if (error?.name === 'VectorRecallTimeoutError') {
+                logVectorRecall('检索超时，已跳过', {
+                    timeoutMs: VECTOR_RECALL_TIMEOUT_MS,
+                }, 'warn');
+            } else {
+                logVectorRecall('检索失败，已跳过', String(error?.message || error || '未知错误'), 'warn');
+            }
             return [];
         } finally {
             window.clearTimeout(timeoutId);
@@ -812,16 +884,13 @@
         }
     }
 
-    async function prepareDirectorContext(state, source, ledger, actualTrackBReview) {
+    async function prepareDirectorContext(state, source, ledger, actualTrackBReview, visibleChat, vectors) {
         const profiles = JSON.parse(serializeProfiles());
         const tables = JSON.parse(serializeTables(state)).tables;
-        const chat = JSON.parse(serializeVisibleChat());
-        const [worldbooks, vectors] = await Promise.all([
-            serializeSelectedWorldbooks(state),
-            searchVectorMemories(),
-        ]);
+        const chat = JSON.parse(serializeVisibleChat(visibleChat));
+        const worldbooks = await serializeSelectedWorldbooks(state);
         return {
-            profiles, worldbooks, tables, vectors, chat, ledger,
+            profiles, worldbooks, tables, vectors: Array.isArray(vectors) ? vectors : [], chat, ledger,
             anchor: { floor: getSourceIndex(source), role: source.role === 'user' ? 'user' : 'assistant' },
             actualTrackBReview: actualTrackBReview ? {
                 assistantFloor: actualTrackBReview.source.assistantIndex,
@@ -1005,14 +1074,18 @@
             if (!sourceIsLatestDialogue(source)) throw new Error('导演完成前正文分支或会话已经变化。');
         };
         try {
-            await waitForDirectorWork(() => YuzukiMemory.VectorStore?.whenReady?.(), controller.signal);
+            await waitForDirectorWork(() => YuzukiMemory.readyPromise, controller.signal);
             assertActive();
             const ledger = reconcileTrackBCallHistory(previousDirector.ledger);
             const visibleChat = collectVisibleChatMessages();
             const actualTrackBReview = visibleChat.some((message) => message.floor === getSourceIndex(source) && message.role === 'assistant')
                 ? buildActualTrackBReview(previousDirector, source, ledger) : null;
+            const vectors = await waitForDirectorWork(
+                () => searchVectorMemories(visibleChat), controller.signal,
+            );
+            assertActive();
             const context = await waitForDirectorWork(
-                () => prepareDirectorContext(state, source, ledger, actualTrackBReview), controller.signal,
+                () => prepareDirectorContext(state, source, ledger, actualTrackBReview, visibleChat, vectors), controller.signal,
             );
             assertActive();
             const snapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.('storyDirector') || { mode: 'tavern', preset: null };

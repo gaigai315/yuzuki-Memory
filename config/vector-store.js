@@ -91,11 +91,24 @@
             return null;
         }
 
+        getChatMetadataForActiveBooks(context = this.getContext()) {
+            const candidates = [context?.chatMetadata, window.chat_metadata]
+                .filter((metadata, index, source) => (
+                    metadata
+                    && typeof metadata === 'object'
+                    && source.indexOf(metadata) === index
+                ));
+            const hasActiveBookState = (metadata) => (
+                Object.prototype.hasOwnProperty.call(metadata, ACTIVE_BOOKS_KEY)
+                || Object.prototype.hasOwnProperty.call(metadata, LEGACY_ACTIVE_BOOKS_KEY)
+            );
+            return candidates.find(hasActiveBookState) || candidates[0] || null;
+        }
+
         getChatMetadataForWrite(context = this.getContext()) {
             if (!context) return null;
-            const metadata = context.chatMetadata;
-            if (metadata && typeof metadata === 'object') return metadata;
-            if (window.chat_metadata && typeof window.chat_metadata === 'object') return window.chat_metadata;
+            const metadata = this.getChatMetadataForActiveBooks(context);
+            if (metadata) return metadata;
 
             try {
                 context.chatMetadata = {};
@@ -1020,7 +1033,7 @@
         }
 
         getActiveBooks() {
-            const metadata = this.getContext()?.chatMetadata;
+            const metadata = this.getChatMetadataForActiveBooks();
             const activeBooks = Array.isArray(metadata?.[ACTIVE_BOOKS_KEY])
                 ? metadata[ACTIVE_BOOKS_KEY]
                 : (metadata?.[LEGACY_ACTIVE_BOOKS_KEY] || []);

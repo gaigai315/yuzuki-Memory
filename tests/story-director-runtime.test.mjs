@@ -5,6 +5,7 @@ import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../config/story-director-runtime.js', import.meta.url), 'utf8');
 const variableInjectorSource = fs.readFileSync(new URL('../config/variable-injector.js', import.meta.url), 'utf8');
+const vectorStoreSource = fs.readFileSync(new URL('../config/vector-store.js', import.meta.url), 'utf8');
 
 function createToolResponse(name, args = '{}') {
     const call = { id: 'plan-output', type: 'function', function: { name, arguments: args } };
@@ -45,6 +46,8 @@ function createSandbox(options = {}) {
     const vectorBooks = Array.isArray(options.vectorBooks) ? options.vectorBooks : [];
     const vectorCalls = [];
     const tagFilterCalls = [];
+    const infoLogs = [];
+    const warningLogs = [];
     const initialLedger = Object.hasOwn(options, 'initialLedger') ? String(options.initialLedger || '') : '旧账本';
     let state = {
         tables: [
@@ -130,7 +133,15 @@ function createSandbox(options = {}) {
             },
         },
         VariableInjector: { createDefaultState: () => structuredClone(state) },
-        EmbeddingClient: { loadSettings: () => ({ enabled: options.embeddingEnabled !== false, contextDepth: 2 }) },
+        EmbeddingClient: {
+            loadSettings: () => ({
+                enabled: options.embeddingEnabled !== false,
+                contextDepth: options.contextDepth ?? 2,
+                threshold: options.threshold ?? 0.3,
+                recallLimit: options.recallLimit ?? 6,
+            }),
+        },
+        RerankClient: { loadSettings: () => ({ enabled: options.rerankEnabled === true }) },
         VectorStore: {
             async whenReady() {},
             getActiveBooks: () => vectorBooks,
@@ -182,7 +193,11 @@ function createSandbox(options = {}) {
         },
     };
     const sandbox = {
-        console: { info() {}, warn() {}, error() {} },
+        console: {
+            info(...args) { infoLogs.push(args); },
+            warn(...args) { warningLogs.push(args); },
+            error() {},
+        },
         AbortController,
         CustomEvent: class CustomEvent { constructor(type, options = {}) { this.type = type; this.detail = options.detail; } },
         DOMException,
@@ -216,6 +231,8 @@ function createSandbox(options = {}) {
         eventBindings,
         directorCaptures,
         dispatchedEvents,
+        infoLogs,
+        warningLogs,
         getState: () => state,
         setEnabled: (value) => {
             enabled = value;
@@ -224,6 +241,64 @@ function createSandbox(options = {}) {
         },
         setActivePrompt: (prompt) => { activePrompt = prompt; },
     };
+}
+
+async function createVectorStoreMetadataSandbox(contextMetadata = {}, windowMetadata = {}) {
+    let saveChatCalls = 0;
+    const context = {
+        chatMetadata: contextMetadata,
+        saveChat() { saveChatCalls += 1; },
+    };
+    const document = {
+        body: {},
+        head: { appendChild() {} },
+        createElement() { return { style: { setProperty() {} } }; },
+        getElementById() { return null; },
+        querySelectorAll() { return []; },
+    };
+    const memory = {
+        GlobalSettings: { get: (_key, fallback) => fallback },
+    };
+    const sandbox = {
+        console: { info() {}, warn() {}, error() {} },
+        document,
+        fetch: async () => ({ ok: false, status: 404, text: async () => '' }),
+        JSON,
+        Math,
+        Date,
+        Promise,
+        Set,
+        Map,
+        WeakMap,
+        Float32Array,
+        ArrayBuffer,
+        DataView,
+        Uint8Array,
+        TextEncoder,
+        TextDecoder,
+        Blob,
+        URL,
+        MutationObserver: class MutationObserver { observe() {} },
+        localStorage: { getItem: () => null, setItem() {} },
+        SillyTavern: { getContext: () => context },
+        window: {
+            YuzukiMemory: memory,
+            chat_metadata: windowMetadata,
+            getRequestHeaders: () => ({ 'X-CSRF-Token': 'test' }),
+            setInterval: () => 1,
+            setTimeout: (callback) => { queueMicrotask(callback); return 1; },
+            clearTimeout() {},
+        },
+    };
+    sandbox.window.window = sandbox.window;
+    vm.createContext(sandbox);
+    vm.runInContext(vectorStoreSource, sandbox, { filename: 'vector-store.js' });
+    await memory.VectorStore.whenReady();
+    memory.VectorStore.library = {
+        'generic-book': { name: '通用书' },
+        'managed-table-book': { name: '托管表格书' },
+    };
+    return { memory, contextMetadata, windowMetadata, getSaveChatCalls: () => saveChatCalls };
 }
 
 test('director prepares all data before request one and saves only the reviewed result after two requests', async () => {
@@ -625,14 +700,47 @@ test('deleting, regenerating, or swiping A2 reuses the card bound to U2 and manu
     assert.doesNotMatch(swipeManual.at(-2).mes, /推进支线/);
 });
 
+test('vector store reads and updates active books from the compatible chat metadata source', async () => {
+    const fallbackMetadata = {
+        yzm_memory_active_vector_books: ['generic-book', 'managed-table-book', 'missing-book'],
+    };
+    const fallback = await createVectorStoreMetadataSandbox({}, fallbackMetadata);
+    assert.deepEqual(Array.from(fallback.memory.VectorStore.getActiveBooks()), ['generic-book', 'managed-table-book']);
+    assert.equal(fallback.memory.VectorStore.setActiveBooks(['managed-table-book']), true);
+    assert.deepEqual(Array.from(fallbackMetadata.yzm_memory_active_vector_books), ['managed-table-book']);
+    assert.equal(fallback.contextMetadata.yzm_memory_active_vector_books, undefined);
+    assert.equal(fallback.getSaveChatCalls(), 1);
+
+    const explicitContextMetadata = { yzm_memory_active_vector_books: [] };
+    const explicit = await createVectorStoreMetadataSandbox(explicitContextMetadata, {
+        yzm_memory_active_vector_books: ['generic-book'],
+    });
+    assert.deepEqual(Array.from(explicit.memory.VectorStore.getActiveBooks()), []);
+});
+
 test('director recalls vectors once and sends only text to both requests and the viewer', async () => {
-    const { memory, chat, requests, vectorCalls, directorCaptures } = createSandbox({ vectorBooks: ['selected-book'] });
+    const activeBookIds = ['generic-book', 'character-profile-book', 'item-tracking-book', 'world-setting-book'];
+    const { memory, chat, requests, vectorCalls, directorCaptures, infoLogs } = createSandbox({
+        vectorBooks: activeBookIds,
+        contextDepth: 3,
+        threshold: 0.42,
+        recallLimit: 9,
+        rerankEnabled: true,
+    });
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(requests.length, 2);
     assert.equal(vectorCalls.length, 1);
-    assert.deepEqual(vectorCalls[0].bookIds, ['selected-book']);
+    assert.deepEqual(vectorCalls[0].bookIds, activeBookIds);
     assert.equal(vectorCalls[0].searchOptions.ignoreInjectionSetting, true);
     assert.equal(vectorCalls[0].query, '当前行动\n最新正文');
+    const startLog = infoLogs.find((entry) => String(entry[0]).includes('开始统一检索'));
+    assert.ok(startLog);
+    assert.equal(startLog[1].boundBooks, 4);
+    assert.equal(startLog[1].contextDepth, 3);
+    assert.equal(startLog[1].queryMessages, 2);
+    assert.equal(startLog[1].threshold, 0.42);
+    assert.equal(startLog[1].recallLimit, 9);
+    assert.equal(startLog[1].rerank, true);
     for (const messages of requests) {
         assert.deepEqual(readContext(messages).vectors, ['向量中保存的历史线索']);
         assert.doesNotMatch(JSON.stringify(messages), /启用的剧情书 #3|0\.92|"score"|"matches"/);
@@ -640,6 +748,32 @@ test('director recalls vectors once and sends only text to both requests and the
     assert.match(JSON.stringify(directorCaptures), /向量中保存的历史线索/);
     assert.doesNotMatch(JSON.stringify(directorCaptures), /启用的剧情书 #3|0\.92/);
     assert.deepEqual(chat.map((message) => message.mes), ['很久以前', '旧回复', '当前行动', '最新正文<Memory><!-- hidden --></Memory>']);
+});
+
+test('director waits for the single vector recall before starting request one', async () => {
+    const { memory, requests } = createSandbox({ vectorBooks: ['generic-book', 'managed-table-book'] });
+    let releaseRecall;
+    let markRecallStarted;
+    let searchCount = 0;
+    const recallStarted = new Promise((resolve) => { markRecallStarted = resolve; });
+    const recallGate = new Promise((resolve) => { releaseRecall = resolve; });
+    memory.VectorStore.search = async () => {
+        searchCount += 1;
+        markRecallStarted();
+        return recallGate;
+    };
+
+    const run = memory.StoryDirectorRuntime.replanLatest();
+    await recallStarted;
+    assert.equal(searchCount, 1);
+    assert.equal(requests.length, 0);
+
+    releaseRecall([{ source: '不应发送的来源', text: '延迟召回内容', score: 0.77 }]);
+    assert.equal((await run).success, true);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(readContext(requests[0]).vectors, ['延迟召回内容']);
+    assert.deepEqual(readContext(requests[1]), readContext(requests[0]));
+    assert.doesNotMatch(JSON.stringify(requests), /不应发送的来源|0\.77|"score"/);
 });
 
 test('director shares direct-injection rules and uses only the vector text recalled this run', async () => {
@@ -692,7 +826,7 @@ test('director shares direct-injection rules and uses only the vector text recal
 });
 
 test('director never backfills vector-only records when recall is empty', async () => {
-    const { memory, requests, vectorCalls, getState } = createSandbox({
+    const { memory, requests, vectorCalls, getState, infoLogs } = createSandbox({
         vectorBooks: ['selected-book'],
         vectorResults: [],
     });
@@ -708,6 +842,7 @@ test('director never backfills vector-only records when recall is empty', async 
     assert.deepEqual(readContext(requests[0]).vectors, []);
     assert.match(JSON.stringify(readContext(requests[0]).tables), /常驻角色/);
     assert.doesNotMatch(JSON.stringify(readContext(requests[0]).tables), /未召回角色全文/);
+    assert.match(String(infoLogs.flat()), /检索完成：没有命中内容/);
 
     state.settings.autoVectorizeTables.character_profile = false;
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
@@ -715,24 +850,58 @@ test('director never backfills vector-only records when recall is empty', async 
     assert.match(JSON.stringify(readContext(requests[2]).tables), /常驻角色|未召回角色全文/);
 });
 
+test('director logs when the current conversation has no bound vector books', async () => {
+    const { memory, requests, vectorCalls, infoLogs } = createSandbox();
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(vectorCalls.length, 0);
+    assert.deepEqual(readContext(requests[0]).vectors, []);
+    assert.match(String(infoLogs.flat()), /跳过：当前会话未绑定向量书/);
+});
+
+test('director logs when filtered chat leaves no vector query', async () => {
+    const { memory, requests, vectorCalls, infoLogs } = createSandbox({
+        vectorBooks: ['selected-book'],
+        tagFilter: () => '',
+    });
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(vectorCalls.length, 0);
+    assert.deepEqual(readContext(requests[0]).vectors, []);
+    assert.deepEqual(readContext(requests[0]).chat.messages, []);
+    assert.match(String(infoLogs.flat()), /跳过：没有可用于检索的过滤后正文/);
+});
+
 test('director can plan with tables and chat when embedding is disabled', async () => {
-    const { memory, requests, vectorCalls } = createSandbox({ vectorBooks: ['selected-book'], embeddingEnabled: false });
+    const { memory, requests, vectorCalls, infoLogs } = createSandbox({ vectorBooks: ['selected-book'], embeddingEnabled: false });
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(vectorCalls.length, 0);
     assert.deepEqual(readContext(requests[0]).vectors, []);
     assert.match(JSON.stringify(readContext(requests[0]).tables), /前100楼总结/);
+    assert.match(String(infoLogs.flat()), /跳过：Embedding 召回未启用/);
 });
 
 test('vector failures are logged locally without sending service metadata to the director', async () => {
-    const { sandbox, memory, requests, getState } = createSandbox({ vectorBooks: ['selected-book'] });
-    const warnings = [];
-    sandbox.console.warn = (...args) => warnings.push(args);
+    const { memory, requests, getState, warningLogs } = createSandbox({ vectorBooks: ['selected-book'] });
     memory.VectorStore.search = async () => { throw new Error('向量服务暂时不可用'); };
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(getState().storyDirector.status, 'ready');
     assert.deepEqual(readContext(requests[0]).vectors, []);
-    assert.match(String(warnings.flat()), /向量服务暂时不可用/);
+    assert.match(String(warningLogs.flat()), /检索失败，已跳过|向量服务暂时不可用/);
     assert.doesNotMatch(JSON.stringify(requests), /向量服务暂时不可用/);
+});
+
+test('vector recall timeout is logged separately and planning continues without vector text', async () => {
+    const { sandbox, memory, requests, warningLogs } = createSandbox({ vectorBooks: ['selected-book'] });
+    memory.VectorStore.search = async () => new Promise(() => {});
+    sandbox.window.setTimeout = (callback, delay) => {
+        if (delay === 20000) queueMicrotask(callback);
+        return 1;
+    };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(readContext(requests[0]).vectors, []);
+    assert.match(String(warningLogs.flat()), /检索超时，已跳过/);
+    assert.doesNotMatch(JSON.stringify(requests), /向量检索超时|timeoutMs/);
 });
 
 test('review can repair a malformed draft without reading data again or adding a third request', async () => {
