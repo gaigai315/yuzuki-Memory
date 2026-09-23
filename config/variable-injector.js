@@ -458,6 +458,11 @@
         return enabled && record?.autoVectorResident !== true;
     }
 
+    function isRecordDirectlyInjectable(state, table, record) {
+        return Boolean(table && !table.hidden && record
+            && isRecordVisible(record) && !isRecordAutoVectorized(state, table, record));
+    }
+
     function getPlotSummaryKindByColumn(column) {
         return cleanColumnName(column) === '支线' ? 'branch' : 'main';
     }
@@ -543,7 +548,7 @@
     }
 
     function recordToText(state, table, record) {
-        if (!table || !record || !isRecordVisible(record) || isRecordAutoVectorized(state, table, record)) return '';
+        if (!isRecordDirectlyInjectable(state, table, record)) return '';
         if (table.id === PLOT_SUMMARY_TABLE_ID) return plotSummaryRecordToText(table, record);
         const values = record.values && typeof record.values === 'object' ? record.values : {};
         const lines = (Array.isArray(table.columns) ? table.columns : [])
@@ -1930,6 +1935,7 @@
 
     YuzukiMemory.VariableInjector = Object.assign(YuzukiMemory.VariableInjector || {}, {
         createDefaultState,
+        isRecordDirectlyInjectable,
         resolveRuntimeVariables,
         getRequestArray,
         getMessageText,

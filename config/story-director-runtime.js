@@ -575,13 +575,13 @@
 
     function serializeTables(state) {
         const tables = (Array.isArray(state?.tables) ? state.tables : [])
-            .filter((table) => table && table.hidden !== true)
+            .filter((table) => table && !table.hidden)
             .map((table) => ({
                 id: String(table.id || ''),
                 name: String(table.name || ''),
                 columns: Array.isArray(table.columns) ? table.columns.map((column) => String(column || '')) : [],
                 records: (Array.isArray(state?.records?.[table.id]) ? state.records[table.id] : [])
-                    .filter((record) => record && record.hidden !== true)
+                    .filter((record) => YuzukiMemory.VariableInjector.isRecordDirectlyInjectable(state, table, record))
                     .map((record) => ({
                         id: String(record.id || ''),
                         values: record.values && typeof record.values === 'object' ? { ...record.values } : {},

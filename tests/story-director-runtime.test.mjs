@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../config/story-director-runtime.js', import.meta.url), 'utf8');
+const variableInjectorSource = fs.readFileSync(new URL('../config/variable-injector.js', import.meta.url), 'utf8');
 
 function createToolResponse(name, args = '{}') {
     const call = { id: 'plan-output', type: 'function', function: { name, arguments: args } };
@@ -134,7 +135,9 @@ function createSandbox(options = {}) {
             getActiveBooks: () => vectorBooks,
             async search(query, bookIds, searchOptions) {
                 vectorCalls.push(structuredClone({ query, bookIds, searchOptions }));
-                return [{ source: '启用的剧情书 #3', text: '向量中保存的历史线索', score: 0.92 }];
+                return Object.hasOwn(options, 'vectorResults')
+                    ? structuredClone(options.vectorResults)
+                    : [{ source: '启用的剧情书 #3', text: '向量中保存的历史线索', score: 0.92 }];
             },
         },
         WorldbookManager: {
@@ -195,6 +198,7 @@ function createSandbox(options = {}) {
     sandbox.window.window = sandbox.window;
     vm.createContext(sandbox);
     vm.runInContext(source, sandbox, { filename: 'story-director-runtime.js' });
+    vm.runInContext(variableInjectorSource, sandbox, { filename: 'variable-injector.js' });
     return {
         sandbox,
         memory,
@@ -599,6 +603,79 @@ test('director recalls vectors once and sends only text to both requests and the
     assert.match(JSON.stringify(directorCaptures), /向量中保存的历史线索/);
     assert.doesNotMatch(JSON.stringify(directorCaptures), /启用的剧情书 #3|0\.92/);
     assert.deepEqual(chat.map((message) => message.mes), ['很久以前', '旧回复', '当前行动', '最新正文<Memory><!-- hidden --></Memory>']);
+});
+
+test('director shares direct-injection rules and uses only the vector text recalled this run', async () => {
+    const vectorText = '本次实际召回：向量角色乙正在港口交接货物';
+    const { memory, requests, vectorCalls, getState } = createSandbox({
+        vectorBooks: ['selected-book'],
+        vectorResults: [{ source: '角色档案 #2', text: vectorText, score: 0.98 }],
+    });
+    const state = getState();
+    state.tables.push(
+        { id: 'item_tracking', name: '物品追踪', columns: ['物品名'], hidden: false },
+        { id: 'world_setting', name: '世界设定', columns: ['设定名'], hidden: false },
+    );
+    state.settings.autoVectorizeTables = {
+        character_profile: true,
+        item_tracking: true,
+        world_setting: true,
+    };
+    state.records.character_profile = [
+        { id: 'profile-resident', autoVectorResident: true, values: { 角色名: '常驻角色甲' } },
+        { id: 'profile-vector-hit', autoVectorResident: false, values: { 角色名: '向量角色乙' } },
+        { id: 'profile-vector-miss', values: { 角色名: '向量角色丙' } },
+        { id: 'profile-hidden', hidden: true, autoVectorResident: true, values: { 角色名: '隐藏常驻角色' } },
+    ];
+    state.records.item_tracking = [
+        { id: 'item-resident', autoVectorResident: true, values: { 物品名: '常驻钥匙' } },
+        { id: 'item-vector', autoVectorResident: false, values: { 物品名: '向量账簿' } },
+    ];
+    state.records.world_setting = [
+        { id: 'world-resident', autoVectorResident: true, values: { 设定名: '常驻城规' } },
+        { id: 'world-vector', values: { 设定名: '向量港规' } },
+    ];
+    const originalRecords = structuredClone(state.records);
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(vectorCalls.length, 1);
+    assert.equal(requests.length, 2);
+
+    const firstContext = readContext(requests[0]);
+    const tableText = JSON.stringify(firstContext.tables);
+    assert.match(tableText, /常驻角色甲|常驻钥匙|常驻城规/);
+    assert.doesNotMatch(tableText, /向量角色乙|向量角色丙|向量账簿|向量港规|隐藏常驻角色/);
+    assert.deepEqual(firstContext.vectors, [vectorText]);
+    assert.deepEqual(readContext(requests[1]), firstContext);
+
+    const directInjectionText = memory.VariableInjector.buildAllTablesText(state);
+    assert.match(directInjectionText, /常驻角色甲|常驻钥匙|常驻城规/);
+    assert.doesNotMatch(directInjectionText, /向量角色乙|向量角色丙|向量账簿|向量港规|隐藏常驻角色/);
+    assert.deepEqual(state.records, originalRecords);
+});
+
+test('director never backfills vector-only records when recall is empty', async () => {
+    const { memory, requests, vectorCalls, getState } = createSandbox({
+        vectorBooks: ['selected-book'],
+        vectorResults: [],
+    });
+    const state = getState();
+    state.settings.autoVectorizeTables = { character_profile: true };
+    state.records.character_profile = [
+        { id: 'resident', autoVectorResident: true, values: { 角色名: '常驻角色' } },
+        { id: 'vector-only', autoVectorResident: false, values: { 角色名: '未召回角色全文' } },
+    ];
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(vectorCalls.length, 1);
+    assert.deepEqual(readContext(requests[0]).vectors, []);
+    assert.match(JSON.stringify(readContext(requests[0]).tables), /常驻角色/);
+    assert.doesNotMatch(JSON.stringify(readContext(requests[0]).tables), /未召回角色全文/);
+
+    state.settings.autoVectorizeTables.character_profile = false;
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(vectorCalls.length, 2);
+    assert.match(JSON.stringify(readContext(requests[2]).tables), /常驻角色|未召回角色全文/);
 });
 
 test('director can plan with tables and chat when embedding is disabled', async () => {
