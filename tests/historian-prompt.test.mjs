@@ -123,9 +123,9 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /响应角色如何回应这条\{\{user\}\}输入的3类预案/);
     assert.match(director.prompt, /每项必须以具体响应角色为主语/);
     assert.match(director.prompt, /严禁替\{\{user\}\}补写、预测或安排动作、台词、选择、态度与心理/);
-    assert.match(director.prompt, /预案\s*1[（(]响应角色采取积极回应[）)]/);
-    assert.match(director.prompt, /预案\s*2[（(]响应角色采取克制或中立回应[）)]/);
-    assert.match(director.prompt, /预案\s*3[（(]响应角色采取对抗回应[）)]/);
+    assert.match(director.prompt, /预案\s*1[（(]采取积极回应[）)]/);
+    assert.match(director.prompt, /预案\s*2[（(]采取克制或中立回应[）)]/);
+    assert.match(director.prompt, /预案\s*3[（(]采取对抗回应[）)]/);
     assert.doesNotMatch(director.prompt, /当前角色正向：顺从\/接纳\/主动/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
     assert.match(director.prompt, /所属模块：\[仅填写Module1、Module2、Module3或Module4中的一个\]/);
@@ -139,7 +139,9 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /情感\/追求\/误会\/私心/);
     assert.match(director.prompt, /敌对\/陷害\/野心\/博弈/);
     assert.match(director.prompt, /严禁因为当前主线[^\n]*压制情感、社交、日常或第三方支线/);
-    assert.match(director.prompt, /跳过轨道A并执行轨道B/);
+    assert.match(director.prompt, /\{\{user\}\}独处\(DSIP\)：\[否 \/ 是\(维持静默\) \/ 是\(破壁介入\)\]/);
+    assert.match(director.prompt, /跳过轨道A[^\n]*并联推进2个场外场景/);
+    assert.match(director.prompt, /外力单向穿透介入/);
     assert.doesNotMatch(director.prompt, /跳过执行轨道B/);
 });
 
