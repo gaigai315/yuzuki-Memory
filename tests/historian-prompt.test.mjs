@@ -8,6 +8,7 @@ const promptLibrarySource = fs.readFileSync(new URL('../config/prompt-library.js
 const promptSchemeIoSource = fs.readFileSync(new URL('../config/prompt-scheme-io.js', import.meta.url), 'utf8');
 const storyDirectorSettingsSource = fs.readFileSync(new URL('../config/story-director-settings.js', import.meta.url), 'utf8');
 const memoryWindowSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
+const memoryCssSource = fs.readFileSync(new URL('../styles/memory.css', import.meta.url), 'utf8');
 
 function getFunctionSource(source, name, nextName) {
     const start = source.indexOf(`function ${name}(`);
@@ -116,13 +117,9 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.equal(director.id, library.getDefaultStoryDirectorPromptId());
     assert.equal(director.builtin, true);
     assert.match(director.prompt, /<下轮导演卡>/);
-    assert.match(director.prompt, /若最新输入为\{\{user\}\}/);
-    assert.match(director.prompt, /若最新输入为\s*Assistant/);
-    assert.match(director.prompt, /严禁复述上一轮已发生事实/);
-    assert.match(director.prompt, /最新的\{\{user\}\}输入是已经发生的既定行动/);
-    assert.match(director.prompt, /响应角色如何回应这条\{\{user\}\}输入的3类预案/);
-    assert.match(director.prompt, /每项必须以具体响应角色为主语/);
-    assert.match(director.prompt, /严禁替\{\{user\}\}补写、预测或安排动作、台词、选择、态度与心理/);
+    assert.match(director.prompt, /根据当前最后一条发言方,执行分支A或分支B/);
+    assert.match(director.prompt, /预案仅输出除\{\{user\}\}以外的角色如何回应或行动/);
+    assert.match(director.prompt, /严禁替\{\{user\}\}决定动作、台词、选择、态度或心理/);
     assert.match(director.prompt, /预案\s*1[（(]采取积极回应[）)]/);
     assert.match(director.prompt, /预案\s*2[（(]采取克制或中立回应[）)]/);
     assert.match(director.prompt, /预案\s*3[（(]采取对抗回应[）)]/);
@@ -135,7 +132,7 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /核对近10轮账本中的正文实际事件/);
     assert.match(director.prompt, /禁止复用相同或高度相似的地点、行为和事件主题/);
     assert.match(director.prompt, /出场角色：\[备选1角色\/势力\].*\[备选2角色\/势力\].*\[备选3角色\/势力\]/);
-    assert.match(director.prompt, /备选1\(\[具体角色\/势力\]｜\[所属模块内子类型\]\)/);
+    assert.match(director.prompt, /备选1[^\n]*所属模块内子类型/);
     assert.match(director.prompt, /情感\/追求\/误会\/私心/);
     assert.match(director.prompt, /敌对\/陷害\/野心\/博弈/);
     assert.match(director.prompt, /严禁因为当前主线[^\n]*压制情感、社交、日常或第三方支线/);
@@ -342,6 +339,29 @@ test('director card can replan through the shared runner and refresh in place', 
     assert.match(openHandler, /getCurrentDirectorCard/);
     assert.match(openHandler, /body\.classList\.toggle\('yzm-story-director-card-empty'/);
     assert.match(openHandler, /body\.scrollTop = 0/);
+});
+
+test('manual story director action remains clickable and stops the active run on a second click', () => {
+    const buttonStateHandler = getFunctionSource(
+        memoryWindowSource,
+        'updateStoryDirectorActionButton',
+        'updateStoryDirectorActionButtons',
+    );
+    const manualRunner = getFunctionSource(
+        memoryWindowSource,
+        'runManualStoryDirector',
+        'openStoryDirectorErrorDialog',
+    );
+
+    assert.match(buttonStateHandler, /yzm-story-director-stoppable/);
+    assert.match(buttonStateHandler, /fa-solid fa-stop/);
+    assert.match(buttonStateHandler, /停止当前剧情规划/);
+    assert.match(manualRunner, /runtime\.isRunning\?\.\(\) === true/);
+    assert.match(manualRunner, /runtime\.cancelActiveRun\?\.\('manual story director stop'\)/);
+    assert.match(manualRunner, /if \(result\?\.aborted\) return result/);
+    assert.doesNotMatch(manualRunner, /button\.disabled = true/);
+    assert.match(memoryCssSource, /\.yzm-top-story-director\.yzm-story-director-stoppable[\s\S]*?cursor: pointer/);
+    assert.match(memoryCssSource, /\.yzm-story-director-card-replan\.yzm-story-director-stoppable[\s\S]*?cursor: pointer/);
 });
 
 test('story director progress indicator follows the live runtime lifecycle', () => {

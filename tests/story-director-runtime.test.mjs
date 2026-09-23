@@ -5,20 +5,8 @@ import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../config/story-director-runtime.js', import.meta.url), 'utf8');
 
-const TOOL_CALL_IDS = {
-    yzm_story_read_context: 'context',
-    yzm_story_read_visible_chat: 'chat',
-    yzm_story_read_ledger: 'ledger',
-    yzm_story_record_actual_track_b: 'actual-track-b',
-    yzm_story_update_ledger: 'write',
-};
-
 function createToolResponse(name, args = '{}') {
-    const call = {
-        id: TOOL_CALL_IDS[name] || name,
-        type: 'function',
-        function: { name, arguments: args },
-    };
+    const call = { id: 'plan-output', type: 'function', function: { name, arguments: args } };
     return {
         success: true,
         message: { role: 'assistant', content: '', tool_calls: [call] },
@@ -26,25 +14,28 @@ function createToolResponse(name, args = '{}') {
     };
 }
 
+function createPlanResponse({
+    card = '<下轮导演卡>推进支线。</下轮导演卡>',
+    ledger = '新账本',
+    actualTrackB = { occurred: false, roles: '', event: '' },
+} = {}) {
+    return createToolResponse('yzm_story_submit_plan', JSON.stringify({ card, ledger, actualTrackB }));
+}
+
 function createTrackBCard(roles, module, plot = '推进支线') {
-    return `<下轮导演卡>
-【轨道B调度指令】
-出场角色：${roles}
-所属模块：${module}
-剧情推演：${plot}
-</下轮导演卡>`;
+    return '<下轮导演卡>\n【轨道B调度指令】\n出场角色：' + roles
+        + '\n所属模块：' + module + '\n剧情推演：' + plot + '\n</下轮导演卡>';
 }
 
-function getOfferedToolName(tools) {
-    return String(tools?.[0]?.function?.name || '');
+function readContext(messages) {
+    const prefix = '【本轮完整资料】\n';
+    const message = messages.find((item) => item.content?.startsWith(prefix));
+    assert.ok(message, 'full context must be present before requesting the model');
+    return JSON.parse(message.content.slice(prefix.length));
 }
 
-function findRequestWithToolResult(requests, callId) {
-    return requests.find((messages) => messages.some((message) => message.tool_call_id === callId));
-}
-
-function findCaptureWithToolResult(captures, label) {
-    return captures.find((capture) => capture.body.messages.some((message) => message.name?.includes(label)));
+function isReview(messages) {
+    return messages.at(-1)?.content?.startsWith('第二轮：') === true;
 }
 
 function createSandbox(options = {}) {
@@ -86,24 +77,8 @@ function createSandbox(options = {}) {
         { is_user: true, mes: '当前行动' },
         { is_user: false, mes: '最新正文<Memory><!-- hidden --></Memory>', swipe_id: 0 },
     ];
-    const tools = new Map();
     const eventBindings = [];
     const directorCaptures = [];
-    const toolManager = {
-        registerFunctionTool(definition) { tools.set(definition.name, definition); },
-        unregisterFunctionTool(name) { tools.delete(name); },
-        async invokeFunctionTool(name, parameters) {
-            const definition = tools.get(name);
-            if (!definition) return new Error(`missing ${name}`);
-            const parsed = typeof parameters === 'string' ? JSON.parse(parameters || '{}') : parameters;
-            try {
-                const result = await definition.action(parsed);
-                return typeof result === 'string' ? result : JSON.stringify(result);
-            } catch (error) {
-                return error;
-            }
-        },
-    };
     const context = {
         chat,
         name1: '用户',
@@ -124,7 +99,6 @@ function createSandbox(options = {}) {
                 creator_notes: '角色卡作者备注',
             },
         }],
-        ToolManager: toolManager,
         eventSource: { on(name, handler) { eventBindings.push({ name, handler }); } },
         eventTypes: {
             CHARACTER_MESSAGE_RENDERED: 'character_message_rendered',
@@ -135,8 +109,7 @@ function createSandbox(options = {}) {
     };
     const requests = [];
     const dispatchedEvents = [];
-    let requestCount = 0;
-    let defaultLedgerUpdated = false;
+    const requestOptions = [];
     const memory = {
         GlobalSettings: {
             get(key, fallback) {
@@ -190,23 +163,12 @@ function createSandbox(options = {}) {
             isBackgroundWorkPending: () => false,
         },
         LlmClient: {
-            async requestAgentWithTavern(messages, availableTools) {
+            async requestAgentWithTavern(messages, availableTools, options) {
                 requests.push(structuredClone(messages));
-                requestCount += 1;
-                const offeredTool = getOfferedToolName(availableTools);
-                if (offeredTool && offeredTool !== 'yzm_story_update_ledger') {
-                    return createToolResponse(offeredTool);
-                }
-                if (offeredTool === 'yzm_story_update_ledger' && !defaultLedgerUpdated) {
-                    defaultLedgerUpdated = true;
-                    return createToolResponse(offeredTool, '{"content":"新账本"}');
-                }
-                return {
-                    success: true,
-                    message: { role: 'assistant', content: '<下轮导演卡>推进支线。</下轮导演卡>' },
-                    text: '<下轮导演卡>推进支线。</下轮导演卡>',
-                    toolCalls: [],
-                };
+                requestOptions.push({ tools: structuredClone(availableTools), ...options });
+                return isReview(messages)
+                    ? createPlanResponse()
+                    : createPlanResponse({ card: '<下轮导演卡>草案，尚未审定。</下轮导演卡>', ledger: '未审定账本' });
             },
         },
     };
@@ -238,6 +200,7 @@ function createSandbox(options = {}) {
         memory,
         chat,
         requests,
+        requestOptions,
         vectorCalls,
         eventBindings,
         directorCaptures,
@@ -252,48 +215,49 @@ function createSandbox(options = {}) {
     };
 }
 
-test('story director performs a private tool loop and stores the next card', async () => {
-    const { memory, chat, requests, directorCaptures, getState } = createSandbox();
+test('director prepares all data before request one and saves only the reviewed result after two requests', async () => {
+    const { memory, chat, requests, requestOptions, directorCaptures, getState } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
-    const anchor = runtime.getLatestAssistantAnchor();
-    const result = await runtime.runDirector(anchor);
+    getState().records.character_profile.push({ id: 'private', hidden: true, values: { 角色名: '隐藏角色不应发送' } });
+    const originalChat = structuredClone(chat);
+    const result = await runtime.runDirector(runtime.getLatestAssistantAnchor());
 
     assert.equal(result.success, true);
+    assert.equal(requests.length, 2);
     assert.equal(getState().storyDirector.ledger, '新账本');
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>推进支线。</下轮导演卡>');
     assert.equal(getState().storyDirector.status, 'ready');
-    assert.doesNotMatch(requests[0][1].content, /轨道A时序锚点|不得预设 User 下一步/);
-    const finalRequest = requests.at(-1);
-    assert.equal(finalRequest.at(-1).role, 'tool');
-    const toolMessages = finalRequest.filter((message) => message.role === 'tool');
-    assert.equal(toolMessages.length, 4);
-    const contextResult = JSON.parse(toolMessages.find((message) => message.tool_call_id === 'context').content);
-    assert.match(contextResult.profiles.user.persona, /用户卡中的背景资料/);
-    assert.match(contextResult.profiles.characters[0].description, /角色卡中的人物描述/);
-    assert.match(contextResult.profiles.characters[0].personality, /冷静而谨慎/);
-    assert.match(contextResult.profiles.characters[0].scenario, /角色卡中的故事背景/);
-    assert.match(contextResult.profiles.characters[0].firstMessage, /角色卡开场消息/);
-    assert.match(contextResult.profiles.characters[0].exampleDialogue, /角色卡对话示例/);
-    assert.match(contextResult.profiles.characters[0].creatorNotes, /角色卡作者备注/);
-    assert.match(contextResult.worldbooks, /世界书中的已选条目/);
-    assert.match(JSON.stringify(contextResult.tables), /前100楼总结/);
-    assert.doesNotMatch(JSON.stringify(contextResult.tables), /不应出现/);
-    assert.match(contextResult.vectors.note, /没有启用的向量书/);
-    assert.match(toolMessages.find((message) => message.tool_call_id === 'chat').content, /当前行动/);
-    assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'chat').content, /很久以前/);
-    assert.doesNotMatch(toolMessages.find((message) => message.tool_call_id === 'chat').content, /<Memory>/);
-    assert.equal(directorCaptures.length, 5);
-    const contextResultCapture = findCaptureWithToolResult(directorCaptures, '读取角色卡、世界书、表格与向量记忆');
-    assert.equal(contextResultCapture.options.storyDirector, true);
-    assert.equal(contextResultCapture.options.agentTurn, 2);
-    assert.equal(contextResultCapture.options.sessionId, 'chat:test');
-    const capturedContext = contextResultCapture.body.messages.find((message) => message.name?.includes('读取角色卡、世界书、表格与向量记忆')).content;
-    assert.match(capturedContext, /用户卡中的背景资料/);
-    assert.match(capturedContext, /角色卡中的人物描述/);
-    assert.match(capturedContext, /世界书中的已选条目/);
-    assert.match(capturedContext, /前100楼总结/);
-    assert.match(directorCaptures[0].body.messages.find((message) => message.yzmAgentTraceType === 'tool-schema').content,
-        /yzm_story_read_context/);
+    const context = readContext(requests[0]);
+    assert.match(context.profiles.user.persona, /用户卡中的背景资料/);
+    assert.match(context.profiles.characters[0].description, /角色卡中的人物描述/);
+    assert.match(context.profiles.characters[0].personality, /冷静而谨慎/);
+    assert.match(context.profiles.characters[0].scenario, /角色卡中的故事背景/);
+    assert.match(context.profiles.characters[0].firstMessage, /角色卡开场消息/);
+    assert.match(context.profiles.characters[0].exampleDialogue, /角色卡对话示例/);
+    assert.match(context.profiles.characters[0].creatorNotes, /角色卡作者备注/);
+    assert.match(context.worldbooks, /世界书中的已选条目/);
+    assert.match(JSON.stringify(context.tables), /前100楼总结/);
+    assert.doesNotMatch(JSON.stringify(context.tables), /不应出现|隐藏角色不应发送/);
+    assert.deepEqual(context.vectors, []);
+    assert.deepEqual(context.chat.messages.map((message) => message.content), ['当前行动', '最新正文']);
+    assert.equal(context.ledger, '旧账本');
+    assert.deepEqual(context.anchor, { floor: 3, role: 'assistant' });
+    assert.deepEqual(readContext(requests[1]), context);
+    assert.match(JSON.stringify(requests[1]), /草案，尚未审定|未审定账本/);
+    assert.match(requests[1].at(-1).content, /事件去重|同义重复|用户自主权|不为改写而改写/);
+    assert.deepEqual(chat, originalChat);
+    for (const options of requestOptions) {
+        assert.deepEqual(options.tools.map((tool) => tool.function.name), ['yzm_story_submit_plan']);
+        assert.equal(options.toolChoice.type, 'function');
+        assert.equal(options.toolChoice.function.name, 'yzm_story_submit_plan');
+        assert.equal(options.emptyResponseMaxRetries, 0);
+        assert.ok(options.signal);
+    }
+    assert.equal(directorCaptures.length, 2);
+    assert.deepEqual(directorCaptures.map((item) => item.options.agentTurn), [1, 2]);
+    assert.equal(directorCaptures[0].options.sessionId, 'chat:test');
+    assert.match(JSON.stringify(directorCaptures[0]), /前100楼总结|世界书中的已选条目/);
+    assert.doesNotMatch(JSON.stringify(directorCaptures), /yzm_story_read_/);
 
     chat.push({ is_user: true, mes: '下一步怎么办？' });
     const generationClone = structuredClone(chat);
@@ -320,17 +284,9 @@ test('story director resolves user and character variables in prompts and cards'
     const { memory, chat, requests, getState } = createSandbox({
         activePrompt: { id: 'director', prompt: '为 {{user}} 与 {{char}} 规划下一轮。' },
     });
-    let ledgerUpdated = false;
-    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
-            ledgerUpdated = true;
-            return createToolResponse(offeredTool, '{"content":"新账本"}');
-        }
-        const card = '<下轮导演卡>{{char}} 回应 {{user}} 的行动。</下轮导演卡>';
-        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
+        return createPlanResponse({ card: '<下轮导演卡>{{char}} 回应 {{user}} 的行动。</下轮导演卡>' });
     };
 
     const runtime = memory.StoryDirectorRuntime;
@@ -432,27 +388,14 @@ test('director ledger removes plot history sections while preserving later sched
 ## 信息隔离
 - 乙不知道密信内容`;
     const { memory, requests, getState } = createSandbox({ initialLedger: oldLedger });
-    let ledgerUpdated = false;
-    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
-            ledgerUpdated = true;
-            return createToolResponse(offeredTool, JSON.stringify({ content: updatedLedger }));
-        }
-        return {
-            success: true,
-            message: { role: 'assistant', content: '<下轮导演卡>继续推进。</下轮导演卡>' },
-            text: '<下轮导演卡>继续推进。</下轮导演卡>',
-            toolCalls: [],
-        };
+        return createPlanResponse({ ledger: updatedLedger });
     };
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
-    const readLedger = findRequestWithToolResult(requests, 'ledger')
-        .find((message) => message.tool_call_id === 'ledger').content;
+    const readLedger = readContext(requests[0]).ledger;
     assert.match(readLedger, /模块轮换/);
     assert.match(readLedger, /角色冷却/);
     assert.doesNotMatch(readLedger, /剧情节点与履历|已发生剧情复述|人物经历/);
@@ -464,11 +407,9 @@ test('director ledger removes plot history sections while preserving later sched
 test('a generated Track B card is not recorded as an actual event before正文 uses it', async () => {
     const { memory, requests, getState } = createSandbox({ initialLedger: '【信息隔离】\n- 林雪不知道密信内容' });
     const card = createTrackBCard('[林雪、赵衡]', '[Module 2]', '城西马场休息；马会结束后返回府邸');
-    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
+        return createPlanResponse({ card, ledger: '【信息隔离】\n- 林雪不知道密信内容' });
     };
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
@@ -492,16 +433,10 @@ test('Track B history survives a model ledger overwrite without adding unused ca
     const initialLedger = `【轨道B调用历史（近10轮）】\n${history}\n\n【角色冷却】\n- 旧状态`;
     const { memory, getState } = createSandbox({ initialLedger });
     const card = createTrackBCard('NPC11、北港商会', 'Module 3');
-    let ledgerUpdated = false;
-    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
-            ledgerUpdated = true;
-            return createToolResponse(offeredTool, JSON.stringify({ content: '【信息隔离】\n- 新状态' }));
-        }
-        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
-    };
+    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({
+        card,
+        ledger: '【信息隔离】\n- 新状态\n\n【轨道B调用历史（近10轮）】\n- Module 3｜出场角色：NPC11',
+    });
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
@@ -515,61 +450,54 @@ test('Track B history survives a model ledger overwrite without adding unused ca
     assert.doesNotMatch(ledger, /【角色冷却】\n- 旧状态/);
 });
 
-test('the next director run records the actual Track B event from the bound card response body once', async () => {
+test('two-pass planning records only the reviewed body event once and invalidates it after a swipe', async () => {
     const { memory, requests, getState, chat } = createSandbox({ initialLedger: '' });
     const cards = [
         createTrackBCard('林雪', 'Module 1', '候选A：城西马场休息；候选B：马会观赛；候选C：马术训练'),
         createTrackBCard('陈舟', 'Module 4', '下一轮候选'),
         createTrackBCard('赵衡', 'Module 2', '手动重规划候选'),
     ];
-    let cardIndex = 0;
-    let actualRecordCalls = 0;
-    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+    let completedRuns = 0;
+    let actualReviewPasses = 0;
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool === 'yzm_story_record_actual_track_b') {
-            actualRecordCalls += 1;
-            if (actualRecordCalls > 1) {
-                return createToolResponse(offeredTool, JSON.stringify({
-                    occurred: false,
-                    roles: '',
-                    event: '',
-                }));
+        const context = readContext(messages);
+        let actualTrackB = { occurred: false, roles: '', event: '' };
+        if (context.actualTrackBReview) {
+            actualReviewPasses += 1;
+            assert.equal(context.actualTrackBReview.assistantFloor, 5);
+            assert.match(context.actualTrackBReview.boundCard, /候选A/);
+            if (chat[5].swipe_id !== 1) {
+                actualTrackB = {
+                    occurred: true, roles: '林雪',
+                    event: isReview(messages) ? '林雪在城西马场短暂休整后返回府邸' : '第一轮误写：马会观赛',
+                };
             }
-            return createToolResponse(offeredTool, JSON.stringify({
-                occurred: true,
-                roles: '林雪',
-                event: '林雪在城西马场短暂休整后返回府邸',
-            }));
         }
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        const card = cards[Math.min(cardIndex, cards.length - 1)];
-        cardIndex += 1;
-        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
+        const card = cards[Math.min(completedRuns, cards.length - 1)];
+        if (isReview(messages)) completedRuns += 1;
+        return createPlanResponse({ card, actualTrackB, ledger: '' });
     };
-
-    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.replanLatest()).success, true);
     chat.push({ is_user: true, mes: '继续观察其他人的行动' });
-    const generationClone = structuredClone(chat);
-    assert.equal(memory.StoryDirectorRuntime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
     chat.push({ is_user: false, mes: '林雪午后抵达城西马场，只短暂休整片刻便乘车返回府邸。' });
-    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-
-    assert.equal(actualRecordCalls, 1);
-    const actualChatRead = requests.flatMap((messages) => messages)
-        .find((message) => message.tool_call_id === 'chat' && /城西马场，只短暂休整/.test(message.content));
-    assert.ok(actualChatRead);
-    assert.ok(requests.flatMap((messages) => messages)
-        .some((message) => message.role === 'user' && /不得抄录导演卡中的三个候选方向/.test(message.content)));
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.equal(requests.length, 6);
+    assert.equal(actualReviewPasses, 2);
+    assert.match(JSON.stringify(readContext(requests[2]).chat), /城西马场，只短暂休整/);
     const ledger = getState().storyDirector.ledger;
     assert.match(ledger, /Module 1｜出场角色：林雪｜实际事件：林雪在城西马场短暂休整后返回府邸｜正文来源：5\/0\//);
-    assert.doesNotMatch(ledger, /候选A|候选B|候选C|马会观赛|马术训练/);
+    assert.equal((ledger.match(/正文来源/g) || []).length, 1);
+    assert.doesNotMatch(ledger, /第一轮误写|候选A|候选B|候选C|马会观赛|马术训练/);
 
     chat[5].swipes = [chat[5].mes, '新分支只继续用户所在场景，没有描写林雪或轨道B。'];
     chat[5].swipe_id = 1;
-    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    assert.equal(actualRecordCalls, 2);
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.equal(requests.length, 8);
+    assert.equal(actualReviewPasses, 4);
     assert.doesNotMatch(getState().storyDirector.ledger, /城西马场|实际事件|正文来源/);
 });
 
@@ -577,11 +505,7 @@ test('legacy candidate events without a正文 source are removed while module an
     const initialLedger = `【轨道B调用历史（近10轮）】\n- Module 3｜出场角色：林雪｜场景事件：港口仓库盘点；临时改道调查失踪货物\n\n【信息隔离】\n- 旧状态`;
     const { memory, getState } = createSandbox({ initialLedger });
     const card = createTrackBCard('陈舟', 'Module 4', '下一轮候选');
-    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
-    };
+    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ card, ledger: getState().storyDirector.ledger });
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
@@ -594,11 +518,7 @@ test('legacy candidate events without a正文 source are removed while module an
 test('placeholder or missing Track B fields do not create fake history entries', async () => {
     const { memory, getState } = createSandbox({ initialLedger: '旧账本' });
     const card = createTrackBCard('[指定具体NPC/势力，符合3轮冷却规则与阵营/性别平衡]', '[Module 1 / 2 / 3 / 4]');
-    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
-    };
+    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ card, ledger: getState().storyDirector.ledger });
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(getState().storyDirector.ledger, '旧账本');
@@ -608,16 +528,7 @@ test('deleting, regenerating, or swiping A2 reuses the card bound to U2 and manu
     const { memory, chat, getState } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
     const setPlannerCard = (card) => {
-        memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
-            const offeredTool = getOfferedToolName(tools);
-            if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-            return {
-                success: true,
-                message: { role: 'assistant', content: card },
-                text: card,
-                toolCalls: [],
-            };
-        };
+        memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ card });
     };
 
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
@@ -673,121 +584,245 @@ test('deleting, regenerating, or swiping A2 reuses the card bound to U2 and manu
     assert.doesNotMatch(swipeManual.at(-2).mes, /推进支线/);
 });
 
-test('director retrieves selected vector memories from visible chat and shows them in the request viewer', async () => {
-    const { memory, chat, requests, vectorCalls, directorCaptures, getState } = createSandbox({ vectorBooks: ['selected-book'] });
-    const result = await memory.StoryDirectorRuntime.replanLatest();
-
-    assert.equal(result.success, true);
-    assert.equal(getState().storyDirector.status, 'ready');
+test('director recalls vectors once and sends only text to both requests and the viewer', async () => {
+    const { memory, chat, requests, vectorCalls, directorCaptures } = createSandbox({ vectorBooks: ['selected-book'] });
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(requests.length, 2);
     assert.equal(vectorCalls.length, 1);
     assert.deepEqual(vectorCalls[0].bookIds, ['selected-book']);
     assert.equal(vectorCalls[0].searchOptions.ignoreInjectionSetting, true);
     assert.equal(vectorCalls[0].query, '当前行动\n最新正文');
-    assert.match(requests[0][1].content, /读取角色卡、世界书、表格与向量记忆 → 读取全部未隐藏聊天楼层/);
+    for (const messages of requests) {
+        assert.deepEqual(readContext(messages).vectors, ['向量中保存的历史线索']);
+        assert.doesNotMatch(JSON.stringify(messages), /启用的剧情书 #3|0\.92|"score"|"matches"/);
+    }
+    assert.match(JSON.stringify(directorCaptures), /向量中保存的历史线索/);
+    assert.doesNotMatch(JSON.stringify(directorCaptures), /启用的剧情书 #3|0\.92/);
     assert.deepEqual(chat.map((message) => message.mes), ['很久以前', '旧回复', '当前行动', '最新正文<Memory><!-- hidden --></Memory>']);
-    const resultMessage = findRequestWithToolResult(requests, 'context').find((message) => message.tool_call_id === 'context');
-    const contextResult = JSON.parse(resultMessage.content);
-    assert.deepEqual(Array.from(contextResult.vectors.matches, (match) => match.text), ['向量中保存的历史线索']);
-    assert.equal(contextResult.vectors.matches[0].source, '启用的剧情书 #3');
-    assert.match(findCaptureWithToolResult(directorCaptures, '读取角色卡、世界书、表格与向量记忆')
-        .body.messages.find((message) => message.name?.includes('读取角色卡、世界书、表格与向量记忆')).content,
-    /向量中保存的历史线索/);
-    assert.match(directorCaptures[0].body.messages.find((message) => message.yzmAgentTraceType === 'tool-schema').content,
-        /yzm_story_read_context/);
 });
 
-test('director reports missing embeddings but still plans with tables and chat', async () => {
+test('director can plan with tables and chat when embedding is disabled', async () => {
     const { memory, requests, vectorCalls } = createSandbox({ vectorBooks: ['selected-book'], embeddingEnabled: false });
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(vectorCalls.length, 0);
-    assert.match(findRequestWithToolResult(requests, 'context').find((message) => message.tool_call_id === 'context').content, /Embedding 未启用/);
+    assert.deepEqual(readContext(requests[0]).vectors, []);
+    assert.match(JSON.stringify(readContext(requests[0]).tables), /前100楼总结/);
 });
 
-test('vector search failure is visible to the director without losing the planned card', async () => {
-    const { memory, requests, getState } = createSandbox({ vectorBooks: ['selected-book'] });
+test('vector failures are logged locally without sending service metadata to the director', async () => {
+    const { sandbox, memory, requests, getState } = createSandbox({ vectorBooks: ['selected-book'] });
+    const warnings = [];
+    sandbox.console.warn = (...args) => warnings.push(args);
     memory.VectorStore.search = async () => { throw new Error('向量服务暂时不可用'); };
-
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(getState().storyDirector.status, 'ready');
-    assert.match(findRequestWithToolResult(requests, 'context').find((message) => message.tool_call_id === 'context').content, /向量服务暂时不可用/);
+    assert.deepEqual(readContext(requests[0]).vectors, []);
+    assert.match(String(warnings.flat()), /向量服务暂时不可用/);
+    assert.doesNotMatch(JSON.stringify(requests), /向量服务暂时不可用/);
 });
 
-test('director enforces combined context, visible chat, then ledger even after an out-of-order call', async () => {
-    const { memory, requests, directorCaptures, vectorCalls } = createSandbox({ vectorBooks: ['selected-book'] });
-    let turn = 0;
-    const offeredTools = [];
-    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+test('review can repair a malformed draft without reading data again or adding a third request', async () => {
+    const { memory, requests, vectorCalls, getState } = createSandbox({ vectorBooks: ['selected-book'] });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        turn += 1;
-        const offeredTool = getOfferedToolName(tools);
-        offeredTools.push(offeredTool);
-        if (turn === 1) {
-            return createToolResponse('yzm_story_read_visible_chat');
-        }
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        return { success: true, message: { role: 'assistant', content: '<下轮导演卡>继续。</下轮导演卡>' }, text: '<下轮导演卡>继续。</下轮导演卡>', toolCalls: [] };
+        if (!isReview(messages)) return createToolResponse('yzm_story_submit_plan', '{"card":');
+        assert.match(messages.at(-1).content, /第一轮本地校验发现/);
+        return createPlanResponse({ card: '<下轮导演卡>修复后的定稿。</下轮导演卡>' });
     };
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    assert.equal(turn, 5);
+    assert.equal(requests.length, 2);
     assert.equal(vectorCalls.length, 1);
-    assert.deepEqual(offeredTools, [
-        'yzm_story_read_context',
-        'yzm_story_read_context',
-        'yzm_story_read_visible_chat',
-        'yzm_story_read_ledger',
-        'yzm_story_update_ledger',
-    ]);
-    assert.match(findRequestWithToolResult(requests, 'chat').find((message) => message.tool_call_id === 'chat').content, /本阶段不允许调用/);
-    assert.match(directorCaptures[1].body.messages.find((message) => message.name?.includes('读取全部未隐藏聊天楼层')).content, /本阶段不允许调用/);
+    assert.deepEqual(readContext(requests[0]), readContext(requests[1]));
+    assert.match(getState().storyDirector.pendingCard, /修复后的定稿/);
 });
 
-test('director can recover after four missed calls and finish within the sixteen-turn limit', async () => {
-    const { memory, requests, getState } = createSandbox({ vectorBooks: ['selected-book'] });
-    let turn = 0;
-    let ledgerUpdated = false;
-    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
-        requests.push(structuredClone(messages));
-        turn += 1;
-        if (turn <= 4) {
-            return {
-                success: true,
-                message: { role: 'assistant', content: '暂未调用工具。' },
-                text: '暂未调用工具。',
-                toolCalls: [],
-            };
-        }
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
-            ledgerUpdated = true;
-            return createToolResponse(offeredTool, '{"content":"延迟完成后的账本"}');
-        }
-        return {
-            success: true,
-            message: { role: 'assistant', content: '<下轮导演卡>十二轮后完成。</下轮导演卡>' },
-            text: '<下轮导演卡>十二轮后完成。</下轮导演卡>',
-            toolCalls: [],
-        };
+test('draft state is never saved or injectable while the review request is pending', async () => {
+    const { memory, getState } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    let resolveReview;
+    let reviewStarted;
+    const started = new Promise((resolve) => { reviewStarted = resolve; });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        if (!isReview(messages)) return createPlanResponse({ ledger: '草案账本' });
+        reviewStarted();
+        return new Promise((resolve) => { resolveReview = resolve; });
     };
-
-    const result = await memory.StoryDirectorRuntime.replanLatest();
-
-    assert.equal(result.success, true);
-    assert.equal(turn, 9);
-    assert.equal(getState().storyDirector.ledger, '延迟完成后的账本');
-    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>十二轮后完成。</下轮导演卡>');
+    const running = runtime.replanLatest();
+    await started;
+    assert.equal(getState().storyDirector.ledger, '旧账本');
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.equal(runtime.getCurrentDirectorCard(), null);
+    resolveReview(createPlanResponse({ card: '<下轮导演卡>审定卡片。</下轮导演卡>', ledger: '审定账本' }));
+    assert.equal((await running).success, true);
+    assert.equal(getState().storyDirector.ledger, '审定账本');
+    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>审定卡片。</下轮导演卡>');
 });
 
 test('combined context reports when no worldbook is enabled', async () => {
-    const { memory, requests, directorCaptures } = createSandbox({ worldbookEnabled: false });
-
+    const { memory, requests } = createSandbox({ worldbookEnabled: false });
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    const contextResult = findRequestWithToolResult(requests, 'context')
-        .find((message) => message.tool_call_id === 'context').content;
-    assert.match(contextResult, /当前未启用或未勾选世界书/);
-    assert.match(findCaptureWithToolResult(directorCaptures, '读取角色卡、世界书、表格与向量记忆')
-        .body.messages.find((message) => message.name?.includes('读取角色卡、世界书、表格与向量记忆')).content,
-    /当前未启用或未勾选世界书/);
+    assert.match(readContext(requests[0]).worldbooks, /未启用或未勾选世界书/);
+});
+
+test('review can reject a draft event without adding any history or candidate roles', async () => {
+    const { memory, chat, getState } = createSandbox({ initialLedger: '【信息隔离】\n- 保留旧状态' });
+    const runtime = memory.StoryDirectorRuntime;
+    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({
+        card: createTrackBCard('林雪', 'Module 1', '候选1：马场休息；候选2：观赛；候选3：训练'),
+        ledger: getState().storyDirector.ledger,
+    });
+    assert.equal((await runtime.replanLatest()).success, true);
+    chat.push({ is_user: true, mes: '继续' });
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+    chat.push({ is_user: false, mes: '正文只描写眼前的谈话，没有切换场景。' });
+    let passes = 0;
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        passes += 1;
+        assert.ok(readContext(messages).actualTrackBReview);
+        if (!isReview(messages)) {
+            return createPlanResponse({ actualTrackB: { occurred: true, roles: '林雪', event: '林雪在马场休息' } });
+        }
+        assert.doesNotMatch(getState().storyDirector.ledger, /林雪|马场/);
+        assert.match(JSON.stringify(messages), /林雪在马场休息/);
+        return createPlanResponse({ ledger: '【信息隔离】\n- 复核确认的状态' });
+    };
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.equal(passes, 2);
+    assert.equal(getState().storyDirector.ledger, '【信息隔离】\n- 复核确认的状态');
+});
+
+test('both passes reuse one context snapshot while live table edits survive the final save', async () => {
+    const { memory, requests, getState } = createSandbox();
+    let worldbookReads = 0;
+    const readWorldbooks = memory.WorldbookManager.buildWorldbookMessage;
+    memory.WorldbookManager.buildWorldbookMessage = async (state) => {
+        worldbookReads += 1;
+        return readWorldbooks(state);
+    };
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        requests.push(structuredClone(messages));
+        if (!isReview(messages)) getState().records.memory_summary[0].values.总结内容 = '用户在运行中编辑了总结';
+        return createPlanResponse();
+    };
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(worldbookReads, 1);
+    assert.deepEqual(readContext(requests[0]), readContext(requests[1]));
+    assert.match(JSON.stringify(readContext(requests[1]).tables), /前100楼总结/);
+    assert.equal(getState().records.memory_summary[0].values.总结内容, '用户在运行中编辑了总结');
+});
+
+test('a custom API route receives two full passes with the same fixed submission contract', async () => {
+    const { memory, requests, getState } = createSandbox();
+    const preset = { id: 'director-api', model: 'director-model' };
+    memory.TaskRunner.createLlmRequestSnapshot = () => ({ mode: 'custom', preset });
+    memory.LlmClient.requestAgentWithTavern = () => { throw new Error('wrong API route'); };
+    memory.LlmClient.requestAgentWithCustom = async (config, messages, tools, options) => {
+        assert.equal(config, preset);
+        assert.equal(tools.length, 1);
+        assert.equal(options.toolChoice.function.name, 'yzm_story_submit_plan');
+        assert.equal(options.emptyResponseMaxRetries, 0);
+        requests.push(structuredClone(messages));
+        return createPlanResponse();
+    };
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(readContext(requests[0]), readContext(requests[1]));
+    assert.equal(getState().storyDirector.status, 'ready');
+});
+
+test('invalid final ledger or actual-event data stops without a third request or partial commit', async (t) => {
+    const cases = [
+        { name: 'missing ledger', ledger: null },
+        { name: 'unstructured card-only response', text: '<下轮导演卡>只有卡片。</下轮导演卡>' },
+        { name: 'empty card', card: '<下轮导演卡>  </下轮导演卡>' },
+        { name: 'multiple cards', card: '<下轮导演卡>一</下轮导演卡><下轮导演卡>二</下轮导演卡>' },
+        { name: 'unbound actual event', actualTrackB: { occurred: true, roles: '林雪', event: '马场休息' } },
+        { name: 'nonboolean occurrence', actualTrackB: { occurred: 'false', roles: '', event: '' } },
+        { name: 'absent event carrying candidate text', actualTrackB: { occurred: false, roles: '林雪', event: '马场休息' } },
+    ];
+    for (const item of cases) {
+        await t.test(item.name, async () => {
+            const { memory, requests, getState } = createSandbox();
+            memory.LlmClient.requestAgentWithTavern = async (messages) => {
+                requests.push(structuredClone(messages));
+                if (!isReview(messages)) return createPlanResponse();
+                return item.text ? { success: true, text: item.text, toolCalls: [] } : createPlanResponse(item);
+            };
+            const result = await memory.StoryDirectorRuntime.replanLatest();
+            assert.equal(result.success, false);
+            assert.match(result.error, /第二轮定稿校验失败/);
+            assert.equal(requests.length, 2);
+            assert.equal(getState().storyDirector.ledger, '旧账本');
+            assert.equal(getState().storyDirector.pendingCard, '');
+        });
+    }
+});
+
+test('final plan can be delivered as a structured JSON text response', async () => {
+    const { memory, getState } = createSandbox();
+    memory.LlmClient.requestAgentWithTavern = async () => {
+        const text = createPlanResponse().toolCalls[0].function.arguments;
+        return { success: true, message: { role: 'assistant', content: text }, text, toolCalls: [] };
+    };
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(getState().storyDirector.ledger, '新账本');
+});
+
+test('stopping context preparation, drafting or review immediately releases the run and ignores late output', async (t) => {
+    for (const stage of ['prepare', 'draft', 'review']) {
+        await t.test(stage, async () => {
+            const { memory, getState, dispatchedEvents } = createSandbox();
+            const runtime = memory.StoryDirectorRuntime;
+            let started;
+            let resolveLate;
+            let requests = 0;
+            const stageStarted = new Promise((resolve) => { started = resolve; });
+            const block = () => {
+                started();
+                return new Promise((resolve) => { resolveLate = resolve; });
+            };
+            if (stage === 'prepare') memory.VectorStore.whenReady = block;
+            memory.LlmClient.requestAgentWithTavern = async (messages) => {
+                requests += 1;
+                if (stage === 'draft' || isReview(messages)) return block();
+                return createPlanResponse({ ledger: '未审定账本' });
+            };
+            const running = runtime.replanLatest();
+            await stageStarted;
+            runtime.cancelActiveRun('manual story director stop');
+            const result = await running;
+            assert.equal(result.aborted, true);
+            assert.equal(runtime.isRunning(), false);
+            assert.equal(getState().storyDirector.ledger, '旧账本');
+            assert.equal(getState().storyDirector.pendingCard, '');
+            assert.equal(getState().storyDirector.status, 'idle');
+            assert.equal(requests, stage === 'prepare' ? 0 : stage === 'draft' ? 1 : 2);
+            assert.equal(dispatchedEvents.some((event) => event.type === 'yzm-story-director-error'), false);
+
+            memory.VectorStore.whenReady = async () => {};
+            memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ ledger: '重新规划的账本' });
+            assert.equal((await runtime.replanLatest()).success, true);
+            resolveLate(createPlanResponse({ ledger: '迟到的旧结果' }));
+            await new Promise((resolve) => setImmediate(resolve));
+            assert.equal(getState().storyDirector.ledger, '重新规划的账本');
+        });
+    }
+});
+
+test('branch changes during review prevent both the card and the ledger from being committed', async () => {
+    const { memory, chat, getState, requests } = createSandbox();
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        requests.push(structuredClone(messages));
+        if (isReview(messages)) chat.at(-1).mes = '用户编辑了来源正文';
+        return createPlanResponse({ ledger: '不应保存' });
+    };
+    const result = await memory.StoryDirectorRuntime.replanLatest();
+    assert.equal(result.success, false);
+    assert.match(result.error, /正文分支或会话已经变化/);
+    assert.equal(requests.length, 2);
+    assert.equal(getState().storyDirector.ledger, '旧账本');
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.equal(memory.StoryDirectorRuntime.isRunning(), false);
 });
 
 test('a changed assistant branch invalidates its card and a disabled director cannot inject', async () => {
@@ -807,28 +842,24 @@ test('a changed assistant branch invalidates its card and a disabled director ca
     assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), false);
 });
 
-test('failed director runs do not commit a staged ledger update and emit a global error event', async () => {
-    const { memory, dispatchedEvents, getState } = createSandbox();
-    let ledgerUpdated = false;
-    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
-            ledgerUpdated = true;
-            return createToolResponse(offeredTool, '{"content":"不应提交"}');
-        }
-        return { success: true, message: { role: 'assistant', content: '格式错误' }, text: '格式错误', toolCalls: [] };
+test('failed review never commits the draft and stops after two requests with one error event', async () => {
+    const { memory, requests, dispatchedEvents, getState } = createSandbox();
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        requests.push(structuredClone(messages));
+        return isReview(messages)
+            ? createPlanResponse({ card: '格式错误', ledger: '不应提交' })
+            : createPlanResponse({ ledger: '草案也不应提交' });
     };
-
-    const result = await memory.StoryDirectorRuntime.runDirector(memory.StoryDirectorRuntime.getLatestAssistantAnchor());
-
+    const result = await memory.StoryDirectorRuntime.replanLatest();
     assert.equal(result.success, false);
     assert.equal(result.errorNotified, true);
+    assert.equal(requests.length, 2);
     assert.equal(getState().storyDirector.ledger, '旧账本');
+    assert.equal(getState().storyDirector.pendingCard, '');
     assert.equal(getState().storyDirector.status, 'error');
     const errorEvents = dispatchedEvents.filter((event) => event.type === 'yzm-story-director-error');
     assert.equal(errorEvents.length, 1);
-    assert.match(errorEvents[0].detail.error, /超过最大工具调用轮数/);
+    assert.match(errorEvents[0].detail.error, /第二轮定稿校验失败/);
 });
 
 test('runtime event bindings are deduplicated', () => {
@@ -877,13 +908,12 @@ test('manual replan after deleting the last assistant sees all visible dialogue 
     assert.equal(getState().storyDirector.source.role, 'user');
     assert.equal(getState().storyDirector.source.messageIndex, 4);
     assert.match(requests[0][1].content, /最新用户消息/);
-    assert.doesNotMatch(requests[0][1].content, /轨道A时序锚点|对这条 User 消息的首次回应/);
-    assert.equal(requests.at(-1).at(-1).role, 'tool');
-    const toolMessages = requests.at(-1).filter((message) => message.role === 'tool');
-    const contextResult = JSON.parse(toolMessages.find((message) => message.tool_call_id === 'context').content);
+    assert.match(requests[0][1].content, /对这条 User 消息的首次回应/);
+    assert.equal(requests.length, 2);
+    const contextResult = readContext(requests[0]);
     assert.deepEqual(contextResult.tables.map((table) => table.name), ['记忆总结', '角色档案']);
     assert.equal(contextResult.tables[0].records[0].values.总结内容, '前100楼总结');
-    const visibleChat = JSON.parse(toolMessages.find((message) => message.tool_call_id === 'chat').content);
+    const visibleChat = contextResult.chat;
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.floor), [2, 3, 4]);
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.role), ['user', 'assistant', 'user']);
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.content),
@@ -910,8 +940,7 @@ test('director keeps SillyTavern floor zero and accepts summary-compatible dialo
     const result = await memory.StoryDirectorRuntime.replanLatest();
 
     assert.equal(result.success, true);
-    const toolMessages = requests.at(-1).filter((message) => message.role === 'tool');
-    const visibleChat = JSON.parse(toolMessages.find((message) => message.tool_call_id === 'chat').content);
+    const visibleChat = readContext(requests[0]).chat;
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.floor), [0, 1, 2, 3]);
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.role), ['assistant', 'user', 'user', 'assistant']);
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.content),
@@ -986,14 +1015,7 @@ test('manual replan can retry after a request failure and replace the director c
     memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
         requestCount += 1;
         if (requestCount === 1) return { success: false, error: 'rate limit exceeded' };
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        return {
-            success: true,
-            message: { role: 'assistant', content: '<下轮导演卡>重试成功。</下轮导演卡>' },
-            text: '<下轮导演卡>重试成功。</下轮导演卡>',
-            toolCalls: [],
-        };
+        return createPlanResponse({ card: '<下轮导演卡>重试成功。</下轮导演卡>' });
     };
 
     const failed = await memory.StoryDirectorRuntime.replanLatest();
@@ -1013,16 +1035,7 @@ test('manual replan replaces an existing card without changing chat messages', a
     const originalChat = structuredClone(chat);
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
 
-    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
-        const offeredTool = getOfferedToolName(tools);
-        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
-        return {
-            success: true,
-            message: { role: 'assistant', content: '<下轮导演卡>新的安排。</下轮导演卡>' },
-            text: '<下轮导演卡>新的安排。</下轮导演卡>',
-            toolCalls: [],
-        };
-    };
+    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ card: '<下轮导演卡>新的安排。</下轮导演卡>' });
 
     assert.equal((await runtime.replanLatest()).success, true);
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>新的安排。</下轮导演卡>');

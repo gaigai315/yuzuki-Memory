@@ -1264,7 +1264,10 @@
             signal: options.signal,
         });
 
-        for (let attempt = 0; attempt <= AGENT_EMPTY_RESPONSE_MAX_RETRIES; attempt += 1) {
+        const maxRetries = Number.isInteger(options.emptyResponseMaxRetries)
+            ? Math.max(0, Math.min(AGENT_EMPTY_RESPONSE_MAX_RETRIES, options.emptyResponseMaxRetries))
+            : AGENT_EMPTY_RESPONSE_MAX_RETRIES;
+        for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
             if (options.signal?.aborted) return { success: false, error: '已中断发送', aborted: true };
             let response = await send(false);
             if (!response.ok) {
@@ -1290,7 +1293,7 @@
             } catch (error) {
                 const retryableEmptyResponse = response.status === 200
                     && isEmptyAgentResponseError(error)
-                    && attempt < AGENT_EMPTY_RESPONSE_MAX_RETRIES;
+                    && attempt < maxRetries;
                 if (retryableEmptyResponse) {
                     const delayMs = AGENT_EMPTY_RESPONSE_RETRY_BASE_MS * (2 ** attempt);
                     const shouldContinue = await waitForAgentRetry(delayMs, options.signal);
@@ -1299,8 +1302,8 @@
                 }
                 const retryNote = response.status === 200
                     && isEmptyAgentResponseError(error)
-                    && attempt >= AGENT_EMPTY_RESPONSE_MAX_RETRIES
-                    ? `\n\n已对空响应重试 ${AGENT_EMPTY_RESPONSE_MAX_RETRIES} 次。`
+                    && maxRetries > 0 && attempt >= maxRetries
+                    ? `\n\n已对空响应重试 ${maxRetries} 次。`
                     : '';
                 return {
                     success: false,
@@ -1324,7 +1327,7 @@
                 chat_completion_source: config.source,
                 messages: cleanMessages,
                 tools,
-                tool_choice: 'auto',
+                tool_choice: options.toolChoice ?? 'auto',
                 temperature: config.temperature,
                 max_tokens: config.maxTokens,
                 stream: false,
@@ -1365,7 +1368,7 @@
         const payload = resolveCustomProxyPayload(config, cleanMessages, { ...options, stream: false });
         payload.stream = false;
         payload.tools = tools;
-        payload.tool_choice = 'auto';
+        payload.tool_choice = options.toolChoice ?? 'auto';
         const result = await postTavernAgentGenerate(payload, options);
         return { ...result, config };
     }

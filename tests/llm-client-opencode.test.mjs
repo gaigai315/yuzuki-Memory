@@ -281,6 +281,46 @@ test('agent response accepts array-based assistant content', () => {
     assert.equal(result.message.content, result.text);
 });
 
+test('fixed-pass custom agent requests force the output tool and do not retry empty responses', async () => {
+    const requests = [];
+    const { client } = createClient(async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: '', tool_calls: [] } }] });
+    });
+    const toolChoice = { type: 'function', function: { name: 'yzm_story_submit_plan' } };
+    const result = await client.requestAgentWithCustom(openCodeConfig, [{ role: 'user', content: 'draft' }], [{
+        type: 'function', function: { name: 'yzm_story_submit_plan', parameters: { type: 'object', properties: {} } },
+    }], { toolChoice, emptyResponseMaxRetries: 0 });
+
+    assert.equal(result.success, false);
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].tool_choice, toolChoice);
+    assert.equal(requests[0].stream, false);
+    assert.match(result.error, /未返回文本或工具调用/);
+    assert.doesNotMatch(result.error, /已对空响应重试/);
+});
+
+test('fixed-pass Tavern requests preserve the output tool and zero-retry policy', async () => {
+    const requests = [];
+    const { client } = createClient(async (url, init) => {
+        if (String(url).includes('/api/settings/get')) {
+            return createResponse({ oai_settings: { chat_completion_source: 'openai', openai_model: 'test-model' } });
+        }
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: '', tool_calls: [] } }] });
+    });
+    const toolChoice = { type: 'function', function: { name: 'yzm_story_submit_plan' } };
+    const result = await client.requestAgentWithTavern([{ role: 'user', content: 'review' }], [{
+        type: 'function', function: { name: 'yzm_story_submit_plan', parameters: { type: 'object', properties: {} } },
+    }], { toolChoice, emptyResponseMaxRetries: 0 });
+
+    assert.equal(result.success, false);
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].tool_choice, toolChoice);
+    assert.equal(requests[0].stream, false);
+    assert.match(result.error, /未返回文本或工具调用/);
+});
+
 test('agent retries HTTP 200 empty responses with exponential backoff', async () => {
     const requests = [];
     const delays = [];

@@ -2901,6 +2901,7 @@
         host.appendChild(overlay);
         host.classList.add('yzm-story-director-card-host-open');
         activeStoryDirectorCardWindow = { host, overlay, abortController };
+        updateStoryDirectorActionButton(replanButton, YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true);
 
         closeButton.addEventListener('click', closeStoryDirectorCard, { signal: abortController.signal });
         replanButton.addEventListener('click', async (event) => {
@@ -3869,23 +3870,49 @@
         return actions;
     }
 
+    function updateStoryDirectorActionButton(button, running = false) {
+        if (!(button instanceof HTMLButtonElement)) return false;
+        const icon = button.querySelector('i');
+        const label = button.querySelector('span');
+        if (!button.dataset.yzmStoryDirectorIdleTitle) {
+            button.dataset.yzmStoryDirectorIdleTitle = button.title || '剧情规划';
+            button.dataset.yzmStoryDirectorIdleLabel = label?.textContent || '';
+            button.dataset.yzmStoryDirectorIdleIcon = icon?.className || 'fa-solid fa-clapperboard';
+        }
+        const active = running === true;
+        button.classList.toggle('yzm-story-director-loading', active);
+        button.classList.toggle('yzm-story-director-stoppable', active);
+        if (active) button.setAttribute('aria-busy', 'true');
+        else button.removeAttribute('aria-busy');
+        const title = active ? '停止当前剧情规划' : button.dataset.yzmStoryDirectorIdleTitle;
+        button.title = title;
+        button.setAttribute('aria-label', title);
+        if (icon) icon.className = active ? 'fa-solid fa-stop' : button.dataset.yzmStoryDirectorIdleIcon;
+        if (label) label.textContent = active ? '停止规划' : button.dataset.yzmStoryDirectorIdleLabel;
+        return true;
+    }
+
+    function updateStoryDirectorActionButtons(running = YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true) {
+        document.querySelectorAll('[data-yzm-story-director-replan], .yzm-story-director-card-replan')
+            .forEach((button) => updateStoryDirectorActionButton(button, running));
+    }
+
     async function runManualStoryDirector(button) {
-        if (!(button instanceof HTMLButtonElement) || button.disabled) return null;
+        if (!(button instanceof HTMLButtonElement)) return null;
         const runtime = YuzukiMemory.StoryDirectorRuntime;
         if (typeof runtime?.replanLatest !== 'function') {
             showTaskToast('剧情导演模块尚未加载。', 'error');
             return { success: false, error: '剧情导演模块尚未加载。' };
         }
+        if (runtime.isRunning?.() === true) {
+            runtime.cancelActiveRun?.('manual story director stop');
+            updateStoryDirectorActionButtons(false);
+            showTaskToast('已停止当前剧情规划', 'warning');
+            return { success: false, skipped: true, aborted: true, reason: 'manual-stop' };
+        }
+        if (button.disabled) return null;
 
-        const icon = button.querySelector('i');
-        const label = button.querySelector('span');
-        const originalIconClass = icon?.className || 'fa-solid fa-clapperboard';
-        const originalLabel = label?.textContent || '剧情规划';
-        button.disabled = true;
-        button.classList.add('yzm-story-director-loading');
-        button.setAttribute('aria-busy', 'true');
-        if (icon) icon.className = 'fa-solid fa-spinner fa-spin';
-        if (label) label.textContent = '规划中';
+        updateStoryDirectorActionButtons(true);
 
         let result;
         try {
@@ -3893,19 +3920,14 @@
         } catch (error) {
             result = { success: false, error: String(error?.message || error || '剧情规划失败。') };
         } finally {
-            if (button.isConnected) {
-                button.disabled = false;
-                button.classList.remove('yzm-story-director-loading');
-                button.removeAttribute('aria-busy');
-            }
-            if (icon?.isConnected) icon.className = originalIconClass;
-            if (label?.isConnected) label.textContent = originalLabel;
+            updateStoryDirectorActionButtons(runtime.isRunning?.() === true);
         }
 
         if (result?.success) {
             showTaskToast('剧情规划完成', 'success');
             return result;
         }
+        if (result?.aborted) return result;
         const errorText = String(result?.error || '剧情规划失败，请稍后重试。');
         if (result?.skipped) {
             showTaskToast(errorText, 'warning');
@@ -11226,7 +11248,7 @@
         );
         const desc = document.createElement('span');
         desc.textContent = isDirector && data
-            ? `显示第 ${data.agentTurn || 1} 轮发送给导演模型的完整上下文。工具调用和工具返回均为便于阅读的展开副本。`
+            ? `第 ${data.agentTurn || 1}/2 轮：${data.agentTurn === 2 ? '复核定稿' : '核验与起草'}。显示完整上下文；复核轮包含第一轮草案。`
             : data?.preparedTask
             ? '插件任务发送前构造的请求快照，不代表酒馆后端已接收或上游已成功返回。'
             : data?.preview
@@ -14601,11 +14623,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '新增剧情规划功能。请前往DC社区，下载更新全局世界书。',
-            '优化约定样式及处理逻辑，过期自动清理。',
-            '新增电脑端可移动/缩放面板。',
-            '优化表格结构编辑：支持使用 [列名]、#[列名]、*[列名] 将列全局同步到所有会话。',
-            '修复云端环境下聊天数据同步与删楼对账问题。',
+            '优化剧情规划逻辑',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -18288,10 +18306,13 @@
         window.visualViewport?.addEventListener?.('resize', reposition, { passive: true, signal: viewportController.signal });
         window.visualViewport?.addEventListener?.('scroll', reposition, { passive: true, signal: viewportController.signal });
         window.yzmStoryDirectorProgressHandler = (event) => {
-            updateStoryDirectorProgressIndicator(event?.detail?.running === true);
+            const running = event?.detail?.running === true;
+            updateStoryDirectorProgressIndicator(running);
+            updateStoryDirectorActionButtons(running);
         };
         window.addEventListener(STORY_DIRECTOR_RUN_STATE_EVENT, window.yzmStoryDirectorProgressHandler);
         updateStoryDirectorProgressIndicator();
+        updateStoryDirectorActionButtons();
     }
 
     function scheduleSessionWorkspaceRefresh(root, sessionId) {

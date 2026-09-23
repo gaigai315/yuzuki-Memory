@@ -640,10 +640,21 @@
     font-size: 14px;
 }
 
-#yzm-memory-root .yzm-top-story-director:disabled,
-#yzm-memory-root .yzm-story-director-loading {
+#yzm-memory-root .yzm-top-story-director:disabled {
     cursor: wait;
     opacity: 0.62;
+}
+
+#yzm-memory-root .yzm-top-story-director.yzm-story-director-stoppable {
+    color: #b42318;
+    background: rgba(180, 35, 24, 0.08);
+    border-color: rgba(180, 35, 24, 0.34);
+    cursor: pointer;
+    opacity: 1;
+}
+
+#yzm-memory-root .yzm-top-story-director.yzm-story-director-stoppable i {
+    color: #b42318;
 }
 
 #yzm-memory-root .yzm-shell-close,
@@ -12597,10 +12608,17 @@
     outline: 0;
 }
 
-#yzm-memory-global-modal-root .yzm-story-director-card-replan:disabled,
-#yzm-memory-global-modal-root .yzm-story-director-card-replan.yzm-story-director-loading {
+#yzm-memory-global-modal-root .yzm-story-director-card-replan:disabled {
     cursor: wait;
     opacity: 0.62;
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-replan.yzm-story-director-stoppable {
+    color: #8f251d;
+    background: rgba(255, 244, 241, 0.96);
+    border-color: rgba(143, 37, 29, 0.42);
+    cursor: pointer;
+    opacity: 1;
 }
 
 @media (max-width: 760px) {
