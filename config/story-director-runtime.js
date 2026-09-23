@@ -372,21 +372,45 @@
         return match ? `Module ${match[1]}` : '';
     }
 
+    function normalizeTrackBEventText(value = '') {
+        let text = String(value || '').trim();
+        const bracketMatch = text.match(/^\[\s*([\s\S]*?)\s*\]$/);
+        if (bracketMatch) text = bracketMatch[1].trim();
+        if (!text
+            || /\{\{|\}\}/.test(text)
+            || /^(?:无|暂无|不适用|n\/?a|none|待定|未指定|跳过|略)$/i.test(text)
+            || /(?:严格围绕|签发三个|三个不同方向|宏观事件备选|禁止描写)/i.test(text)) {
+            return '';
+        }
+        return text
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/[\r\n]+/g, '；')
+            .replace(/\s+/g, ' ')
+            .replace(/\s*[；;]+\s*/g, '；')
+            .replace(/^[；;\s]+|[；;\s]+$/g, '')
+            .slice(0, 600)
+            .trim();
+    }
+
     function parseTrackBCallFromCard(card = '') {
         const text = String(card || '').replace(/^\s*<下轮导演卡>\s*/i, '').replace(/\s*<\/下轮导演卡>\s*$/i, '');
         const trackB = text.match(/【\s*轨道\s*B\s*调度指令\s*】([\s\S]*?)(?=\n\s*【|$)/i);
         const scope = trackB?.[1] || text;
         const roles = normalizeTrackBRoleText(scope.match(/^\s*(?:[-*+]\s*)?出场角色\s*[：:]\s*(.*?)\s*$/mi)?.[1]);
         const module = normalizeTrackBModule(scope.match(/^\s*(?:[-*+]\s*)?所属模块\s*[：:]\s*(.*?)\s*$/mi)?.[1]);
-        return roles && module ? { module, roles } : null;
+        const event = normalizeTrackBEventText(scope.match(/(?:^|\n)\s*(?:[-*+]\s*)?剧情推演\s*[：:]\s*([\s\S]*?)\s*$/i)?.[1]);
+        return roles && module ? { module, roles, event } : null;
     }
 
     function parseTrackBHistoryLine(line = '') {
         const match = String(line || '').match(/^\s*[-*+]\s*(Module\s*[1-4])\s*(?:｜|\|)\s*出场角色\s*[：:]\s*(.*?)\s*$/i);
         if (!match) return null;
         const module = normalizeTrackBModule(match[1]);
-        const roles = normalizeTrackBRoleText(match[2]);
-        return module && roles ? { module, roles } : null;
+        const details = match[2];
+        const eventMatch = details.match(/^([\s\S]*?)\s*(?:｜|\|)\s*(?:场景事件|事件摘要|剧情推演)\s*[：:]\s*([\s\S]*?)\s*$/i);
+        const roles = normalizeTrackBRoleText(eventMatch?.[1] || details);
+        const event = normalizeTrackBEventText(eventMatch?.[2] || '');
+        return module && roles ? { module, roles, event } : null;
     }
 
     function readTrackBCallHistory(ledger = '') {
@@ -432,7 +456,10 @@
         const base = removeTrackBHistorySections(ledger);
         const entries = (Array.isArray(history) ? history : []).slice(-MAX_TRACK_B_HISTORY);
         if (!entries.length) return base;
-        const section = `【${TRACK_B_HISTORY_TITLE}】\n${entries.map((entry) => `- ${entry.module}｜出场角色：${entry.roles}`).join('\n')}`;
+        const section = `【${TRACK_B_HISTORY_TITLE}】\n${entries.map((entry) => {
+            const event = normalizeTrackBEventText(entry?.event);
+            return `- ${entry.module}｜出场角色：${entry.roles}${event ? `｜场景事件：${event}` : ''}`;
+        }).join('\n')}`;
         return [base, section].filter(Boolean).join('\n\n').trim();
     }
 
@@ -663,7 +690,7 @@
                 type: 'function',
                 function: {
                     name: TOOL_NAMES.ledger,
-                    description: '读取剧情导演自己的长期调度账本。账本不包含剧情节点与人物履历；其中轨道B近10轮模块与NPC调用历史由插件自动维护。',
+                    description: '读取剧情导演自己的长期调度账本。账本不包含剧情节点与人物履历；其中轨道B近10轮模块、NPC与场景事件候选历史由插件自动维护。',
                     parameters: { type: 'object', properties: {}, additionalProperties: false },
                 },
             },
@@ -736,7 +763,7 @@
             assertActive();
             return serializeVisibleChat();
         });
-        register(TOOL_NAMES.ledger, '读取剧情导演调度账本；轨道B近10轮模块与NPC调用历史由插件自动维护。', { type: 'object', properties: {}, additionalProperties: false }, () => {
+        register(TOOL_NAMES.ledger, '读取剧情导演调度账本；轨道B近10轮模块、NPC与场景事件候选历史由插件自动维护。', { type: 'object', properties: {}, additionalProperties: false }, () => {
             assertActive();
             runContext.stagedLedger = sanitizeDirectorLedger(runContext.stagedLedger);
             return runContext.stagedLedger || '（当前暂无导演账本）';
@@ -895,7 +922,7 @@
                 { role: 'system', content: resolveDirectorVariables(promptEntry.prompt).trim() },
                 {
                     role: 'user',
-                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。轨道B必须填写具体的“出场角色”和“所属模块（Module 1-4）”。依据账本中插件维护的近10次调用历史，优先选择出现次数最少且不与上一次重复的模块；任一模块连续4次未出现时强制补位，并避开最近3次调用过的NPC或势力。所选模块必须落实为对应类型的事件，不得因当前商战、权谋或其他主线题材反复回落到同类推进。该历史会由插件根据最终导演卡自动追加，不得删除或改写。`,
+                    content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。轨道B必须填写具体的“出场角色”和“所属模块（Module 1-4）”。依据账本中插件维护的近10次调用历史，优先选择出现次数最少且不与上一次重复的模块；任一模块连续4次未出现时强制补位，并避开最近3次调用过的NPC或势力。轨道B历史中的“场景事件”是近期导演候选，剧情总结、表格和最新正文是实际发生事实；生成前必须同时对照两类信息，避免复用近期相同或高度相似的地点、行为与事件主题，跨日时尤其不得让角色回到上一日地点重复同一活动。所选模块必须落实为对应类型的事件，不得因当前商战、权谋或其他主线题材反复回落到同类推进。该历史会由插件根据最终导演卡自动追加，不得删除或改写。`,
                 },
             ];
             const usedTools = new Set();

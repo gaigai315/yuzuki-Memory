@@ -449,7 +449,7 @@ test('director ledger removes plot history sections while preserving later sched
 
 test('director automatically records the Track B module and NPCs from a successful card', async () => {
     const { memory, requests, getState } = createSandbox({ initialLedger: '【信息隔离】\n- 林雪不知道密信内容' });
-    const card = createTrackBCard('[林雪、赵衡]', '[Module 2]');
+    const card = createTrackBCard('[林雪、赵衡]', '[Module 2]', '城西马场休息；马会结束后返回府邸');
     memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
         requests.push(structuredClone(messages));
         const offeredTool = getOfferedToolName(tools);
@@ -463,9 +463,10 @@ test('director automatically records the Track B module and NPCs from a successf
     assert.match(requests[0][1].content, /优先选择出现次数最少且不与上一次重复的模块/);
     assert.match(requests[0][1].content, /连续4次未出现时强制补位/);
     assert.match(requests[0][1].content, /最近3次调用过的NPC或势力/);
+    assert.match(requests[0][1].content, /避免复用近期相同或高度相似的地点、行为与事件主题/);
     assert.match(requests[0][1].content, /不得因当前商战、权谋或其他主线题材反复回落到同类推进/);
     assert.match(getState().storyDirector.ledger, /【轨道B调用历史（近10轮）】/);
-    assert.match(getState().storyDirector.ledger, /- Module 2｜出场角色：林雪、赵衡/);
+    assert.match(getState().storyDirector.ledger, /- Module 2｜出场角色：林雪、赵衡｜场景事件：城西马场休息；马会结束后返回府邸/);
     assert.match(getState().storyDirector.ledger, /【信息隔离】/);
 });
 
@@ -522,8 +523,27 @@ test('the next director run reads the previous Track B module and NPC record', a
     const ledgerReads = requests.flatMap((messages) => messages)
         .filter((message) => message.tool_call_id === 'ledger');
     assert.equal(ledgerReads.length, 2);
-    assert.match(ledgerReads[1].content, /Module 1｜出场角色：林雪/);
-    assert.match(getState().storyDirector.ledger, /Module 1｜出场角色：林雪[\s\S]*Module 4｜出场角色：陈舟/);
+    assert.match(ledgerReads[1].content, /Module 1｜出场角色：林雪｜场景事件：首次推进/);
+    assert.match(getState().storyDirector.ledger, /Module 1｜出场角色：林雪｜场景事件：首次推进[\s\S]*Module 4｜出场角色：陈舟｜场景事件：二次推进/);
+});
+
+test('legacy Track B history without event details remains readable and gains events on new calls', async () => {
+    const initialLedger = `【轨道B调用历史（近10轮）】\n- Module 3｜出场角色：林雪\n\n【信息隔离】\n- 旧状态`;
+    const { memory, getState } = createSandbox({ initialLedger });
+    const card = createTrackBCard('陈舟', 'Module 4', `港口仓库盘点
+临时改道调查失踪货物`);
+    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
+    };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+
+    const ledger = getState().storyDirector.ledger;
+    assert.match(ledger, /- Module 3｜出场角色：林雪(?:\n|$)/);
+    assert.match(ledger, /- Module 4｜出场角色：陈舟｜场景事件：港口仓库盘点；临时改道调查失踪货物/);
+    assert.match(ledger, /【信息隔离】\n- 旧状态/);
 });
 
 test('placeholder or missing Track B fields do not create fake history entries', async () => {
