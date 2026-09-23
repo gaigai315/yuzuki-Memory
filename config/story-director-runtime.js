@@ -56,6 +56,18 @@
         }
     }
 
+    function resolveDirectorVariables(text = '') {
+        const value = String(text || '');
+        const sharedResolver = YuzukiMemory.VariableInjector?.resolveRuntimeVariables;
+        if (typeof sharedResolver === 'function') return String(sharedResolver(value));
+        const context = getContext() || {};
+        const userName = String(context.name1 || context.userName || context.playerName || 'User');
+        const characterName = String(context.name2 || context.characterName || context.name || 'Character');
+        return value
+            .replace(/\{\{user\}\}/gi, () => userName)
+            .replace(/\{\{char\}\}/gi, () => characterName);
+    }
+
     function isStoryDirectorEnabled() {
         return YuzukiMemory.GlobalSettings?.get?.(PLUGIN_SETTINGS_KEY, {})?.enableStoryDirector === true;
     }
@@ -880,7 +892,7 @@
                 : '请为最新完成的助手正文生成下一轮导演卡。';
             const readOrderText = readToolOrder.map((name) => TOOL_LABELS[name] || name).join(' → ');
             const messages = [
-                { role: 'system', content: String(promptEntry.prompt || '').trim() },
+                { role: 'system', content: resolveDirectorVariables(promptEntry.prompt).trim() },
                 {
                     role: 'user',
                     content: `${instruction} 请严格依次调用后台提供的读取工具：${readOrderText}。每次读取并理解当前结果后，再进行下一步。导演账本只用于补充调度状态，不得替代剧情总结、表格或最新正文；不得创建或保留“剧情节点与履历”章节。轨道B必须填写具体的“出场角色”和“所属模块（Module 1-4）”。依据账本中插件维护的近10次调用历史，优先选择出现次数最少且不与上一次重复的模块；任一模块连续4次未出现时强制补位，并避开最近3次调用过的NPC或势力。所选模块必须落实为对应类型的事件，不得因当前商战、权谋或其他主线题材反复回落到同类推进。该历史会由插件根据最终导演卡自动追加，不得删除或改写。`,
@@ -925,11 +937,12 @@
                     });
                     continue;
                 }
-                const card = extractDirectorCard(result.text || assistantMessage.content || '');
-                if (!card) {
+                const extractedCard = extractDirectorCard(result.text || assistantMessage.content || '');
+                if (!extractedCard) {
                     messages.push({ role: 'user', content: '请只输出完整的 <下轮导演卡>...</下轮导演卡>。' });
                     continue;
                 }
+                const card = resolveDirectorVariables(extractedCard);
                 if (controller.signal.aborted || !isStoryDirectorEnabled()) throw new DOMException('Aborted', 'AbortError');
                 if (!sourceIsLatestDialogue(source)) throw new Error('导演完成前正文分支已经变化。');
                 runContext.stagedLedger = appendTrackBCallHistory(runContext.stagedLedger, card);
@@ -1167,10 +1180,10 @@
         const user = getGenerationTargetUser(generationType);
         if (!director || !user) return null;
         const boundCard = findMessageCard(director.messageCards, user);
-        if (boundCard) return { card: boundCard, user, origin: 'bound' };
+        if (boundCard) return { card: resolveDirectorVariables(boundCard), user, origin: 'bound' };
         if (generationType === 'regenerate' || generationType === 'swipe' || !pendingCardTargetsUser(director, user)) return null;
         const pendingCard = String(director.pendingCard || '').trim();
-        return pendingCard ? { card: pendingCard, user, origin: 'pending' } : null;
+        return pendingCard ? { card: resolveDirectorVariables(pendingCard), user, origin: 'pending' } : null;
     }
 
     function getInjectableCard(options = {}) {
@@ -1187,6 +1200,7 @@
     function buildDirectorCardView(card, source, origin) {
         const context = getContext() || {};
         const chat = Array.isArray(context.chat) ? context.chat : [];
+        const resolvedCard = resolveDirectorVariables(card);
         let userIndex = source?.role === 'user' ? Number(source.messageIndex) : -1;
         const assistantIndex = source?.role === 'user' ? -1 : Number(source?.assistantIndex);
         if (userIndex < 0 && Number.isInteger(assistantIndex)) {
@@ -1199,8 +1213,8 @@
             }
         }
         return {
-            card,
-            content: unwrapDirectorCard(card),
+            card: resolvedCard,
+            content: unwrapDirectorCard(resolvedCard),
             source: source ? { ...source } : null,
             origin,
             userIndex,

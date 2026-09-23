@@ -302,6 +302,36 @@ test('manual replan uses the currently selected story director prompt', async ()
     assert.equal(requests[0][0].content, 'CUSTOM_STORY_DIRECTOR_PROMPT');
 });
 
+test('story director resolves user and character variables in prompts and cards', async () => {
+    const { memory, chat, requests, getState } = createSandbox({
+        activePrompt: { id: 'director', prompt: '为 {{user}} 与 {{char}} 规划下一轮。' },
+    });
+    let ledgerUpdated = false;
+    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
+        requests.push(structuredClone(messages));
+        const offeredTool = getOfferedToolName(tools);
+        if (offeredTool && offeredTool !== 'yzm_story_update_ledger') return createToolResponse(offeredTool);
+        if (offeredTool === 'yzm_story_update_ledger' && !ledgerUpdated) {
+            ledgerUpdated = true;
+            return createToolResponse(offeredTool, '{"content":"新账本"}');
+        }
+        const card = '<下轮导演卡>{{char}} 回应 {{user}} 的行动。</下轮导演卡>';
+        return { success: true, message: { role: 'assistant', content: card }, text: card, toolCalls: [] };
+    };
+
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+    assert.equal(requests[0][0].content, '为 用户 与 角色 规划下一轮。');
+    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>角色 回应 用户 的行动。</下轮导演卡>');
+    assert.equal(runtime.getCurrentDirectorCard().content, '角色 回应 用户 的行动。');
+
+    chat.push({ is_user: true, mes: '继续' });
+    const generationClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
+    assert.match(generationClone.at(-1).mes, /<下轮导演卡>角色 回应 用户 的行动。<\/下轮导演卡>/);
+    assert.doesNotMatch(generationClone.at(-1).mes, /\{\{(?:user|char)\}\}/i);
+});
+
 test('director card coexists with timed prompt tags across duplicate message text fields', async () => {
     const { memory, chat } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
