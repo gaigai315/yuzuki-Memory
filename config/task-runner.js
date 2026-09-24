@@ -97,6 +97,11 @@
     function isForegroundGenerationBusy() {
         const ctx = getContext();
         const streamingProcessor = ctx?.streamingProcessor;
+        const hasStreamingProcessorState = typeof streamingProcessor?.isFinished === 'boolean'
+            || typeof streamingProcessor?.isStopped === 'boolean';
+        const streamingProcessorActive = hasStreamingProcessorState
+            && streamingProcessor?.isFinished !== true
+            && streamingProcessor?.isStopped !== true;
         const contextGenerating = typeof ctx?.isGenerating === 'function'
             ? ctx.isGenerating() === true
             : ctx?.isGenerating === true;
@@ -114,7 +119,7 @@
             || ctx?.isStreaming === true
             || contextGenerating
             || ctx?.generationStarted === true
-            || Boolean(streamingProcessor && streamingProcessor.isFinished !== true && streamingProcessor.isStopped !== true)
+            || streamingProcessorActive
             || (typeof document !== 'undefined' && document.body?.dataset?.generating === 'true');
     }
 

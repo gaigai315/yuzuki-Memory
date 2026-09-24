@@ -261,6 +261,7 @@ function createHarness(options = {}) {
 
     return {
         chat,
+        context,
         stateRef,
         saveCalls,
         successToasts,
@@ -303,6 +304,24 @@ function createHarness(options = {}) {
         },
     };
 }
+
+test('foreground generation check ignores stale streaming processors without explicit state', () => {
+    const harness = createHarness({ activateAfterBind: false });
+
+    harness.context.streamingProcessor = {};
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), false);
+
+    harness.context.streamingProcessor = { isFinished: false, isStopped: false };
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
+
+    harness.context.streamingProcessor = { isFinished: true, isStopped: false };
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), false);
+
+    harness.emit('generation_started', 'normal', {}, false);
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
+    harness.emit('generation_ended');
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), false);
+});
 
 test('loading a chat with pending summary ranges waits for the user to resume chatting', async () => {
     const harness = createHarness({ activateAfterBind: false });
