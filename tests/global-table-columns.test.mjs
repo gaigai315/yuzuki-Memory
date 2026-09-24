@@ -242,6 +242,94 @@ test('cloud chat metadata outranks browser cache and receives current-state save
     assert.equal(saveCalls, 1);
 });
 
+test('newer manual worldbook selection recovers from local cache without replacing cloud records', () => {
+    const fallback = createFallbackState();
+    const sessionId = 'char:0:worldbook-recovery';
+    const remoteState = structuredClone(fallback);
+    remoteState.sessionId = sessionId;
+    remoteState.sessionAliases = [sessionId, 'chat:worldbook-recovery'];
+    remoteState.updatedAt = 100;
+    remoteState.manualEditedAt = 50;
+    remoteState.settings.worldbookSelection = { enabled: false, initialized: true, ids: [], updatedAt: 50 };
+    remoteState.records.character_profile = [{
+        id: 'remote_record',
+        values: { 角色名: '远端角色', 待办事项: '', 约定: '保留云端记录' },
+    }];
+    const windowChatMetadata = {
+        file_name: 'worldbook-recovery',
+        yuzukiMemory: remoteState,
+    };
+    const { storage, localStorage } = createStorageSandbox({
+        context: {
+            characterId: 0,
+            characters: [{ avatar: 'recovery.png', name: '恢复角色' }],
+        },
+        windowChatMetadata,
+        saveChatConditional: () => {},
+    });
+    const localState = structuredClone(remoteState);
+    localState.updatedAt = 200;
+    localState.manualEditedAt = 200;
+    localState.saveOrigin = 'manual';
+    localState.settings.worldbookSelection = {
+        enabled: true,
+        initialized: true,
+        ids: ['world:剧情设定'],
+        updatedAt: 200,
+    };
+    localState.records.character_profile[0].values.约定 = '不应覆盖云端记录';
+    localStorage.setItem(storage.getStorageKey(sessionId), JSON.stringify(localState));
+
+    const loaded = storage.loadState(fallback);
+
+    assert.equal(loaded.settings.worldbookSelection.enabled, true);
+    assert.deepEqual(Array.from(loaded.settings.worldbookSelection.ids), ['world:剧情设定']);
+    assert.equal(loaded.records.character_profile[0].values.约定, '保留云端记录');
+    assert.equal(windowChatMetadata.yuzukiMemory.settings.worldbookSelection.enabled, true);
+});
+
+test('unrelated newer manual edits never restore an older local worldbook selection', () => {
+    const fallback = createFallbackState();
+    const sessionId = 'char:0:worldbook-selection-order';
+    const remoteState = structuredClone(fallback);
+    remoteState.sessionId = sessionId;
+    remoteState.sessionAliases = [sessionId, 'chat:worldbook-selection-order'];
+    remoteState.updatedAt = 300;
+    remoteState.manualEditedAt = 300;
+    remoteState.settings.worldbookSelection = {
+        enabled: false,
+        initialized: true,
+        ids: [],
+        updatedAt: 300,
+    };
+    const windowChatMetadata = {
+        file_name: 'worldbook-selection-order',
+        yuzukiMemory: remoteState,
+    };
+    const { storage, localStorage } = createStorageSandbox({
+        context: {
+            characterId: 0,
+            characters: [{ avatar: 'order.png', name: '顺序角色' }],
+        },
+        windowChatMetadata,
+    });
+    const localState = structuredClone(remoteState);
+    localState.updatedAt = 500;
+    localState.manualEditedAt = 500;
+    localState.settings.worldbookSelection = {
+        enabled: true,
+        initialized: true,
+        ids: ['world:旧选择'],
+        updatedAt: 200,
+    };
+    localStorage.setItem(storage.getStorageKey(sessionId), JSON.stringify(localState));
+
+    const loaded = storage.loadState(fallback);
+
+    assert.equal(loaded.settings.worldbookSelection.enabled, false);
+    assert.deepEqual(Array.from(loaded.settings.worldbookSelection.ids), []);
+});
+
 test('global character-status columns preserve their selected section', () => {
     const { storage } = createStorageSandbox();
     storage.setGlobalTableColumns('character_status', [{

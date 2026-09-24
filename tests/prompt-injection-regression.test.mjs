@@ -193,6 +193,7 @@ test('request probe keeps foreground generation active across quiet and dry-run 
                 GENERATION_STARTED: 'generation_started',
                 GENERATION_ENDED: 'generation_ended',
                 GENERATION_STOPPED: 'generation_stopped',
+                MESSAGE_RECEIVED: 'message_received',
             },
         }),
     };
@@ -221,6 +222,11 @@ test('request probe keeps foreground generation active across quiet and dry-run 
     assert.equal(probe.getChatRequestState().foregroundGenerationActive, true);
 
     emit('generation_ended');
+    assert.equal(probe.getChatRequestState().foregroundGenerationActive, false);
+
+    emit('generation_started', 'normal', {}, false);
+    emit('generation_started', 'quiet', {}, false);
+    emit('message_received');
     assert.equal(probe.getChatRequestState().foregroundGenerationActive, false);
 });
 

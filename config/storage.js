@@ -418,6 +418,46 @@
         return newest;
     }
 
+    function getManualEditTimestamp(state) {
+        const explicit = Number(state?.manualEditedAt || 0);
+        if (explicit > 0) return explicit;
+        return state?.saveOrigin === 'manual' ? getTimestamp(state) : 0;
+    }
+
+    function getWorldbookSelectionTimestamp(state) {
+        const selection = state?.settings?.worldbookSelection;
+        const explicit = Number(selection?.updatedAt || 0);
+        return explicit > 0 ? explicit : getManualEditTimestamp(state);
+    }
+
+    function recoverNewerManualWorldbookSelection(metadataState, localStates = []) {
+        if (!metadataState || typeof metadataState !== 'object') {
+            return { state: metadataState, recovered: false };
+        }
+        const localState = localStates
+            .filter((state) => state?.settings?.worldbookSelection && typeof state.settings.worldbookSelection === 'object')
+            .sort((left, right) => getWorldbookSelectionTimestamp(right) - getWorldbookSelectionTimestamp(left))[0] || null;
+        if (!localState) return { state: metadataState, recovered: false };
+
+        const localSelectionAt = getWorldbookSelectionTimestamp(localState);
+        const metadataSelectionAt = getWorldbookSelectionTimestamp(metadataState);
+        if (!localSelectionAt || localSelectionAt <= metadataSelectionAt) {
+            return { state: metadataState, recovered: false };
+        }
+
+        return {
+            state: {
+                ...metadataState,
+                manualEditedAt: Math.max(getManualEditTimestamp(metadataState), getManualEditTimestamp(localState)),
+                settings: {
+                    ...(metadataState.settings || {}),
+                    worldbookSelection: clone(localState.settings.worldbookSelection),
+                },
+            },
+            recovered: true,
+        };
+    }
+
     function extractSessionChatId(sessionId) {
         const text = String(sessionId || '');
         if (text.startsWith('char:')) return text.split(':').slice(2).join(':');
@@ -1028,8 +1068,9 @@
 
             const metadataState = sessionId === getCurrentSessionId() ? readChatMetadataState() : null;
             const compatibleMetadata = isMigratableChatMetadataState(metadataState, sessionId) ? metadataState : null;
+            const recoveredMetadata = recoverNewerManualWorldbookSelection(compatibleMetadata, localStates);
             const branchParentState = compatibleMetadata ? null : loadBranchParentState(sessionId);
-            const sourceState = compatibleMetadata || branchParentState || pickBestState(localStates);
+            const sourceState = recoveredMetadata.state || branchParentState || pickBestState(localStates);
             const normalized = normalizeState(sourceState ? stampSession(sourceState, sessionId) : null, fallbackState);
             const storyDirectorEnabledNeedsMigration = !!sourceState
                 && typeof sourceState.storyDirector?.enabled !== 'boolean';
@@ -1040,6 +1081,13 @@
                 saveState(normalized, fallbackState, sessionId, {
                     force: true,
                     saveOrigin: 'migration',
+                    immediate: true,
+                    allowDuringSwitch: true,
+                });
+            } else if (recoveredMetadata.recovered) {
+                saveState(normalized, fallbackState, sessionId, {
+                    force: true,
+                    saveOrigin: 'worldbook-selection-recovery',
                     immediate: true,
                     allowDuringSwitch: true,
                 });
@@ -1123,7 +1171,7 @@
                 ? writeChatMetadataState(payload, { immediate: options.force || options.immediate })
                 : false;
             const localSaved = tryWritePayloadToLocalStorage([getPrimaryStorageKey(sessionId)].filter(Boolean), payload, sessionId);
-            return sessionId === getCurrentSessionId() ? metadataSaved : localSaved;
+            return sessionId === getCurrentSessionId() ? (metadataSaved || localSaved) : localSaved;
         } catch (error) {
             console.warn('[yuzuki-Memory] Failed to save chat state.', error);
             return false;

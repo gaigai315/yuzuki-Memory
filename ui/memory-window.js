@@ -11816,11 +11816,17 @@
             initialized: false,
             ids: [],
             entryIdsBySource: {},
+            updatedAt: 0,
         };
     }
 
     function persistTaskWorldbookSelection(selection) {
-        saveState({ force: true, saveOrigin: 'manual' });
+        if (!selection) return null;
+        const saved = saveState({ force: true, saveOrigin: 'manual' });
+        if (!saved) {
+            memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
+            return null;
+        }
         dispatchManualStateUpdated({ source: 'worldbook-selection' });
         return selection;
     }
@@ -11925,7 +11931,7 @@
 
         const header = createPluginConfigRow(
             '任务世界书',
-            '勾选后，手动/自动追溯、总结和优化任务会额外读取下方选中的酒馆世界书。',
+            '仅对当前聊天生效。勾选后，手动/自动追溯、总结和优化任务会额外读取下方选中的酒馆世界书。',
             'fa-solid fa-book-atlas',
             createConfigSwitch(selection.enabled, 'taskWorldbookEnabled')
         );
@@ -12148,7 +12154,12 @@
             cancelButton.addEventListener('click', () => closeModal({ saved: false, entryIds: [] }));
             confirmButton.addEventListener('click', () => {
                 const entryIds = choices.filter((input) => input.checked).map((input) => input.value);
-                saveTaskWorldbookEntrySelection(source, entryIds);
+                const saved = saveTaskWorldbookEntrySelection(source, entryIds);
+                if (!saved) {
+                    showTaskToast('当前聊天尚未就绪，任务世界书选择未保存。', 'error');
+                    closeModal({ saved: false, entryIds: [] });
+                    return;
+                }
                 closeModal({ saved: true, entryIds });
             });
             updateSelectionMeta();
@@ -17853,7 +17864,11 @@
                             showTaskToast('当前会话尚未就绪，剧情规划开关未保存。', 'error');
                         }
                     } else if (pluginSettingKey === 'taskWorldbookEnabled') {
-                        saveTaskWorldbookSelection({ enabled: isOn, initialized: getTaskWorldbookSelection().initialized });
+                        const saved = saveTaskWorldbookSelection({ enabled: isOn, initialized: getTaskWorldbookSelection().initialized });
+                        if (!saved) {
+                            setConfigSwitchState(configSwitch, getTaskWorldbookSelection().enabled);
+                            showTaskToast('当前聊天尚未就绪，任务世界书开关未保存。', 'error');
+                        }
                         void refreshTaskWorldbookList(root);
                     } else if (autoSummarySettingKey) {
                         updateAutoSummarySetting(autoSummarySettingKey, isOn);
@@ -17894,7 +17909,9 @@
                     if (target.checked) {
                         void chooseTaskWorldbookEntries(root, source);
                     } else {
-                        saveTaskWorldbookSourceSelection(source, false);
+                        if (!saveTaskWorldbookSourceSelection(source, false)) {
+                            showTaskToast('当前聊天尚未就绪，任务世界书选择未保存。', 'error');
+                        }
                         void refreshTaskWorldbookList(root);
                     }
                     return;

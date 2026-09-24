@@ -352,6 +352,24 @@ test('background generation end events never release an active foreground summar
     assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 200);
 });
 
+test('final message receipt releases a stale foreground lock when a background end event is missing', async () => {
+    const harness = createHarness({ activateAfterBind: false });
+
+    harness.chat.push({ is_user: true, name: '测试用户', mes: '继续当前剧情' });
+    harness.emit('message_sent');
+    harness.emit('generation_started', 'normal', {}, false);
+    harness.chat.push({ is_user: false, name: '测试角色', mes: '已经完成的正文' });
+    harness.emit('character_message_rendered');
+    harness.emit('generation_started', 'quiet', {}, false);
+    harness.emit('message_received');
+
+    harness.advance();
+    await harness.runNextTimer();
+
+    assert.equal(harness.generatedCount, 1);
+    assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 200);
+});
+
 function createSummaryRecord({
     id,
     start,

@@ -4366,6 +4366,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 markLatestAssistantMessageActivity();
                 armAutoTaskAfterGeneration(callbacks);
             };
+            const onMessageReceived = () => {
+                foregroundGenerationActive = false;
+                onCharacterRendered();
+            };
             const activateCurrentSession = () => {
                 const currentSessionId = getCurrentSessionId();
                 if (currentSessionId && currentSessionId !== autoTaskSessionId) {
@@ -4409,10 +4413,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             };
             bindEvents([
                 eventTypes.CHARACTER_MESSAGE_RENDERED,
-                eventTypes.MESSAGE_RECEIVED,
                 'character_message_rendered',
-                'message_received',
             ], onCharacterRendered);
+            bindEvents([eventTypes.MESSAGE_RECEIVED, 'message_received'], onMessageReceived);
             bindEvents([eventTypes.MESSAGE_SENT, 'message_sent'], activateCurrentSession);
             bindEvents([eventTypes.GENERATION_STARTED, 'generation_started'], onGenerationStarted);
             bindEvents([

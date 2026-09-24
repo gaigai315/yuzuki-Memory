@@ -215,6 +215,11 @@
                 foregroundGenerationActive = false;
             });
         });
+        [...new Set([eventTypes?.MESSAGE_RECEIVED, 'message_received'].filter(Boolean))].forEach((eventName) => {
+            eventSource.on(eventName, () => {
+                foregroundGenerationActive = false;
+            });
+        });
         eventSource.on('js_generation_started', markJsGenerationStarted);
         eventSource.on('js_generation_ended', markJsGenerationFinished);
     }

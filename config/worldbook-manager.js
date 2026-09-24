@@ -664,9 +664,10 @@
                     initialized: raw.initialized === true,
                     ids: Array.isArray(raw.ids) ? raw.ids.map(String).filter(Boolean) : [],
                     entryIdsBySource: normalizeEntrySelectionMap(raw.entryIdsBySource || raw.entrySelections),
+                    updatedAt: Math.max(0, Math.round(Number(raw.updatedAt) || 0)),
                 };
             }
-            return { enabled: false, initialized: false, ids: [], entryIdsBySource: {} };
+            return { enabled: false, initialized: false, ids: [], entryIdsBySource: {}, updatedAt: 0 };
         }
 
         applySelectionState(state, nextSelection = {}) {
@@ -679,6 +680,9 @@
                 entryIdsBySource: normalizeEntrySelectionMap(
                     nextSelection.entryIdsBySource === undefined ? current.entryIdsBySource : nextSelection.entryIdsBySource
                 ),
+                updatedAt: nextSelection.updatedAt === undefined
+                    ? Date.now()
+                    : Math.max(0, Math.round(Number(nextSelection.updatedAt) || 0)),
             };
             state.settings[SETTINGS_KEY] = selection;
             return selection;
