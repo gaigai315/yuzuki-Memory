@@ -29,11 +29,37 @@ function createTrackBCard(roles, module, plot = '推进支线') {
         + '\n所属模块：' + module + '\n剧情推演：' + plot + '\n</下轮导演卡>';
 }
 
+function readSection(messages, title, parseJson = true) {
+    const prefix = `【${title}】\n`;
+    const message = messages.find((item) => item.role === 'system' && item.content?.startsWith(prefix));
+    assert.ok(message, `${title} must be present before requesting the model`);
+    const content = message.content.slice(prefix.length);
+    return parseJson ? JSON.parse(content) : content;
+}
+
 function readContext(messages) {
-    const prefix = '【本轮完整资料】\n';
-    const message = messages.find((item) => item.content?.startsWith(prefix));
-    assert.ok(message, 'full context must be present before requesting the model');
-    return JSON.parse(message.content.slice(prefix.length));
+    const profiles = readSection(messages, '角色卡与用户卡信息');
+    const worldbooks = readSection(messages, '世界书信息', false);
+    const memory = readSection(messages, '全部启用表格（含总结）与向量召回');
+    const chat = readSection(messages, '最近剧情正文');
+    const director = readSection(messages, '导演账本与本轮核验信息');
+    return {
+        profiles,
+        worldbooks,
+        tables: memory.tables,
+        vectors: memory.vectors,
+        chat,
+        ledger: director.ledger,
+        anchor: director.anchor,
+        actualTrackBReview: director.actualTrackBReview,
+    };
+}
+
+function readDirectorRules(messages) {
+    const message = messages.find((item) => item.role === 'system'
+        && item.content?.startsWith('所选剧情导演提示词决定剧情规则'));
+    assert.ok(message, 'director runtime rules must be present before requesting the model');
+    return message.content;
 }
 
 function isReview(messages) {
@@ -313,6 +339,19 @@ test('director prepares all data before request one and saves only the reviewed 
     assert.equal(getState().storyDirector.ledger, '新账本');
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>推进支线。</下轮导演卡>');
     assert.equal(getState().storyDirector.status, 'ready');
+    assert.deepEqual(requests[0].map((message) => message.role), [
+        'system', 'system', 'system', 'system', 'system', 'system', 'system', 'user',
+    ]);
+    assert.equal(requests[0][0].content, 'DEFAULT_STORY_DIRECTOR_PROMPT');
+    assert.match(requests[0][1].content, /^【角色卡与用户卡信息】/);
+    assert.match(requests[0][2].content, /^【世界书信息】/);
+    assert.match(requests[0][3].content, /^【全部启用表格（含总结）与向量召回】/);
+    assert.match(requests[0][4].content, /^【最近剧情正文】/);
+    assert.match(requests[0][5].content, /^所选剧情导演提示词决定剧情规则/);
+    assert.match(requests[0][6].content, /^【导演账本与本轮核验信息】/);
+    assert.equal(requests[0].at(-1).content, '第一轮：核验与起草。先阅读所有给出的数据，根据后台剧情导演中枢规则，拟定下一轮导演卡草案与导演账本，通过提交工具一次交付三个字段。');
+    assert.equal(requests[0].filter((message) => message.role === 'user').length, 1);
+    assert.doesNotMatch(JSON.stringify(requests[0]), /【本轮完整资料】/);
     const context = readContext(requests[0]);
     assert.match(context.profiles.user.persona, /用户卡中的背景资料/);
     assert.match(context.profiles.characters[0].description, /角色卡中的人物描述/);
@@ -530,15 +569,13 @@ test('a generated Track B card is not recorded as an actual event before正文 u
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
-    assert.match(requests[0][1].content, /严禁调用以下轨道B已经发生过的历史（近10轮）/);
-    assert.match(requests[0][1].content, /硬性排除清单，只能用于避重/);
-    assert.match(requests[0][1].content, /严禁照抄、改写、同义替换、换角色换地点或换皮复用/);
-    assert.match(requests[0][1].content, /优先选择出现次数最少且不与上一次重复的模块/);
-    assert.match(requests[0][1].content, /连续4次未出现时强制补位/);
-    assert.match(requests[0][1].content, /最近3次调用过的NPC或势力/);
-    assert.match(requests[0][1].content, /避免复用近期相同或高度相似的地点、行为与事件主题/);
-    assert.match(requests[0][1].content, /不得把导演卡签发的三个候选方向直接当成已发生事件/);
-    assert.match(requests[0][1].content, /不得因当前商战、权谋或其他主线题材反复回落到同类推进/);
+    const rules = readDirectorRules(requests[0]);
+    assert.match(rules, /严禁调用以下轨道B已经发生过的历史（近10轮）/);
+    assert.match(rules, /由插件维护，只用于识别已经发生的轨道B历史/);
+    assert.match(rules, /不得在输出 ledger 中新增、删除或改写该清单/);
+    assert.match(rules, /不得把其中任何事件直接当作下一轮候选/);
+    assert.match(rules, /不得把导演卡签发的三个候选方向直接当成已发生事件/);
+    assert.doesNotMatch(rules, /优先选择出现次数最少|连续4次未出现|最近3次调用|跨日不得|所选模块必须落实/);
     assert.doesNotMatch(getState().storyDirector.ledger, /轨道B调用历史|城西马场|马会结束/);
     assert.match(getState().storyDirector.ledger, /【信息隔离】/);
 });
@@ -1207,8 +1244,8 @@ test('manual replan after deleting the last assistant sees all visible dialogue 
     assert.equal(result.success, true);
     assert.equal(getState().storyDirector.source.role, 'user');
     assert.equal(getState().storyDirector.source.messageIndex, 4);
-    assert.match(requests[0][1].content, /最新用户消息/);
-    assert.match(requests[0][1].content, /对这条 User 消息的首次回应/);
+    assert.match(readDirectorRules(requests[0]), /最新用户消息/);
+    assert.match(readDirectorRules(requests[0]), /对这条 User 消息的首次回应/);
     assert.equal(requests.length, 2);
     const contextResult = readContext(requests[0]);
     assert.deepEqual(contextResult.tables.map((table) => table.name), ['记忆总结', '角色档案']);
