@@ -197,17 +197,51 @@ test('story director enabled state is isolated per session and legacy global val
     assert.equal(storage.loadState(fallback, disabledSessionId).storyDirector.enabled, false);
 });
 
-test('cloud chat metadata outranks browser cache and receives current-state saves', () => {
+test('cloud chat metadata outranks browser cache for all tables and receives current-state saves', () => {
     const fallback = createFallbackState();
     const sessionId = 'char:0:cloud-chat';
     const remoteState = structuredClone(fallback);
     remoteState.sessionId = sessionId;
     remoteState.sessionAliases = [sessionId, 'chat:cloud-chat'];
     remoteState.updatedAt = 10;
-    remoteState.records.character_profile = [{
-        id: 'remote_record',
-        values: { 角色名: '远端角色', 待办事项: '', 约定: '远端数据' },
-    }];
+    remoteState.tables = [
+        { id: 'plot_summary', name: '剧情摘要', icon: 'timeline', columns: ['#主线', '#支线'], hidden: false },
+        ...remoteState.tables,
+        { id: 'item_tracking', name: '物品追踪', icon: 'item', columns: ['物品名称', '状态'], hidden: false },
+        { id: 'world_setting', name: '世界设定', icon: 'world', columns: ['设定名', '详细说明'], hidden: false },
+        { id: 'memory_summary', name: '记忆总结', icon: 'memory_book', columns: ['总结标题', '总结内容'], hidden: false },
+        { id: 'custom_table', name: '自定义表', icon: 'chart_bar', columns: ['主键', '内容'], hidden: false },
+    ];
+    remoteState.records = {
+        plot_summary: [{ id: 'remote_plot', values: { 主线: '云端剧情摘要', 支线: '' } }],
+        character_profile: [{
+            id: 'remote_profile',
+            values: { 角色名: '远端角色', 待办事项: '', 约定: '云端角色档案' },
+        }],
+        character_status: [{
+            id: 'remote_status',
+            values: { 角色名: '远端角色', 住址: '云端住址', 好感度: '', 疲劳值: '', 力量: '', 敏捷: '', 奇遇: '' },
+        }],
+        item_tracking: [{ id: 'remote_item', values: { 物品名称: '远端物品', 状态: '云端物品状态' } }],
+        world_setting: [{ id: 'remote_world', values: { 设定名: '远端设定', 详细说明: '云端世界设定' } }],
+        memory_summary: [{ id: 'remote_summary', values: { 总结标题: '远端总结', 总结内容: '云端记忆总结' } }],
+        custom_table: [{ id: 'remote_custom', values: { 主键: '远端自定义', 内容: '云端自定义表' } }],
+    };
+    remoteState.floorLedger = {
+        version: 1,
+        id: 'remote_floor_ledger',
+        tableShape: 'remote-shape',
+        baselineRecords: {
+            plot_summary: structuredClone(remoteState.records.plot_summary),
+            character_profile: structuredClone(remoteState.records.character_profile),
+            character_status: structuredClone(remoteState.records.character_status),
+            item_tracking: structuredClone(remoteState.records.item_tracking),
+            world_setting: structuredClone(remoteState.records.world_setting),
+            custom_table: structuredClone(remoteState.records.custom_table),
+        },
+        entries: {},
+        activeEntries: [],
+    };
     const windowChatMetadata = {
         file_name: 'cloud-chat',
         yuzukiMemory: remoteState,
@@ -225,20 +259,43 @@ test('cloud chat metadata outranks browser cache and receives current-state save
     });
     const staleLocalState = structuredClone(remoteState);
     staleLocalState.updatedAt = 999;
-    staleLocalState.records.character_profile[0].values.约定 = '浏览器旧缓存';
+    Object.values(staleLocalState.records).forEach((records) => {
+        Object.keys(records[0].values).forEach((column) => {
+            if (records[0].values[column]) records[0].values[column] = `浏览器旧缓存:${column}`;
+        });
+    });
+    staleLocalState.floorLedger.id = 'stale_browser_floor_ledger';
     localStorage.setItem(storage.getStorageKey(sessionId), JSON.stringify(staleLocalState));
 
     assert.equal(storage.getCurrentSessionId(), sessionId);
     const loaded = storage.loadState(fallback);
-    assert.equal(loaded.records.character_profile[0].values.约定, '远端数据');
+    const expectedRemoteValues = [
+        ['plot_summary', '主线', '云端剧情摘要'],
+        ['character_profile', '约定', '云端角色档案'],
+        ['character_status', '住址', '云端住址'],
+        ['item_tracking', '状态', '云端物品状态'],
+        ['world_setting', '详细说明', '云端世界设定'],
+        ['memory_summary', '总结内容', '云端记忆总结'],
+        ['custom_table', '内容', '云端自定义表'],
+    ];
+    expectedRemoteValues.forEach(([tableId, column, value]) => {
+        assert.equal(loaded.records[tableId][0].values[column], value, `${tableId} must load from chat metadata`);
+    });
+    assert.equal(loaded.floorLedger.id, 'remote_floor_ledger');
 
-    loaded.records.character_profile[0].values.约定 = '删楼对账后的远端数据';
+    expectedRemoteValues.forEach(([tableId, column]) => {
+        loaded.records[tableId][0].values[column] = `删楼对账后:${tableId}`;
+    });
+    loaded.floorLedger.id = 'reconciled_floor_ledger';
     assert.equal(storage.saveState(loaded, fallback, undefined, {
         force: true,
         immediate: true,
         saveOrigin: 'floor-ledger',
     }), true);
-    assert.equal(windowChatMetadata.yuzukiMemory.records.character_profile[0].values.约定, '删楼对账后的远端数据');
+    expectedRemoteValues.forEach(([tableId, column]) => {
+        assert.equal(windowChatMetadata.yuzukiMemory.records[tableId][0].values[column], `删楼对账后:${tableId}`);
+    });
+    assert.equal(windowChatMetadata.yuzukiMemory.floorLedger.id, 'reconciled_floor_ledger');
     assert.equal(saveCalls, 1);
 });
 
