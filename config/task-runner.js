@@ -78,6 +78,7 @@
     let autoTaskAbortController = null;
     let autoTaskRequestPromise = null;
     let autoTaskInterruptedByForeground = false;
+    let backgroundGenerationEventDepth = 0;
     let summaryDeletionSyncTimer = null;
     let summaryDeletionSyncRevision = 0;
     let summaryDeletionSyncRunning = false;
@@ -4373,7 +4374,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 autoTaskSessionActivated = true;
             };
             const onGenerationStarted = (type, options, dryRun) => {
-                if (!isForegroundGenerationEvent(type, options, dryRun)) return undefined;
+                if (!isForegroundGenerationEvent(type, options, dryRun)) {
+                    backgroundGenerationEventDepth += 1;
+                    return undefined;
+                }
                 activateCurrentSession();
                 foregroundGenerationActive = true;
                 window.clearTimeout(autoSummaryTimer);
@@ -4388,6 +4392,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 return activeRequest?.then?.(() => undefined, () => undefined);
             };
             const onGenerationFinished = () => {
+                if (backgroundGenerationEventDepth > 0) {
+                    backgroundGenerationEventDepth -= 1;
+                    return;
+                }
                 foregroundGenerationActive = false;
                 markLatestAssistantMessageActivity();
                 armAutoTaskAfterGeneration(callbacks);
@@ -4399,7 +4407,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 reconcileStateAfterChatDeletion(chatLength);
                 refreshAutoTaskBaseline();
             };
-            if (eventTypes.CHARACTER_MESSAGE_RENDERED) eventSource.on?.(eventTypes.CHARACTER_MESSAGE_RENDERED, onCharacterRendered);
+            bindEvents([
+                eventTypes.CHARACTER_MESSAGE_RENDERED,
+                eventTypes.MESSAGE_RECEIVED,
+                'character_message_rendered',
+                'message_received',
+            ], onCharacterRendered);
             bindEvents([eventTypes.MESSAGE_SENT, 'message_sent'], activateCurrentSession);
             bindEvents([eventTypes.GENERATION_STARTED, 'generation_started'], onGenerationStarted);
             bindEvents([

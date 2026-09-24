@@ -79,6 +79,7 @@ function createHarness(options = {}) {
         eventSource,
         eventTypes: {
             CHARACTER_MESSAGE_RENDERED: 'character_message_rendered',
+            MESSAGE_RECEIVED: 'message_received',
             MESSAGE_SENT: 'message_sent',
             GENERATION_STARTED: 'generation_started',
             GENERATION_ENDED: 'generation_ended',
@@ -312,6 +313,41 @@ test('loading a chat with pending summary ranges waits for the user to resume ch
     assert.equal(harness.pendingTimerCount, 1);
     harness.advance();
     await harness.runNextTimer();
+    assert.equal(harness.generatedCount, 1);
+    assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 200);
+});
+
+test('background generation end events never release an active foreground summary lock', async () => {
+    const harness = createHarness({ activateAfterBind: false });
+
+    harness.chat.push({ is_user: true, name: '测试用户', mes: '继续当前剧情' });
+    harness.emit('message_sent');
+    harness.emit('generation_started', 'normal', {}, false);
+    harness.chat.push({ is_user: false, name: '测试角色', mes: '仍在流式生成中的正文' });
+    harness.emit('character_message_rendered');
+
+    harness.emit('generation_started', 'quiet', {}, false);
+    harness.emit('generation_ended');
+    assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 0);
+    assert.equal(harness.pendingTimerCount, 1);
+
+    harness.advance();
+    await harness.runNextTimer();
+    assert.equal(harness.generatedCount, 0, 'quiet generation completion must not start the queued summary');
+    assert.equal(harness.pendingTimerCount, 1, 'summary must remain queued behind the foreground response');
+
+    harness.emit('generation_started', 'normal', { dry_run: true }, true);
+    harness.emit('generation_ended');
+    harness.advance();
+    await harness.runNextTimer();
+    assert.equal(harness.generatedCount, 0, 'dry-run completion must not start the queued summary');
+
+    harness.chat.at(-1).mes = '已经完整提交的正文';
+    harness.emit('message_received');
+    harness.emit('generation_ended');
+    harness.advance();
+    await harness.runNextTimer();
+
     assert.equal(harness.generatedCount, 1);
     assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 200);
 });

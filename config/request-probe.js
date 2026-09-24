@@ -19,6 +19,7 @@
     let lastChatRequestFinishedAt = 0;
     let generationEventsBound = false;
     let dryRunGenerationDepth = 0;
+    let backgroundGenerationEventDepth = 0;
     let dryRunCaptureUntil = 0;
     let foregroundGenerationActive = false;
     let generationActivitySequence = 0;
@@ -194,12 +195,23 @@
                 return;
             }
             const generationType = String(args[0] || '').toLowerCase();
-            foregroundGenerationActive = generationType !== 'quiet';
-            if (foregroundGenerationActive) foregroundGenerationSequence = ++generationActivitySequence;
+            if (generationType === 'quiet') {
+                backgroundGenerationEventDepth += 1;
+                return;
+            }
+            foregroundGenerationActive = true;
+            foregroundGenerationSequence = ++generationActivitySequence;
         });
         [stoppedEvent, endedEvent].filter(Boolean).forEach((eventName) => {
             eventSource.on(eventName, () => {
-                if (dryRunGenerationDepth > 0) markDryRunGenerationFinished();
+                if (dryRunGenerationDepth > 0) {
+                    markDryRunGenerationFinished();
+                    return;
+                }
+                if (backgroundGenerationEventDepth > 0) {
+                    backgroundGenerationEventDepth -= 1;
+                    return;
+                }
                 foregroundGenerationActive = false;
             });
         });
