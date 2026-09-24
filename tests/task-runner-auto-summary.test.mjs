@@ -17,6 +17,7 @@ function createHarness(options = {}) {
     const errorToasts = [];
     const promptedTasks = [];
     const resultConfirmations = [];
+    const failurePayloads = [];
     const updatePayloads = [];
     const vectorSyncCalls = [];
     const worldbookSyncCalls = [];
@@ -150,6 +151,9 @@ function createHarness(options = {}) {
                     supportsAssistantPrefill: () => false,
                     generateWithTavern: async () => {
                         generatedCount += 1;
+                        if (typeof options.generateWithTavern === 'function') {
+                            return options.generateWithTavern(generatedCount, summaryResponse);
+                        }
                         if (generatedCount === 1 && options.replaceStateDuringRequest === true) {
                             stateRef.current = clone(stateRef.current);
                         }
@@ -221,6 +225,11 @@ function createHarness(options = {}) {
             }
             return { action: 'confirm', text: result.text };
         },
+        onAutoTaskFailure(payload) {
+            failurePayloads.push(clone(payload));
+            if (typeof options.onAutoTaskFailure === 'function') return options.onAutoTaskFailure(payload);
+            return false;
+        },
         async syncSummaryToVectorBook(syncOptions = {}) {
             vectorSyncCalls.push({ ...syncOptions });
             return { success: true, count: stateRef.current.records.memory_summary.length };
@@ -258,10 +267,12 @@ function createHarness(options = {}) {
         errorToasts,
         promptedTasks,
         resultConfirmations,
+        failurePayloads,
         updatePayloads,
         vectorSyncCalls,
         worldbookSyncCalls,
         floorScope,
+        taskRunner: sandbox.window.YuzukiMemory.TaskRunner,
         get generatedCount() {
             return generatedCount;
         },
@@ -433,6 +444,33 @@ test('failed automatic summary persistence never reports task success', async ()
     assert.equal(harness.updateCount, 0);
     assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 0);
     assert.equal(harness.stateRef.current.records.memory_summary.length, 0);
+});
+
+test('explicit retry immediately requeues a failed automatic task for the same chat', async () => {
+    const harness = createHarness({
+        generateWithTavern: (attempt, summaryResponse) => (
+            attempt === 1
+                ? { success: false, status: 400, error: 'invalid upstream response' }
+                : { success: true, text: summaryResponse }
+        ),
+    });
+
+    harness.advance();
+    await harness.runNextTimer();
+
+    assert.equal(harness.generatedCount, 1);
+    assert.equal(harness.pendingTimerCount, 0, 'a non-retryable failure must wait for the user retry');
+    assert.equal(harness.failurePayloads.length, 1);
+    assert.equal(harness.failurePayloads[0].sessionId, harness.stateRef.current.sessionId);
+    assert.equal(harness.taskRunner.retryPendingAutoTask(harness.failurePayloads[0].sessionId), true);
+    assert.equal(harness.pendingTimerCount, 1);
+
+    harness.advance();
+    await harness.runNextTimer();
+
+    assert.equal(harness.generatedCount, 2);
+    assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 200);
+    assert.equal(harness.stateRef.current.records.memory_summary.length, 1);
 });
 
 test('postponing a history summary delays the reminder without shifting its range', async () => {

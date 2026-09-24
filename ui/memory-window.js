@@ -3999,17 +3999,9 @@
         };
         close.onclick = closeDialog;
         confirm.onclick = closeDialog;
-        retry.onclick = async () => {
-            const result = await runManualStoryDirector(retry);
-            if (result?.success) {
-                closeDialog();
-                return;
-            }
-            const retryError = String(result?.error || '').trim();
-            if (retryError && content.isConnected) {
-                content.textContent = retryError;
-                content.scrollTop = 0;
-            }
+        retry.onclick = () => {
+            closeDialog();
+            void runManualStoryDirector(retry);
         };
         copy.onclick = async () => {
             const copied = await writeTextToClipboard(content.textContent || '');
@@ -7716,7 +7708,11 @@
             const cancel = options.cancelLabel
                 ? createButton(options.cancelLabel, 'yzm-api-button')
                 : null;
+            const retry = options.retryLabel
+                ? createIconButton(options.retryLabel, 'fa-solid fa-rotate-right', 'yzm-api-button yzm-api-button-primary')
+                : null;
             if (cancel) actions.append(cancel);
+            if (retry) actions.append(retry);
             actions.append(confirm);
 
             const body = document.createElement('div');
@@ -7745,6 +7741,7 @@
             };
             close.onclick = () => closeWith({ action: 'cancel', cancelled: true });
             if (cancel) cancel.onclick = () => closeWith({ action: 'cancel', cancelled: true });
+            if (retry) retry.onclick = () => closeWith({ action: 'retry', retry: true });
             confirm.onclick = () => closeWith(options.readOnly === true
                 ? { action: 'confirm' }
                 : { action: 'confirm', text: editableTextarea.value });
@@ -14634,7 +14631,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化剧情规划逻辑',
+            '优化部分重试逻辑',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -18515,7 +18512,18 @@
                     description: '以下为完整错误与模型原始回复，此次结果未写入。',
                     result: { text: String(payload.message || '未知错误') },
                     readOnly: true,
+                    retryLabel: '重试',
                     confirmLabel: '确定',
+                }).then((choice) => {
+                    if (choice?.action !== 'retry') return choice;
+                    const queued = YuzukiMemory.TaskRunner?.retryPendingAutoTask?.(payload.sessionId) === true;
+                    showTaskToast(
+                        queued
+                            ? `${payload.taskTitle || '自动任务'}已重新加入后台队列。`
+                            : '当前聊天已切换或尚未就绪，未能重新加入后台队列。',
+                        queued ? 'info' : 'warning',
+                    );
+                    return choice;
                 });
             },
             syncSummaryToVectorBook(options = {}) {

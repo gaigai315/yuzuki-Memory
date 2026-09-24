@@ -162,6 +162,22 @@
         );
     }
 
+    function retryPendingAutoTask(expectedSessionId = '') {
+        const currentSessionId = getCurrentSessionId();
+        const targetSessionId = String(expectedSessionId || '').trim();
+        if (!currentSessionId || (targetSessionId && targetSessionId !== currentSessionId)) return false;
+        if (!isAutoTaskStateReady(autoTaskCallbacks)) return false;
+
+        autoTaskSessionId = currentSessionId;
+        autoTaskSessionActivated = true;
+        autoTaskArmed = true;
+        autoTaskRetryPending = true;
+        autoTaskRetryAttempt = 0;
+        scheduleAutoSummary(autoTaskCallbacks, 0);
+        console.info('[yuzuki-Memory] 用户已将失败的自动记忆任务重新加入后台队列。');
+        return true;
+    }
+
     function isRetryableAutoTaskFailure(failure) {
         if (failure?.aborted === true) return false;
         const status = Number(failure?.status ?? failure?.upstreamError?.code);
@@ -193,7 +209,16 @@
         let handled = false;
         if (typeof callbacks.onAutoTaskFailure === 'function') {
             try {
-                const callbackResult = callbacks.onAutoTaskFailure({ task, taskTitle, message, range, retryHint, notification, detail });
+                const callbackResult = callbacks.onAutoTaskFailure({
+                    task,
+                    taskTitle,
+                    message,
+                    range,
+                    retryHint,
+                    notification,
+                    detail,
+                    sessionId: getCurrentSessionId(),
+                });
                 if (callbackResult !== false) {
                     handled = true;
                     Promise.resolve(callbackResult).catch((callbackError) => {
@@ -4459,5 +4484,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         invalidateSummariesAfterChatDeletion,
         bindAutoSummary,
         cancelPendingAutoTask,
+        retryPendingAutoTask,
     });
 })();

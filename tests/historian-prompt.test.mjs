@@ -366,6 +366,30 @@ test('manual story director action remains clickable and stops the active run on
     assert.match(memoryCssSource, /\.yzm-story-director-card-replan\.yzm-story-director-stoppable[\s\S]*?cursor: pointer/);
 });
 
+test('retry actions close failure dialogs before restarting background work', () => {
+    const directorDialog = getFunctionSource(
+        memoryWindowSource,
+        'openStoryDirectorErrorDialog',
+        'createSidebarTableItem',
+    );
+    const taskResultDialog = getFunctionSource(
+        memoryWindowSource,
+        'openTaskResultConfirmDialog',
+        'openCharacterGrowthTaskDialog',
+    );
+    const mountStart = memoryWindowSource.indexOf('function mount(');
+    const mountEnd = memoryWindowSource.indexOf('YuzukiMemory.MemoryWindow', mountStart + 1);
+    assert.notEqual(mountStart, -1, 'mount should exist');
+    assert.notEqual(mountEnd, -1, 'MemoryWindow export should follow mount');
+    const mountHandler = memoryWindowSource.slice(mountStart, mountEnd);
+
+    assert.match(directorDialog, /retry\.onclick = \(\) => \{\s*closeDialog\(\);\s*void runManualStoryDirector\(retry\);/);
+    assert.match(taskResultDialog, /options\.retryLabel/);
+    assert.match(taskResultDialog, /closeWith\(\{ action: 'retry', retry: true \}\)/);
+    assert.match(mountHandler, /retryLabel: '重试'/);
+    assert.match(mountHandler, /retryPendingAutoTask\?\.\(payload\.sessionId\)/);
+});
+
 test('story director progress indicator follows the live runtime lifecycle', () => {
     const ensureIndicator = getFunctionSource(
         memoryWindowSource,
