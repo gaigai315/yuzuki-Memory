@@ -125,13 +125,14 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /预案2\(中立\)/);
     assert.match(director.prompt, /预案3\(对抗\)/);
     assert.match(director.prompt, /若\{\{user\}\}直接跨时间或剧情推进/);
+    assert.match(director.prompt, /预案内容严禁预设\{\{user\}\}的言行或决定/);
     assert.doesNotMatch(director.prompt, /当前角色正向：顺从\/接纳\/主动/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
     assert.match(director.prompt, /所有模块权重相同/);
     assert.match(director.prompt, /近10轮中出现未出现或次数最少的模块/);
     assert.match(director.prompt, /连续4轮未出现时强制调用/);
     assert.match(director.prompt, /核对近10轮账本中的正文实际事件/);
-    assert.match(director.prompt, /禁止复用相同或高度相似的地点、行为和事件主题/);
+    assert.match(director.prompt, /禁止轨道B复用相同或高度相似的地点、行为和剧情/);
     assert.match(director.prompt, /登场角色：角色A、角色B、角色C/);
     assert.match(director.prompt, /所属模块：Module 1/);
     assert.match(director.prompt, /备选1\(直球升温\)/);
@@ -139,7 +140,7 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /敌对\/陷害\/野心\/博弈/);
     assert.match(director.prompt, /严禁因为当前主线[^\n]*压制情感、社交、日常或第三方支线/);
     assert.match(director.prompt, /用户独处：否/);
-    assert.match(director.prompt, /独处状态为是[^\n]*跳过[^\n]*轨道B[^\n]*2个或2个以上/);
+    assert.match(director.prompt, /处于独处状态[^\n]*跳过[^\n]*轨道B[^\n]*2个或2个以上/);
     assert.match(director.prompt, /外力单向穿透介入/);
     assert.doesNotMatch(director.prompt, /跳过执行轨道B/);
 });
