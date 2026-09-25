@@ -118,7 +118,8 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.equal(director.builtin, true);
     assert.match(director.prompt, /<下轮导演卡>/);
     assert.match(director.prompt, /最后一条发言为user方仅输出分支A/);
-    assert.match(director.prompt, /最后一条发言为Assistant方仅输出分支B/);
+    assert.match(director.prompt, /最后一条发言为Assistant方,仅输出分支B/);
+    assert.match(director.prompt, /根据\{\{user\}\}可能产生的反应,预演其他角色\/群体反应/);
     assert.match(director.prompt, /导演卡职责仅限于确立“宏观博弈走向\/策略态度”/);
     assert.match(director.prompt, /所有的预案只输出策略标签\(8~20字以内\)/);
     assert.match(director.prompt, /预案1\(正向\)/);
