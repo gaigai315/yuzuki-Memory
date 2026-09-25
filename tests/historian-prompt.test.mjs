@@ -107,6 +107,21 @@ test('built-in historian remains available outside prompt schemes', () => {
     assert.match(defaultHistorian.prompt, /data extraction, summarization, and structuring engine/);
 });
 
+test('built-in character status prompt remains available with its growth task prompt', () => {
+    const sandbox = createSandbox();
+    const library = sandbox.window.YuzukiMemory.PromptLibrary;
+    const [characterStatusPrompt] = library.getDefaultCharacterStatusPrompts();
+    const merged = library.mergeCharacterStatusPrompts([]);
+
+    assert.equal(characterStatusPrompt.id, 'yuzuki_default_character_status_prompt_v1');
+    assert.equal(characterStatusPrompt.builtin, true);
+    assert.match(characterStatusPrompt.prompt, /只允许更新角色状态表“头部信息”和“状态总览”/);
+    assert.match(characterStatusPrompt.prompt, /禁止更新基础属性和事务分组/);
+    assert.match(characterStatusPrompt.growthPrompt, /角色属性成长任务设计助手/);
+    assert.equal(merged.length, 1);
+    assert.equal(merged[0].id, characterStatusPrompt.id);
+});
+
 test('built-in story director remains independent from prompt schemes', () => {
     const sandbox = createSandbox();
     const library = sandbox.window.YuzukiMemory.PromptLibrary;
