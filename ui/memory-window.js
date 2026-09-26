@@ -385,6 +385,7 @@
             characterStatusPromptId: '',
             storyDirector: {
                 enabled: false,
+                enabledUpdatedAt: 0,
                 ledger: '',
                 pendingCard: '',
                 source: null,
@@ -2650,6 +2651,7 @@
         state.storyDirector = {
             ...director,
             enabled,
+            enabledUpdatedAt: Date.now(),
             pendingCard: enabled ? String(director.pendingCard || '') : '',
             source: enabled && director.source && typeof director.source === 'object' ? director.source : null,
             status: enabled

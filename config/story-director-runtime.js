@@ -563,6 +563,7 @@
             : normalizeMessageCards(latest.storyDirector?.messageCards);
         latest.storyDirector = {
             enabled: latest.storyDirector?.enabled === true,
+            enabledUpdatedAt: Math.max(0, Math.round(Number(latest.storyDirector?.enabledUpdatedAt) || 0)),
             ledger: sanitizeDirectorLedger(nextDirector?.ledger),
             pendingCard: String(nextDirector?.pendingCard || ''),
             source: nextDirector?.source && typeof nextDirector.source === 'object' ? { ...nextDirector.source } : null,

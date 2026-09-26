@@ -340,6 +340,7 @@ test('story director switch is stored in the current chat state instead of globa
     );
 
     assert.ok(updateHandler.includes('state.storyDirector = {'));
+    assert.ok(updateHandler.includes('enabledUpdatedAt: Date.now()'));
     assert.ok(updateHandler.includes('saveState({ force: true })'));
     assert.doesNotMatch(updateHandler, /GlobalSettings|updatePluginSetting/);
     assert.ok(configPanel.includes('getStoryDirectorEnabled()'));

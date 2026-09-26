@@ -430,6 +430,11 @@
         return explicit > 0 ? explicit : getManualEditTimestamp(state);
     }
 
+    function getStoryDirectorEnabledTimestamp(state) {
+        const explicit = Number(state?.storyDirector?.enabledUpdatedAt || 0);
+        return explicit > 0 ? explicit : 0;
+    }
+
     function recoverNewerManualWorldbookSelection(metadataState, localStates = []) {
         if (!metadataState || typeof metadataState !== 'object') {
             return { state: metadataState, recovered: false };
@@ -452,6 +457,47 @@
                 settings: {
                     ...(metadataState.settings || {}),
                     worldbookSelection: clone(localState.settings.worldbookSelection),
+                },
+            },
+            recovered: true,
+        };
+    }
+
+    function recoverNewerStoryDirectorEnabled(metadataState, localStates = []) {
+        if (!metadataState || typeof metadataState !== 'object') {
+            return { state: metadataState, recovered: false };
+        }
+        const localState = localStates
+            .filter((state) => typeof state?.storyDirector?.enabled === 'boolean')
+            .sort((left, right) => getStoryDirectorEnabledTimestamp(right) - getStoryDirectorEnabledTimestamp(left))[0] || null;
+        if (!localState) return { state: metadataState, recovered: false };
+
+        const localEnabledAt = getStoryDirectorEnabledTimestamp(localState);
+        const metadataEnabledAt = getStoryDirectorEnabledTimestamp(metadataState);
+        if (!localEnabledAt || localEnabledAt <= metadataEnabledAt) {
+            return { state: metadataState, recovered: false };
+        }
+
+        const enabled = localState.storyDirector.enabled === true;
+        const metadataDirector = metadataState.storyDirector && typeof metadataState.storyDirector === 'object'
+            ? metadataState.storyDirector
+            : {};
+        return {
+            state: {
+                ...metadataState,
+                manualEditedAt: Math.max(getManualEditTimestamp(metadataState), getManualEditTimestamp(localState)),
+                storyDirector: {
+                    ...metadataDirector,
+                    enabled,
+                    enabledUpdatedAt: localEnabledAt,
+                    pendingCard: enabled ? String(metadataDirector.pendingCard || '') : '',
+                    source: enabled && metadataDirector.source && typeof metadataDirector.source === 'object'
+                        ? metadataDirector.source
+                        : null,
+                    status: enabled
+                        ? (metadataDirector.status === 'disabled' ? 'idle' : String(metadataDirector.status || 'idle'))
+                        : 'disabled',
+                    lastError: enabled ? String(metadataDirector.lastError || '') : '',
                 },
             },
             recovered: true,
@@ -898,6 +944,7 @@
             enabled: typeof source.enabled === 'boolean'
                 ? source.enabled
                 : (options.legacyEnabled === true || fallback.enabled === true),
+            enabledUpdatedAt: Math.max(0, Math.round(Number(source.enabledUpdatedAt ?? fallback.enabledUpdatedAt) || 0)),
             ledger: String(source.ledger ?? fallback.ledger ?? ''),
             pendingCard: String(source.pendingCard ?? fallback.pendingCard ?? ''),
             source: anchor ? {
@@ -1068,9 +1115,10 @@
 
             const metadataState = sessionId === getCurrentSessionId() ? readChatMetadataState() : null;
             const compatibleMetadata = isMigratableChatMetadataState(metadataState, sessionId) ? metadataState : null;
-            const recoveredMetadata = recoverNewerManualWorldbookSelection(compatibleMetadata, localStates);
+            const recoveredWorldbook = recoverNewerManualWorldbookSelection(compatibleMetadata, localStates);
+            const recoveredStoryDirector = recoverNewerStoryDirectorEnabled(recoveredWorldbook.state, localStates);
             const branchParentState = compatibleMetadata ? null : loadBranchParentState(sessionId);
-            const sourceState = recoveredMetadata.state || branchParentState || pickBestState(localStates);
+            const sourceState = recoveredStoryDirector.state || branchParentState || pickBestState(localStates);
             const normalized = normalizeState(sourceState ? stampSession(sourceState, sessionId) : null, fallbackState);
             const storyDirectorEnabledNeedsMigration = !!sourceState
                 && typeof sourceState.storyDirector?.enabled !== 'boolean';
@@ -1084,10 +1132,12 @@
                     immediate: true,
                     allowDuringSwitch: true,
                 });
-            } else if (recoveredMetadata.recovered) {
+            } else if (recoveredWorldbook.recovered || recoveredStoryDirector.recovered) {
                 saveState(normalized, fallbackState, sessionId, {
                     force: true,
-                    saveOrigin: 'worldbook-selection-recovery',
+                    saveOrigin: recoveredWorldbook.recovered && recoveredStoryDirector.recovered
+                        ? 'session-setting-recovery'
+                        : (recoveredStoryDirector.recovered ? 'story-director-setting-recovery' : 'worldbook-selection-recovery'),
                     immediate: true,
                     allowDuringSwitch: true,
                 });

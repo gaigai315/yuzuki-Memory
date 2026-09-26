@@ -94,6 +94,7 @@ function createFallbackState() {
         records: {},
         storyDirector: {
             enabled: false,
+            enabledUpdatedAt: 0,
             ledger: '',
             pendingCard: '',
             source: null,
@@ -385,6 +386,84 @@ test('unrelated newer manual edits never restore an older local worldbook select
 
     assert.equal(loaded.settings.worldbookSelection.enabled, false);
     assert.deepEqual(Array.from(loaded.settings.worldbookSelection.ids), []);
+});
+
+test('newer local story-director toggle survives delayed chat-metadata persistence without replacing cloud records', () => {
+    const fallback = createFallbackState();
+    const sessionId = 'char:0:story-director-recovery';
+    const remoteState = structuredClone(fallback);
+    remoteState.sessionId = sessionId;
+    remoteState.sessionAliases = [sessionId, 'chat:story-director-recovery'];
+    remoteState.updatedAt = 100;
+    remoteState.storyDirector.enabled = false;
+    remoteState.storyDirector.enabledUpdatedAt = 100;
+    remoteState.storyDirector.status = 'disabled';
+    remoteState.records.character_profile = [{
+        id: 'remote_record',
+        values: { 角色名: '远端角色', 待办事项: '', 约定: '保留云端记录' },
+    }];
+    const windowChatMetadata = {
+        file_name: 'story-director-recovery',
+        yuzukiMemory: remoteState,
+    };
+    const { storage, localStorage } = createStorageSandbox({
+        context: {
+            characterId: 0,
+            characters: [{ avatar: 'director.png', name: '导演角色' }],
+        },
+        windowChatMetadata,
+        saveChatConditional: () => {},
+    });
+    const localState = structuredClone(remoteState);
+    localState.updatedAt = 300;
+    localState.manualEditedAt = 300;
+    localState.saveOrigin = 'manual';
+    localState.storyDirector.enabled = true;
+    localState.storyDirector.enabledUpdatedAt = 300;
+    localState.storyDirector.status = 'idle';
+    localState.records.character_profile[0].values.约定 = '不应覆盖云端记录';
+    localStorage.setItem(storage.getStorageKey(sessionId), JSON.stringify(localState));
+
+    const loaded = storage.loadState(fallback);
+
+    assert.equal(loaded.storyDirector.enabled, true);
+    assert.equal(loaded.storyDirector.enabledUpdatedAt, 300);
+    assert.equal(loaded.storyDirector.status, 'idle');
+    assert.equal(loaded.records.character_profile[0].values.约定, '保留云端记录');
+    assert.equal(windowChatMetadata.yuzukiMemory.storyDirector.enabled, true);
+});
+
+test('older local story-director toggle never overrides newer chat metadata', () => {
+    const fallback = createFallbackState();
+    const sessionId = 'char:0:story-director-order';
+    const remoteState = structuredClone(fallback);
+    remoteState.sessionId = sessionId;
+    remoteState.sessionAliases = [sessionId, 'chat:story-director-order'];
+    remoteState.updatedAt = 300;
+    remoteState.storyDirector.enabled = true;
+    remoteState.storyDirector.enabledUpdatedAt = 300;
+    const windowChatMetadata = {
+        file_name: 'story-director-order',
+        yuzukiMemory: remoteState,
+    };
+    const { storage, localStorage } = createStorageSandbox({
+        context: {
+            characterId: 0,
+            characters: [{ avatar: 'director-order.png', name: '导演顺序角色' }],
+        },
+        windowChatMetadata,
+    });
+    const localState = structuredClone(remoteState);
+    localState.updatedAt = 500;
+    localState.manualEditedAt = 500;
+    localState.storyDirector.enabled = false;
+    localState.storyDirector.enabledUpdatedAt = 200;
+    localStorage.setItem(storage.getStorageKey(sessionId), JSON.stringify(localState));
+
+    const loaded = storage.loadState(fallback);
+
+    assert.equal(loaded.storyDirector.enabled, true);
+    assert.equal(loaded.storyDirector.enabledUpdatedAt, 300);
 });
 
 test('global character-status columns preserve their selected section', () => {

@@ -112,6 +112,7 @@
             promptPresetId: '',
             storyDirector: {
                 enabled: false,
+                enabledUpdatedAt: 0,
                 ledger: '',
                 pendingCard: '',
                 source: null,
