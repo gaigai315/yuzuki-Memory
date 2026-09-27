@@ -1319,19 +1319,21 @@
     async function requestAgentWithTavern(messages, tools, options = {}) {
         const cleanMessages = normalizeAgentMessages(messages);
         if (!cleanMessages.length) return { success: false, error: 'Agent 消息数组为空' };
-        if (!Array.isArray(tools) || !tools.length) return { success: false, error: 'Agent 工具数组为空' };
+        const normalizedTools = Array.isArray(tools) ? tools.filter(Boolean) : [];
         try {
             const settings = await getTavernSettings();
             const config = resolveTavernConfig(settings, options);
             const payload = {
                 chat_completion_source: config.source,
                 messages: cleanMessages,
-                tools,
-                tool_choice: options.toolChoice ?? 'auto',
                 temperature: config.temperature,
                 max_tokens: config.maxTokens,
                 stream: false,
             };
+            if (normalizedTools.length) {
+                payload.tools = normalizedTools;
+                payload.tool_choice = options.toolChoice ?? 'auto';
+            }
             if (config.frequencyPenalty !== undefined) payload.frequency_penalty = config.frequencyPenalty;
             if (config.presencePenalty !== undefined) payload.presence_penalty = config.presencePenalty;
             if (config.topP !== undefined) payload.top_p = config.topP;
@@ -1364,11 +1366,13 @@
         }
         const cleanMessages = normalizeAgentMessages(messages);
         if (!cleanMessages.length) return { success: false, error: 'Agent 消息数组为空' };
-        if (!Array.isArray(tools) || !tools.length) return { success: false, error: 'Agent 工具数组为空' };
+        const normalizedTools = Array.isArray(tools) ? tools.filter(Boolean) : [];
         const payload = resolveCustomProxyPayload(config, cleanMessages, { ...options, stream: false });
         payload.stream = false;
-        payload.tools = tools;
-        payload.tool_choice = options.toolChoice ?? 'auto';
+        if (normalizedTools.length) {
+            payload.tools = normalizedTools;
+            payload.tool_choice = options.toolChoice ?? 'auto';
+        }
         const result = await postTavernAgentGenerate(payload, options);
         return { ...result, config };
     }

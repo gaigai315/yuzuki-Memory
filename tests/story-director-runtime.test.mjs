@@ -24,6 +24,27 @@ function createPlanResponse({
     return createToolResponse('yzm_story_submit_plan', JSON.stringify({ card, ledger, actualTrackB }));
 }
 
+function createTaggedPlanText({
+    card = '<下轮导演卡>推进支线。</下轮导演卡>',
+    ledger = '新账本',
+    actualTrackB = { occurred: false, roles: '', event: '' },
+} = {}) {
+    return [
+        '<剧情规划提交>',
+        card,
+        `<导演账本>${ledger ?? ''}</导演账本>`,
+        `<轨道B是否发生>${actualTrackB?.occurred === true ? '是' : '否'}</轨道B是否发生>`,
+        `<轨道B实际角色>${actualTrackB?.roles || ''}</轨道B实际角色>`,
+        `<轨道B事件摘要>${actualTrackB?.event || ''}</轨道B事件摘要>`,
+        '</剧情规划提交>',
+    ].join('\n');
+}
+
+function createTaggedPlanResponse(options = {}) {
+    const text = createTaggedPlanText(options);
+    return { success: true, message: { role: 'assistant', content: text }, text, toolCalls: [] };
+}
+
 function createTrackBCard(roles, module, plot = '推进支线') {
     return '<下轮导演卡>\n【轨道B调度指令】\n出场角色：' + roles
         + '\n所属模块：' + module + '\n剧情推演：' + plot + '\n</下轮导演卡>';
@@ -57,7 +78,7 @@ function readContext(messages) {
 
 function readDirectorRules(messages) {
     const message = messages.find((item) => item.role === 'system'
-        && item.content?.startsWith('所选剧情导演提示词决定剧情规则'));
+        && item.content?.startsWith('所选剧情导演提示词决定'));
     assert.ok(message, 'director runtime rules must be present before requesting the model');
     return message.content;
 }
@@ -220,8 +241,8 @@ function createSandbox(options = {}) {
                 requests.push(structuredClone(messages));
                 requestOptions.push({ tools: structuredClone(availableTools), ...options });
                 return isReview(messages)
-                    ? createPlanResponse()
-                    : createPlanResponse({ card: '<下轮导演卡>草案，尚未审定。</下轮导演卡>', ledger: '未审定账本' });
+                    ? createTaggedPlanResponse()
+                    : createTaggedPlanResponse({ card: '<下轮导演卡>草案，尚未审定。</下轮导演卡>', ledger: '未审定账本' });
             },
         },
     };
@@ -354,9 +375,9 @@ test('director prepares all data before request one and saves only the reviewed 
     assert.match(requests[0][2].content, /^【世界书信息】/);
     assert.match(requests[0][3].content, /^【全部启用表格（含总结）与向量召回】/);
     assert.match(requests[0][4].content, /^【最近剧情正文】/);
-    assert.match(requests[0][5].content, /^所选剧情导演提示词决定剧情规则/);
+    assert.match(requests[0][5].content, /^所选剧情导演提示词决定/);
     assert.match(requests[0][6].content, /^【导演账本与本轮核验信息】/);
-    assert.equal(requests[0].at(-1).content, '第一轮：核验与起草。先阅读所有给出的数据，根据后台剧情导演中枢规则，拟定下一轮导演卡草案与导演账本，通过提交工具一次交付三个字段。');
+    assert.equal(requests[0].at(-1).content, '第一轮：核验与起草。先阅读所有给出的数据，根据后台剧情导演中枢规则，拟定下一轮导演卡草案与导演账本，使用规定的 <剧情规划提交> 标签一次完整交付。');
     assert.equal(requests[0].filter((message) => message.role === 'user').length, 1);
     assert.doesNotMatch(JSON.stringify(requests[0]), /【本轮完整资料】/);
     const context = readContext(requests[0]);
@@ -379,9 +400,8 @@ test('director prepares all data before request one and saves only the reviewed 
     assert.match(requests[1].at(-1).content, /事件去重|同义重复|用户自主权|不为改写而改写/);
     assert.deepEqual(chat, originalChat);
     for (const options of requestOptions) {
-        assert.deepEqual(options.tools.map((tool) => tool.function.name), ['yzm_story_submit_plan']);
-        assert.equal(options.toolChoice.type, 'function');
-        assert.equal(options.toolChoice.function.name, 'yzm_story_submit_plan');
+        assert.deepEqual(options.tools, []);
+        assert.equal(Object.hasOwn(options, 'toolChoice'), false);
         assert.equal(options.emptyResponseMaxRetries, 0);
         assert.ok(options.signal);
     }
@@ -1059,18 +1079,18 @@ test('both passes reuse one context snapshot while live table edits survive the 
     assert.equal(getState().records.memory_summary[0].values.总结内容, '用户在运行中编辑了总结');
 });
 
-test('a custom API route receives two full passes with the same fixed submission contract', async () => {
+test('a custom API route receives two full passes with the same tagged submission contract', async () => {
     const { memory, requests, getState } = createSandbox();
     const preset = { id: 'director-api', model: 'director-model' };
     memory.TaskRunner.createLlmRequestSnapshot = () => ({ mode: 'custom', preset });
     memory.LlmClient.requestAgentWithTavern = () => { throw new Error('wrong API route'); };
     memory.LlmClient.requestAgentWithCustom = async (config, messages, tools, options) => {
         assert.equal(config, preset);
-        assert.equal(tools.length, 1);
-        assert.equal(options.toolChoice.function.name, 'yzm_story_submit_plan');
+        assert.equal(tools.length, 0);
+        assert.equal(Object.hasOwn(options, 'toolChoice'), false);
         assert.equal(options.emptyResponseMaxRetries, 0);
         requests.push(structuredClone(messages));
-        return createPlanResponse();
+        return createTaggedPlanResponse();
     };
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(requests.length, 2);
@@ -1114,6 +1134,17 @@ test('final plan can be delivered as a structured JSON text response', async () 
     };
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(getState().storyDirector.ledger, '新账本');
+});
+
+test('final plan can be delivered as a tagged text response without tool JSON', async () => {
+    const { memory, getState } = createSandbox();
+    memory.LlmClient.requestAgentWithTavern = async () => createTaggedPlanResponse({
+        card: '<下轮导演卡>标签定稿。</下轮导演卡>',
+        ledger: '标签账本',
+    });
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>标签定稿。</下轮导演卡>');
+    assert.equal(getState().storyDirector.ledger, '标签账本');
 });
 
 test('stopping context preparation, drafting or review immediately releases the run and ignores late output', async (t) => {

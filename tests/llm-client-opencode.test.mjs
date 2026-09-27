@@ -321,6 +321,43 @@ test('fixed-pass Tavern requests preserve the output tool and zero-retry policy'
     assert.match(result.error, /未返回文本或工具调用/);
 });
 
+test('custom agent requests can use a tagged text contract without tools', async () => {
+    const requests = [];
+    const taggedText = '<剧情规划提交><下轮导演卡>推进。</下轮导演卡><导演账本>账本</导演账本><轨道B是否发生>否</轨道B是否发生><轨道B实际角色></轨道B实际角色><轨道B事件摘要></轨道B事件摘要></剧情规划提交>';
+    const { client } = createClient(async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: taggedText } }] });
+    });
+    const result = await client.requestAgentWithCustom(openCodeConfig, [{ role: 'user', content: 'draft' }], [], {
+        emptyResponseMaxRetries: 0,
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.text, taggedText);
+    assert.equal(Object.hasOwn(requests[0], 'tools'), false);
+    assert.equal(Object.hasOwn(requests[0], 'tool_choice'), false);
+});
+
+test('Tavern agent requests can use a tagged text contract without tools', async () => {
+    const requests = [];
+    const taggedText = '<剧情规划提交><下轮导演卡>推进。</下轮导演卡><导演账本>账本</导演账本><轨道B是否发生>否</轨道B是否发生><轨道B实际角色></轨道B实际角色><轨道B事件摘要></轨道B事件摘要></剧情规划提交>';
+    const { client } = createClient(async (url, init) => {
+        if (String(url).includes('/api/settings/get')) {
+            return createResponse({ oai_settings: { chat_completion_source: 'openai', openai_model: 'test-model' } });
+        }
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: taggedText } }] });
+    });
+    const result = await client.requestAgentWithTavern([{ role: 'user', content: 'review' }], [], {
+        emptyResponseMaxRetries: 0,
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.text, taggedText);
+    assert.equal(Object.hasOwn(requests[0], 'tools'), false);
+    assert.equal(Object.hasOwn(requests[0], 'tool_choice'), false);
+});
+
 test('agent retries HTTP 200 empty responses with exponential backoff', async () => {
     const requests = [];
     const delays = [];

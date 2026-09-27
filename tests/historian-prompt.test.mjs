@@ -148,7 +148,7 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /近10轮中出现未出现或次数最少的模块/);
     assert.match(director.prompt, /连续4轮未出现时强制调用/);
     assert.match(director.prompt, /核对近10轮账本中的正文实际事件/);
-    assert.match(director.prompt, /禁止轨道B复用相同或高度相似的地点、行为和剧情/);
+    assert.match(director.prompt, /禁止轨道B复用相同的剧情/);
     assert.match(director.prompt, /登场角色：角色A、角色B、角色C/);
     assert.match(director.prompt, /所属模块：Module 1/);
     assert.match(director.prompt, /备选1\(直球升温\)/);
@@ -156,8 +156,8 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /敌对\/陷害\/野心\/博弈/);
     assert.match(director.prompt, /严禁因为当前主线[^\n]*压制情感、社交、日常或第三方支线/);
     assert.match(director.prompt, /用户独处：否/);
-    assert.match(director.prompt, /处于真性独处[^\n]*跳过[^\n]*轨道B[^\n]*2个或2个以上/);
-    assert.match(director.prompt, /处于真性独处[^\n]*不需要输出分支A\/B/);
+    assert.match(director.prompt, /处于真性独处[^\n]*跳过描写\{\{user\}\}所在场景[^\n]*主角视角生成轨道A[^\n]*不需要输出分支A\/B/);
+    assert.match(director.prompt, /通过手机或通讯设备联系的角色[^\n]*轨道B登场/);
     assert.match(director.prompt, /外力单向穿透介入/);
     assert.doesNotMatch(director.prompt, /跳过执行轨道B/);
 });
