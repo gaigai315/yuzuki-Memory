@@ -2638,12 +2638,21 @@
     }
 
     function getStoryDirectorEnabled() {
-        return getState().storyDirector?.enabled === true;
+        const runtimeEnabled = YuzukiMemory.StoryDirectorRuntime?.isStoryDirectorEnabled?.();
+        if (typeof runtimeEnabled === 'boolean') return runtimeEnabled;
+        const sessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
+        const storedState = sessionId
+            ? getStorage()?.loadState?.(createDefaultState(), sessionId)
+            : null;
+        return storedState?.storyDirector?.enabled === true;
     }
 
     function updateStoryDirectorEnabled(value) {
         const enabled = value === true;
-        const state = getState();
+        const sessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
+        if (!sessionId || getStorage()?.isSessionSwitching?.()) return false;
+        const state = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), sessionId));
+        if (!state) return false;
         const director = state.storyDirector && typeof state.storyDirector === 'object'
             ? state.storyDirector
             : {};
@@ -2659,11 +2668,18 @@
                 : 'disabled',
             lastError: enabled ? String(director.lastError || '') : '',
         };
-        const saved = saveState({ force: true });
+        const saved = getStorage()?.saveState?.(state, createDefaultState(), sessionId, {
+            force: true,
+            immediate: true,
+            saveOrigin: 'manual',
+        }) === true;
         if (!saved) {
             memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
             return false;
         }
+        loadedSessionId = sessionId;
+        memoryState = state;
+        sessionStateReady = true;
         window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
             detail: { source: 'story-director-toggle' },
         }));

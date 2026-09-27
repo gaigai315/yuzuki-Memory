@@ -328,6 +328,11 @@ test('changing or saving a story director prompt does not automatically run the 
 });
 
 test('story director switch is stored in the current chat state instead of global plugin settings', () => {
+    const readHandler = getFunctionSource(
+        memoryWindowSource,
+        'getStoryDirectorEnabled',
+        'updateStoryDirectorEnabled',
+    );
     const updateHandler = getFunctionSource(
         memoryWindowSource,
         'updateStoryDirectorEnabled',
@@ -339,13 +344,86 @@ test('story director switch is stored in the current chat state instead of globa
         'createFloatingIconStylePicker',
     );
 
+    assert.match(readHandler, /StoryDirectorRuntime\?\.isStoryDirectorEnabled/);
+    assert.doesNotMatch(readHandler, /getState\(\)\.storyDirector/);
     assert.ok(updateHandler.includes('state.storyDirector = {'));
     assert.ok(updateHandler.includes('enabledUpdatedAt: Date.now()'));
-    assert.ok(updateHandler.includes('saveState({ force: true })'));
+    assert.match(updateHandler, /loadState\?\.\(createDefaultState\(\), sessionId\)/);
+    assert.match(updateHandler, /saveOrigin: 'manual'/);
     assert.doesNotMatch(updateHandler, /GlobalSettings|updatePluginSetting/);
     assert.ok(configPanel.includes('getStoryDirectorEnabled()'));
     assert.match(configPanel, /storyDirectorEnabled/);
     assert.ok(!configPanel.includes('settings.enableStoryDirector'));
+});
+
+test('story director config switch reads and updates the runtime storage state instead of stale UI memory', () => {
+    const latestState = {
+        records: {
+            character_profile: [{ id: 'hero', values: { 角色名: '柚月' } }],
+        },
+        storyDirector: {
+            enabled: true,
+            enabledUpdatedAt: 100,
+            ledger: '保留导演账本',
+            pendingCard: '<下轮导演卡>保留卡片</下轮导演卡>',
+            source: { signature: 'assistant-1' },
+            status: 'ready',
+            lastError: '',
+        },
+    };
+    let savedState = null;
+    let savedOptions = null;
+    let cancelled = false;
+    const storage = {
+        getCurrentSessionId: () => 'chat:test',
+        isSessionSwitching: () => false,
+        loadState: () => structuredClone(latestState),
+        saveState: (state, _fallback, _sessionId, options) => {
+            savedState = structuredClone(state);
+            savedOptions = structuredClone(options);
+            return true;
+        },
+    };
+    const sandbox = {
+        result: null,
+        YuzukiMemory: {
+            StoryDirectorRuntime: {
+                isStoryDirectorEnabled: () => true,
+                cancelActiveRun: () => { cancelled = true; },
+            },
+        },
+        getStorage: () => storage,
+        createDefaultState: () => ({}),
+        prepareLoadedState: (state) => state,
+        loadedSessionId: 'chat:test',
+        memoryState: { storyDirector: { enabled: false } },
+        sessionStateReady: false,
+        Date,
+        String,
+        CustomEvent: class CustomEvent {
+            constructor(type, options) {
+                this.type = type;
+                this.detail = options?.detail;
+            }
+        },
+        window: { dispatchEvent() {} },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        getFunctionSource(memoryWindowSource, 'getStoryDirectorEnabled', 'updateStoryDirectorEnabled'),
+        getFunctionSource(memoryWindowSource, 'updateStoryDirectorEnabled', 'saveFillModeSetting'),
+        'result = { displayed: getStoryDirectorEnabled(), saved: updateStoryDirectorEnabled(false) };',
+    ].join('\n'), sandbox);
+
+    assert.equal(sandbox.result.displayed, true);
+    assert.equal(sandbox.result.saved, true);
+    assert.equal(cancelled, true);
+    assert.equal(savedState.storyDirector.enabled, false);
+    assert.equal(savedState.storyDirector.ledger, '保留导演账本');
+    assert.equal(savedState.storyDirector.pendingCard, '');
+    assert.equal(savedState.records.character_profile[0].values.角色名, '柚月');
+    assert.equal(savedOptions.immediate, true);
+    assert.equal(savedOptions.saveOrigin, 'manual');
 });
 
 test('director card can replan through the shared runner and refresh in place', () => {
