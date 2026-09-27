@@ -114,6 +114,13 @@ function createSandbox(options = {}) {
         chat,
         name1: '用户',
         name2: '角色',
+        substituteParams(text) {
+            const value = String(text || '');
+            if (typeof options.substituteParams === 'function') return options.substituteParams(value, this);
+            return value
+                .replace(/\{\{user\}\}/gi, this.name1)
+                .replace(/\{\{char\}\}/gi, this.name2);
+        },
         powerUserSettings: {
             persona_description: '用户卡中的背景资料',
         },
@@ -437,24 +444,28 @@ test('manual replan uses the currently selected story director prompt', async ()
 
 test('story director resolves user and character variables in prompts and cards', async () => {
     const { memory, chat, requests, getState } = createSandbox({
-        activePrompt: { id: 'director', prompt: '为 {{user}} 与 {{char}} 规划下一轮。' },
+        activePrompt: { id: 'director', prompt: '为 {{user}} 与 {{char}} 规划下一轮：{{customMacro::状态}}。' },
+        substituteParams: (text, context) => text
+            .replace(/\{\{user\}\}/gi, context.name1)
+            .replace(/\{\{char\}\}/gi, context.name2)
+            .replace(/\{\{customMacro::状态\}\}/gi, '自定义宏已展开'),
     });
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        return createPlanResponse({ card: '<下轮导演卡>{{char}} 回应 {{user}} 的行动。</下轮导演卡>' });
+        return createPlanResponse({ card: '<下轮导演卡>{{char}} 回应 {{user}} 的行动，{{customMacro::状态}}。</下轮导演卡>' });
     };
 
     const runtime = memory.StoryDirectorRuntime;
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
-    assert.equal(requests[0][0].content, '为 用户 与 角色 规划下一轮。');
-    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>角色 回应 用户 的行动。</下轮导演卡>');
-    assert.equal(runtime.getCurrentDirectorCard().content, '角色 回应 用户 的行动。');
+    assert.equal(requests[0][0].content, '为 用户 与 角色 规划下一轮：自定义宏已展开。');
+    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>角色 回应 用户 的行动，自定义宏已展开。</下轮导演卡>');
+    assert.equal(runtime.getCurrentDirectorCard().content, '角色 回应 用户 的行动，自定义宏已展开。');
 
     chat.push({ is_user: true, mes: '继续' });
     const generationClone = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
-    assert.match(generationClone.at(-1).mes, /<下轮导演卡>角色 回应 用户 的行动。<\/下轮导演卡>/);
-    assert.doesNotMatch(generationClone.at(-1).mes, /\{\{(?:user|char)\}\}/i);
+    assert.match(generationClone.at(-1).mes, /<下轮导演卡>角色 回应 用户 的行动，自定义宏已展开。<\/下轮导演卡>/);
+    assert.doesNotMatch(generationClone.at(-1).mes, /\{\{(?:user|char|customMacro)/i);
 });
 
 test('director card coexists with timed prompt tags across duplicate message text fields', async () => {

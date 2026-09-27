@@ -370,6 +370,31 @@
             return null;
         }
 
+        async _getMacroSubstituter() {
+            const context = this._getContext();
+            if (typeof context?.substituteParams === 'function') {
+                return context.substituteParams.bind(context);
+            }
+
+            const stContextModule = await this._loadStContextModule();
+            const moduleContext = stContextModule?.getContext?.();
+            return typeof moduleContext?.substituteParams === 'function'
+                ? moduleContext.substituteParams.bind(moduleContext)
+                : null;
+        }
+
+        _substituteWorldbookContent(content, substituteParams = null) {
+            const text = String(content || '');
+            if (!text || typeof substituteParams !== 'function') return text;
+            try {
+                const resolved = substituteParams(text);
+                return resolved === undefined || resolved === null ? text : String(resolved);
+            } catch (error) {
+                console.warn('[yuzuki-Memory Worldbook] 世界书宏变量替换失败，保留原文:', error);
+                return text;
+            }
+        }
+
         _getWorldNamesFromWindow() {
             if (Array.isArray(window.world_names)) return window.world_names;
             if (Array.isArray(window.worldNames)) return window.worldNames;
@@ -780,10 +805,11 @@
                 : [];
             if (!selectedSources.length) return null;
             const loadedSources = await Promise.all(selectedSources.map((source) => this._loadWorldContent(source)));
+            const substituteParams = await this._getMacroSubstituter();
             const blocks = loadedSources.map((source) => {
                 const parts = this._resolveSourceEntrySelection(selection, source)
                     .selectedEntries
-                    .map((entry) => entry.content)
+                    .map((entry) => this._substituteWorldbookContent(entry.content, substituteParams))
                     .filter(Boolean);
                 if (!parts.length) return '';
                 return `【${source.name}】\n${parts.join('\n---\n')}`;

@@ -896,14 +896,11 @@
     }
 
     function resolveTaskPromptVariables(text, state, options = {}) {
-        const names = getRuntimeNames();
         const suppressMemoryTables = options.suppressMemoryTables === true;
         const suppressMemoryData = suppressMemoryTables || options.suppressMemoryData === true;
         const targetTable = getOptionTargetTable(state, options);
         const targetTableText = targetTable ? tablesToReferenceText(state, { ...options, tableId: targetTable.id }) : '';
-        return String(text || '')
-            .replace(/\{\{user\}\}/g, names.user)
-            .replace(/\{\{char\}\}/g, names.char)
+        const resolved = String(text || '')
             .replace(/\{\{BRANCH_SUMMARY_NAMES\}\}/gi, () => buildBranchSummaryNamesText(state))
             .replace(/\{\{(?:DATABASE_SCHEMA|TABLE_DEFINITIONS|TARGET_TABLE_DEFINITIONS|OPTIMIZE_TABLE_DEFINITIONS)\}\}/gi, () => suppressMemoryTables ? '' : buildDatabaseSchemaText(state, options))
             .replace(/\{\{MEMORY_TABLE_(.+?)\}\}/gi, (_match, tableName) => {
@@ -927,6 +924,8 @@
                 return YuzukiMemory.VariableInjector?.buildMemoryText?.(state)
                     || compactLines([YuzukiMemory.VariableInjector?.buildSummaryText?.(state), tablesToReferenceText(state, options)]);
             });
+        const substituteParams = YuzukiMemory.VariableInjector?.resolveRuntimeVariables;
+        return typeof substituteParams === 'function' ? String(substituteParams(resolved)) : resolved;
     }
 
     function getActivePromptScheme(state) {

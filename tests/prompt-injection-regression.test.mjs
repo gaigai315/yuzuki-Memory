@@ -6,6 +6,7 @@ import vm from 'node:vm';
 const promptReadySource = fs.readFileSync(new URL('../config/prompt-ready-injector.js', import.meta.url), 'utf8');
 const requestProbeSource = fs.readFileSync(new URL('../config/request-probe.js', import.meta.url), 'utf8');
 const variableInjectorSource = fs.readFileSync(new URL('../config/variable-injector.js', import.meta.url), 'utf8');
+const taskRunnerSource = fs.readFileSync(new URL('../config/task-runner.js', import.meta.url), 'utf8');
 const promptLibrarySource = fs.readFileSync(new URL('../config/prompt-library.js', import.meta.url), 'utf8');
 const plotSummarySource = fs.readFileSync(new URL('../config/plot-summary.js', import.meta.url), 'utf8');
 
@@ -38,6 +39,40 @@ function createBaseSandbox() {
     vm.createContext(sandbox);
     return sandbox;
 }
+
+test('runtime and task prompts delegate common macros to SillyTavern without the legacy macro parser', () => {
+    const sandbox = createBaseSandbox();
+    const calls = [];
+    sandbox.SillyTavern = {
+        getContext: () => ({
+            substituteParams(text) {
+                calls.push(text);
+                return String(text)
+                    .replaceAll('{{user}}', '枯月')
+                    .replaceAll('{{char}}', '星辰假珠屋')
+                    .replaceAll('{{customMacro::状态}}', '自定义宏已展开');
+            },
+        }),
+    };
+    sandbox.window.YuzukiMemory.GlobalSettings = { get: (_key, fallback) => fallback };
+    sandbox.window.YuzukiMemory.Storage = { loadState: (fallback) => fallback };
+
+    vm.runInContext(variableInjectorSource, sandbox, { filename: 'variable-injector.js' });
+
+    assert.equal(
+        sandbox.window.YuzukiMemory.VariableInjector.resolveRuntimeVariables('{{user}}/{{char}}/{{customMacro::状态}}'),
+        '枯月/星辰假珠屋/自定义宏已展开',
+    );
+    assert.equal(calls.length, 1);
+    assert.doesNotMatch(variableInjectorSource, /MacrosParser|\/scripts\/macros\.js/);
+
+    const taskResolver = taskRunnerSource.slice(
+        taskRunnerSource.indexOf('function resolveTaskPromptVariables('),
+        taskRunnerSource.indexOf('function getActivePromptScheme(', taskRunnerSource.indexOf('function resolveTaskPromptVariables(')),
+    );
+    assert.match(taskResolver, /VariableInjector\?\.resolveRuntimeVariables/);
+    assert.doesNotMatch(taskResolver, /replace\(\/\\\{\\\{(?:user|char)/);
+});
 
 test('prompt-ready cleanup preserves mixed world-info prompt containers', () => {
     const sandbox = createBaseSandbox();

@@ -42,12 +42,7 @@
         const value = String(text || '');
         const sharedResolver = YuzukiMemory.VariableInjector?.resolveRuntimeVariables;
         if (typeof sharedResolver === 'function') return String(sharedResolver(value));
-        const context = getContext() || {};
-        const userName = String(context.name1 || context.userName || context.playerName || 'User');
-        const characterName = String(context.name2 || context.characterName || context.name || 'Character');
-        return value
-            .replace(/\{\{user\}\}/gi, () => userName)
-            .replace(/\{\{char\}\}/gi, () => characterName);
+        return value;
     }
 
     function isStoryDirectorEnabled(sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.()) {

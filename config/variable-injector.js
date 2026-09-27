@@ -218,14 +218,6 @@
         }
     }
 
-    function getRuntimeNames() {
-        const context = getContext() || {};
-        return {
-            user: String(context.name1 || context.userName || context.playerName || 'User'),
-            char: String(context.name2 || context.characterName || context.name || 'Character'),
-        };
-    }
-
     function getCurrentCharacterPromptKeys() {
         const context = getContext() || {};
         if (context.groupId) return [`group:${context.groupId}`];
@@ -244,10 +236,16 @@
     }
 
     function resolveRuntimeVariables(text) {
-        const names = getRuntimeNames();
-        return String(text || '')
-            .replace(/\{\{user\}\}/g, names.user)
-            .replace(/\{\{char\}\}/g, names.char);
+        const value = String(text || '');
+        const context = getContext();
+        if (!value || typeof context?.substituteParams !== 'function') return value;
+        try {
+            const resolved = context.substituteParams(value);
+            return resolved === undefined || resolved === null ? value : String(resolved);
+        } catch (error) {
+            console.warn('[yuzuki-Memory] 酒馆宏变量替换失败，保留原文:', error);
+            return value;
+        }
     }
 
     function getPluginSettings() {
@@ -1657,7 +1655,6 @@
     }
 
     function buildVariableReplacements(state, vectorText = '', settings = getPluginSettings(), options = {}) {
-        const names = getRuntimeNames();
         const allowMemoryPrompt = settings.injectMemoryTable && settings.injectMemoryPrompt !== false;
         const allowSummary = settings.injectMemoryTable && settings.injectSummary !== false;
         const allowTable = settings.injectMemoryTable && settings.injectTable !== false;
@@ -1682,8 +1679,6 @@
             '{{TARGET_TABLE_DEFINITIONS}}': allowTable ? buildDatabaseSchemaText(state) : '{{TARGET_TABLE_DEFINITIONS}}',
             '{{OPTIMIZE_TABLE_DEFINITIONS}}': allowTable ? buildDatabaseSchemaText(state) : '{{OPTIMIZE_TABLE_DEFINITIONS}}',
             '{{VECTOR_MEMORY}}': settings.injectVectorMemory ? resolveRuntimeVariables(vectorText) : '{{VECTOR_MEMORY}}',
-            '{{user}}': names.user,
-            '{{char}}': names.char,
             __table: (tableName) => allowTable
                 ? resolveRuntimeVariables(buildSpecificTableText(state, tableName, tableOptions))
                 : `{{MEMORY_TABLE_${tableName}}}`,
@@ -1739,17 +1734,6 @@
         }
     }
 
-    async function registerLegacyMacro(name) {
-        try {
-            const module = await import('/scripts/macros.js');
-            module?.MacrosParser?.registerMacro?.(name, createMacroHandler(name), `yuzuki-Memory ${name}`);
-            return true;
-        } catch (error) {
-            console.warn('[yuzuki-Memory] 注册旧版酒馆宏失败。', name, error);
-            return false;
-        }
-    }
-
     function registerSillyTavernMacros(attempt = 0) {
         const names = getSillyTavernMacroNames();
         const pending = names.filter((name) => !REGISTERED_ST_MACROS.has(name));
@@ -1759,8 +1743,7 @@
         ST_MACRO_REGISTRATION.updatedAt = Date.now();
         pending.forEach((name) => REGISTERED_ST_MACROS.add(name));
         Promise.all(pending.map(async (name) => {
-            let ok = await registerMacroSystem(name);
-            if (!ok) ok = await registerLegacyMacro(name);
+            const ok = await registerMacroSystem(name);
             if (ok) {
                 ST_MACRO_REGISTRATION.registered += 1;
             } else {

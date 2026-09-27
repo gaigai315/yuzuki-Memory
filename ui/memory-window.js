@@ -4690,6 +4690,14 @@
         return window.matchMedia?.('(max-width: 760px) and (pointer: coarse)').matches;
     }
 
+    function focusEditorControlOnDesktop(control, options = {}) {
+        if (!control || isMobileLayout()) return false;
+        if (options.preventScroll === true) control.focus({ preventScroll: true });
+        else control.focus();
+        if (options.select === true) control.select?.();
+        return true;
+    }
+
     function isTauriTavernIosRuntime() {
         const isTauriRuntime = window.__TAURI_RUNNING__ === true
             || window.__TAURI_INTERNALS__ !== undefined
@@ -6138,7 +6146,7 @@
         });
         dialog.addEventListener('click', (event) => event.stopPropagation());
         save.addEventListener('click', () => saveVectorBookFromEditor(root, overlay, bookId));
-        nameInput.focus();
+        focusEditorControlOnDesktop(nameInput);
     }
 
     async function handleVectorAction(root, action) {
@@ -8602,8 +8610,7 @@
             if (event.target === overlay) closeModal();
         });
         dialog.addEventListener('click', (event) => event.stopPropagation());
-        input.focus();
-        input.select();
+        focusEditorControlOnDesktop(input, { select: true });
     }
 
     function renderPromptSchemeWorkspaceContent(page) {
@@ -9232,7 +9239,7 @@
         dialog.append(header, form, footer);
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
-        window.setTimeout(() => nameInput.focus(), 0);
+        window.setTimeout(() => focusEditorControlOnDesktop(nameInput), 0);
 
         const closeModal = () => removePluginElement(overlay);
         close.onclick = closeModal;
@@ -10833,7 +10840,7 @@
             event.preventDefault();
             createPreset();
         });
-        window.setTimeout(() => input.focus(), 0);
+        window.setTimeout(() => focusEditorControlOnDesktop(input), 0);
     }
 
     function saveCurrentLlmApiPreset(root) {
@@ -15740,7 +15747,7 @@
             closeModal();
         });
 
-        nameInput.focus();
+        focusEditorControlOnDesktop(nameInput);
     }
 
     function openAddSummaryDialog(root, table) {
@@ -15861,7 +15868,7 @@
         dialog.append(header, textarea, footer);
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
-        textarea.focus();
+        focusEditorControlOnDesktop(textarea);
 
         const closeModal = () => removePluginElement(overlay);
         textarea.addEventListener('input', updateCounter);
@@ -16053,7 +16060,7 @@
             persistTodoChange(result.value, '当前会话尚未就绪，待办事项未保存。');
         });
 
-        fields.querySelector('[data-yzm-record-field="待办内容"]')?.focus();
+        focusEditorControlOnDesktop(fields.querySelector('[data-yzm-record-field="待办内容"]'));
     }
 
     function createSummarySegmentEditorBlock(segment = {}, index = 0) {
@@ -16336,7 +16343,7 @@
             persistEditorChanges('当前会话尚未就绪，剧情摘要未保存。');
         });
 
-        fields.querySelector('.yzm-record-input')?.focus();
+        focusEditorControlOnDesktop(fields.querySelector('.yzm-record-input'));
     }
 
     function patchMemorySummaryContent(root, table) {
@@ -16478,7 +16485,7 @@
             persistEditorChanges('当前会话尚未就绪，总结段落未保存。');
         });
 
-        fields.querySelector('.yzm-record-input')?.focus();
+        focusEditorControlOnDesktop(fields.querySelector('.yzm-record-input'));
     }
 
     function openRecordEditor(root) {
@@ -16661,7 +16668,7 @@
         });
 
         const firstInput = fields.querySelector('.yzm-record-input');
-        firstInput?.focus();
+        focusEditorControlOnDesktop(firstInput);
     }
 
     function bindPanelInteractions(root) {

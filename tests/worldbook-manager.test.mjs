@@ -173,6 +173,48 @@ test('worldbook search matches source titles, entry titles, and entry content', 
     assert.equal(manager.matchesWorldbookSearch(source, '不存在的内容'), false);
 });
 
+test('selected worldbook entries use SillyTavern macro substitution without mutating cached source text', async () => {
+    const calls = [];
+    const rawContent = '{{user}}读取{{char}}的数据：{{customMacro::状态}}';
+    const source = {
+        id: 'world:宏变量测试',
+        name: '宏变量测试',
+        source: 'world',
+        entries: [{ uid: '1', comment: '动态内容', content: rawContent, enabled: true }],
+    };
+    const { manager } = loadWorldbookManager({
+        SillyTavern: {
+            getContext: () => ({
+                substituteParams: (text) => {
+                    calls.push(text);
+                    return text
+                        .replaceAll('{{user}}', '枯月')
+                        .replaceAll('{{char}}', '星辰假珠屋')
+                        .replaceAll('{{customMacro::状态}}', '宏变量已展开');
+                },
+            }),
+        },
+    });
+    manager.listAvailableWorldbooks = async () => [source];
+    manager._loadWorldContent = async (book) => book;
+
+    const message = await manager.buildWorldbookMessage({
+        settings: {
+            worldbookSelection: {
+                enabled: true,
+                initialized: true,
+                ids: [source.id],
+            },
+        },
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0], rawContent);
+    assert.match(message.content, /枯月读取星辰假珠屋的数据：宏变量已展开/);
+    assert.doesNotMatch(message.content, /\{\{(?:user|char|customMacro)/);
+    assert.equal(source.entries[0].content, rawContent);
+});
+
 function runSummarySyncBuilders(record) {
     const source = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
     const match = source.match(/    function getSummarySyncContent\(record\) \{[\s\S]*?(?=\r?\n    function recordToVectorChunk)/);
