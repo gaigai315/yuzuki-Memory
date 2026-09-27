@@ -15889,6 +15889,76 @@
         dialog.addEventListener('click', (event) => event.stopPropagation());
     }
 
+    function openRecordTextEditorDialog(root, sourceTextarea) {
+        if (!sourceTextarea) return;
+        const fieldLabel = sourceTextarea.dataset.yzmRecordField || '文本内容';
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-record-expanded-modal');
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-record-expanded-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-record-expanded-dialog';
+        dialog.setAttribute('aria-label', `展开编辑${fieldLabel}`);
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = `编辑${fieldLabel}`;
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', `关闭${fieldLabel}展开编辑`);
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const textarea = document.createElement('textarea');
+        textarea.className = 'yzm-record-expanded-textarea';
+        textarea.value = sourceTextarea.value || '';
+        textarea.placeholder = sourceTextarea.placeholder || '';
+        textarea.spellcheck = sourceTextarea.spellcheck;
+
+        const footer = document.createElement('div');
+        footer.className = 'yzm-record-expanded-footer';
+        const counter = document.createElement('span');
+        counter.className = 'yzm-record-expanded-counter';
+        const updateCounter = () => {
+            counter.textContent = `${textarea.value.length.toLocaleString()} 字`;
+        };
+        updateCounter();
+        const cancel = createButton('取消', 'yzm-api-button');
+        const apply = createIconButton('应用到总结内容', 'fa-regular fa-circle-check', 'yzm-api-button yzm-api-button-primary');
+        footer.append(counter, cancel, apply);
+
+        dialog.append(header, textarea, footer);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        const closeModal = () => {
+            removePluginElement(overlay);
+            document.removeEventListener('keydown', handleKeydown);
+        };
+        const handleKeydown = (event) => {
+            if (event.key === 'Escape') closeModal();
+        };
+        textarea.addEventListener('input', updateCounter);
+        close.onclick = closeModal;
+        cancel.onclick = closeModal;
+        apply.onclick = () => {
+            sourceTextarea.value = textarea.value;
+            sourceTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+            closeModal();
+        };
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeModal();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        document.addEventListener('keydown', handleKeydown);
+        focusEditorControlOnDesktop(textarea);
+    }
+
     function createSummaryChoiceButton(label, iconClassName, kind) {
         const button = createIconButton(label, iconClassName, 'yzm-summary-choice-button');
         button.dataset.yzmSummaryKind = kind;
@@ -15896,7 +15966,8 @@
     }
 
     function createRecordInput(label, value = '', multiline = false, options = {}) {
-        const field = document.createElement('label');
+        const hasMobileExpand = multiline && options.mobileExpand === true;
+        const field = document.createElement(hasMobileExpand ? 'div' : 'label');
         field.className = multiline ? 'yzm-record-field yzm-record-field-wide' : 'yzm-record-field';
 
         const text = document.createElement('span');
@@ -15909,9 +15980,21 @@
         input.value = value;
         if (options.placeholder) input.placeholder = options.placeholder;
         input.dataset.yzmRecordField = label;
+        input.setAttribute('aria-label', label);
         preparePluginTextControl(input);
 
-        field.append(text, input);
+        if (hasMobileExpand) {
+            const heading = document.createElement('div');
+            heading.className = 'yzm-record-field-heading';
+            const expand = createIconButton('展开编辑', 'fa-solid fa-up-right-and-down-left-from-center', 'yzm-record-expand-button');
+            expand.dataset.yzmRecordExpand = 'true';
+            expand.setAttribute('aria-label', `展开编辑${label}`);
+            expand.title = `展开编辑${label}`;
+            heading.append(text, expand);
+            field.append(heading, input);
+        } else {
+            field.append(text, input);
+        }
         return field;
     }
 
@@ -16086,7 +16169,10 @@
 
         const floorField = createRecordInput('楼层数', segment.floor || '', false, { placeholder: '例如 0-100' });
         floorField.querySelector('.yzm-record-input')?.setAttribute('data-yzm-summary-segment-floor', 'true');
-        const summaryField = createRecordInput('总结内容', segment.summary || '', true, { placeholder: '填写该楼层段对应的支线总结' });
+        const summaryField = createRecordInput('总结内容', segment.summary || '', true, {
+            placeholder: '填写该楼层段对应的支线总结',
+            mobileExpand: true,
+        });
         summaryField.querySelector('.yzm-record-input')?.setAttribute('data-yzm-summary-segment-summary', 'true');
 
         block.append(header, floorField, summaryField);
@@ -16122,7 +16208,12 @@
         fields.className = 'yzm-record-fields yzm-summary-main-record-fields';
         ensureMemorySummaryColumns(table?.columns || [], 'main').forEach((column) => {
             const name = cleanColumnName(column);
-            fields.appendChild(createRecordInput(name, getRecordValue(record, name), isRecordEditorMultilineField(table, name)));
+            fields.appendChild(createRecordInput(
+                name,
+                getRecordValue(record, name),
+                isRecordEditorMultilineField(table, name),
+                { mobileExpand: name === '总结内容' },
+            ));
         });
         return fields;
     }
@@ -16554,6 +16645,17 @@
             if (event.target === overlay) closeModal();
         });
         dialog.addEventListener('click', (event) => event.stopPropagation());
+        if (isMemorySummaryRecord) {
+            fields.addEventListener('click', (event) => {
+                const target = event.target instanceof Element ? event.target : null;
+                const expand = target?.closest('[data-yzm-record-expand]');
+                if (!expand) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const sourceTextarea = expand.closest('.yzm-record-field')?.querySelector('textarea[data-yzm-record-field]');
+                openRecordTextEditorDialog(root, sourceTextarea);
+            });
+        }
         if (isBranchSummaryRecord) {
             fields.addEventListener('click', (event) => {
                 const target = event.target instanceof Element ? event.target : null;

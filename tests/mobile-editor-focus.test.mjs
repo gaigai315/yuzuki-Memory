@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const memoryWindowSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
+const memoryCssSource = fs.readFileSync(new URL('../styles/memory.css', import.meta.url), 'utf8');
 const indexSource = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 
@@ -81,6 +82,7 @@ test('text editor entry points use desktop-only initial focus', () => {
         'openLlmPresetNameDialog',
         'openAddTableDialog',
         'openPromptSchemeEditorDialog',
+        'openRecordTextEditorDialog',
         'openCharacterTodoEditor',
         'openPlotSummaryFieldEditor',
         'openSummaryParagraphEditor',
@@ -111,4 +113,18 @@ test('release metadata and update notice describe both current optimizations', (
     assert.match(noticeSource, /宏变量统一接入酒馆标准替换入口/);
     assert.match(noticeSource, /移动端编辑体验/);
     assert.match(noticeSource, /不再自动弹出输入法/);
+});
+
+test('mobile summary fields provide a large synchronized text editor', () => {
+    const mainFields = getFunctionSource('createMainSummaryRecordFields');
+    const branchSegment = getFunctionSource('createSummarySegmentEditorBlock');
+    const expandedEditor = getFunctionSource('openRecordTextEditorDialog');
+
+    assert.match(mainFields, /mobileExpand: name === '总结内容'/);
+    assert.match(branchSegment, /mobileExpand: true/);
+    assert.match(expandedEditor, /sourceTextarea\.value = textarea\.value/);
+    assert.match(expandedEditor, /dispatchEvent\(new Event\('input', \{ bubbles: true \}\)\)/);
+    assert.match(expandedEditor, /focusEditorControlOnDesktop\(textarea\)/);
+    assert.match(memoryCssSource, /@media \(max-width: 760px\) and \(pointer: coarse\)[\s\S]*?\.yzm-record-expand-button \{[\s\S]*?display: inline-flex/);
+    assert.match(memoryCssSource, /\.yzm-record-expanded-dialog \{[\s\S]*?height: 100%/);
 });
