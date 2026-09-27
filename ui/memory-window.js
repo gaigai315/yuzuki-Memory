@@ -14656,7 +14656,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化部分重试逻辑',
+            '世界书与插件运行时宏变量统一接入酒馆标准替换入口，兼容角色名、用户名及自定义宏变量。',
+            '优化移动端编辑体验：打开剧情摘要、记忆总结、角色档案等编辑面板时不再自动弹出输入法。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

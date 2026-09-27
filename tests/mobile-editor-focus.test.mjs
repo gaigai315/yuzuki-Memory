@@ -4,6 +4,8 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const memoryWindowSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
+const indexSource = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
+const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 
 function getFunctionSource(name) {
     const start = memoryWindowSource.indexOf(`function ${name}(`);
@@ -99,4 +101,14 @@ test('vector segment editor remains open without any initial focus call', () => 
     const appendIndex = source.lastIndexOf('modalHost.appendChild(overlay)');
     assert.notEqual(appendIndex, -1);
     assert.doesNotMatch(source.slice(appendIndex), /\.focus\(/);
+});
+
+test('release metadata and update notice describe both current optimizations', () => {
+    assert.equal(manifest.version, '1.0.3');
+    assert.match(indexSource, /const VERSION = '1\.0\.3';/);
+
+    const noticeSource = getFunctionSource('openUpdateNoticeDialog');
+    assert.match(noticeSource, /宏变量统一接入酒馆标准替换入口/);
+    assert.match(noticeSource, /移动端编辑体验/);
+    assert.match(noticeSource, /不再自动弹出输入法/);
 });
