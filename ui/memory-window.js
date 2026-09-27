@@ -2906,27 +2906,64 @@
         replanButton.setAttribute('aria-label', replanButton.title);
         replanButton.innerHTML = '<i class="fa-solid fa-clapperboard" aria-hidden="true"></i>';
 
+        const clearButton = document.createElement('button');
+        clearButton.type = 'button';
+        clearButton.className = 'yzm-story-director-card-clear';
+        clearButton.title = '清理待用导演卡';
+        clearButton.setAttribute('aria-label', clearButton.title);
+        clearButton.innerHTML = '<i class="fa-regular fa-trash-can" aria-hidden="true"></i>';
+
+        const actionBar = document.createElement('div');
+        actionBar.className = 'yzm-story-director-card-actions';
+        actionBar.append(clearButton, replanButton);
+
+        const syncClearButton = (latest, latestContent) => {
+            const canClear = latest?.origin === 'pending'
+                && !!latestContent
+                && YuzukiMemory.StoryDirectorRuntime?.isRunning?.() !== true;
+            clearButton.hidden = !canClear;
+            clearButton.disabled = !canClear;
+        };
+
         const refreshCardContent = () => {
             const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
             const latestContent = String(latest?.content || '').trim();
             body.classList.toggle('yzm-story-director-card-empty', !latestContent);
             body.textContent = latestContent || '当前导演卡尚未生成';
+            syncClearButton(latest, latestContent);
             body.scrollTop = 0;
         };
 
-        sheet.append(closeButton, body, replanButton);
+        syncClearButton(current, content);
+        sheet.append(closeButton, body, actionBar);
         overlay.appendChild(sheet);
         host.appendChild(overlay);
         host.classList.add('yzm-story-director-card-host-open');
-        activeStoryDirectorCardWindow = { host, overlay, abortController };
+        activeStoryDirectorCardWindow = { host, overlay, abortController, syncClearButton };
         updateStoryDirectorActionButton(replanButton, YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true);
 
         closeButton.addEventListener('click', closeStoryDirectorCard, { signal: abortController.signal });
+        clearButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
+            if (latest?.origin !== 'pending') {
+                refreshCardContent();
+                return;
+            }
+            const cleared = YuzukiMemory.StoryDirectorRuntime?.discardPendingCard?.('idle') === true;
+            refreshCardContent();
+            showTaskToast(
+                cleared ? '已清理待用导演卡，下次发送不会注入' : '当前没有可清理的待用导演卡',
+                cleared ? 'success' : 'warning',
+            );
+        }, { signal: abortController.signal });
         replanButton.addEventListener('click', async (event) => {
             event.preventDefault();
             event.stopPropagation();
-            const result = await runManualStoryDirector(replanButton);
-            if (result?.success && body.isConnected) refreshCardContent();
+            clearButton.disabled = true;
+            await runManualStoryDirector(replanButton);
+            if (body.isConnected) refreshCardContent();
         }, { signal: abortController.signal });
         overlay.addEventListener('pointerdown', (event) => {
             if (event.target === overlay) closeStoryDirectorCard();
@@ -3913,6 +3950,8 @@
     function updateStoryDirectorActionButtons(running = YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true) {
         document.querySelectorAll('[data-yzm-story-director-replan], .yzm-story-director-card-replan')
             .forEach((button) => updateStoryDirectorActionButton(button, running));
+        const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
+        activeStoryDirectorCardWindow?.syncClearButton?.(latest, String(latest?.content || '').trim());
     }
 
     async function runManualStoryDirector(button) {

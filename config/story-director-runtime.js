@@ -1341,6 +1341,28 @@
         }, 'story-director-clear');
     }
 
+    function discardPendingCard(status = 'idle') {
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        const state = loadState(sessionId);
+        const director = state?.storyDirector || {};
+        const pendingCard = String(director.pendingCard || '').trim();
+        if (!state || !pendingCard) return false;
+        const pendingSource = director.source && typeof director.source === 'object'
+            ? { ...director.source }
+            : null;
+        const messageCards = pendingSource?.role === 'user'
+            ? normalizeMessageCards(director.messageCards).filter((entry) => !userAnchorsMatch(entry.user, pendingSource))
+            : normalizeMessageCards(director.messageCards);
+        return saveDirectorState(sessionId, {
+            ...director,
+            pendingCard: '',
+            source: null,
+            messageCards,
+            status,
+            lastError: '',
+        }, 'story-director-discard-card');
+    }
+
     function scheduleDirector(reason = 'assistant-updated', delayMs = RUN_DELAY_MS) {
         window.clearTimeout(runTimer);
         if (!isStoryDirectorEnabled()) {
@@ -1587,6 +1609,7 @@
         getCurrentTurnDirectorCard: getCurrentDirectorCard,
         injectDirectorCardForGeneration,
         clearPendingCard,
+        discardPendingCard,
         scheduleDirector,
         cancelActiveRun,
         isStoryDirectorEnabled,

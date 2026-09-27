@@ -6,6 +6,8 @@ import vm from 'node:vm';
 const source = fs.readFileSync(new URL('../config/story-director-runtime.js', import.meta.url), 'utf8');
 const variableInjectorSource = fs.readFileSync(new URL('../config/variable-injector.js', import.meta.url), 'utf8');
 const vectorStoreSource = fs.readFileSync(new URL('../config/vector-store.js', import.meta.url), 'utf8');
+const memoryWindowSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
+const memoryCssSource = fs.readFileSync(new URL('../styles/memory.css', import.meta.url), 'utf8');
 
 function createToolResponse(name, args = '{}') {
     const call = { id: 'plan-output', type: 'function', function: { name, arguments: args } };
@@ -1490,6 +1492,55 @@ test('missing or disabled switch prevents requests and card injection until enab
     runtime.clearPendingCard('disabled');
     assert.equal(getState().storyDirector.pendingCard, '');
     assert.equal(getState().storyDirector.ledger, '新账本');
+});
+
+test('clearing a ready pending card prevents the next normal injection and preserves the ledger', async () => {
+    const { memory, chat, getState } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.equal(runtime.getCurrentDirectorCard()?.origin, 'pending');
+    assert.equal(runtime.discardPendingCard('idle'), true);
+    assert.equal(runtime.getCurrentDirectorCard(), null);
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.equal(getState().storyDirector.source, null);
+    assert.equal(getState().storyDirector.status, 'idle');
+    assert.equal(getState().storyDirector.ledger, '新账本');
+
+    chat.push({ is_user: true, mes: '这一轮不用导演卡' });
+    const generationClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), false);
+    assert.equal(generationClone.at(-1).mes, '这一轮不用导演卡');
+});
+
+test('discarding a user-anchored pending card also removes its same-turn bound copy', async () => {
+    const { memory, chat, getState } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    chat.pop();
+
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.equal(runtime.getCurrentDirectorCard()?.origin, 'pending');
+    assert.equal(getState().storyDirector.messageCards.length, 1);
+    assert.equal(runtime.discardPendingCard('idle'), true);
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.equal(getState().storyDirector.messageCards.length, 0);
+    assert.equal(runtime.getCurrentDirectorCard(), null);
+
+    const normalClone = structuredClone(chat);
+    const regenerateClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(normalClone, { generationType: 'normal' }), false);
+    assert.equal(runtime.injectDirectorCardForGeneration(regenerateClone, { generationType: 'regenerate' }), false);
+    assert.equal(normalClone.at(-1).mes, '当前行动');
+    assert.equal(regenerateClone.at(-1).mes, '当前行动');
+});
+
+test('director card modal exposes a pending-only clear action', () => {
+    assert.match(memoryWindowSource, /className = 'yzm-story-director-card-clear'/);
+    assert.match(memoryWindowSource, /latest\?\.origin === 'pending'/);
+    assert.match(memoryWindowSource, /discardPendingCard\?\.\('idle'\)/);
+    assert.match(memoryWindowSource, /下次发送不会注入/);
+    assert.match(memoryCssSource, /\.yzm-story-director-card-actions/);
+    assert.match(memoryCssSource, /\.yzm-story-director-card-clear/);
 });
 
 test('turning off the switch stops an already scheduled plan', async () => {
