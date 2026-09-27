@@ -128,3 +128,23 @@ test('mobile summary fields provide a large synchronized text editor', () => {
     assert.match(memoryCssSource, /@media \(max-width: 760px\) and \(pointer: coarse\)[\s\S]*?\.yzm-record-expand-button \{[\s\S]*?display: inline-flex/);
     assert.match(memoryCssSource, /\.yzm-record-expanded-dialog \{[\s\S]*?height: 100%/);
 });
+
+test('summary primary search supports mobile Enter and cyclic detail highlighting', () => {
+    const shellSource = getFunctionSource('createPanelBody');
+    const bindingSource = getFunctionSource('bindPanelInteractions');
+    const jumpSource = getFunctionSource('jumpToSummaryKeyword');
+    const matchSource = getFunctionSource('getSummarySearchMatches');
+    const highlightSource = getFunctionSource('highlightSummarySearchMatch');
+
+    assert.match(shellSource, /setAttribute\('enterkeyhint', 'search'\)/);
+    assert.match(bindingSource, /event\.key !== 'Enter' \|\| event\.isComposing/);
+    assert.match(bindingSource, /event\.preventDefault\(\);\s*jumpToSummaryKeyword\(root\)/);
+    assert.match(jumpSource, /clearSummarySearchHighlights\(root\)/);
+    assert.match(jumpSource, /\(cursor \+ 1\) % matches\.length/);
+    assert.match(matchSource, /\.yzm-summary-timeline-event/);
+    assert.match(matchSource, /\.yzm-summary-text-body/);
+    assert.match(matchSource, /document\.createTreeWalker\(target, NodeFilter\.SHOW_TEXT\)/);
+    assert.match(highlightSource, /mark\.scrollIntoView\(\{ block: 'center', inline: 'nearest' \}\)/);
+    assert.doesNotMatch(jumpSource, /renderTableWorkspace|replaceChildren/);
+    assert.match(memoryCssSource, /#yzm-memory-root \.yzm-summary-search-highlight \{/);
+});

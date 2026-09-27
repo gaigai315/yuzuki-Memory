@@ -4584,6 +4584,7 @@
         );
 
         const primarySearch = createSearchBox('搜索主键', 'yzm-primary-search');
+        primarySearch.querySelector('.yzm-search-input')?.setAttribute('enterkeyhint', 'search');
 
         const primaryList = document.createElement('div');
         primaryList.className = 'yzm-primary-list';
@@ -11417,6 +11418,85 @@
         });
     }
 
+    function resetSummarySearchJumpState(root, keyword = '') {
+        const view = root.querySelector('.yzm-summary-view');
+        if (!view) return;
+        view.dataset.yzmSummaryJumpKeyword = String(keyword || '').trim().toLowerCase();
+        view.dataset.yzmSummaryJumpMatch = '0';
+    }
+
+    function clearSummarySearchHighlights(root) {
+        root.querySelectorAll('.yzm-summary-search-highlight').forEach((mark) => {
+            const parent = mark.parentNode;
+            mark.replaceWith(document.createTextNode(mark.textContent || ''));
+            parent?.normalize?.();
+        });
+    }
+
+    function getSummarySearchMatches(view, keyword) {
+        const normalizedKeyword = String(keyword || '').trim().toLowerCase();
+        if (!view || !normalizedKeyword) return [];
+
+        const matches = [];
+        const targets = view.querySelectorAll([
+            '.yzm-summary-title',
+            '.yzm-summary-meta-chip',
+            '.yzm-summary-segment-header',
+            '.yzm-summary-timeline-date',
+            '.yzm-summary-timeline-time',
+            '.yzm-summary-timeline-event',
+            '.yzm-summary-text-body',
+        ].join(', '));
+        targets.forEach((target) => {
+            const walker = document.createTreeWalker(target, NodeFilter.SHOW_TEXT);
+            let textNode = walker.nextNode();
+            while (textNode) {
+                const text = textNode.textContent || '';
+                getRequestProbeMatches(text, normalizedKeyword).forEach((match) => {
+                    matches.push({ node: textNode, index: match.index, length: match.length });
+                });
+                textNode = walker.nextNode();
+            }
+        });
+        return matches;
+    }
+
+    function highlightSummarySearchMatch(match) {
+        if (!match?.node) return false;
+        const range = document.createRange();
+        range.setStart(match.node, match.index);
+        range.setEnd(match.node, match.index + match.length);
+        const mark = document.createElement('mark');
+        mark.className = 'yzm-summary-search-highlight';
+        range.surroundContents(mark);
+        mark.scrollIntoView({ block: 'center', inline: 'nearest' });
+        return true;
+    }
+
+    function jumpToSummaryKeyword(root) {
+        const input = root.querySelector('.yzm-primary-search .yzm-search-input');
+        const keyword = String(input?.value || '').trim();
+        const view = root.querySelector('.yzm-summary-view');
+        if (!keyword || !view) return false;
+
+        clearSummarySearchHighlights(root);
+        const normalizedKeyword = keyword.toLowerCase();
+        if (view.dataset.yzmSummaryJumpKeyword !== normalizedKeyword) {
+            resetSummarySearchJumpState(root, normalizedKeyword);
+        }
+
+        const matches = getSummarySearchMatches(view, normalizedKeyword);
+        if (!matches.length) {
+            view.dataset.yzmSummaryJumpMatch = '0';
+            return false;
+        }
+
+        const cursor = Number(view.dataset.yzmSummaryJumpMatch || 0) % matches.length;
+        if (!highlightSummarySearchMatch(matches[cursor])) return false;
+        view.dataset.yzmSummaryJumpMatch = String((cursor + 1) % matches.length);
+        return true;
+    }
+
     function jumpToRequestProbeKeyword(root) {
         const input = root.querySelector('[data-yzm-request-probe-search]');
         const keyword = String(input?.value || '').trim();
@@ -18240,6 +18320,8 @@
             primarySearchInput.addEventListener('input', () => {
                 const table = getActiveTable();
                 if (table && isSummaryLikeTable(table.id)) {
+                    clearSummarySearchHighlights(root);
+                    resetSummarySearchJumpState(root, primarySearchInput.value);
                     renderPrimaryList(root);
                     bindPanelInteractions(root);
                     return;
@@ -18249,6 +18331,13 @@
                     const name = item.textContent?.toLowerCase() || '';
                     item.hidden = !!query && !name.includes(query);
                 });
+            });
+            primarySearchInput.addEventListener('keydown', (event) => {
+                if (event.key !== 'Enter' || event.isComposing) return;
+                const table = getActiveTable();
+                if (!table || !isSummaryLikeTable(table.id)) return;
+                event.preventDefault();
+                jumpToSummaryKeyword(root);
             });
         }
     }

@@ -8505,6 +8505,16 @@
     overflow-wrap: anywhere;
 }
 
+#yzm-memory-root .yzm-summary-search-highlight {
+    padding: 0 1px;
+    color: inherit;
+    background: color-mix(in srgb, var(--yzm-selected-color) 24%, transparent);
+    border-bottom: 2px solid var(--yzm-selected-color);
+    border-radius: 3px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--yzm-selected-color) 14%, transparent);
+    scroll-margin-block: 24px;
+}
+
 #yzm-memory-root .yzm-structure-modal,
 #yzm-memory-global-modal-root .yzm-structure-modal {
     position: absolute;
