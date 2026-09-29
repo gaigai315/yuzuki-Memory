@@ -374,8 +374,9 @@ test('story director config switch reads and updates the runtime storage state i
     let savedState = null;
     let savedOptions = null;
     let cancelled = false;
+    let queriedSessionId = null;
     const storage = {
-        getCurrentSessionId: () => 'chat:test',
+        getCurrentSessionId: () => null,
         isSessionSwitching: () => false,
         loadState: () => structuredClone(latestState),
         saveState: (state, _fallback, _sessionId, options) => {
@@ -388,7 +389,10 @@ test('story director config switch reads and updates the runtime storage state i
         result: null,
         YuzukiMemory: {
             StoryDirectorRuntime: {
-                isStoryDirectorEnabled: () => true,
+                isStoryDirectorEnabled: (sessionId) => {
+                    queriedSessionId = sessionId;
+                    return sessionId === 'chat:test';
+                },
                 cancelActiveRun: () => { cancelled = true; },
             },
         },
@@ -416,6 +420,7 @@ test('story director config switch reads and updates the runtime storage state i
     ].join('\n'), sandbox);
 
     assert.equal(sandbox.result.displayed, true);
+    assert.equal(queriedSessionId, 'chat:test');
     assert.equal(sandbox.result.saved, true);
     assert.equal(cancelled, true);
     assert.equal(savedState.storyDirector.enabled, false);

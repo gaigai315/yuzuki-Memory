@@ -2626,9 +2626,9 @@
     }
 
     function getStoryDirectorEnabled() {
-        const runtimeEnabled = YuzukiMemory.StoryDirectorRuntime?.isStoryDirectorEnabled?.();
-        if (typeof runtimeEnabled === 'boolean') return runtimeEnabled;
         const sessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
+        const runtimeEnabled = YuzukiMemory.StoryDirectorRuntime?.isStoryDirectorEnabled?.(sessionId);
+        if (typeof runtimeEnabled === 'boolean') return runtimeEnabled;
         const storedState = sessionId
             ? getStorage()?.loadState?.(createDefaultState(), sessionId)
             : null;
