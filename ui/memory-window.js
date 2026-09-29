@@ -493,17 +493,6 @@
         return saveGlobalCustomTables(loadGlobalCustomTables().filter((table) => table.id !== id));
     }
 
-    function mergeGlobalCustomTableColumns(localColumns = [], globalColumns = []) {
-        const merged = uniqueNormalizedColumns(localColumns);
-        uniqueNormalizedColumns(globalColumns).forEach((definition, globalIndex) => {
-            const name = cleanColumnName(definition);
-            const existingIndex = merged.findIndex((column) => cleanColumnName(column) === name);
-            if (existingIndex >= 0) merged[existingIndex] = definition;
-            else merged.splice(Math.min(globalIndex, merged.length), 0, definition);
-        });
-        return merged;
-    }
-
     function syncGlobalCustomTablesIntoState(state, options = {}) {
         if (!state || !Array.isArray(state.tables)) return false;
         const deletedIds = loadDeletedCustomTableIds();
@@ -527,7 +516,6 @@
                 ...table,
                 name: globalTable.name,
                 icon: globalTable.icon,
-                columns: mergeGlobalCustomTableColumns(table.columns, globalTable.columns),
             };
             if (JSON.stringify(nextTable) !== JSON.stringify(table)) changed = true;
             return nextTable;

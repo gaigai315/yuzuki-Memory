@@ -840,16 +840,10 @@
         if (!fallbackTable) return rawColumns;
 
         const fallbackColumns = Array.isArray(fallbackTable.columns) ? fallbackTable.columns : [];
-        if (String(table?.id || '').startsWith('custom_') && fallbackColumns.length) {
-            const mergedColumns = [...rawColumns];
-            fallbackColumns.map(normalizeColumnDefinition).filter(Boolean).forEach((definition, fallbackIndex) => {
-                const name = cleanColumnName(definition);
-                const existingIndex = mergedColumns.findIndex((column) => cleanColumnName(column) === name);
-                if (existingIndex >= 0) mergedColumns[existingIndex] = definition;
-                else mergedColumns.splice(Math.min(fallbackIndex, mergedColumns.length), 0, definition);
-            });
-            return mergedColumns;
-        }
+        // A global custom-table definition is only the template for sessions that do not
+        // have the table yet. Existing sessions own their local structure; cross-session
+        // additions are merged separately through the explicit [column] syntax.
+        if (String(table?.id || '').startsWith('custom_')) return rawColumns;
         const legacyCharacterStatusColumns = ['角色名', '好感度', '疲劳值', '力量', '敏捷', '智力', '魅力', '幸运', '#奇遇', '剧情规划'];
         const usesLegacyCharacterStatusDefault = table?.id === 'character_status'
             && Number(options.rawDefaultRevision || 1) < 16

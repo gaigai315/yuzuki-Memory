@@ -503,3 +503,62 @@ test('custom-table local additions survive normalization without entering other 
     const otherSession = storage.loadState(fallback, 'chat:custom-other');
     assert.deepEqual(Array.from(otherSession.tables.at(-1).columns), ['名称', '内容']);
 });
+
+test('custom-table starter columns stay deleted after the current session replaces its structure', () => {
+    const { storage, localStorage } = createStorageSandbox();
+    const fallback = createFallbackState();
+    fallback.tables.push({
+        id: 'custom_archive',
+        name: '影视档案',
+        icon: 'note',
+        columns: ['名称', '内容'],
+        hidden: false,
+    });
+
+    const editedState = structuredClone(fallback);
+    editedState.sessionId = 'chat:custom-replaced';
+    editedState.tables.at(-1).columns = ['项目名称', '项目类型', '#项目进度'];
+    localStorage.setItem(storage.getStorageKey('chat:custom-replaced'), JSON.stringify(editedState));
+
+    const loaded = storage.loadState(fallback, 'chat:custom-replaced');
+    assert.deepEqual(Array.from(loaded.tables.at(-1).columns), ['项目名称', '项目类型', '#项目进度']);
+
+    const newSession = storage.loadState(fallback, 'chat:custom-new');
+    assert.deepEqual(Array.from(newSession.tables.at(-1).columns), ['名称', '内容']);
+});
+
+test('global custom-table metadata sync preserves an existing session column structure', () => {
+    const sandbox = {
+        DEFAULT_TABLE_IDS: new Set(['character_profile']),
+        loadDeletedCustomTableIds: () => new Set(),
+        loadGlobalCustomTables: () => [{
+            id: 'custom_archive',
+            name: '影视档案',
+            icon: 'chart_bar',
+            columns: ['名称', '内容'],
+        }],
+        result: null,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        extractFunction(memoryWindowSource, 'syncGlobalCustomTablesIntoState', 'migrateSessionCustomTablesToGlobal'),
+        `const state = {
+            activeTableId: 'custom_archive',
+            activeRecordIds: {},
+            records: {},
+            tables: [{
+                id: 'custom_archive',
+                name: '旧名称',
+                icon: 'note',
+                columns: ['项目名称', '项目类型'],
+                hidden: false,
+            }],
+        };`,
+        'syncGlobalCustomTablesIntoState(state);',
+        'result = state;',
+    ].join('\n'), sandbox);
+
+    assert.equal(sandbox.result.tables[0].name, '影视档案');
+    assert.equal(sandbox.result.tables[0].icon, 'chart_bar');
+    assert.deepEqual(Array.from(sandbox.result.tables[0].columns), ['项目名称', '项目类型']);
+});
