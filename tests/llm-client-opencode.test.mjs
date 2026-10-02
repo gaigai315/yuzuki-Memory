@@ -19,12 +19,17 @@ function createResponse(body, options = {}) {
 
 function createClient(fetchImpl, options = {}) {
     let currentSessionId = options.sessionId || 'char:7:chat-a';
+    const elements = options.elements || {};
     const storage = new Map([
         ['yzm_memory_opencode_session_salt', options.salt || '0123456789abcdef0123456789abcdef0123456789abcdef'],
     ]);
     const sandbox = {
         console,
-        document: { getElementById: () => null },
+        document: {
+            getElementById: (id) => Object.prototype.hasOwnProperty.call(elements, id)
+                ? { value: elements[id] }
+                : null,
+        },
         fetch: fetchImpl,
         localStorage: {
             getItem: (key) => storage.get(key) ?? null,
@@ -176,6 +181,59 @@ test('follow-SillyTavern mode preserves custom headers and adds OpenCode session
     const payload = JSON.parse(requests[1].init.body);
     assert.match(payload.custom_include_headers, /^X-Existing: kept$/m);
     assert.match(payload.custom_include_headers, /^x-opencode-session: [a-f0-9-]{36}$/m);
+});
+
+test('follow-SillyTavern mode uses the selected DeepSeek model instead of the OpenAI model', async () => {
+    const requests = [];
+    const settings = {
+        oai_settings: {
+            chat_completion_source: 'deepseek',
+            deepseek_model: 'deepseek-flash',
+            openai_model: 'gpt-4-turbo',
+            openai_max_tokens: 128,
+        },
+    };
+    const { client } = createClient(async (url, init) => {
+        if (url === '/api/settings/get') return createResponse({ settings });
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    });
+
+    const result = await client.generateWithTavern([{ role: 'user', content: 'test' }], { stream: false });
+
+    assert.equal(result.success, true);
+    assert.equal(result.config.source, 'deepseek');
+    assert.equal(result.config.model, 'deepseek-flash');
+    assert.equal(requests[0].model, 'deepseek-flash');
+    assert.notEqual(requests[0].model, 'gpt-4-turbo');
+});
+
+test('follow-SillyTavern mode prefers the live model selector over cached settings', async () => {
+    const requests = [];
+    const settings = {
+        oai_settings: {
+            chat_completion_source: 'deepseek',
+            deepseek_model: 'deepseek-chat',
+            openai_model: 'gpt-4-turbo',
+            openai_max_tokens: 128,
+        },
+    };
+    const { client } = createClient(async (url, init) => {
+        if (url === '/api/settings/get') return createResponse({ settings });
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    }, {
+        elements: {
+            chat_completion_source: 'deepseek',
+            model_deepseek_select: 'deepseek-v4-flash',
+        },
+    });
+
+    const result = await client.generateWithTavern([{ role: 'user', content: 'test' }], { stream: false });
+
+    assert.equal(result.success, true);
+    assert.equal(result.config.model, 'deepseek-v4-flash');
+    assert.equal(requests[0].model, 'deepseek-v4-flash');
 });
 
 test('custom headers do not leak OpenCode affinity to unrelated providers', async () => {

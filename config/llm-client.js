@@ -12,6 +12,46 @@
     const OPENCODE_GO_PROVIDER = 'opencode_go';
     const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1';
     const OPENCODE_SESSION_SALT_STORAGE_KEY = 'yzm_memory_opencode_session_salt';
+    const TAVERN_OPENROUTER_WEBSITE_MODEL = 'OR_Website';
+    const TAVERN_MODEL_BINDINGS = Object.freeze({
+        openai: { setting: 'openai_model', elementIds: ['model_openai_select', 'model_openai'] },
+        claude: { setting: 'claude_model', elementIds: ['model_claude_select', 'model_claude'] },
+        makersuite: { setting: 'google_model', elementIds: ['model_google_select'] },
+        vertexai: { setting: 'vertexai_model', elementIds: ['model_vertexai_select'] },
+        openrouter: { setting: 'openrouter_model', elementIds: ['model_openrouter_select', 'model_openrouter'] },
+        ai21: { setting: 'ai21_model', elementIds: ['model_ai21_select'] },
+        mistralai: { setting: 'mistralai_model', elementIds: ['model_mistralai_select'] },
+        custom: { setting: 'custom_model', elementIds: ['custom_model_id', 'custom_model', 'model_custom_select'] },
+        cohere: { setting: 'cohere_model', elementIds: ['model_cohere_select'] },
+        perplexity: { setting: 'perplexity_model', elementIds: ['model_perplexity_select'] },
+        groq: { setting: 'groq_model', elementIds: ['model_groq_select'] },
+        siliconflow: { setting: 'siliconflow_model', elementIds: ['model_siliconflow_select'] },
+        minimax: { setting: 'minimax_model', elementIds: ['model_minimax_select'] },
+        electronhub: { setting: 'electronhub_model', elementIds: ['model_electronhub_select'] },
+        chutes: { setting: 'chutes_model', elementIds: ['model_chutes_select'] },
+        nanogpt: { setting: 'nanogpt_model', elementIds: ['model_nanogpt_select'] },
+        deepseek: { setting: 'deepseek_model', elementIds: ['model_deepseek_select'] },
+        aimlapi: { setting: 'aimlapi_model', elementIds: ['model_aimlapi_select'] },
+        xai: { setting: 'xai_model', elementIds: ['model_xai_select'] },
+        pollinations: { setting: 'pollinations_model', elementIds: ['model_pollinations_select'] },
+        cometapi: { setting: 'cometapi_model', elementIds: ['model_cometapi_select'] },
+        moonshot: { setting: 'moonshot_model', elementIds: ['model_moonshot_select'] },
+        fireworks: { setting: 'fireworks_model', elementIds: ['model_fireworks_select'] },
+        azure_openai: { setting: 'azure_openai_model', elementIds: ['azure_openai_model'] },
+        zai: { setting: 'zai_model', elementIds: ['model_zai_select'] },
+        workers_ai: { setting: 'workers_ai_model', elementIds: ['model_workers_ai_select'] },
+    });
+    const TAVERN_PROXY_SUPPORTED_SOURCES = new Set([
+        'claude',
+        'openai',
+        'mistralai',
+        'makersuite',
+        'vertexai',
+        'deepseek',
+        'xai',
+        'zai',
+        'moonshot',
+    ]);
     const FORBIDDEN_CUSTOM_HEADERS = new Set([
         'connection',
         'content-length',
@@ -595,31 +635,40 @@
         return payload;
     }
 
+    function getDocumentValue(elementIds = []) {
+        if (typeof document === 'undefined' || typeof document.getElementById !== 'function') return '';
+        for (const elementId of elementIds) {
+            const value = String(document.getElementById(elementId)?.value || '').trim();
+            if (value) return value;
+        }
+        return '';
+    }
+
+    function resolveTavernModel(oai, source) {
+        const binding = TAVERN_MODEL_BINDINGS[source];
+        if (!binding) return '';
+        const model = getDocumentValue(binding.elementIds) || String(oai?.[binding.setting] || '').trim();
+        if (source === 'openrouter' && model === TAVERN_OPENROUTER_WEBSITE_MODEL) return '';
+        return model;
+    }
+
     function resolveTavernConfig(settings = {}, options = {}) {
         const oai = settings.oai_settings || settings || {};
-        const source = document.getElementById('chat_completion_source')?.value || oai.chat_completion_source || 'custom';
-        let model = '';
+        const source = getDocumentValue(['chat_completion_source']) || oai.chat_completion_source || 'custom';
+        const model = resolveTavernModel(oai, source);
         let reverseProxy = '';
         let apiKey = '';
         let customIncludeHeaders = '';
 
         if (source === 'custom') {
-            model = oai.custom_model || document.getElementById('custom_model')?.value || '';
-            reverseProxy = oai.custom_url || document.getElementById('custom_url')?.value || '';
+            reverseProxy = getDocumentValue(['custom_api_url_text', 'custom_url']) || oai.custom_url || '';
             apiKey = oai.custom_key || '';
-            customIncludeHeaders = oai.custom_include_headers || document.getElementById('custom_include_headers')?.value || '';
-        } else if (source === 'openrouter') {
-            model = oai.openrouter_model || document.getElementById('model_openrouter')?.value || '';
-            reverseProxy = 'https://openrouter.ai/api/v1';
-            apiKey = oai.openrouter_key || '';
-        } else if (source === 'claude') {
-            model = oai.claude_model || document.getElementById('model_claude')?.value || '';
-            reverseProxy = oai.claude_reverse_proxy || document.getElementById('claude_reverse_proxy')?.value || '';
-            apiKey = oai.claude_key || '';
-        } else {
-            model = oai.openai_model || document.getElementById('model_openai')?.value || '';
-            reverseProxy = oai.reverse_proxy || document.getElementById('openai_reverse_proxy')?.value || '';
-            apiKey = oai.openai_key || '';
+            customIncludeHeaders = getDocumentValue(['custom_include_headers']) || oai.custom_include_headers || '';
+        } else if (TAVERN_PROXY_SUPPORTED_SOURCES.has(source)) {
+            reverseProxy = getDocumentValue(['openai_reverse_proxy']) || oai.reverse_proxy || '';
+            if (reverseProxy) {
+                apiKey = getDocumentValue(['openai_proxy_access_key']) || oai.proxy_password || '';
+            }
         }
 
         const maxTokens = intFromCandidates([

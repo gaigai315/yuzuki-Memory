@@ -105,14 +105,14 @@ test('vector segment editor remains open without any initial focus call', () => 
     assert.doesNotMatch(source.slice(appendIndex), /\.focus\(/);
 });
 
-test('release metadata and update notice describe both current optimizations', () => {
-    assert.equal(manifest.version, '1.0.3');
-    assert.match(indexSource, /const VERSION = '1\.0\.3';/);
+test('release metadata and update notice describe the Tavern model compatibility fix', () => {
+    assert.equal(manifest.version, '1.0.4');
+    assert.match(indexSource, /const VERSION = '1\.0\.4';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /宏变量统一接入酒馆标准替换入口/);
-    assert.match(noticeSource, /移动端编辑体验/);
-    assert.match(noticeSource, /不再自动弹出输入法/);
+    assert.match(noticeSource, /跟随酒馆当前 API 来源和实时模型选择/);
+    assert.match(noticeSource, /DeepSeek 等来源不再误用 OpenAI 模型/);
+    assert.match(noticeSource, /独立 API 请求路径保持不变/);
 });
 
 test('mobile summary fields provide a large synchronized text editor', () => {
