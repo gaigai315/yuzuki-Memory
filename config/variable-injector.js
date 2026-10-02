@@ -394,6 +394,19 @@
         return lines.map((line) => String(line || '').trim()).filter(Boolean).join('\n');
     }
 
+    function buildVectorRecallText(options = {}) {
+        const genericText = String(options.generic || '').trim();
+        const characterProfileText = String(options.characterProfile || '').trim();
+        const itemTrackingText = String(options.itemTracking || '').trim();
+        const worldSettingText = String(options.worldSetting || '').trim();
+        return [
+            genericText,
+            characterProfileText ? `【角色档案向量召回】\n${characterProfileText}` : '',
+            itemTrackingText ? `【物品追踪向量召回】\n${itemTrackingText}` : '',
+            worldSettingText ? `【世界设定向量召回】\n${worldSettingText}` : '',
+        ].filter(Boolean).join('\n\n');
+    }
+
     function normalizeAnchorName(value) {
         return String(value || '')
             .normalize('NFKC')
@@ -1035,6 +1048,19 @@
         return getRequestArrays(body).some((target) => (
             target.items.some((item) => item?.[flagName] || (marker && getMessageText(item).includes(marker)))
         ));
+    }
+
+    function requestBodyContainsText(body, marker) {
+        const expected = String(marker || '');
+        if (!expected) return false;
+        const scan = (node) => {
+            if (!node) return false;
+            if (typeof node === 'string') return node.includes(expected);
+            if (Array.isArray(node)) return node.some((item) => scan(item));
+            if (typeof node !== 'object') return false;
+            return Object.values(node).some((value) => scan(value));
+        };
+        return scan(body);
     }
 
     function requestBodyContainsMemoryData(body) {
@@ -1848,31 +1874,38 @@
             itemTrackingVectorText = String(vectorText.itemTracking || '');
             worldSettingVectorText = String(vectorText.worldSetting || '');
         }
+        const vectorAnchorText = buildVectorRecallText({
+            generic: genericVectorText,
+            characterProfile: characterProfileVectorText,
+            itemTracking: itemTrackingVectorText,
+            worldSetting: worldSettingVectorText,
+        });
         const extractedTableIds = [...collectSpecificTableAnchorIds(body, state)];
+        const embedSpecializedVectorInTables = !hadVectorVariable;
         const runtimeOptions = {
-            characterProfileText: characterProfileVectorText,
-            itemTrackingText: itemTrackingVectorText,
-            worldSettingText: worldSettingVectorText,
+            characterProfileText: embedSpecializedVectorInTables ? characterProfileVectorText : '',
+            itemTrackingText: embedSpecializedVectorInTables ? itemTrackingVectorText : '',
+            worldSettingText: embedSpecializedVectorInTables ? worldSettingVectorText : '',
             excludeTableIds: extractedTableIds,
         };
-        const replacements = buildVariableReplacements(state, genericVectorText, settings, runtimeOptions);
+        const replacements = buildVariableReplacements(state, vectorAnchorText, settings, runtimeOptions);
         const anchorState = { seen: new Set(), injected: new Set() };
         const injectedVars = new Set();
         if (settings.injectMemoryTable || settings.injectVectorMemory) {
-            replaceMemoryDataAnchorsInRequest(body, state, genericVectorText, injectedVars, {
+            replaceMemoryDataAnchorsInRequest(body, state, vectorAnchorText, injectedVars, {
                 settings,
-                characterProfileText: characterProfileVectorText,
-                itemTrackingText: itemTrackingVectorText,
-                worldSettingText: worldSettingVectorText,
+                characterProfileText: runtimeOptions.characterProfileText,
+                itemTrackingText: runtimeOptions.itemTrackingText,
+                worldSettingText: runtimeOptions.worldSettingText,
                 excludeTableIds: extractedTableIds,
                 preserveUnresolvedVectorAnchors: options.preserveUnresolvedVectorAnchors === true,
             });
         }
         replaceVariablesInNode(body, replacements, anchorState);
 
-        if (settings.injectVectorMemory && genericVectorText && hadVectorVariable) {
+        if (settings.injectVectorMemory && vectorAnchorText && hadVectorVariable) {
             logVectorInfo('已替换 {{VECTOR_MEMORY}} 变量', {
-                contentLength: genericVectorText.length,
+                contentLength: vectorAnchorText.length,
                 replaced: injectedVars.has('VECTOR_MEMORY') || anchorState.injected.has('{{VECTOR_MEMORY}}'),
             });
         }
@@ -1896,19 +1929,26 @@
             if (messages.length > 0) insertInjectedMessages(body, messages);
         }
 
+        const fallbackVectorText = buildVectorRecallText({
+            generic: genericVectorText,
+            characterProfile: requestBodyContainsText(body, '【角色档案向量召回】') ? '' : characterProfileVectorText,
+            itemTracking: requestBodyContainsText(body, '【物品追踪向量召回】') ? '' : itemTrackingVectorText,
+            worldSetting: requestBodyContainsText(body, '【世界设定向量召回】') ? '' : worldSettingVectorText,
+        });
+
         if (
             settings.injectVectorMemory
-            && genericVectorText
+            && fallbackVectorText
             && !disableVectorFallback
             && !hasYuzukiVectorMarker(body)
             && !injectedVars.has('VECTOR_MEMORY')
         ) {
-            insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(genericVectorText)}`, {
+            insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(fallbackVectorText)}`, {
                 isYuzukiVector: true,
                 isGaigaiVector: true,
                 name: 'SYSTEM (向量化)',
             });
-            logVectorInfo('已自动插入向量记忆消息', { contentLength: genericVectorText.length });
+            logVectorInfo('已自动插入向量记忆消息', { contentLength: fallbackVectorText.length });
         }
 
         dedupeTableInjectionMessages(body);

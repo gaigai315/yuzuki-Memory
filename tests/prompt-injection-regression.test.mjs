@@ -310,6 +310,60 @@ test('memory prompt fallback ignores unrelated names and schema flags without du
     }
 });
 
+test('vector anchors include managed table recalls when generic recall is empty', async () => {
+    const sandbox = createBaseSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    const state = { tables: [], records: {}, settings: {} };
+    memory.GlobalSettings = {
+        get(key, fallback) {
+            if (key === 'yzm_memory_global_plugin_settings') {
+                return { injectMemoryTable: true, injectVectorMemory: true };
+            }
+            return fallback;
+        },
+    };
+    memory.Storage = { loadState: () => state };
+    vm.runInContext(variableInjectorSource, sandbox, { filename: 'variable-injector.js' });
+
+    const recalls = {
+        generic: '',
+        characterProfile: '',
+        itemTracking: '物品：旧钥匙；状态：已取得',
+        worldSetting: '设定：地下城宵禁；时间：午夜',
+    };
+    const anchoredBody = {
+        messages: [
+            { role: 'system', content: '既有表格内容', isGaigaiData: true, yzmMemoryInjectionType: 'table' },
+            { role: 'system', content: '{{VECTOR_MEMORY}}' },
+        ],
+    };
+    await memory.VariableInjector.processBody(anchoredBody, {
+        getVectorText: async () => recalls,
+        preserveUnresolvedVectorAnchors: true,
+    });
+
+    const anchoredVector = anchoredBody.messages.find((message) => (
+        String(message.content || '').includes('【系统检索到的历史记忆片段】')
+    ));
+    assert.ok(anchoredVector);
+    assert.match(anchoredVector.content, /【系统检索到的历史记忆片段】/);
+    assert.match(anchoredVector.content, /【物品追踪向量召回】\n物品：旧钥匙；状态：已取得/);
+    assert.match(anchoredVector.content, /【世界设定向量召回】\n设定：地下城宵禁；时间：午夜/);
+    assert.doesNotMatch(JSON.stringify(anchoredBody), /\{\{VECTOR_MEMORY\}\}/);
+
+    const fallbackBody = {
+        messages: [
+            { role: 'system', content: '既有表格内容', isGaigaiData: true, yzmMemoryInjectionType: 'table' },
+            { role: 'user', content: '继续' },
+        ],
+    };
+    await memory.VariableInjector.processBody(fallbackBody, { getVectorText: async () => recalls });
+    const fallbackVector = fallbackBody.messages.find((message) => message.isYuzukiVector === true);
+    assert.ok(fallbackVector);
+    assert.match(fallbackVector.content, /【物品追踪向量召回】/);
+    assert.match(fallbackVector.content, /【世界设定向量召回】/);
+});
+
 test('switching built-in schemes keeps the realtime prompt with existing plot records', () => {
     const sandbox = createBaseSandbox();
     const memory = sandbox.window.YuzukiMemory;

@@ -1171,7 +1171,13 @@
     function bodyContainsYuzukiVector(body) {
         return getRequestArrays(body).some((target) => target.items.some((item) => {
             if (item?.isYuzukiVector === true) return true;
-            return getMessageText(item).includes('【系统检索到的历史记忆片段】');
+            const text = getMessageText(item);
+            return [
+                '【系统检索到的历史记忆片段】',
+                '【角色档案向量召回】',
+                '【物品追踪向量召回】',
+                '【世界设定向量召回】',
+            ].some((marker) => text.includes(marker));
         }));
     }
 
