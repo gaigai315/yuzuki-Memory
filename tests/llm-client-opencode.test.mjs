@@ -71,12 +71,17 @@ const openCodeConfig = {
     stream: false,
 };
 
-test('assistant prefill detection tolerates an unavailable Tavern config', () => {
+test('assistant prefill detection excludes every Gemini Flash model', () => {
     const { client } = createClient(async () => createResponse({}));
 
     assert.equal(client.supportsAssistantPrefill(null), false);
     assert.equal(client.supportsAssistantPrefill(undefined), false);
     assert.equal(client.supportsAssistantPrefill({ source: 'openai', model: 'gemini-2.5-pro' }), true);
+    assert.equal(client.supportsAssistantPrefill({ source: 'openai', model: 'gemini-3-flash-preview' }), false);
+    assert.equal(client.supportsAssistantPrefill({ source: 'openai', model: 'gemini-3.7-flash' }), false);
+    assert.equal(client.supportsAssistantPrefill({ source: 'openai', model: 'gemini-3.8-flash-preview' }), false);
+    assert.equal(client.supportsAssistantPrefill({ source: 'openai', model: 'gemini-2.5-flash-lite' }), false);
+    assert.equal(client.supportsAssistantPrefill({ source: 'openai', model: 'gemini-flash-latest' }), false);
 });
 
 test('OpenCode Go proxy requests carry a stable opaque session header per chat', async () => {

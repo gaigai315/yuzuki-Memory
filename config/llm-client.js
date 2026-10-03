@@ -507,8 +507,9 @@
         const provider = String(config?.provider || config?.source || '').trim().toLowerCase();
         const model = String(config?.model || '').trim().toLowerCase();
         if (provider === 'makersuite' || shouldUseGeminiNative(config)) return false;
-        if (/gemini-3\.(?:6|7|8)-flash(?:-|$)/.test(model)) return false;
-        return model.includes('gemini');
+        const isGeminiModel = model.includes('gemini');
+        if (isGeminiModel && /(?:^|[-_.])flash(?:[-_.]|$)/.test(model)) return false;
+        return isGeminiModel;
     }
 
     function resolveGeminiGenerateUrl(apiUrl, model, apiKey = '') {
