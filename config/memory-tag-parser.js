@@ -113,6 +113,7 @@
             storyDirector: {
                 enabled: false,
                 enabledUpdatedAt: 0,
+                ledgerVersion: 2,
                 ledger: '',
                 pendingCard: '',
                 source: null,

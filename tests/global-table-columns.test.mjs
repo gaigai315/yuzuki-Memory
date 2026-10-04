@@ -95,6 +95,7 @@ function createFallbackState() {
         storyDirector: {
             enabled: false,
             enabledUpdatedAt: 0,
+            ledgerVersion: 2,
             ledger: '',
             pendingCard: '',
             source: null,
@@ -196,6 +197,58 @@ test('story director enabled state is isolated per session and legacy global val
     disabledState.storyDirector.enabled = false;
     localStorage.setItem(storage.getStorageKey(disabledSessionId), JSON.stringify(disabledState));
     assert.equal(storage.loadState(fallback, disabledSessionId).storyDirector.enabled, false);
+});
+
+test('legacy story director records are cleared and persisted as ledger version 2', () => {
+    const { storage, localStorage } = createStorageSandbox();
+    const fallback = createFallbackState();
+    const sessionId = 'chat:legacy-director-ledger';
+    const legacyState = structuredClone(fallback);
+    legacyState.sessionId = sessionId;
+    legacyState.storyDirector = {
+        enabled: true,
+        ledgerVersion: 1,
+        ledger: '旧版导演账本',
+        pendingCard: '<下轮导演卡>旧卡</下轮导演卡>',
+        source: {
+            sessionId,
+            assistantIndex: 3,
+            messageIndex: 3,
+            role: 'assistant',
+            swipeId: 0,
+            signature: 'legacy-source',
+        },
+        messageCards: [{
+            user: {
+                sessionId,
+                messageIndex: 4,
+                role: 'user',
+                swipeId: 0,
+                signature: 'legacy-user',
+            },
+            card: '<下轮导演卡>旧绑定卡</下轮导演卡>',
+        }],
+        status: 'ready',
+    };
+    localStorage.setItem(storage.getStorageKey(sessionId), JSON.stringify(legacyState));
+
+    const migrated = storage.loadState(fallback, sessionId);
+    assert.equal(migrated.storyDirector.ledgerVersion, 2);
+    assert.equal(migrated.storyDirector.ledger, '');
+    assert.equal(migrated.storyDirector.pendingCard, '');
+    assert.equal(migrated.storyDirector.source, null);
+    assert.deepEqual(Array.from(migrated.storyDirector.messageCards), []);
+    assert.equal(migrated.storyDirector.status, 'idle');
+    assert.equal(migrated.storyDirector.lastError, '');
+
+    const persisted = JSON.parse(localStorage.getItem(storage.getStorageKey(sessionId)));
+    assert.equal(persisted.storyDirector.ledgerVersion, 2);
+    assert.equal(persisted.storyDirector.ledger, '');
+    assert.equal(persisted.storyDirector.pendingCard, '');
+    assert.equal(persisted.storyDirector.source, null);
+    assert.deepEqual(persisted.storyDirector.messageCards, []);
+    assert.equal(persisted.storyDirector.status, 'idle');
+    assert.equal(persisted.storyDirector.lastError, '');
 });
 
 test('cloud chat metadata outranks browser cache for all tables and receives current-state saves', () => {

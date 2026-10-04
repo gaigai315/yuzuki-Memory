@@ -196,6 +196,7 @@
             storyDirector: {
                 enabled: false,
                 enabledUpdatedAt: 0,
+                ledgerVersion: 2,
                 ledger: '',
                 pendingCard: '',
                 source: null,
@@ -405,6 +406,26 @@
             itemTrackingText ? `【物品追踪向量召回】\n${itemTrackingText}` : '',
             worldSettingText ? `【世界设定向量召回】\n${worldSettingText}` : '',
         ].filter(Boolean).join('\n\n');
+    }
+
+    function buildVectorMemoryMessage(vectorText = '') {
+        const text = vectorText && typeof vectorText === 'object'
+            ? buildVectorRecallText({
+                generic: vectorText.generic || vectorText.text || '',
+                characterProfile: vectorText.characterProfile || '',
+                itemTracking: vectorText.itemTracking || '',
+                worldSetting: vectorText.worldSetting || '',
+            })
+            : String(vectorText || '').trim();
+        if (!text) return null;
+        return {
+            role: 'system',
+            content: `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(text)}`,
+            name: 'SYSTEM (向量化)',
+            isGaigaiVector: true,
+            isYuzukiVector: true,
+            yzmMemoryInjectionType: 'vector',
+        };
     }
 
     function normalizeAnchorName(value) {
@@ -1471,13 +1492,8 @@
                 if (settings.injectVectorMemory === false) return [];
                 if (!vectorText) return options.preserveUnresolvedVectorAnchors === true ? null : [];
                 injectedVars.add('VECTOR_MEMORY');
-                return [{
-                    role: 'system',
-                    content: `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(vectorText)}`,
-                    name: 'SYSTEM (向量化)',
-                    isGaigaiVector: true,
-                    isYuzukiVector: true,
-                }];
+                const message = buildVectorMemoryMessage(vectorText);
+                return message ? [message] : [];
             }
 
             return [];
@@ -1943,12 +1959,12 @@
             && !hasYuzukiVectorMarker(body)
             && !injectedVars.has('VECTOR_MEMORY')
         ) {
-            insertInjectedMessage(body, `${VECTOR_MARKER}\n\n${resolveRuntimeVariables(fallbackVectorText)}`, {
-                isYuzukiVector: true,
-                isGaigaiVector: true,
-                name: 'SYSTEM (向量化)',
-            });
-            logVectorInfo('已自动插入向量记忆消息', { contentLength: fallbackVectorText.length });
+            const message = buildVectorMemoryMessage(fallbackVectorText);
+            if (message) {
+                const { role: _role, content, ...flags } = message;
+                insertInjectedMessage(body, content, flags);
+                logVectorInfo('已自动插入向量记忆消息', { contentLength: fallbackVectorText.length });
+            }
         }
 
         dedupeTableInjectionMessages(body);
@@ -1980,6 +1996,7 @@
         normalizeTimedPromptInjection,
         buildSummaryMessageEntries,
         buildTableMessageEntries,
+        buildVectorMemoryMessage,
         createPromptMemoryMessage,
         getRequestArrays,
         registerSillyTavernMacros,

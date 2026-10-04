@@ -9,41 +9,21 @@ const vectorStoreSource = fs.readFileSync(new URL('../config/vector-store.js', i
 const memoryWindowSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
 const memoryCssSource = fs.readFileSync(new URL('../styles/memory.css', import.meta.url), 'utf8');
 
-function createToolResponse(name, args = '{}') {
-    const call = { id: 'plan-output', type: 'function', function: { name, arguments: args } };
-    return {
-        success: true,
-        message: { role: 'assistant', content: '', tool_calls: [call] },
-        toolCalls: [call],
-    };
-}
-
-function createPlanResponse({
-    card = '<下轮导演卡>推进支线。</下轮导演卡>',
-    ledger = '新账本',
-    actualTrackB = { occurred: false, roles: '', event: '' },
-} = {}) {
-    return createToolResponse('yzm_story_submit_plan', JSON.stringify({ card, ledger, actualTrackB }));
-}
-
-function createTaggedPlanText({
-    card = '<下轮导演卡>推进支线。</下轮导演卡>',
-    ledger = '新账本',
-    actualTrackB = { occurred: false, roles: '', event: '' },
-} = {}) {
-    return [
-        '<剧情规划提交>',
-        card,
-        `<导演账本>${ledger ?? ''}</导演账本>`,
-        `<轨道B是否发生>${actualTrackB?.occurred === true ? '是' : '否'}</轨道B是否发生>`,
-        `<轨道B实际角色>${actualTrackB?.roles || ''}</轨道B实际角色>`,
-        `<轨道B事件摘要>${actualTrackB?.event || ''}</轨道B事件摘要>`,
-        '</剧情规划提交>',
+function createRoleLedgerResponse({ roster = [], occurred = false, entries = [] } = {}) {
+    const text = [
+        '<角色账本更新>',
+        ...roster.map((entry) => `[${entry.name}] | ${entry.type} | 状态: ${entry.status}`),
+        '</角色账本更新>',
+        '<轨道B最后一轮角色出场账本>',
+        `发生: ${occurred ? '是' : '否'}`,
+        ...(occurred ? entries.map((entry) => `[${entry.name}] | ${entry.event}`) : []),
+        '</轨道B最后一轮角色出场账本>',
     ].join('\n');
+    return { success: true, message: { role: 'assistant', content: text }, text, toolCalls: [] };
 }
 
-function createTaggedPlanResponse(options = {}) {
-    const text = createTaggedPlanText(options);
+function createCardResponse(card = '<下轮导演卡>推进支线。</下轮导演卡>') {
+    const text = String(card || '');
     return { success: true, message: { role: 'assistant', content: text }, text, toolCalls: [] };
 }
 
@@ -52,41 +32,104 @@ function createTrackBCard(roles, module, plot = '推进支线') {
         + '\n所属模块：' + module + '\n剧情推演：' + plot + '\n</下轮导演卡>';
 }
 
-function readSection(messages, title, parseJson = true) {
+function readSection(messages, title, parseJson = true, required = true) {
     const prefix = `【${title}】\n`;
     const message = messages.find((item) => item.role === 'system' && item.content?.startsWith(prefix));
-    assert.ok(message, `${title} must be present before requesting the model`);
+    if (!message) {
+        if (required) assert.fail(`${title} must be present before requesting the model`);
+        return parseJson ? null : '';
+    }
     const content = message.content.slice(prefix.length);
     return parseJson ? JSON.parse(content) : content;
 }
 
+function readChatContext(messages) {
+    const prefix = '【最近剧情正文】\n';
+    const markerIndex = messages.findIndex((item) => item.role === 'system' && item.content?.startsWith(prefix));
+    assert.ok(markerIndex >= 0, '最近剧情正文 must be present before requesting the model');
+    const visibleMessages = [];
+    for (let index = markerIndex + 1; index < messages.length; index += 1) {
+        const message = messages[index];
+        if (message.role !== 'user' && message.role !== 'assistant') break;
+        visibleMessages.push(message);
+    }
+    const chatMessages = visibleMessages.map((message) => {
+        const rawContent = String(message.content || '');
+        const targetMatch = rawContent.match(/^\[楼层 (\d+)\] 当前核验目标为此楼正文；[^\n]*\n([\s\S]*)$/);
+        return {
+            floor: targetMatch ? Number(targetMatch[1]) : null,
+            role: message.role,
+            content: targetMatch ? targetMatch[2] : rawContent,
+        };
+    });
+    return { messages: chatMessages };
+}
+
 function readContext(messages) {
-    const profiles = readSection(messages, '角色卡与用户卡信息');
-    const worldbooks = readSection(messages, '世界书信息', false);
-    const memory = readSection(messages, '全部启用表格（含总结）与向量召回');
-    const chat = readSection(messages, '最近剧情正文');
+    const profileMessages = messages.filter((message) => {
+        const content = String(message?.content || '');
+        return content.startsWith('【用户卡】') || content.startsWith('【角色卡：');
+    }).map((message) => ({
+        name: String(message?.name || ''),
+        content: String(message?.content || ''),
+    }));
+    const worldbooks = readSection(messages, '世界书信息', false, false);
+    const memoryMessages = messages.filter((message) => {
+        const name = String(message?.name || '');
+        const content = String(message?.content || '');
+        return /^SYSTEM\s*\(总结/i.test(name)
+            || content.startsWith('【当前世界状态参考 - ')
+            || content.startsWith('【系统检索到的历史记忆片段】');
+    });
+    const tables = memoryMessages
+        .filter((message) => !String(message.content || '').startsWith('【系统检索到的历史记忆片段】'))
+        .map((message) => {
+            const name = /^SYSTEM\s*\(总结/i.test(String(message.name || ''))
+                ? '记忆总结'
+                : (String(message.name || '').match(/^SYSTEM\s*\(([^)]+)\)/i)?.[1] || '');
+            return {
+                name,
+                content: String(message.content || ''),
+                records: [{ values: { 总结内容: String(message.content || '') } }],
+            };
+        });
+    const vectors = memoryMessages
+        .filter((message) => String(message.content || '').startsWith('【系统检索到的历史记忆片段】'))
+        .map((message) => String(message.content || '').replace(/^【系统检索到的历史记忆片段】\s*/, '').trim())
+        .filter(Boolean);
+    const chat = readChatContext(messages);
     const director = readSection(messages, '导演账本与本轮核验信息');
     return {
-        profiles,
+        profileMessages,
         worldbooks,
-        tables: memory.tables,
-        vectors: memory.vectors,
+        memoryMessages,
+        tables,
+        vectors,
         chat,
         ledger: director.ledger,
         anchor: director.anchor,
-        actualTrackBReview: director.actualTrackBReview,
+        latestAssistantReview: director.latestAssistantReview,
+    };
+}
+
+function withoutReviewFloorMarkers(context) {
+    return {
+        ...context,
+        chat: {
+            messages: context.chat.messages.map(({ floor: _floor, ...message }) => message),
+        },
     };
 }
 
 function readDirectorRules(messages) {
-    const message = messages.find((item) => item.role === 'system'
-        && item.content?.startsWith('所选剧情导演提示词决定'));
-    assert.ok(message, 'director runtime rules must be present before requesting the model');
+    const message = messages.at(-1);
+    assert.equal(message?.role, 'user', 'director runtime rules must be the final user instruction');
+    assert.match(message?.content || '', /^请根据基础资料和已经更新完成的总账/);
     return message.content;
 }
 
 function isReview(messages) {
-    return messages.at(-1)?.content?.startsWith('第二轮：') === true;
+    return messages.at(-1)?.content?.startsWith('请根据基础资料和已经更新完成的总账') === true;
 }
 
 function createSandbox(options = {}) {
@@ -111,6 +154,7 @@ function createSandbox(options = {}) {
         },
         storyDirector: {
             ...(enabled === null ? {} : { enabled: enabled === true }),
+            ledgerVersion: options.ledgerVersion ?? 2,
             ledger: initialLedger,
             pendingCard: '',
             source: null,
@@ -158,12 +202,19 @@ function createSandbox(options = {}) {
                 first_mes: '角色卡开场消息',
                 mes_example: '角色卡对话示例',
                 creator_notes: '角色卡作者备注',
+                system_prompt: '角色卡系统提示',
+                post_history_instructions: '角色卡后置提示',
+                extensions: { depth_prompt: { prompt: '角色卡深度提示' } },
             },
         }],
         eventSource: { on(name, handler) { eventBindings.push({ name, handler }); } },
         eventTypes: {
             CHARACTER_MESSAGE_RENDERED: 'character_message_rendered',
             MESSAGE_RECEIVED: 'message_received',
+            MESSAGE_SWIPED: 'message_swiped',
+            MESSAGE_EDITED: 'message_edited',
+            MESSAGE_UPDATED: 'message_updated',
+            MESSAGE_DELETED: 'message_deleted',
             GENERATION_STARTED: 'generation_started',
             CHAT_CHANGED: 'chat_id_changed',
         },
@@ -243,8 +294,10 @@ function createSandbox(options = {}) {
                 requests.push(structuredClone(messages));
                 requestOptions.push({ tools: structuredClone(availableTools), ...options });
                 return isReview(messages)
-                    ? createTaggedPlanResponse()
-                    : createTaggedPlanResponse({ card: '<下轮导演卡>草案，尚未审定。</下轮导演卡>', ledger: '未审定账本' });
+                    ? createCardResponse()
+                    : createRoleLedgerResponse({
+                        roster: [{ name: '甲', type: '配角', status: '有效' }],
+                    });
             },
         },
     };
@@ -279,6 +332,7 @@ function createSandbox(options = {}) {
     return {
         sandbox,
         memory,
+        context,
         chat,
         requests,
         requestOptions,
@@ -357,7 +411,7 @@ async function createVectorStoreMetadataSandbox(contextMetadata = {}, windowMeta
     return { memory, contextMetadata, windowMetadata, getSaveChatCalls: () => saveChatCalls };
 }
 
-test('director prepares all data before request one and saves only the reviewed result after two requests', async () => {
+test('director inventories roles first and saves the merged ledger with the second-pass card', async () => {
     const { memory, chat, requests, requestOptions, directorCaptures, getState } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
     getState().records.character_profile.push({ id: 'private', hidden: true, values: { 角色名: '隐藏角色不应发送' } });
@@ -366,40 +420,75 @@ test('director prepares all data before request one and saves only the reviewed 
 
     assert.equal(result.success, true);
     assert.equal(requests.length, 2);
-    assert.equal(getState().storyDirector.ledger, '新账本');
+    assert.match(getState().storyDirector.ledger, /【剧情角色名册】\n\[甲\] \| 配角 \| 状态: 有效/);
+    assert.match(getState().storyDirector.ledger, /【轨道B最近20轮角色出场账本】\n距今1轮轨道B剧情: 未发生/);
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>推进支线。</下轮导演卡>');
     assert.equal(getState().storyDirector.status, 'ready');
     assert.deepEqual(requests[0].map((message) => message.role), [
-        'system', 'system', 'system', 'system', 'system', 'system', 'system', 'user',
+        'system', 'system', 'system', 'system', 'system', 'system', 'system', 'user', 'assistant', 'system', 'user',
     ]);
-    assert.equal(requests[0][0].content, 'DEFAULT_STORY_DIRECTOR_PROMPT');
-    assert.match(requests[0][1].content, /^【角色卡与用户卡信息】/);
-    assert.match(requests[0][2].content, /^【世界书信息】/);
-    assert.match(requests[0][3].content, /^【全部启用表格（含总结）与向量召回】/);
-    assert.match(requests[0][4].content, /^【最近剧情正文】/);
-    assert.match(requests[0][5].content, /^所选剧情导演提示词决定/);
-    assert.match(requests[0][6].content, /^【导演账本与本轮核验信息】/);
-    assert.equal(requests[0].at(-1).content, '第一轮：核验与起草。先阅读所有给出的数据，根据后台剧情导演中枢规则，拟定下一轮导演卡草案与导演账本，使用规定的 <剧情规划提交> 标签一次完整交付。');
-    assert.equal(requests[0].filter((message) => message.role === 'user').length, 1);
+    assert.match(requests[0][0].content, /^Role: 剧情角色账本维护专家/);
+    assert.match(requests[0][0].content, /【轨道A\(主角层\)】定义：聚焦于与用户同场景下的角色故事。/);
+    assert.match(requests[0][0].content, /【轨道B\(世界层\)】定义：必须构建不同于轨道A的场景下的不同角色支线剧情。/);
+    assert.doesNotMatch(requests[0][0].content, /\{\{user\}\}/);
+    assert.equal(requests[0][1].content, '【用户卡】\n用户卡中的背景资料');
+    assert.equal(requests[0][2].name, 'SYSTEM (角色卡 - 角色)');
+    assert.equal(requests[0][2].content, '【角色卡：角色】\n' + [
+        '角色卡中的人物描述',
+        '冷静而谨慎',
+        '角色卡中的故事背景',
+        '角色卡开场消息',
+        '角色卡对话示例',
+        '角色卡作者备注',
+        '角色卡系统提示',
+        '角色卡后置提示',
+        '角色卡深度提示',
+    ].join('\n\n'));
+    assert.match(requests[0][3].content, /^【世界书信息】/);
+    assert.equal(requests[0][4].name, 'SYSTEM(总结1)');
+    assert.match(requests[0][4].content, /前100楼总结/);
+    assert.equal(requests[0][5].name, 'SYSTEM (角色档案)');
+    assert.match(requests[0][5].content, /【当前世界状态参考 - 角色档案】/);
+    assert.match(requests[0][6].content, /^【最近剧情正文】/);
+    assert.equal(requests[0][7].role, 'user');
+    assert.equal(requests[0][7].content, '当前行动');
+    assert.equal(requests[0][8].role, 'assistant');
+    assert.match(requests[0][8].content, /^\[楼层 3\] 当前核验目标为此楼正文；根据此楼内容更新<角色账本更新>及<轨道B最后一轮角色出场账本>。\n最新正文$/);
+    assert.match(requests[0][9].content, /^【导演账本与本轮核验信息】/);
+    assert.match(requests[0].at(-1).content, /^第一轮：只更新角色账本/);
+    assert.equal(requests[0].filter((message) => message.role === 'user').length, 2);
     assert.doesNotMatch(JSON.stringify(requests[0]), /【本轮完整资料】/);
     const context = readContext(requests[0]);
-    assert.match(context.profiles.user.persona, /用户卡中的背景资料/);
-    assert.match(context.profiles.characters[0].description, /角色卡中的人物描述/);
-    assert.match(context.profiles.characters[0].personality, /冷静而谨慎/);
-    assert.match(context.profiles.characters[0].scenario, /角色卡中的故事背景/);
-    assert.match(context.profiles.characters[0].firstMessage, /角色卡开场消息/);
-    assert.match(context.profiles.characters[0].exampleDialogue, /角色卡对话示例/);
-    assert.match(context.profiles.characters[0].creatorNotes, /角色卡作者备注/);
+    assert.deepEqual(context.profileMessages, [
+        { name: 'SYSTEM (用户卡)', content: '【用户卡】\n用户卡中的背景资料' },
+        { name: 'SYSTEM (角色卡 - 角色)', content: requests[0][2].content },
+    ]);
     assert.match(context.worldbooks, /世界书中的已选条目/);
     assert.match(JSON.stringify(context.tables), /前100楼总结/);
     assert.doesNotMatch(JSON.stringify(context.tables), /不应出现|隐藏角色不应发送/);
     assert.deepEqual(context.vectors, []);
+    requests.forEach((messages) => {
+        const serialized = JSON.stringify(messages);
+        assert.doesNotMatch(serialized, /"tables"\s*:|"records"\s*:|"values"\s*:|record_\d+/);
+        assert.doesNotMatch(serialized, /"user"\s*:|"persona"\s*:|"characters"\s*:|"description"\s*:/);
+        assert.match(serialized, /【当前世界状态参考 - 角色档案】/);
+    });
     assert.deepEqual(context.chat.messages.map((message) => message.content), ['当前行动', '最新正文']);
     assert.equal(context.ledger, '旧账本');
     assert.deepEqual(context.anchor, { floor: 3, role: 'assistant' });
-    assert.deepEqual(readContext(requests[1]), context);
-    assert.match(JSON.stringify(requests[1]), /草案，尚未审定|未审定账本/);
-    assert.match(requests[1].at(-1).content, /事件去重|同义重复|用户自主权|不为改写而改写/);
+    const planningContext = readContext(requests[1]);
+    assert.equal(requests[1][0].content, 'DEFAULT_STORY_DIRECTOR_PROMPT');
+    assert.deepEqual(withoutReviewFloorMarkers({
+        ...planningContext,
+        ledger: context.ledger,
+        latestAssistantReview: context.latestAssistantReview,
+    }), withoutReviewFloorMarkers(context));
+    assert.match(planningContext.ledger, /剧情角色名册|轨道B最近20轮角色出场账本/);
+    assert.deepEqual(context.latestAssistantReview, { assistantFloor: 3, shouldRecord: true });
+    assert.equal(planningContext.latestAssistantReview, null);
+    assert.match(requests[1].at(-1).content, /^请根据基础资料和已经更新完成的总账/);
+    assert.equal(requests[1].some((message) => message.role === 'system'
+        && message.content?.includes('这是第二轮最终规划')), false);
     assert.deepEqual(chat, originalChat);
     for (const options of requestOptions) {
         assert.deepEqual(options.tools, []);
@@ -461,7 +550,8 @@ test('manual replan uses the currently selected story director prompt', async ()
 
     assert.equal(result.success, true);
     assert.equal(requests[0][0].role, 'system');
-    assert.equal(requests[0][0].content, 'CUSTOM_STORY_DIRECTOR_PROMPT');
+    assert.match(requests[0][0].content, /^Role: 剧情角色账本维护专家/);
+    assert.equal(requests[1][0].content, 'CUSTOM_STORY_DIRECTOR_PROMPT');
 });
 
 test('story director resolves user and character variables in prompts and cards', async () => {
@@ -474,12 +564,14 @@ test('story director resolves user and character variables in prompts and cards'
     });
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        return createPlanResponse({ card: '<下轮导演卡>{{char}} 回应 {{user}} 的行动，{{customMacro::状态}}。</下轮导演卡>' });
+        return isReview(messages)
+            ? createCardResponse('<下轮导演卡>{{char}} 回应 {{user}} 的行动，{{customMacro::状态}}。</下轮导演卡>')
+            : createRoleLedgerResponse();
     };
 
     const runtime = memory.StoryDirectorRuntime;
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
-    assert.equal(requests[0][0].content, '为 用户 与 角色 规划下一轮：自定义宏已展开。');
+    assert.equal(requests[1][0].content, '为 用户 与 角色 规划下一轮：自定义宏已展开。');
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>角色 回应 用户 的行动，自定义宏已展开。</下轮导演卡>');
     assert.equal(runtime.getCurrentDirectorCard().content, '角色 回应 用户 的行动，自定义宏已展开。');
 
@@ -556,7 +648,7 @@ test('current director card prefers the latest pending card and never falls back
     assert.equal(runtime.getCurrentDirectorCard().origin, 'bound');
 });
 
-test('director ledger removes plot history sections while preserving later scheduling sections', async () => {
+test('director ledger removes plot history sections and only applies first-pass roster updates', async () => {
     const oldLedger = `【模块轮换】
 - 上轮 Module 2
 
@@ -566,19 +658,12 @@ test('director ledger removes plot history sections while preserving later sched
 
 【角色冷却】
 - 甲：2轮`;
-    const updatedLedger = `## 模块轮换
-- 本轮 Module 3
-
-## 剧情节点和履历
-- 另一段剧情复述
-- 另一段人物经历
-
-## 信息隔离
-- 乙不知道密信内容`;
     const { memory, requests, getState } = createSandbox({ initialLedger: oldLedger });
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        return createPlanResponse({ ledger: updatedLedger });
+        return isReview(messages)
+            ? createCardResponse()
+            : createRoleLedgerResponse({ roster: [{ name: '乙', type: '配角', status: '有效' }] });
     };
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
@@ -588,8 +673,9 @@ test('director ledger removes plot history sections while preserving later sched
     assert.match(readLedger, /角色冷却/);
     assert.doesNotMatch(readLedger, /剧情节点与履历|已发生剧情复述|人物经历/);
     assert.match(getState().storyDirector.ledger, /模块轮换/);
-    assert.match(getState().storyDirector.ledger, /信息隔离/);
-    assert.doesNotMatch(getState().storyDirector.ledger, /剧情节点和履历|另一段剧情复述|另一段人物经历/);
+    assert.match(getState().storyDirector.ledger, /角色冷却/);
+    assert.match(getState().storyDirector.ledger, /【剧情角色名册】\n\[乙\] \| 配角 \| 状态: 有效/);
+    assert.doesNotMatch(getState().storyDirector.ledger, /剧情节点和履历|剧情复述|人物经历/);
 });
 
 test('a generated Track B card is not recorded as an actual event before正文 uses it', async () => {
@@ -597,20 +683,19 @@ test('a generated Track B card is not recorded as an actual event before正文 u
     const card = createTrackBCard('[林雪、赵衡]', '[Module 2]', '城西马场休息；马会结束后返回府邸');
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        return createPlanResponse({ card, ledger: '【信息隔离】\n- 林雪不知道密信内容' });
+        return isReview(messages) ? createCardResponse(card) : createRoleLedgerResponse();
     };
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
-    const rules = readDirectorRules(requests[0]);
-    assert.match(rules, /严禁调用以下轨道B已经发生过的历史（近10轮）/);
-    assert.match(rules, /由插件维护，只用于识别已经发生的轨道B历史/);
-    assert.match(rules, /不得在输出 ledger 中新增、删除或改写该清单/);
-    assert.match(rules, /不得把其中任何事件直接当作下一轮候选/);
-    assert.match(rules, /不得把导演卡签发的三个候选方向直接当成已发生事件/);
-    assert.doesNotMatch(rules, /优先选择出现次数最少|连续4次未出现|最近3次调用|跨日不得|所选模块必须落实/);
+    const rules = readDirectorRules(requests[1]);
+    assert.match(rules, /【轨道B最近20轮角色出场账本】视为已经发生的轨道B事件禁用清单/);
+    assert.match(rules, /且必须推进剧情的发展/);
+    assert.match(rules, /不得修改、重写或输出任何账本内容/);
+    assert.match(rules, /严格遵守【后台剧情导演中枢】规则更新<下轮导演卡>内容/);
     assert.doesNotMatch(getState().storyDirector.ledger, /轨道B调用历史|城西马场|马会结束/);
     assert.match(getState().storyDirector.ledger, /【信息隔离】/);
+    assert.match(getState().storyDirector.ledger, /距今1轮轨道B剧情: 未发生/);
 });
 
 test('Track B history survives a model ledger overwrite without adding unused card candidates', async () => {
@@ -623,15 +708,13 @@ test('Track B history survives a model ledger overwrite without adding unused ca
     const card = createTrackBCard('NPC11、北港商会', 'Module 3');
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        return createPlanResponse({
-            card,
-            ledger: '【信息隔离】\n- 新状态\n\n【轨道B调用历史（近10轮）】\n- Module 3｜出场角色：NPC11',
-        });
+        return isReview(messages) ? createCardResponse(card) : createRoleLedgerResponse();
     };
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
-    const modelLedger = readContext(requests[0]).ledger;
+    const modelLedger = readContext(requests[1]).ledger;
+    assert.doesNotMatch(readContext(requests[0]).ledger, /Module 1｜出场角色：NPC01/);
     assert.match(modelLedger, /【严禁调用以下轨道B已经发生过的历史（近10轮）】/);
     assert.doesNotMatch(modelLedger, /【轨道B调用历史（近10轮）】/);
     assert.match(modelLedger, /Module 1｜出场角色：NPC01/);
@@ -641,8 +724,8 @@ test('Track B history survives a model ledger overwrite without adding unused ca
     assert.match(entries[0], /NPC01/);
     assert.match(entries.at(-1), /Module 2｜出场角色：NPC10/);
     assert.doesNotMatch(ledger, /NPC11|北港商会|推进支线/);
-    assert.match(ledger, /【信息隔离】\n- 新状态/);
-    assert.doesNotMatch(ledger, /【角色冷却】\n- 旧状态/);
+    assert.match(ledger, /【角色冷却】\n- 旧状态/);
+    assert.match(ledger, /距今1轮轨道B剧情: 未发生/);
 });
 
 test('two-pass planning records only the reviewed body event once and invalidates it after a swipe', async () => {
@@ -657,21 +740,30 @@ test('two-pass planning records only the reviewed body event once and invalidate
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
         const context = readContext(messages);
-        let actualTrackB = { occurred: false, roles: '', event: '' };
-        if (context.actualTrackBReview) {
-            actualReviewPasses += 1;
-            assert.equal(context.actualTrackBReview.assistantFloor, 5);
-            assert.match(context.actualTrackBReview.boundCard, /候选A/);
-            if (chat[5].swipe_id !== 1) {
-                actualTrackB = {
-                    occurred: true, roles: '林雪',
-                    event: isReview(messages) ? '林雪在城西马场短暂休整后返回府邸' : '第一轮误写：马会观赛',
-                };
+        if (!isReview(messages)) {
+            let occurred = false;
+            let entries = [];
+            if (context.latestAssistantReview?.assistantFloor === 5
+                && context.latestAssistantReview.shouldRecord === true) {
+                actualReviewPasses += 1;
+                if (chat[5].swipe_id !== 1) {
+                    occurred = true;
+                    entries = [{
+                        name: '林雪',
+                        event: actualReviewPasses === 1
+                            ? '林雪在城西马场短暂休整后返回府邸'
+                            : '林雪重新核验后确认已从城西马场返回府邸',
+                    }];
+                }
             }
+            return createRoleLedgerResponse({ occurred, entries });
+        }
+        if (context.latestAssistantReview) {
+            actualReviewPasses += 1;
         }
         const card = cards[Math.min(completedRuns, cards.length - 1)];
-        if (isReview(messages)) completedRuns += 1;
-        return createPlanResponse({ card, actualTrackB, ledger: '' });
+        completedRuns += 1;
+        return createCardResponse(card);
     };
     const runtime = memory.StoryDirectorRuntime;
     assert.equal((await runtime.replanLatest()).success, true);
@@ -683,32 +775,43 @@ test('two-pass planning records only the reviewed body event once and invalidate
     assert.equal(requests.length, 6);
     assert.equal(actualReviewPasses, 2);
     assert.match(JSON.stringify(readContext(requests[2]).chat), /城西马场，只短暂休整/);
+    assert.deepEqual(readContext(requests[2]).latestAssistantReview, { assistantFloor: 5, shouldRecord: true });
+    assert.doesNotMatch(JSON.stringify(requests[2]), /boundCard|候选A|候选B|候选C/);
+    assert.deepEqual(readContext(requests[4]).latestAssistantReview, { assistantFloor: 5, shouldRecord: true });
+    const repeatedReviewTarget = requests[4].find((message) => message.role === 'assistant' && message.content.includes('城西马场，只短暂休整'));
+    assert.match(repeatedReviewTarget.content, /^\[楼层 5\] 当前核验目标为此楼正文；根据此楼内容更新<角色账本更新>及<轨道B最后一轮角色出场账本>。/);
     const ledger = getState().storyDirector.ledger;
     assert.match(ledger, /Module 1｜出场角色：林雪｜实际事件：林雪在城西马场短暂休整后返回府邸｜正文来源：5\/0\//);
-    assert.equal((ledger.match(/正文来源/g) || []).length, 1);
-    assert.doesNotMatch(ledger, /第一轮误写|候选A|候选B|候选C|马会观赛|马术训练/);
+    assert.match(ledger, /距今1轮轨道B剧情: \[林雪\] \| 林雪重新核验后确认已从城西马场返回府邸｜正文来源：5\/0\//);
+    assert.doesNotMatch(ledger, /距今1轮轨道B剧情: \[林雪\] \| 林雪在城西马场短暂休整后返回府邸/);
+    assert.equal((ledger.match(/正文来源：5\/0\//g) || []).length, 2);
+    assert.doesNotMatch(ledger, /候选A|候选B|候选C|马会观赛|马术训练/);
     const sourceSignature = ledger.match(/正文来源：5\/0\/([^｜|\s]+)/)?.[1] || '';
     assert.ok(sourceSignature);
-    const modelLedger = readContext(requests[4]).ledger;
+    const modelLedger = readContext(requests[3]).ledger;
     assert.match(modelLedger, /【严禁调用以下轨道B已经发生过的历史（近10轮）】/);
     assert.match(modelLedger, /Module 1｜出场角色：林雪｜实际事件：林雪在城西马场短暂休整后返回府邸/);
     assert.doesNotMatch(modelLedger, /正文来源/);
     assert.equal(modelLedger.includes(sourceSignature), false);
-    assert.equal(readContext(requests[5]).ledger, modelLedger);
+    assert.match(modelLedger, /轨道B最近20轮角色出场账本/);
 
     chat[5].swipes = [chat[5].mes, '新分支只继续用户所在场景，没有描写林雪或轨道B。'];
     chat[5].swipe_id = 1;
     assert.equal((await runtime.replanLatest()).success, true);
     assert.equal(requests.length, 8);
-    assert.equal(actualReviewPasses, 4);
-    assert.doesNotMatch(getState().storyDirector.ledger, /城西马场|实际事件|正文来源/);
+    assert.equal(actualReviewPasses, 3);
+    assert.doesNotMatch(getState().storyDirector.ledger, /城西马场|实际事件/);
+    assert.equal(getState().storyDirector.ledger.includes(sourceSignature), false);
+    assert.match(getState().storyDirector.ledger, /距今1轮轨道B剧情: 未发生｜正文来源：5\/1\//);
 });
 
 test('legacy candidate events without a正文 source are removed while module and角色 history stays readable', async () => {
     const initialLedger = `【轨道B调用历史（近10轮）】\n- Module 3｜出场角色：林雪｜场景事件：港口仓库盘点；临时改道调查失踪货物\n\n【信息隔离】\n- 旧状态`;
     const { memory, getState } = createSandbox({ initialLedger });
     const card = createTrackBCard('陈舟', 'Module 4', '下一轮候选');
-    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ card, ledger: getState().storyDirector.ledger });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => isReview(messages)
+        ? createCardResponse(card)
+        : createRoleLedgerResponse();
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
 
@@ -721,17 +824,153 @@ test('legacy candidate events without a正文 source are removed while module an
 test('placeholder or missing Track B fields do not create fake history entries', async () => {
     const { memory, getState } = createSandbox({ initialLedger: '旧账本' });
     const card = createTrackBCard('[指定具体NPC/势力，符合3轮冷却规则与阵营/性别平衡]', '[Module 1 / 2 / 3 / 4]');
-    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ card, ledger: getState().storyDirector.ledger });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => isReview(messages)
+        ? createCardResponse(card)
+        : createRoleLedgerResponse();
 
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    assert.equal(getState().storyDirector.ledger, '旧账本');
+    assert.match(getState().storyDirector.ledger, /^旧账本/);
+    assert.match(getState().storyDirector.ledger, /距今1轮轨道B剧情: 未发生/);
+    assert.doesNotMatch(getState().storyDirector.ledger, /指定具体NPC|Module 1 \/ 2 \/ 3 \/ 4/);
+});
+
+test('role appearance history keeps only the latest 20 completed assistant rounds', async () => {
+    const { memory, chat, getState } = createSandbox({ initialLedger: '', embeddingEnabled: false });
+    const runtime = memory.StoryDirectorRuntime;
+
+    for (let round = 1; round <= 21; round += 1) {
+        if (round > 1) {
+            chat.push({ is_user: true, mes: `第${round}轮用户输入` });
+            chat.push({ is_user: false, mes: `第${round}轮助手正文`, swipe_id: 0 });
+        }
+        assert.equal((await runtime.replanLatest()).success, true);
+    }
+
+    const historyLines = getState().storyDirector.ledger
+        .split('\n')
+        .filter((line) => /^距今\d+轮轨道B剧情:/.test(line));
+    assert.equal(historyLines.length, 20);
+    assert.match(historyLines[0], /^距今20轮轨道B剧情: 未发生｜正文来源：5\/0\//);
+    assert.match(historyLines.at(-1), /^距今1轮轨道B剧情: 未发生｜正文来源：43\/0\//);
+    assert.equal(historyLines.some((line) => line.includes('正文来源：3/0/')), false);
+});
+
+test('a trailing user turn does not record the same latest assistant body twice', async () => {
+    const { memory, chat, requests, getState } = createSandbox({ initialLedger: '', embeddingEnabled: false });
+    const runtime = memory.StoryDirectorRuntime;
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        requests.push(structuredClone(messages));
+        if (isReview(messages)) return createCardResponse();
+        const review = readContext(messages).latestAssistantReview;
+        return createRoleLedgerResponse({
+            occurred: true,
+            entries: review
+                ? [{ name: '甲', event: '甲在最新Assistant正文中完成了交谈' }]
+                : [],
+        });
+    };
+
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.deepEqual(readContext(requests[0]).latestAssistantReview, { assistantFloor: 3, shouldRecord: true });
+    chat.push({ is_user: true, mes: '用户在正文之后补充的新行动' });
+    assert.equal((await runtime.replanLatest()).success, true);
+
+    assert.deepEqual(readContext(requests[2]).latestAssistantReview, { assistantFloor: 3, shouldRecord: false });
+    assert.doesNotMatch(JSON.stringify(requests[2]), /boundCard|所属模块|推进支线。/);
+    const historyLines = getState().storyDirector.ledger
+        .split('\n')
+        .filter((line) => /^距今\d+轮轨道B剧情:/.test(line));
+    assert.equal(historyLines.length, 1);
+    assert.match(historyLines[0], /\[甲\] \| 甲在最新Assistant正文中完成了交谈｜正文来源：3\/0\//);
+    assert.equal((getState().storyDirector.ledger.match(/最新Assistant正文中完成了交谈/g) || []).length, 1);
+});
+
+test('deleting, swiping, or rerolling a planned assistant floor clears its stale ledger records', async () => {
+    const { memory, chat, getState, eventBindings, sandbox } = createSandbox({
+        initialLedger: '',
+        embeddingEnabled: false,
+    });
+    const runtime = memory.StoryDirectorRuntime;
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        if (isReview(messages)) return createCardResponse();
+        const review = readContext(messages).latestAssistantReview;
+        return createRoleLedgerResponse({
+            occurred: !!review,
+            entries: review ? [{ name: '甲', event: `第${review.assistantFloor}楼当前分支事件` }] : [],
+        });
+    };
+    const dispatchBranchEvent = (name, maxDelay) => {
+        const binding = eventBindings.find((entry) => entry.name === name);
+        assert.ok(binding, `${name} must be bound`);
+        sandbox.window.setTimeout = (callback, delay) => {
+            if (Number(delay) <= maxDelay) callback();
+            return 1;
+        };
+        binding.handler();
+    };
+
+    assert.equal((await runtime.replanLatest()).success, true);
+    const firstSource = getState().storyDirector.ledger.match(/正文来源：3\/0\/([^｜|\s]+)/);
+    assert.ok(firstSource);
+    getState().storyDirector.ledger += `\n\n【轨道B调用历史（近10轮）】\n- Module 2｜出场角色：甲｜实际事件：旧分支事件｜正文来源：3/0/${firstSource[1]}`;
+
+    chat[3].swipes = [chat[3].mes, 'Swipe 后的新正文'];
+    chat[3].mes = 'Swipe 后的新正文';
+    chat[3].swipe_id = 1;
+    dispatchBranchEvent('message_swiped', 650);
+    assert.doesNotMatch(getState().storyDirector.ledger, /第3楼当前分支事件|旧分支事件|正文来源：3\/0\//);
+
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.match(getState().storyDirector.ledger, /第3楼当前分支事件｜正文来源：3\/1\//);
+    chat.splice(3, 1);
+    dispatchBranchEvent('message_deleted', 180);
+    assert.doesNotMatch(getState().storyDirector.ledger, /第3楼当前分支事件|正文来源：3\/1\//);
+
+    chat.push({ is_user: false, mes: '重Roll前的正文', swipe_id: 0 });
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.match(getState().storyDirector.ledger, /第3楼当前分支事件｜正文来源：3\/0\//);
+    chat[3].mes = '重Roll后的正文';
+    dispatchBranchEvent('message_updated', 250);
+    assert.doesNotMatch(getState().storyDirector.ledger, /第3楼当前分支事件|正文来源：3\/0\//);
+});
+
+test('deleting an earlier floor rebases surviving assistant ledger sources instead of clearing them', async () => {
+    const { memory, chat, getState, eventBindings, sandbox } = createSandbox({
+        initialLedger: '',
+        embeddingEnabled: false,
+    });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => isReview(messages)
+        ? createCardResponse()
+        : createRoleLedgerResponse({
+            occurred: true,
+            entries: [{ name: '甲', event: '应随楼层位移保留的事件' }],
+        });
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    const sourceMatch = getState().storyDirector.ledger.match(/正文来源：3\/0\/([^｜|\s]+)/);
+    assert.ok(sourceMatch);
+    getState().storyDirector.ledger += `\n\n【轨道B调用历史（近10轮）】\n- Module 3｜出场角色：甲｜实际事件：应随楼层位移保留的事件｜正文来源：3/0/${sourceMatch[1]}`;
+
+    sandbox.window.setTimeout = (callback, delay) => {
+        if (Number(delay) <= 180) callback();
+        return 1;
+    };
+    chat.splice(2, 1);
+    eventBindings.find((entry) => entry.name === 'message_deleted').handler();
+
+    const ledger = getState().storyDirector.ledger;
+    assert.equal((ledger.match(/应随楼层位移保留的事件/g) || []).length, 2);
+    assert.equal((ledger.match(/正文来源：2\/0\//g) || []).length, 2);
+    assert.doesNotMatch(ledger, /正文来源：3\/0\//);
 });
 
 test('deleting, regenerating, or swiping A2 reuses the card bound to U2 and manual planning replaces it', async () => {
     const { memory, chat, getState } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
     const setPlannerCard = (card) => {
-        memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ card });
+        memory.LlmClient.requestAgentWithTavern = async (messages) => isReview(messages)
+            ? createCardResponse(card)
+            : createRoleLedgerResponse();
     };
 
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
@@ -830,7 +1069,10 @@ test('director recalls vectors once and sends only text to both requests and the
     assert.equal(startLog[1].rerank, true);
     for (const messages of requests) {
         assert.deepEqual(readContext(messages).vectors, ['向量中保存的历史线索']);
+        const vectorMessage = messages.find((message) => String(message.content || '').startsWith('【系统检索到的历史记忆片段】'));
+        assert.equal(vectorMessage?.content, '【系统检索到的历史记忆片段】\n\n向量中保存的历史线索');
         assert.doesNotMatch(JSON.stringify(messages), /启用的剧情书 #3|0\.92|"score"|"matches"/);
+        assert.doesNotMatch(JSON.stringify(messages), /"tables"\s*:|"records"\s*:|"values"\s*:/);
     }
     assert.match(JSON.stringify(directorCaptures), /向量中保存的历史线索/);
     assert.doesNotMatch(JSON.stringify(directorCaptures), /启用的剧情书 #3|0\.92/);
@@ -859,7 +1101,13 @@ test('director waits for the single vector recall before starting request one', 
     assert.equal((await run).success, true);
     assert.equal(requests.length, 2);
     assert.deepEqual(readContext(requests[0]).vectors, ['延迟召回内容']);
-    assert.deepEqual(readContext(requests[1]), readContext(requests[0]));
+    const firstContext = readContext(requests[0]);
+    const secondContext = readContext(requests[1]);
+    assert.deepEqual(withoutReviewFloorMarkers({
+        ...secondContext,
+        ledger: firstContext.ledger,
+        latestAssistantReview: firstContext.latestAssistantReview,
+    }), withoutReviewFloorMarkers(firstContext));
     assert.doesNotMatch(JSON.stringify(requests), /不应发送的来源|0\.77|"score"/);
 });
 
@@ -904,7 +1152,17 @@ test('director shares direct-injection rules and uses only the vector text recal
     assert.match(tableText, /常驻角色甲|常驻钥匙|常驻城规/);
     assert.doesNotMatch(tableText, /向量角色乙|向量角色丙|向量账簿|向量港规|隐藏常驻角色/);
     assert.deepEqual(firstContext.vectors, [vectorText]);
-    assert.deepEqual(readContext(requests[1]), firstContext);
+    requests.forEach((messages) => {
+        const serialized = JSON.stringify(messages);
+        assert.doesNotMatch(serialized, /profile-resident|profile-vector-hit|profile-vector-miss|item-resident|world-resident/);
+        assert.doesNotMatch(serialized, /"tables"\s*:|"records"\s*:|"values"\s*:/);
+    });
+    const secondContext = readContext(requests[1]);
+    assert.deepEqual(withoutReviewFloorMarkers({
+        ...secondContext,
+        ledger: firstContext.ledger,
+        latestAssistantReview: firstContext.latestAssistantReview,
+    }), withoutReviewFloorMarkers(firstContext));
 
     const directInjectionText = memory.VariableInjector.buildAllTablesText(state);
     assert.match(directInjectionText, /常驻角色甲|常驻钥匙|常驻城规/);
@@ -991,29 +1249,67 @@ test('vector recall timeout is logged separately and planning continues without 
     assert.doesNotMatch(JSON.stringify(requests), /向量检索超时|timeoutMs/);
 });
 
-test('review can repair a malformed draft without reading data again or adding a third request', async () => {
+test('a malformed first-pass ledger stops before the card request and commits nothing', async () => {
     const { memory, requests, vectorCalls, getState } = createSandbox({ vectorBooks: ['selected-book'] });
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
-        if (!isReview(messages)) return createToolResponse('yzm_story_submit_plan', '{"card":');
-        assert.match(messages.at(-1).content, /第一轮本地校验发现/);
-        return createPlanResponse({ card: '<下轮导演卡>修复后的定稿。</下轮导演卡>' });
+        return { success: true, text: '<角色账本更新>格式错误</角色账本更新>', toolCalls: [] };
     };
-    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    assert.equal(requests.length, 2);
+    const result = await memory.StoryDirectorRuntime.replanLatest();
+    assert.equal(result.success, false);
+    assert.match(result.error, /第一轮账本校验失败/);
+    assert.equal(requests.length, 1);
     assert.equal(vectorCalls.length, 1);
-    assert.deepEqual(readContext(requests[0]), readContext(requests[1]));
-    assert.match(getState().storyDirector.pendingCard, /修复后的定稿/);
+    assert.equal(getState().storyDirector.ledger, '旧账本');
+    assert.equal(getState().storyDirector.pendingCard, '');
 });
 
-test('draft state is never saved or injectable while the review request is pending', async () => {
+test('legacy director state stays cleared even when the first new-format request fails', async () => {
+    const { memory, getState } = createSandbox({
+        ledgerVersion: 1,
+        initialLedger: '旧版导演账本',
+    });
+    getState().storyDirector.pendingCard = '<下轮导演卡>旧版待用卡</下轮导演卡>';
+    getState().storyDirector.source = {
+        sessionId: 'chat:test',
+        assistantIndex: 3,
+        messageIndex: 3,
+        role: 'assistant',
+        swipeId: 0,
+        signature: 'legacy-source',
+    };
+    getState().storyDirector.messageCards = [{
+        user: {
+            sessionId: 'chat:test',
+            messageIndex: 2,
+            role: 'user',
+            swipeId: 0,
+            signature: 'legacy-user',
+        },
+        card: '<下轮导演卡>旧版绑定卡</下轮导演卡>',
+    }];
+    memory.LlmClient.requestAgentWithTavern = async () => ({ success: false, error: 'new request failed' });
+
+    const result = await memory.StoryDirectorRuntime.replanLatest();
+    assert.equal(result.success, false);
+    assert.match(result.error, /new request failed/);
+    assert.equal(getState().storyDirector.ledgerVersion, 2);
+    assert.equal(getState().storyDirector.ledger, '');
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.equal(getState().storyDirector.source, null);
+    assert.deepEqual(getState().storyDirector.messageCards, []);
+});
+
+test('first-pass ledger changes stay provisional while the second request is pending', async () => {
     const { memory, getState } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
     let resolveReview;
     let reviewStarted;
     const started = new Promise((resolve) => { reviewStarted = resolve; });
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
-        if (!isReview(messages)) return createPlanResponse({ ledger: '草案账本' });
+        if (!isReview(messages)) return createRoleLedgerResponse({
+            roster: [{ name: '林雪', type: '配角', status: '有效' }],
+        });
         reviewStarted();
         return new Promise((resolve) => { resolveReview = resolve; });
     };
@@ -1022,25 +1318,59 @@ test('draft state is never saved or injectable while the review request is pendi
     assert.equal(getState().storyDirector.ledger, '旧账本');
     assert.equal(getState().storyDirector.pendingCard, '');
     assert.equal(runtime.getCurrentDirectorCard(), null);
-    resolveReview(createPlanResponse({ card: '<下轮导演卡>审定卡片。</下轮导演卡>', ledger: '审定账本' }));
+    resolveReview(createCardResponse('<下轮导演卡>审定卡片。</下轮导演卡>'));
     assert.equal((await running).success, true);
-    assert.equal(getState().storyDirector.ledger, '审定账本');
+    assert.match(getState().storyDirector.ledger, /\[林雪\] \| 配角 \| 状态: 有效/);
+    assert.match(getState().storyDirector.ledger, /距今1轮轨道B剧情: 未发生/);
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>审定卡片。</下轮导演卡>');
 });
 
-test('combined context reports when no worldbook is enabled', async () => {
+test('combined context omits the worldbook system message when no worldbook is enabled', async () => {
     const { memory, requests } = createSandbox({ worldbookEnabled: false });
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    assert.match(readContext(requests[0]).worldbooks, /未启用或未勾选世界书/);
+    assert.equal(readContext(requests[0]).worldbooks, '');
+    assert.equal(requests[0].some((message) => message.content?.startsWith('【世界书信息】')), false);
+    assert.equal(requests[1].some((message) => message.content?.startsWith('【世界书信息】')), false);
 });
 
-test('review can reject a draft event without adding any history or candidate roles', async () => {
+test('director omits user and character card messages when the cards contain no text', async () => {
+    const { memory, context, requests } = createSandbox();
+    context.powerUserSettings.persona_description = '';
+    context.characters[0] = { name: '角色', data: { name: '角色' } };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+
+    requests.forEach((messages) => {
+        assert.equal(messages.some((message) => String(message.content || '').startsWith('【用户卡】')), false);
+        assert.equal(messages.some((message) => String(message.content || '').startsWith('【角色卡：')), false);
+        assert.equal(messages.some((message) => String(message.content || '').startsWith('【角色卡与用户卡信息】')), false);
+    });
+});
+
+test('director omits empty worldbook and table-vector system messages from both passes', async () => {
+    const { memory, requests, getState } = createSandbox({
+        worldbookEnabled: false,
+        embeddingEnabled: false,
+    });
+    const state = getState();
+    Object.keys(state.records).forEach((tableId) => { state.records[tableId] = []; });
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(requests.length, 2);
+    requests.forEach((messages) => {
+        assert.equal(messages.some((message) => message.content?.startsWith('【世界书信息】')), false);
+        assert.equal(messages.some((message) => message.content?.startsWith('【全部启用表格（含总结）与向量召回】')), false);
+        assert.deepEqual(readContext(messages).tables, []);
+        assert.deepEqual(readContext(messages).vectors, []);
+    });
+});
+
+test('first-pass核验 can reject a planned Track B event without recording candidate roles', async () => {
     const { memory, chat, getState } = createSandbox({ initialLedger: '【信息隔离】\n- 保留旧状态' });
     const runtime = memory.StoryDirectorRuntime;
-    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({
-        card: createTrackBCard('林雪', 'Module 1', '候选1：马场休息；候选2：观赛；候选3：训练'),
-        ledger: getState().storyDirector.ledger,
-    });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => isReview(messages)
+        ? createCardResponse(createTrackBCard('林雪', 'Module 1', '候选1：马场休息；候选2：观赛；候选3：训练'))
+        : createRoleLedgerResponse();
     assert.equal((await runtime.replanLatest()).success, true);
     chat.push({ is_user: true, mes: '继续' });
     assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
@@ -1048,17 +1378,19 @@ test('review can reject a draft event without adding any history or candidate ro
     let passes = 0;
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         passes += 1;
-        assert.ok(readContext(messages).actualTrackBReview);
         if (!isReview(messages)) {
-            return createPlanResponse({ actualTrackB: { occurred: true, roles: '林雪', event: '林雪在马场休息' } });
+            assert.deepEqual(readContext(messages).latestAssistantReview, { assistantFloor: 5, shouldRecord: true });
+            assert.doesNotMatch(JSON.stringify(messages), /候选1|候选2|候选3|boundCard/);
+            return createRoleLedgerResponse({ occurred: false });
         }
-        assert.doesNotMatch(getState().storyDirector.ledger, /林雪|马场/);
-        assert.match(JSON.stringify(messages), /林雪在马场休息/);
-        return createPlanResponse({ ledger: '【信息隔离】\n- 复核确认的状态' });
+        assert.equal(readContext(messages).latestAssistantReview, null);
+        assert.doesNotMatch(readContext(messages).ledger, /林雪在马场休息|候选1|候选2|候选3/);
+        return createCardResponse();
     };
     assert.equal((await runtime.replanLatest()).success, true);
     assert.equal(passes, 2);
-    assert.equal(getState().storyDirector.ledger, '【信息隔离】\n- 复核确认的状态');
+    assert.match(getState().storyDirector.ledger, /距今1轮轨道B剧情: 未发生/);
+    assert.doesNotMatch(getState().storyDirector.ledger, /轨道B调用历史|林雪在马场休息/);
 });
 
 test('both passes reuse one context snapshot while live table edits survive the final save', async () => {
@@ -1072,16 +1404,23 @@ test('both passes reuse one context snapshot while live table edits survive the 
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
         if (!isReview(messages)) getState().records.memory_summary[0].values.总结内容 = '用户在运行中编辑了总结';
-        return createPlanResponse();
+        return isReview(messages) ? createCardResponse() : createRoleLedgerResponse();
     };
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(worldbookReads, 1);
-    assert.deepEqual(readContext(requests[0]), readContext(requests[1]));
+    const firstContext = readContext(requests[0]);
+    const secondContext = readContext(requests[1]);
+    assert.deepEqual(withoutReviewFloorMarkers({
+        ...secondContext,
+        ledger: firstContext.ledger,
+        latestAssistantReview: firstContext.latestAssistantReview,
+    }), withoutReviewFloorMarkers(firstContext));
+    assert.match(secondContext.ledger, /轨道B最近20轮角色出场账本/);
     assert.match(JSON.stringify(readContext(requests[1]).tables), /前100楼总结/);
     assert.equal(getState().records.memory_summary[0].values.总结内容, '用户在运行中编辑了总结');
 });
 
-test('a custom API route receives two full passes with the same tagged submission contract', async () => {
+test('a custom API route receives the ledger pass followed by the card pass', async () => {
     const { memory, requests, getState } = createSandbox();
     const preset = { id: 'director-api', model: 'director-model' };
     memory.TaskRunner.createLlmRequestSnapshot = () => ({ mode: 'custom', preset });
@@ -1092,31 +1431,31 @@ test('a custom API route receives two full passes with the same tagged submissio
         assert.equal(Object.hasOwn(options, 'toolChoice'), false);
         assert.equal(options.emptyResponseMaxRetries, 0);
         requests.push(structuredClone(messages));
-        return createTaggedPlanResponse();
+        return isReview(messages) ? createCardResponse() : createRoleLedgerResponse();
     };
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(requests.length, 2);
-    assert.deepEqual(readContext(requests[0]), readContext(requests[1]));
+    assert.match(requests[0][0].content, /^Role: 剧情角色账本维护专家/);
+    assert.equal(requests[1][0].content, 'DEFAULT_STORY_DIRECTOR_PROMPT');
     assert.equal(getState().storyDirector.status, 'ready');
 });
 
-test('invalid final ledger or actual-event data stops without a third request or partial commit', async (t) => {
+test('invalid second-pass cards stop without committing the provisional ledger', async (t) => {
     const cases = [
-        { name: 'missing ledger', ledger: null },
-        { name: 'unstructured card-only response', text: '<下轮导演卡>只有卡片。</下轮导演卡>' },
-        { name: 'empty card', card: '<下轮导演卡>  </下轮导演卡>' },
-        { name: 'multiple cards', card: '<下轮导演卡>一</下轮导演卡><下轮导演卡>二</下轮导演卡>' },
-        { name: 'unbound actual event', actualTrackB: { occurred: true, roles: '林雪', event: '马场休息' } },
-        { name: 'nonboolean occurrence', actualTrackB: { occurred: 'false', roles: '', event: '' } },
-        { name: 'absent event carrying candidate text', actualTrackB: { occurred: false, roles: '林雪', event: '马场休息' } },
+        { name: 'empty card', text: '<下轮导演卡>  </下轮导演卡>' },
+        { name: 'multiple cards', text: '<下轮导演卡>一</下轮导演卡><下轮导演卡>二</下轮导演卡>' },
+        { name: 'extra text', text: '说明\n<下轮导演卡>推进</下轮导演卡>' },
+        { name: 'missing card', text: '<角色账本更新></角色账本更新>' },
     ];
     for (const item of cases) {
         await t.test(item.name, async () => {
             const { memory, requests, getState } = createSandbox();
             memory.LlmClient.requestAgentWithTavern = async (messages) => {
                 requests.push(structuredClone(messages));
-                if (!isReview(messages)) return createPlanResponse();
-                return item.text ? { success: true, text: item.text, toolCalls: [] } : createPlanResponse(item);
+                if (!isReview(messages)) return createRoleLedgerResponse({
+                    roster: [{ name: '林雪', type: '配角', status: '有效' }],
+                });
+                return { success: true, text: item.text, toolCalls: [] };
             };
             const result = await memory.StoryDirectorRuntime.replanLatest();
             assert.equal(result.success, false);
@@ -1128,29 +1467,25 @@ test('invalid final ledger or actual-event data stops without a third request or
     }
 });
 
-test('final plan can be delivered as a structured JSON text response', async () => {
-    const { memory, getState } = createSandbox();
-    memory.LlmClient.requestAgentWithTavern = async () => {
-        const text = createPlanResponse().toolCalls[0].function.arguments;
-        return { success: true, message: { role: 'assistant', content: text }, text, toolCalls: [] };
-    };
+test('roster updates use the character name as key and preserve the original type', async () => {
+    const initialLedger = '【剧情角色名册】\n[林雪] | 配角 | 状态: 有效';
+    const { memory, getState } = createSandbox({ initialLedger });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => isReview(messages)
+        ? createCardResponse('<下轮导演卡>标签定稿。</下轮导演卡>')
+        : createRoleLedgerResponse({
+            roster: [
+                { name: '林雪', type: '主角', status: '暂时退场' },
+                { name: '陈舟', type: '主角', status: '有效' },
+            ],
+        });
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
-    assert.equal(getState().storyDirector.ledger, '新账本');
-});
-
-test('final plan can be delivered as a tagged text response without tool JSON', async () => {
-    const { memory, getState } = createSandbox();
-    memory.LlmClient.requestAgentWithTavern = async () => createTaggedPlanResponse({
-        card: '<下轮导演卡>标签定稿。</下轮导演卡>',
-        ledger: '标签账本',
-    });
-    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.match(getState().storyDirector.ledger, /\[林雪\] \| 配角 \| 状态: 暂时退场/);
+    assert.match(getState().storyDirector.ledger, /\[陈舟\] \| 主角 \| 状态: 有效/);
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>标签定稿。</下轮导演卡>');
-    assert.equal(getState().storyDirector.ledger, '标签账本');
 });
 
-test('stopping context preparation, drafting or review immediately releases the run and ignores late output', async (t) => {
-    for (const stage of ['prepare', 'draft', 'review']) {
+test('stopping context preparation, ledger analysis or card planning releases the run and ignores late output', async (t) => {
+    for (const stage of ['prepare', 'ledger', 'planning']) {
         await t.test(stage, async () => {
             const { memory, getState, dispatchedEvents } = createSandbox();
             const runtime = memory.StoryDirectorRuntime;
@@ -1165,8 +1500,8 @@ test('stopping context preparation, drafting or review immediately releases the 
             if (stage === 'prepare') memory.VectorStore.whenReady = block;
             memory.LlmClient.requestAgentWithTavern = async (messages) => {
                 requests += 1;
-                if (stage === 'draft' || isReview(messages)) return block();
-                return createPlanResponse({ ledger: '未审定账本' });
+                if (stage === 'ledger' || (stage === 'planning' && isReview(messages))) return block();
+                return isReview(messages) ? createCardResponse() : createRoleLedgerResponse();
             };
             const running = runtime.replanLatest();
             await stageStarted;
@@ -1177,15 +1512,18 @@ test('stopping context preparation, drafting or review immediately releases the 
             assert.equal(getState().storyDirector.ledger, '旧账本');
             assert.equal(getState().storyDirector.pendingCard, '');
             assert.equal(getState().storyDirector.status, 'idle');
-            assert.equal(requests, stage === 'prepare' ? 0 : stage === 'draft' ? 1 : 2);
+            assert.equal(requests, stage === 'prepare' ? 0 : stage === 'ledger' ? 1 : 2);
             assert.equal(dispatchedEvents.some((event) => event.type === 'yzm-story-director-error'), false);
 
             memory.VectorStore.whenReady = async () => {};
-            memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ ledger: '重新规划的账本' });
+            memory.LlmClient.requestAgentWithTavern = async (messages) => isReview(messages)
+                ? createCardResponse()
+                : createRoleLedgerResponse({ roster: [{ name: '重试角色', type: '配角', status: '有效' }] });
             assert.equal((await runtime.replanLatest()).success, true);
-            resolveLate(createPlanResponse({ ledger: '迟到的旧结果' }));
+            resolveLate(createRoleLedgerResponse({ roster: [{ name: '迟到角色', type: '配角', status: '有效' }] }));
             await new Promise((resolve) => setImmediate(resolve));
-            assert.equal(getState().storyDirector.ledger, '重新规划的账本');
+            assert.match(getState().storyDirector.ledger, /重试角色/);
+            assert.doesNotMatch(getState().storyDirector.ledger, /迟到角色/);
         });
     }
 });
@@ -1195,7 +1533,9 @@ test('branch changes during review prevent both the card and the ledger from bei
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
         if (isReview(messages)) chat.at(-1).mes = '用户编辑了来源正文';
-        return createPlanResponse({ ledger: '不应保存' });
+        return isReview(messages) ? createCardResponse() : createRoleLedgerResponse({
+            roster: [{ name: '不应保存', type: '配角', status: '有效' }],
+        });
     };
     const result = await memory.StoryDirectorRuntime.replanLatest();
     assert.equal(result.success, false);
@@ -1228,8 +1568,8 @@ test('failed review never commits the draft and stops after two requests with on
     memory.LlmClient.requestAgentWithTavern = async (messages) => {
         requests.push(structuredClone(messages));
         return isReview(messages)
-            ? createPlanResponse({ card: '格式错误', ledger: '不应提交' })
-            : createPlanResponse({ ledger: '草案也不应提交' });
+            ? { success: true, text: '格式错误', toolCalls: [] }
+            : createRoleLedgerResponse({ roster: [{ name: '草案也不应提交', type: '配角', status: '有效' }] });
     };
     const result = await memory.StoryDirectorRuntime.replanLatest();
     assert.equal(result.success, false);
@@ -1251,6 +1591,10 @@ test('runtime event bindings are deduplicated', () => {
     }, {});
 
     assert.equal(counts.character_message_rendered, 1);
+    assert.equal(counts.message_deleted, 1);
+    assert.equal(counts.message_swiped, 1);
+    assert.equal(counts.message_edited, 1);
+    assert.equal(counts.message_updated, 1);
     assert.equal(counts.generation_started, 1);
     assert.equal(counts.chat_id_changed, 1);
 });
@@ -1288,17 +1632,19 @@ test('manual replan after deleting the last assistant sees all visible dialogue 
     assert.equal(result.success, true);
     assert.equal(getState().storyDirector.source.role, 'user');
     assert.equal(getState().storyDirector.source.messageIndex, 4);
-    assert.match(readDirectorRules(requests[0]), /最新用户消息/);
-    assert.match(readDirectorRules(requests[0]), /对这条 User 消息的首次回应/);
+    assert.match(readDirectorRules(requests[1]), /最新用户消息/);
+    assert.match(readDirectorRules(requests[1]), /对这条 User 消息的首次回应/);
     assert.equal(requests.length, 2);
     const contextResult = readContext(requests[0]);
+    assert.deepEqual(contextResult.latestAssistantReview, { assistantFloor: 3, shouldRecord: true });
     assert.deepEqual(contextResult.tables.map((table) => table.name), ['记忆总结', '角色档案']);
-    assert.equal(contextResult.tables[0].records[0].values.总结内容, '前100楼总结');
+    assert.match(contextResult.tables[0].records[0].values.总结内容, /前100楼总结/);
     const visibleChat = contextResult.chat;
-    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.floor), [2, 3, 4]);
+    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.floor), [null, 3, null]);
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.role), ['user', 'assistant', 'user']);
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.content),
         ['第一条可见用户消息', '可见助手正文', '最后的用户消息']);
+    assert.match(getState().storyDirector.ledger, /距今1轮轨道B剧情: 未发生｜正文来源：3\/0\//);
     assert.deepEqual(chat, originalChat);
 
     const generationClone = structuredClone(chat);
@@ -1322,10 +1668,22 @@ test('director keeps SillyTavern floor zero and accepts summary-compatible dialo
 
     assert.equal(result.success, true);
     const visibleChat = readContext(requests[0]).chat;
-    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.floor), [0, 1, 2, 3]);
+    assert.deepEqual(Array.from(visibleChat.messages, (message) => message.floor), [null, null, null, 3]);
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.role), ['assistant', 'user', 'user', 'assistant']);
     assert.deepEqual(Array.from(visibleChat.messages, (message) => message.content),
         ['第0楼角色开场', '第1楼用户输入', '当前行动', '最新正文']);
+});
+
+test('first-pass ledger review marks an assistant at SillyTavern floor zero', async () => {
+    const { memory, chat, requests } = createSandbox();
+    chat.splice(0, chat.length, { role: 'model', mes: '第0楼角色开场', is_system: false });
+
+    const result = await memory.StoryDirectorRuntime.replanLatest();
+
+    assert.equal(result.success, true);
+    const target = requests[0].find((message) => message.role === 'assistant');
+    assert.match(target.content, /^\[楼层 0\] 当前核验目标为此楼正文；根据此楼内容更新<角色账本更新>及<轨道B最后一轮角色出场账本>。\n第0楼角色开场$/);
+    assert.equal(requests[1].find((message) => message.role === 'assistant').content, '第0楼角色开场');
 });
 
 test('manual replan rejects an empty dialogue', async () => {
@@ -1393,10 +1751,12 @@ test('manual replan rejects a concurrent director run', async () => {
 test('manual replan can retry after a request failure and replace the director card', async () => {
     const { memory, getState } = createSandbox();
     let requestCount = 0;
-    memory.LlmClient.requestAgentWithTavern = async (_messages, tools) => {
+    memory.LlmClient.requestAgentWithTavern = async (messages, tools) => {
         requestCount += 1;
         if (requestCount === 1) return { success: false, error: 'rate limit exceeded' };
-        return createPlanResponse({ card: '<下轮导演卡>重试成功。</下轮导演卡>' });
+        return isReview(messages)
+            ? createCardResponse('<下轮导演卡>重试成功。</下轮导演卡>')
+            : createRoleLedgerResponse();
     };
 
     const failed = await memory.StoryDirectorRuntime.replanLatest();
@@ -1416,7 +1776,9 @@ test('manual replan replaces an existing card without changing chat messages', a
     const originalChat = structuredClone(chat);
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
 
-    memory.LlmClient.requestAgentWithTavern = async () => createPlanResponse({ card: '<下轮导演卡>新的安排。</下轮导演卡>' });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => isReview(messages)
+        ? createCardResponse('<下轮导演卡>新的安排。</下轮导演卡>')
+        : createRoleLedgerResponse();
 
     assert.equal((await runtime.replanLatest()).success, true);
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>新的安排。</下轮导演卡>');
@@ -1485,13 +1847,16 @@ test('missing or disabled switch prevents requests and card injection until enab
 
     setEnabled(true);
     assert.equal((await runtime.replanLatest()).success, true);
+    const savedLedger = getState().storyDirector.ledger;
     chat.push({ is_user: true, mes: '下一轮' });
     setEnabled(false);
     assert.equal(runtime.getInjectableCard(), '');
     assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), false);
     runtime.clearPendingCard('disabled');
     assert.equal(getState().storyDirector.pendingCard, '');
-    assert.equal(getState().storyDirector.ledger, '新账本');
+    assert.equal(getState().storyDirector.ledger, savedLedger);
+    assert.match(savedLedger, /【剧情角色名册】/);
+    assert.match(savedLedger, /【轨道B最近20轮角色出场账本】/);
 });
 
 test('clearing a ready pending card prevents the next normal injection and preserves the ledger', async () => {
@@ -1499,13 +1864,14 @@ test('clearing a ready pending card prevents the next normal injection and prese
     const runtime = memory.StoryDirectorRuntime;
 
     assert.equal((await runtime.replanLatest()).success, true);
+    const savedLedger = getState().storyDirector.ledger;
     assert.equal(runtime.getCurrentDirectorCard()?.origin, 'pending');
     assert.equal(runtime.discardPendingCard('idle'), true);
     assert.equal(runtime.getCurrentDirectorCard(), null);
     assert.equal(getState().storyDirector.pendingCard, '');
     assert.equal(getState().storyDirector.source, null);
     assert.equal(getState().storyDirector.status, 'idle');
-    assert.equal(getState().storyDirector.ledger, '新账本');
+    assert.equal(getState().storyDirector.ledger, savedLedger);
 
     chat.push({ is_user: true, mes: '这一轮不用导演卡' });
     const generationClone = structuredClone(chat);

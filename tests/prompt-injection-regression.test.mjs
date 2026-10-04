@@ -178,6 +178,37 @@ test('request probe keeps summaries in the memory color group without the legacy
     assert.ok(data.messages.every((message) => message.flags.memory === true));
 });
 
+test('request probe expands structured director context for display without changing the request', async () => {
+    const sandbox = createBaseSandbox();
+    sandbox.CustomEvent = class CustomEvent {
+        constructor(type, options = {}) {
+            this.type = type;
+            this.detail = options.detail;
+        }
+    };
+    sandbox.window.dispatchEvent = () => true;
+    vm.runInContext(requestProbeSource, sandbox, { filename: 'request-probe.js' });
+
+    const content = '【角色卡与用户卡信息】\n' + JSON.stringify({
+        user: {
+            name: '苏弥',
+            persona: '第一行\n第二行',
+        },
+    });
+    const data = await sandbox.window.YuzukiMemory.RequestProbe.captureFromBody({
+        messages: [{ role: 'system', content }],
+    });
+
+    assert.equal(data.messages[0].content, content);
+    assert.match(data.messages[0].displayContent, /persona:\n\s+第一行\n\s+第二行/);
+    assert.doesNotMatch(data.messages[0].displayContent, /第一行\\n第二行/);
+
+    const ordinary = await sandbox.window.YuzukiMemory.RequestProbe.captureFromBody({
+        messages: [{ role: 'system', content: '普通提示中的字面量\\n保持原样' }],
+    });
+    assert.equal(ordinary.messages[0].displayContent, '普通提示中的字面量\\n保持原样');
+});
+
 test('request probe stores story director snapshots separately from normal requests', async () => {
     const sandbox = createBaseSandbox();
     let currentSessionId = 'chat:first';

@@ -386,6 +386,7 @@
             storyDirector: {
                 enabled: false,
                 enabledUpdatedAt: 0,
+                ledgerVersion: 2,
                 ledger: '',
                 pendingCard: '',
                 source: null,
@@ -11380,7 +11381,11 @@
         const item = document.createElement('details');
         item.className = 'yzm-request-probe-item';
         item.dataset.yzmRequestProbeItem = 'true';
-        item.dataset.yzmRequestProbeText = `${message?.content || ''} ${message?.role || ''} ${message?.name || ''}`.toLowerCase();
+        const rawContent = String(message?.content || '');
+        const displayContent = typeof message?.displayContent === 'string'
+            ? message.displayContent
+            : rawContent;
+        item.dataset.yzmRequestProbeText = `${displayContent} ${rawContent} ${message?.role || ''} ${message?.name || ''}`.toLowerCase();
 
         const summary = document.createElement('summary');
         summary.className = 'yzm-request-probe-summary';
@@ -11395,7 +11400,7 @@
         role.append(createIconNode(meta.icon, ''), document.createTextNode(meta.label));
         const preview = document.createElement('span');
         preview.className = 'yzm-request-probe-preview';
-        preview.textContent = message?.content || '空消息';
+        preview.textContent = displayContent || '空消息';
         left.append(indexNode, role, preview);
         const tokens = document.createElement('span');
         tokens.className = 'yzm-request-probe-token';
@@ -11404,7 +11409,7 @@
 
         const content = document.createElement('pre');
         content.className = 'yzm-request-probe-content';
-        content.textContent = message?.content || '';
+        content.textContent = displayContent;
         item.append(summary, content);
         return item;
     }
@@ -14763,8 +14768,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复使用酒馆 API 时模型读取错误：现在会跟随酒馆当前 API 来源和实时模型选择，DeepSeek 等来源不再误用 OpenAI 模型。',
-            '独立 API 请求路径保持不变，不受本次酒馆 API 兼容修复影响。',
+            '优化 Gemini 的 Flash 模型请求及剧情规划功能。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

@@ -8,6 +8,11 @@
         '/generate',
     ];
     const EXCLUDED_GENERATE_TYPES = ['/api/sd/', '/api/tts/', '/api/images/'];
+    const STRUCTURED_CONTEXT_HEADERS = new Set([
+        '【角色卡与用户卡信息】',
+        '【全部启用表格（含总结）与向量召回】',
+        '【导演账本与本轮核验信息】',
+    ]);
     let lastRequestData = null;
     let lastPreviewRequestData = null;
     let lastStoryDirectorRequestData = null;
@@ -1044,6 +1049,60 @@
         return /小手机|手机插件|微信|音乐状态栏|音乐|HONEY|PHONE/i.test(sourceText);
     }
 
+    function formatProbeScalar(value) {
+        if (typeof value === 'string') return value ? value.replace(/\r\n?/g, '\n') : '""';
+        if (value === null) return 'null';
+        if (value === undefined) return 'undefined';
+        return String(value);
+    }
+
+    function indentProbeLines(text, indent) {
+        return String(text || '').split('\n').map((line) => `${indent}${line}`).join('\n');
+    }
+
+    function formatStructuredProbeValue(value, depth = 0) {
+        const indent = '  '.repeat(depth);
+        if (Array.isArray(value)) {
+            if (!value.length) return `${indent}[]`;
+            return value.map((item) => {
+                if (item && typeof item === 'object') {
+                    return `${indent}-\n${formatStructuredProbeValue(item, depth + 1)}`;
+                }
+                const scalar = formatProbeScalar(item);
+                if (!scalar.includes('\n')) return `${indent}- ${scalar}`;
+                return `${indent}-\n${indentProbeLines(scalar, `${indent}  `)}`;
+            }).join('\n');
+        }
+        if (value && typeof value === 'object') {
+            const entries = Object.entries(value);
+            if (!entries.length) return `${indent}{}`;
+            return entries.map(([key, item]) => {
+                if (item && typeof item === 'object') {
+                    return `${indent}${key}:\n${formatStructuredProbeValue(item, depth + 1)}`;
+                }
+                const scalar = formatProbeScalar(item);
+                if (!scalar.includes('\n')) return `${indent}${key}: ${scalar}`;
+                return `${indent}${key}:\n${indentProbeLines(scalar, `${indent}  `)}`;
+            }).join('\n');
+        }
+        return `${indent}${formatProbeScalar(value)}`;
+    }
+
+    function formatMessageContentForDisplay(content = '') {
+        const raw = String(content || '');
+        const separatorIndex = raw.indexOf('\n');
+        if (separatorIndex < 0) return raw;
+        const header = raw.slice(0, separatorIndex).trim();
+        if (!STRUCTURED_CONTEXT_HEADERS.has(header)) return raw;
+        const payload = raw.slice(separatorIndex + 1).trim();
+        if (!payload) return raw;
+        try {
+            return `${header}\n${formatStructuredProbeValue(JSON.parse(payload))}`;
+        } catch (_error) {
+            return raw;
+        }
+    }
+
     function normalizeMessage(message, index) {
         const item = message && typeof message === 'object' ? message : { content: String(message || '') };
         const content = getMessageText(item);
@@ -1077,6 +1136,7 @@
             role,
             name,
             content,
+            displayContent: formatMessageContentForDisplay(content),
             tokens,
             tokensEstimated: true,
             flags: {

@@ -105,14 +105,12 @@ test('vector segment editor remains open without any initial focus call', () => 
     assert.doesNotMatch(source.slice(appendIndex), /\.focus\(/);
 });
 
-test('release metadata and update notice describe the Tavern model compatibility fix', () => {
-    assert.equal(manifest.version, '1.0.4');
-    assert.match(indexSource, /const VERSION = '1\.0\.4';/);
+test('release metadata and update notice describe the Gemini Flash and story planning optimization', () => {
+    assert.equal(manifest.version, '1.0.5');
+    assert.match(indexSource, /const VERSION = '1\.0\.5';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /跟随酒馆当前 API 来源和实时模型选择/);
-    assert.match(noticeSource, /DeepSeek 等来源不再误用 OpenAI 模型/);
-    assert.match(noticeSource, /独立 API 请求路径保持不变/);
+    assert.match(noticeSource, /优化 Gemini 的 Flash 模型请求及剧情规划功能/);
 });
 
 test('mobile summary fields provide a large synchronized text editor', () => {

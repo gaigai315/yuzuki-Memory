@@ -905,7 +905,14 @@
     function normalizeStoryDirectorState(rawValue, fallbackValue = {}, options = {}) {
         const source = rawValue && typeof rawValue === 'object' ? rawValue : {};
         const fallback = fallbackValue && typeof fallbackValue === 'object' ? fallbackValue : {};
-        const anchor = source.source && typeof source.source === 'object' ? source.source : null;
+        const storedLedgerVersion = Object.prototype.hasOwnProperty.call(source, 'ledgerVersion')
+            ? Math.max(0, Math.round(Number(source.ledgerVersion) || 0))
+            : 0;
+        const legacyLedger = storedLedgerVersion < 2;
+        const enabled = typeof source.enabled === 'boolean'
+            ? source.enabled
+            : (options.legacyEnabled === true || fallback.enabled === true);
+        const anchor = !legacyLedger && source.source && typeof source.source === 'object' ? source.source : null;
         const normalizeUserAnchor = (rawAnchor) => {
             if (!rawAnchor || typeof rawAnchor !== 'object') return null;
             const signature = String(rawAnchor.signature || '');
@@ -921,7 +928,9 @@
                 createdAt: Math.max(0, Math.round(Number(rawAnchor.createdAt) || 0)),
             };
         };
-        const rawMessageCards = Array.isArray(source.messageCards)
+        const rawMessageCards = legacyLedger
+            ? []
+            : Array.isArray(source.messageCards)
             ? source.messageCards
             : (Array.isArray(fallback.messageCards) ? fallback.messageCards : []);
         const messageCards = rawMessageCards.map((entry) => {
@@ -935,12 +944,11 @@
             };
         }).filter(Boolean).slice(-50);
         return {
-            enabled: typeof source.enabled === 'boolean'
-                ? source.enabled
-                : (options.legacyEnabled === true || fallback.enabled === true),
+            enabled,
             enabledUpdatedAt: Math.max(0, Math.round(Number(source.enabledUpdatedAt ?? fallback.enabledUpdatedAt) || 0)),
-            ledger: String(source.ledger ?? fallback.ledger ?? ''),
-            pendingCard: String(source.pendingCard ?? fallback.pendingCard ?? ''),
+            ledgerVersion: 2,
+            ledger: legacyLedger ? '' : String(source.ledger ?? fallback.ledger ?? ''),
+            pendingCard: legacyLedger ? '' : String(source.pendingCard ?? fallback.pendingCard ?? ''),
             source: anchor ? {
                 sessionId: String(anchor.sessionId || ''),
                 assistantIndex: Number.isInteger(Number(anchor.assistantIndex)) ? Number(anchor.assistantIndex) : -1,
@@ -951,8 +959,8 @@
                 createdAt: Math.max(0, Math.round(Number(anchor.createdAt) || 0)),
             } : null,
             messageCards,
-            status: String(source.status || fallback.status || 'idle'),
-            lastError: String(source.lastError || ''),
+            status: legacyLedger ? (enabled ? 'idle' : 'disabled') : String(source.status || fallback.status || 'idle'),
+            lastError: legacyLedger ? '' : String(source.lastError || ''),
             updatedAt: Math.max(0, Math.round(Number(source.updatedAt) || 0)),
         };
     }
@@ -1116,6 +1124,8 @@
             const normalized = normalizeState(sourceState ? stampSession(sourceState, sessionId) : null, fallbackState);
             const storyDirectorEnabledNeedsMigration = !!sourceState
                 && typeof sourceState.storyDirector?.enabled !== 'boolean';
+            const storyDirectorLedgerNeedsMigration = !!sourceState
+                && Math.max(0, Math.round(Number(sourceState.storyDirector?.ledgerVersion) || 0)) < 2;
             const metadataNeedsMigration = compatibleMetadata
                 && !isCompatibleStateSession(compatibleMetadata, sessionId)
                 && sessionId === getCurrentSessionId();
@@ -1142,10 +1152,14 @@
                     immediate: true,
                     allowDuringSwitch: true,
                 });
-            } else if (storyDirectorEnabledNeedsMigration) {
+            } else if (storyDirectorEnabledNeedsMigration || storyDirectorLedgerNeedsMigration) {
                 saveState(normalized, fallbackState, sessionId, {
                     force: true,
-                    saveOrigin: 'story-director-setting-migration',
+                    saveOrigin: storyDirectorEnabledNeedsMigration && storyDirectorLedgerNeedsMigration
+                        ? 'story-director-migration'
+                        : (storyDirectorLedgerNeedsMigration
+                            ? 'story-director-ledger-migration'
+                            : 'story-director-setting-migration'),
                     immediate: true,
                     allowDuringSwitch: true,
                 });

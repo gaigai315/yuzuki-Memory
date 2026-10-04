@@ -1,7 +1,7 @@
 // ============================================================================
 // yuzuki-Memory background story director agent runtime.
-// Prepares context once, drafts and reviews in two requests, then stores one
-// card for the next normal user turn without writing drafts into chat.
+// Prepares context once, updates the role ledger, then generates one card for
+// the next normal user turn without writing background output into chat.
 // ============================================================================
 (function () {
     'use strict';
@@ -10,15 +10,49 @@
     const CARD_PATTERN = /<下轮导演卡>[\s\S]*?<\/下轮导演卡>/i;
     const CARD_GLOBAL_PATTERN = /\n*<下轮导演卡>[\s\S]*?<\/下轮导演卡>\s*/gi;
     const MEMORY_TAG_PATTERN = /<(Memory|GaigaiMemory|memory|tableEdit|gaigaimemory|tableedit)>[\s\S]*?<\/\1>/gi;
-    const PLAN_ENVELOPE_PATTERN = /^\s*<剧情规划提交>\s*([\s\S]*?)\s*<\/剧情规划提交>\s*$/i;
-    const TOOL_NAMES = Object.freeze({ submitPlan: 'yzm_story_submit_plan' });
-    const TOOL_LABELS = Object.freeze({
-        [TOOL_NAMES.submitPlan]: '提交导演卡、调度账本与实际事件核验',
-    });
     const MAX_MESSAGE_CARDS = 50;
     const MAX_TRACK_B_HISTORY = 10;
+    const MAX_ROLE_APPEARANCE_HISTORY = 20;
     const TRACK_B_HISTORY_TITLE = '轨道B调用历史（近10轮）';
     const MODEL_TRACK_B_HISTORY_TITLE = '严禁调用以下轨道B已经发生过的历史（近10轮）';
+    const CHARACTER_ROSTER_TITLE = '剧情角色名册';
+    const ROLE_APPEARANCE_HISTORY_TITLE = '轨道B最近20轮角色出场账本';
+    const ROLE_LEDGER_PROMPT = `Role: 剧情角色账本维护专家
+
+你的唯一职责是核验角色资料和最后一条实际Assistant正文。
+禁止生成、起草、复述或讨论任何<下轮导演卡>。
+
+【名册维护规则】
+1. 根据角色卡、世界设定、向量资料、表格、旧名册和正文，只输出本轮需要新增的主角或配角，以及有明确事实依据需要修改状态的已有角色。
+2. <角色账本更新>是增量补丁，不得重写完整名册。旧名册中没有变化的角色不要重复输出，也不得删除任何未输出的旧角色。
+3. 已有角色必须沿用【剧情角色名册】中的标准角色名；角色名是主键。已有角色只更新状态，首次登记的主角/配角类型不得改写。
+4. 不得因为角色近期未出场就判定其暂时退场。只有正文或设定明确证明时，才能将状态改为“暂时退场”或“死亡”。
+5. 不收录无名路人、一次性群众、输出范例角色或仅被提及的人物。角色类型只能填写“主角”或“配角”，状态只能填写“有效”“暂时退场”或“死亡”。
+6. 如果旧名册为空，应补录资料中所有明确存在且具有持续剧情意义的主角和配角。
+
+【轨道B核验规则】
+【轨道A(主角层)】定义：聚焦于与{{user}}同场景下的角色故事。
+【轨道B(世界层)】定义：必须构建不同于轨道A的场景下的不同角色支线剧情。
+
+1. 只核验系统提供的 latestAssistantReview 指定的最后一条实际Assistant正文。禁止读取、推测或依据任何导演卡、候选方向、轨道模块和调度记录。
+2. 记录该Assistant正文中实际进入场景的所有角色及各自具体剧情摘要；仅被提及、回忆、讨论、等待或作为计划对象不算实际出场。
+3. 多名角色参与不同正文事件时，按角色及其所在场景分别记录。同一角色有多个独立场景时允许分成多行。
+4. 如果该Assistant正文没有需要记录的实际角色场景，必须填写“发生: 否”，并且不得输出任何角色行。
+5. latestAssistantReview为空或 shouldRecord=false，表示没有新的Assistant正文或该正文已经入账，必须填写“发生: 否”。
+
+严格只输出以下两个标签，不得输出JSON、Markdown代码块或标签外文字：
+<角色账本更新>
+[张三] | 主角 | 状态: 有效
+[李四] | 配角 | 状态: 暂时退场
+</角色账本更新>
+
+<轨道B最后一轮角色出场账本>
+发生: 是
+[张三] | 张三在最后一条Assistant正文中实际参与的具体剧情摘要
+[李四] | 李四在该正文另一个场景实际参与的具体剧情摘要
+</轨道B最后一轮角色出场账本>
+
+没有名册变更时，<角色账本更新>保持为空。没有新的Assistant正文需要记录时只输出“发生: 否”。`;
     const RUN_DELAY_MS = 1800;
     const RUN_STATE_EVENT = 'yzm-story-director-run-state';
     const VECTOR_RECALL_TIMEOUT_MS = 20000;
@@ -26,6 +60,7 @@
     let bound = false;
     let bindRetryTimer = null;
     let runTimer = null;
+    let ledgerReconcileTimer = null;
     let activeAbortController = null;
     let activeRunSignature = '';
 
@@ -324,6 +359,279 @@
         return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
     }
 
+    function normalizeCharacterRosterName(value = '') {
+        return String(value || '')
+            .replace(/^\[|\]$/g, '')
+            .replace(/[\r\n|｜]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 120);
+    }
+
+    function getCharacterRosterNameKey(value = '') {
+        const normalize = YuzukiMemory.CharacterNameMatcher?.normalizeName;
+        return typeof normalize === 'function'
+            ? normalize(value)
+            : normalizeCharacterRosterName(value).normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+    }
+
+    function isCharacterRosterHeading(line = '') {
+        return normalizeLedgerHeading(line).replace(/\s+/g, '') === CHARACTER_ROSTER_TITLE;
+    }
+
+    function isRoleAppearanceHistoryHeading(line = '') {
+        return normalizeLedgerHeading(line).replace(/\s+/g, '') === ROLE_APPEARANCE_HISTORY_TITLE;
+    }
+
+    function removeLedgerSections(ledger = '', matchesHeading = () => false) {
+        const lines = sanitizeDirectorLedger(ledger).replace(/\r\n?/g, '\n').split('\n');
+        const kept = [];
+        let removing = false;
+        lines.forEach((line) => {
+            if (matchesHeading(line)) {
+                removing = true;
+                while (kept.at(-1) === '') kept.pop();
+                return;
+            }
+            if (removing) {
+                if (!isLedgerSectionHeading(line)) return;
+                removing = false;
+            }
+            kept.push(line);
+        });
+        return kept.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    function parseCharacterRosterLine(line = '') {
+        const match = String(line || '').trim().match(/^\[([^\]\r\n]+)\]\s*[|｜]\s*(主角|配角)\s*[|｜]\s*状态\s*[:：]\s*(有效|暂时退场|死亡)\s*$/);
+        if (!match) return null;
+        const name = normalizeCharacterRosterName(match[1]);
+        return name ? { name, type: match[2], status: match[3] } : null;
+    }
+
+    function readCharacterRoster(ledger = '') {
+        const lines = sanitizeDirectorLedger(ledger).replace(/\r\n?/g, '\n').split('\n');
+        const roster = [];
+        const seen = new Set();
+        let reading = false;
+        lines.forEach((line) => {
+            if (isCharacterRosterHeading(line)) {
+                reading = true;
+                return;
+            }
+            if (!reading) return;
+            if (isLedgerSectionHeading(line)) {
+                reading = false;
+                return;
+            }
+            const entry = parseCharacterRosterLine(line);
+            const key = getCharacterRosterNameKey(entry?.name);
+            if (!entry || !key || seen.has(key)) return;
+            seen.add(key);
+            roster.push(entry);
+        });
+        return roster;
+    }
+
+    function writeCharacterRoster(ledger = '', roster = []) {
+        const base = removeLedgerSections(ledger, isCharacterRosterHeading);
+        const entries = [];
+        const seen = new Set();
+        (Array.isArray(roster) ? roster : []).forEach((entry) => {
+            const parsed = parseCharacterRosterLine(`[${entry?.name || ''}] | ${entry?.type || ''} | 状态: ${entry?.status || ''}`);
+            const key = getCharacterRosterNameKey(parsed?.name);
+            if (!parsed || !key || seen.has(key)) return;
+            seen.add(key);
+            entries.push(parsed);
+        });
+        if (!entries.length) return base;
+        const section = `【${CHARACTER_ROSTER_TITLE}】\n${entries.map((entry) => (
+            `[${entry.name}] | ${entry.type} | 状态: ${entry.status}`
+        )).join('\n')}`;
+        return [base, section].filter(Boolean).join('\n\n').trim();
+    }
+
+    function mergeCharacterRoster(ledger = '', updates = []) {
+        const roster = readCharacterRoster(ledger);
+        const indexByKey = new Map(roster.map((entry, index) => [getCharacterRosterNameKey(entry.name), index]));
+        (Array.isArray(updates) ? updates : []).forEach((update) => {
+            const parsed = parseCharacterRosterLine(`[${update?.name || ''}] | ${update?.type || ''} | 状态: ${update?.status || ''}`);
+            const key = getCharacterRosterNameKey(parsed?.name);
+            if (!parsed || !key) return;
+            const existingIndex = indexByKey.get(key);
+            if (Number.isInteger(existingIndex)) {
+                roster[existingIndex] = { ...roster[existingIndex], status: parsed.status };
+                return;
+            }
+            indexByKey.set(key, roster.length);
+            roster.push(parsed);
+        });
+        return writeCharacterRoster(ledger, roster);
+    }
+
+    function normalizeRoleAppearanceEvent(value = '') {
+        return String(value || '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/[\r\n]+/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 600);
+    }
+
+    function parseRoleAppearanceLine(line = '') {
+        const match = String(line || '').trim().match(/^\[([^\]\r\n]+)\]\s*[|｜]\s*([\s\S]+)$/);
+        if (!match) return null;
+        const name = normalizeCharacterRosterName(match[1]);
+        const event = normalizeRoleAppearanceEvent(match[2]);
+        return name && event ? { name, event } : null;
+    }
+
+    function parseRoleAppearanceHistoryLine(line = '') {
+        const match = String(line || '').trim().match(/^距今\s*(\d+)\s*轮轨道B剧情\s*[:：]\s*([\s\S]*?)\s*$/i);
+        if (!match) return null;
+        const sourceMatch = match[2].match(/^([\s\S]*?)\s*(?:｜|\|)\s*正文来源\s*[:：]\s*(\d+)\/(\d+)\/([^｜|\s]+)\s*$/i);
+        const content = String(sourceMatch?.[1] || match[2] || '').trim();
+        const source = sourceMatch ? {
+            assistantIndex: Number(sourceMatch[2]),
+            swipeId: Math.max(0, Math.round(Number(sourceMatch[3]) || 0)),
+            signature: String(sourceMatch[4] || ''),
+        } : null;
+        if (/^未发生$/i.test(content)) return { occurred: false, entries: [], source };
+        const entries = content.split(/\s*；\s*(?=\[[^\]]+\]\s*[|｜])/)
+            .map(parseRoleAppearanceLine)
+            .filter(Boolean);
+        return entries.length ? { occurred: true, entries, source } : null;
+    }
+
+    function readRoleAppearanceHistory(ledger = '') {
+        const lines = sanitizeDirectorLedger(ledger).replace(/\r\n?/g, '\n').split('\n');
+        const history = [];
+        let reading = false;
+        lines.forEach((line) => {
+            if (isRoleAppearanceHistoryHeading(line)) {
+                reading = true;
+                return;
+            }
+            if (!reading) return;
+            if (isLedgerSectionHeading(line)) {
+                reading = false;
+                return;
+            }
+            const entry = parseRoleAppearanceHistoryLine(line);
+            if (entry) history.push(entry);
+        });
+        return history.slice(-MAX_ROLE_APPEARANCE_HISTORY);
+    }
+
+    function writeRoleAppearanceHistory(ledger = '', history = [], options = {}) {
+        const base = removeLedgerSections(ledger, isRoleAppearanceHistoryHeading);
+        const entries = (Array.isArray(history) ? history : []).slice(-MAX_ROLE_APPEARANCE_HISTORY);
+        if (!entries.length) return base;
+        const includeSource = options.includeSource !== false;
+        const section = `【${ROLE_APPEARANCE_HISTORY_TITLE}】\n${entries.map((entry, index) => {
+            const distance = entries.length - index;
+            const content = entry?.occurred === true
+                ? (Array.isArray(entry.entries) ? entry.entries : [])
+                    .map((item) => `[${normalizeCharacterRosterName(item?.name)}] | ${normalizeRoleAppearanceEvent(item?.event)}`)
+                    .filter((item) => !/^\[\]\s*[|｜]/.test(item))
+                    .join('；')
+                : '未发生';
+            const source = includeSource && entry?.source && Number.isInteger(Number(entry.source.assistantIndex))
+                && String(entry.source.signature || '')
+                ? `｜正文来源：${Number(entry.source.assistantIndex)}/${Math.max(0, Math.round(Number(entry.source.swipeId) || 0))}/${String(entry.source.signature)}`
+                : '';
+            return `距今${distance}轮轨道B剧情: ${content || '未发生'}${source}`;
+        }).join('\n')}`;
+        return [base, section].filter(Boolean).join('\n\n').trim();
+    }
+
+    function appendRoleAppearanceHistory(ledger = '', entry = {}) {
+        const source = entry?.source && typeof entry.source === 'object' ? {
+            assistantIndex: Number(entry.source.assistantIndex),
+            swipeId: Math.max(0, Math.round(Number(entry.source.swipeId) || 0)),
+            signature: String(entry.source.signature || ''),
+        } : null;
+        if (!source || !Number.isInteger(source.assistantIndex) || source.assistantIndex < 0 || !source.signature) {
+            return sanitizeDirectorLedger(ledger);
+        }
+        const entries = (Array.isArray(entry.entries) ? entry.entries : [])
+            .map((item) => parseRoleAppearanceLine(`[${item?.name || ''}] | ${item?.event || ''}`))
+            .filter(Boolean);
+        const occurred = entry.occurred === true && entries.length > 0;
+        const history = readRoleAppearanceHistory(ledger).filter((item) => !item.source
+            || Number(item.source.assistantIndex) !== source.assistantIndex);
+        history.push({ occurred, entries: occurred ? entries : [], source });
+        return writeRoleAppearanceHistory(ledger, history);
+    }
+
+    function roleAppearanceSourcesHaveSameContent(left = null, right = null) {
+        return !!left && !!right
+            && Number(left.swipeId || 0) === Number(right.swipeId || 0)
+            && String(left.signature || '') === String(right.signature || '');
+    }
+
+    function assistantSourcesMatch(left = null, right = null) {
+        return roleAppearanceSourcesHaveSameContent(left, right)
+            && Number(left?.assistantIndex) === Number(right?.assistantIndex);
+    }
+
+    function resolveCurrentAssistantSource(source = null) {
+        if (!source || typeof source !== 'object') return null;
+        const chat = getContext()?.chat;
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        if (!Array.isArray(chat) || !sessionId || !String(source.signature || '')) return null;
+        const expectedIndex = Number(source.assistantIndex);
+        if (Number.isInteger(expectedIndex) && expectedIndex >= 0 && expectedIndex < chat.length) {
+            const current = buildAssistantAnchor(chat[expectedIndex], expectedIndex, sessionId);
+            if (current && roleAppearanceSourcesHaveSameContent(current, source)) {
+                return {
+                    assistantIndex: current.assistantIndex,
+                    swipeId: current.swipeId,
+                    signature: current.signature,
+                };
+            }
+        }
+        const matches = [];
+        for (let index = 0; index < chat.length; index += 1) {
+            const current = buildAssistantAnchor(chat[index], index, sessionId);
+            if (current && roleAppearanceSourcesHaveSameContent(current, source)) matches.push(current);
+        }
+        if (matches.length !== 1) return null;
+        return {
+            assistantIndex: matches[0].assistantIndex,
+            swipeId: matches[0].swipeId,
+            signature: matches[0].signature,
+        };
+    }
+
+    function preserveLatestRoleAppearanceSource(ledger = '', source = null) {
+        const history = readRoleAppearanceHistory(ledger);
+        const latest = history.at(-1);
+        if (!source || !latest?.source || !roleAppearanceSourcesHaveSameContent(latest.source, source)) {
+            return { ledger: sanitizeDirectorLedger(ledger), alreadyRecorded: false };
+        }
+        if (Number(latest.source.assistantIndex) === Number(source.assistantIndex)) {
+            return { ledger: sanitizeDirectorLedger(ledger), alreadyRecorded: true };
+        }
+        history[history.length - 1] = { ...latest, source: { ...source } };
+        return { ledger: writeRoleAppearanceHistory(ledger, history), alreadyRecorded: true };
+    }
+
+    function removeRoleAppearanceHistorySource(ledger = '', source = null) {
+        if (!source) return sanitizeDirectorLedger(ledger);
+        const history = readRoleAppearanceHistory(ledger)
+            .filter((entry) => !entry.source || !assistantSourcesMatch(entry.source, source));
+        return writeRoleAppearanceHistory(ledger, history);
+    }
+
+    function reconcileRoleAppearanceHistory(ledger = '') {
+        const history = readRoleAppearanceHistory(ledger).map((entry) => {
+            const source = resolveCurrentAssistantSource(entry.source);
+            return source ? { ...entry, source } : null;
+        }).filter(Boolean);
+        return writeRoleAppearanceHistory(ledger, history);
+    }
+
     function isTrackBHistoryHeading(line = '') {
         const heading = normalizeLedgerHeading(line).replace(/\s+/g, '').toLowerCase();
         return heading === '轨道b调用历史（近10轮）'
@@ -454,8 +762,14 @@
         return [base, section].filter(Boolean).join('\n\n').trim();
     }
 
+    function serializeRoleLedgerForModel(ledger = '') {
+        let base = removeTrackBHistorySections(ledger);
+        base = writeRoleAppearanceHistory(base, readRoleAppearanceHistory(base), { includeSource: false });
+        return base;
+    }
+
     function serializeDirectorLedgerForModel(ledger = '') {
-        const base = removeTrackBHistorySections(ledger);
+        const base = serializeRoleLedgerForModel(ledger);
         const entries = getRuntimeTrackBHistory(ledger).slice(-MAX_TRACK_B_HISTORY);
         if (!entries.length) return base;
         const section = `【${MODEL_TRACK_B_HISTORY_TITLE}】\n${entries.map((entry) => {
@@ -476,21 +790,20 @@
     }
 
     function trackBSourceMatchesCurrentMessage(source) {
-        if (!source || typeof source !== 'object') return false;
-        const chat = getContext()?.chat;
-        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
-        const index = Number(source.assistantIndex);
-        if (!Array.isArray(chat) || !sessionId || !Number.isInteger(index) || index < 0 || index >= chat.length) return false;
-        const current = buildAssistantAnchor(chat[index], index, sessionId);
-        return !!current
-            && current.signature === String(source.signature || '')
-            && current.swipeId === Math.max(0, Math.round(Number(source.swipeId) || 0));
+        return !!resolveCurrentAssistantSource(source);
     }
 
     function reconcileTrackBCallHistory(ledger = '') {
-        const history = getRuntimeTrackBHistory(ledger)
-            .filter((entry) => !entry.source || trackBSourceMatchesCurrentMessage(entry.source));
+        const history = getRuntimeTrackBHistory(ledger).map((entry) => {
+            if (!entry.source) return entry;
+            const source = resolveCurrentAssistantSource(entry.source);
+            return source ? { ...entry, source } : null;
+        }).filter(Boolean);
         return writeTrackBCallHistory(ledger, history);
+    }
+
+    function reconcileDirectorLedger(ledger = '') {
+        return reconcileRoleAppearanceHistory(reconcileTrackBCallHistory(ledger));
     }
 
     function hasTrackBHistorySource(ledger = '', source = null) {
@@ -531,7 +844,17 @@
         return null;
     }
 
-    function buildActualTrackBReview(director, source, ledger = '') {
+    function findLatestVisibleAssistantAnchor(visibleChat = [], sessionId = '') {
+        const latest = [...(Array.isArray(visibleChat) ? visibleChat : [])]
+            .reverse()
+            .find((message) => message?.role === 'assistant' && Number.isInteger(Number(message.floor)));
+        const chat = getContext()?.chat;
+        const floor = Number(latest?.floor);
+        if (!latest || !Array.isArray(chat) || !Number.isInteger(floor) || floor < 0 || floor >= chat.length) return null;
+        return buildAssistantAnchor(chat[floor], floor, sessionId);
+    }
+
+    function buildTrackBModuleBinding(director, source, ledger = '') {
         const user = findRespondedUserAnchor(source);
         if (!user || hasTrackBHistorySource(ledger, source)) return null;
         const card = findMessageCard(director?.messageCards, user);
@@ -544,7 +867,6 @@
                 signature: String(source.signature || ''),
             },
             user,
-            card,
             module: call.module,
         };
     }
@@ -560,6 +882,9 @@
         latest.storyDirector = {
             enabled: latest.storyDirector?.enabled === true,
             enabledUpdatedAt: Math.max(0, Math.round(Number(latest.storyDirector?.enabledUpdatedAt) || 0)),
+            ledgerVersion: Object.prototype.hasOwnProperty.call(nextDirector || {}, 'ledgerVersion')
+                ? Math.max(0, Math.round(Number(nextDirector.ledgerVersion) || 0))
+                : Math.max(0, Math.round(Number(latest.storyDirector?.ledgerVersion) || 0)),
             ledger: sanitizeDirectorLedger(nextDirector?.ledger),
             pendingCard: String(nextDirector?.pendingCard || ''),
             source: nextDirector?.source && typeof nextDirector.source === 'object' ? { ...nextDirector.source } : null,
@@ -585,23 +910,6 @@
     function extractDirectorCard(text = '') {
         const match = String(text || '').match(CARD_PATTERN);
         return match ? match[0].trim() : '';
-    }
-
-    function serializeTables(state) {
-        const tables = (Array.isArray(state?.tables) ? state.tables : [])
-            .filter((table) => table && !table.hidden)
-            .map((table) => ({
-                id: String(table.id || ''),
-                name: String(table.name || ''),
-                columns: Array.isArray(table.columns) ? table.columns.map((column) => String(column || '')) : [],
-                records: (Array.isArray(state?.records?.[table.id]) ? state.records[table.id] : [])
-                    .filter((record) => YuzukiMemory.VariableInjector.isRecordDirectlyInjectable(state, table, record))
-                    .map((record) => ({
-                        id: String(record.id || ''),
-                        values: record.values && typeof record.values === 'object' ? { ...record.values } : {},
-                    })),
-            }));
-        return JSON.stringify({ tables });
     }
 
     function firstTextValue(sources, keys = []) {
@@ -637,32 +945,53 @@
         return character ? [character] : [];
     }
 
-    function serializeProfiles() {
+    function collectUniqueTextBlocks(values = []) {
+        const seen = new Set();
+        return (Array.isArray(values) ? values : []).map((value) => String(value || '').trim()).filter((value) => {
+            if (!value || seen.has(value)) return false;
+            seen.add(value);
+            return true;
+        });
+    }
+
+    function buildDirectorProfileMessages() {
         const context = getContext() || {};
         const powerUser = context.powerUserSettings || context.power_user || {};
         const persona = firstTextValue([
             context,
             powerUser,
         ], ['persona', 'userPersona', 'persona_description', 'user_description']);
-        const characters = getCurrentCharacters(context).map((character) => {
-            const sources = [character, character?.data];
-            return {
-                name: firstTextValue(sources, ['name']) || String(context.name2 || context.characterName || 'Character'),
-                description: firstTextValue(sources, ['description', 'desc']),
-                personality: firstTextValue(sources, ['personality']),
-                scenario: firstTextValue(sources, ['scenario', 'world_scenario']),
-                firstMessage: firstTextValue(sources, ['first_mes', 'first_message', 'firstMessage']),
-                exampleDialogue: firstTextValue(sources, ['mes_example', 'example_dialogue']),
-                creatorNotes: firstTextValue(sources, ['creatorcomment', 'creator_comment', 'creator_notes', 'comment', 'notes']),
-            };
+        const messages = persona ? [{
+            role: 'system',
+            name: 'SYSTEM (用户卡)',
+            content: `【用户卡】\n${persona}`,
+        }] : [];
+        getCurrentCharacters(context).forEach((character) => {
+            const sources = [character?.data, character];
+            const name = firstTextValue(sources, ['name']) || String(context.name2 || context.characterName || 'Character');
+            const depthPrompt = firstTextValue([
+                character?.data?.extensions?.depth_prompt,
+                character?.extensions?.depth_prompt,
+            ], ['prompt', 'text', 'content']);
+            const blocks = collectUniqueTextBlocks([
+                firstTextValue(sources, ['description', 'desc']),
+                firstTextValue(sources, ['personality']),
+                firstTextValue(sources, ['scenario', 'world_scenario']),
+                firstTextValue(sources, ['first_mes', 'first_message', 'firstMessage']),
+                firstTextValue(sources, ['mes_example', 'example_dialogue']),
+                firstTextValue(sources, ['creatorcomment', 'creator_comment', 'creator_notes', 'comment', 'notes']),
+                firstTextValue(sources, ['system_prompt', 'systemPrompt']),
+                firstTextValue(sources, ['post_history_instructions', 'postHistoryInstructions']),
+                depthPrompt,
+            ]);
+            if (!blocks.length) return;
+            messages.push({
+                role: 'system',
+                name: `SYSTEM (角色卡 - ${name})`,
+                content: `【角色卡：${name}】\n${blocks.join('\n\n')}`,
+            });
         });
-        return JSON.stringify({
-            user: {
-                name: String(context.name1 || context.userName || context.playerName || 'User'),
-                persona,
-            },
-            characters,
-        });
+        return messages;
     }
 
     async function serializeSelectedWorldbooks(state) {
@@ -670,11 +999,10 @@
             const message = await YuzukiMemory.WorldbookManager?.buildWorldbookMessage?.(state, {
                 includeEntries: true,
             });
-            const content = String(message?.content || '').trim();
-            return content || '（当前未启用或未勾选世界书）';
+            return String(message?.content || '').trim();
         } catch (error) {
             console.warn('[yuzuki-Memory] 剧情导演读取世界书失败:', error);
-            return `（读取已勾选世界书失败：${String(error?.message || error || '未知错误')}）`;
+            return '';
         }
     }
 
@@ -826,89 +1154,64 @@
         return { full, value };
     }
 
-    function parseTaggedDirectorPlan(raw) {
-        let source = String(raw || '').trim();
+    function readAgentResultText(result) {
+        const calls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
+        if (calls.length) {
+            throw new Error('剧情导演本轮不得调用工具。');
+        }
+        let source = String(result?.text || result?.message?.content || '').trim();
         const fenced = source.match(/^```(?:xml|text)?\s*([\s\S]*?)\s*```$/i);
         if (fenced) source = fenced[1].trim();
-        const envelope = source.match(PLAN_ENVELOPE_PATTERN);
-        if (!envelope) throw new Error('导演规划缺少完整的 <剧情规划提交> 标签。');
-
-        const body = envelope[1];
-        const cardMatches = body.match(/<下轮导演卡>[\s\S]*?<\/下轮导演卡>/gi) || [];
-        if (cardMatches.length !== 1) {
-            throw new Error('剧情规划提交必须包含且只能包含一个 <下轮导演卡>。');
-        }
-        const card = cardMatches[0].trim();
-        const ledger = readSingleDirectorPlanTag(body, '导演账本');
-        const occurred = readSingleDirectorPlanTag(body, '轨道B是否发生');
-        const roles = readSingleDirectorPlanTag(body, '轨道B实际角色');
-        const event = readSingleDirectorPlanTag(body, '轨道B事件摘要');
-        const occurrenceText = occurred.value.replace(/\s+/g, '').toLowerCase();
-        let occurrenceValue;
-        if (['是', '已发生', '发生', 'true'].includes(occurrenceText)) occurrenceValue = true;
-        else if (['否', '未发生', '没有发生', 'false'].includes(occurrenceText)) occurrenceValue = false;
-        else throw new Error('<轨道B是否发生> 只能填写“是”或“否”。');
-
-        let remaining = body;
-        [card, ledger.full, occurred.full, roles.full, event.full].forEach((part) => {
-            remaining = remaining.replace(part, '');
-        });
-        if (remaining.trim()) throw new Error('<剧情规划提交> 内存在规定标签之外的内容。');
-        return {
-            card,
-            ledger: ledger.value,
-            actualTrackB: {
-                occurred: occurrenceValue,
-                roles: roles.value,
-                event: event.value,
-            },
-        };
+        return source;
     }
 
-    function parseDirectorPlan(result, actualTrackBReview) {
-        const calls = Array.isArray(result?.toolCalls) ? result.toolCalls : [];
-        let raw = String(result?.text || result?.message?.content || '').trim();
-        if (calls.length) {
-            if (calls.length !== 1 || calls[0]?.function?.name !== TOOL_NAMES.submitPlan) {
-                throw new Error('导演必须一次提交完整规划结果。');
-            }
-            raw = calls[0].function.arguments;
+    function parseRoleLedgerUpdate(result, latestAssistantReview) {
+        const source = readAgentResultText(result);
+        const roster = readSingleDirectorPlanTag(source, '角色账本更新');
+        const appearance = readSingleDirectorPlanTag(source, '轨道B最后一轮角色出场账本');
+        const remaining = source.replace(roster.full, '').replace(appearance.full, '').trim();
+        if (remaining) throw new Error('角色账本更新存在规定标签之外的内容。');
+
+        const rosterUpdates = [];
+        const rosterLines = roster.value.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trim()).filter(Boolean);
+        rosterLines.forEach((line) => {
+            const entry = parseCharacterRosterLine(line);
+            if (!entry) throw new Error('<角色账本更新> 中存在格式错误的角色记录。');
+            rosterUpdates.push(entry);
+        });
+
+        const appearanceLines = appearance.value.replace(/\r\n?/g, '\n').split('\n').map((line) => line.trim()).filter(Boolean);
+        const occurrenceLine = appearanceLines.shift() || '';
+        const occurrenceMatch = occurrenceLine.match(/^发生\s*[:：]\s*(是|否)\s*$/);
+        if (!occurrenceMatch) throw new Error('<轨道B最后一轮角色出场账本> 必须以“发生: 是”或“发生: 否”开头。');
+        const occurred = occurrenceMatch[1] === '是';
+        const entries = appearanceLines.map((line) => {
+            const entry = parseRoleAppearanceLine(line);
+            if (!entry) throw new Error('<轨道B最后一轮角色出场账本> 中存在格式错误的角色剧情记录。');
+            return entry;
+        });
+        if (!occurred && entries.length) throw new Error('轨道B未发生时不得输出角色剧情记录。');
+        if (latestAssistantReview?.shouldRecord !== true) {
+            return { rosterUpdates, actualTrackB: { occurred: false, entries: [] } };
         }
-        let plan = raw;
-        if (typeof raw === 'string') {
-            let tagError;
-            try {
-                plan = parseTaggedDirectorPlan(raw);
-            } catch (error) {
-                tagError = error;
-                try {
-                    plan = JSON.parse(raw);
-                } catch (_jsonError) {
-                    throw tagError;
-                }
-            }
+        if (occurred && !entries.length) {
+            throw new Error('记录Assistant正文时必须存在尚未入账的目标正文，并至少输出一条实际角色剧情记录。');
         }
-        const card = typeof plan?.card === 'string' ? plan.card.trim() : '';
+        return { rosterUpdates, actualTrackB: { occurred, entries } };
+    }
+
+    function parseFinalDirectorCard(result) {
+        const source = readAgentResultText(result);
+        const matches = source.match(/<下轮导演卡>[\s\S]*?<\/下轮导演卡>/gi) || [];
+        if (matches.length !== 1 || source.replace(matches[0], '').trim()) {
+            throw new Error('第二轮必须只输出一个完整的 <下轮导演卡>。');
+        }
+        const card = matches[0].trim();
         if (!card || extractDirectorCard(card) !== card || !unwrapDirectorCard(card).trim()
             || (card.match(/<下轮导演卡>/gi) || []).length !== 1) {
-            throw new Error('导演规划缺少完整且非空的 <下轮导演卡>。');
+            throw new Error('第二轮导演规划缺少完整且非空的 <下轮导演卡>。');
         }
-        if (typeof plan.ledger !== 'string' || plan.ledger.length > 100000) {
-            throw new Error('导演规划缺少完整调度账本，或账本超过长度限制。');
-        }
-        const actual = plan.actualTrackB;
-        if (!actual || typeof actual.occurred !== 'boolean'
-            || typeof actual.roles !== 'string' || typeof actual.event !== 'string') {
-            throw new Error('导演规划缺少有效的实际轨道B核验结果。');
-        }
-        if (actual.occurred && (!actualTrackBReview
-            || !normalizeTrackBRoleText(actual.roles) || !normalizeTrackBEventText(actual.event))) {
-            throw new Error('实际轨道B必须有待核验正文、实际出场角色和事件摘要。');
-        }
-        if (!actual.occurred && (actual.roles.trim() || actual.event.trim())) {
-            throw new Error('未发生轨道B时，实际角色和事件必须留空。');
-        }
-        return { card, ledger: plan.ledger, actualTrackB: actual };
+        return card;
     }
 
     async function waitForDirectorWork(work, signal) {
@@ -928,104 +1231,122 @@
         }
     }
 
-    async function prepareDirectorContext(state, source, ledger, actualTrackBReview, visibleChat, vectors) {
-        const profiles = JSON.parse(serializeProfiles());
-        const tables = JSON.parse(serializeTables(state)).tables;
+    async function prepareDirectorContext(state, source, ledger, latestAssistantReview, visibleChat, vectors) {
+        const profileMessages = buildDirectorProfileMessages();
         const chat = JSON.parse(serializeVisibleChat(visibleChat));
         const worldbooks = await serializeSelectedWorldbooks(state);
+        const memoryMessages = YuzukiMemory.VariableInjector?.buildMemoryDataMessages?.(state) || [];
+        const vectorMessage = YuzukiMemory.VariableInjector?.buildVectorMemoryMessage?.(
+            (Array.isArray(vectors) ? vectors : []).join('\n\n')
+        );
         return {
-            profiles, worldbooks, tables, vectors: Array.isArray(vectors) ? vectors : [], chat,
-            ledger: serializeDirectorLedgerForModel(ledger),
+            profileMessages,
+            worldbooks,
+            memoryMessages: [
+                ...memoryMessages,
+                ...(vectorMessage ? [vectorMessage] : []),
+            ].map((message) => ({
+                role: 'system',
+                content: String(message?.content || '').trim(),
+                name: String(message?.name || ''),
+            })).filter((message) => message.content),
+            chat,
+            ledger: serializeRoleLedgerForModel(ledger),
             anchor: { floor: getSourceIndex(source), role: source.role === 'user' ? 'user' : 'assistant' },
-            actualTrackBReview: actualTrackBReview ? {
-                assistantFloor: actualTrackBReview.source.assistantIndex,
-                module: actualTrackBReview.module,
-                boundCard: actualTrackBReview.card,
+            latestAssistantReview: latestAssistantReview ? {
+                assistantFloor: latestAssistantReview.source.assistantIndex,
+                shouldRecord: latestAssistantReview.shouldRecord === true,
             } : null,
         };
+    }
+
+    function buildDirectorContextMessages(context, options = {}) {
+        const markLatestAssistant = options.markLatestAssistant === true;
+        const rawReviewFloor = Number(context?.latestAssistantReview?.assistantFloor);
+        const reviewFloor = Number.isFinite(rawReviewFloor) ? Math.max(0, Math.round(rawReviewFloor)) : -1;
+        const messages = (Array.isArray(context?.profileMessages) ? context.profileMessages : [])
+            .map((message) => ({
+                role: 'system',
+                content: String(message?.content || '').trim(),
+                ...(message?.name ? { name: String(message.name) } : {}),
+            }))
+            .filter((message) => message.content);
+        const worldbooks = String(context?.worldbooks || '').trim();
+        if (worldbooks) {
+            messages.push({
+                role: 'system',
+                content: '【世界书信息】\n' + worldbooks,
+            });
+        }
+        messages.push(...(Array.isArray(context?.memoryMessages) ? context.memoryMessages : [])
+            .map((message) => ({
+                role: 'system',
+                content: String(message?.content || '').trim(),
+                ...(message?.name ? { name: String(message.name) } : {}),
+            }))
+            .filter((message) => message.content));
+        messages.push(
+            {
+                role: 'system',
+                content: '【最近剧情正文】\n以下为最近剧情正文',
+            },
+            ...(Array.isArray(context?.chat?.messages) ? context.chat.messages : []).map((message) => {
+                const role = message?.role === 'user' ? 'user' : 'assistant';
+                const floor = Math.max(0, Math.round(Number(message?.floor) || 0));
+                let content = String(message?.content || '');
+                if (markLatestAssistant && role === 'assistant' && floor === reviewFloor) {
+                    const instruction = '当前核验目标为此楼正文；根据此楼内容更新<角色账本更新>及<轨道B最后一轮角色出场账本>。';
+                    content = `[楼层 ${floor}] ${instruction}\n${content}`;
+                }
+                return { role, content };
+            }),
+        );
+        return messages;
+    }
+
+    function buildDirectorLedgerMessage(context) {
+        return {
+            role: 'system',
+            content: '【导演账本与本轮核验信息】\n' + JSON.stringify({
+                ledger: context.ledger,
+                anchor: context.anchor,
+                latestAssistantReview: context.latestAssistantReview,
+            }),
+        };
+    }
+
+    function buildRoleLedgerMessages(context) {
+        return [
+            { role: 'system', content: resolveDirectorVariables(ROLE_LEDGER_PROMPT) },
+            ...buildDirectorContextMessages(context, { markLatestAssistant: true }),
+            buildDirectorLedgerMessage(context),
+            {
+                role: 'user',
+                content: '第一轮：只更新角色账本。根据全部资料输出一次 <角色账本更新> 和一次 <轨道B最后一轮角色出场账本>，不得生成或讨论 <下轮导演卡>。',
+            },
+        ];
     }
 
     function buildDirectorMessages(prompt, context) {
         const anchorRule = context.anchor.role === 'user'
             ? '最后有效楼层为 User：最新用户消息尚未获得回应，轨道A只规划其他角色对这条 User 消息的首次回应。'
             : '最后有效楼层为 Assistant：上一条 User 已经得到回应，轨道A必须从最新助手正文末尾继续，禁止重演或再次回应上一条 User。';
-        const contextMessages = [
-            {
-                role: 'system',
-                content: '【角色卡与用户卡信息】\n' + JSON.stringify(context.profiles),
-            },
-            {
-                role: 'system',
-                content: '【世界书信息】\n' + String(context.worldbooks || ''),
-            },
-            {
-                role: 'system',
-                content: '【全部启用表格（含总结）与向量召回】\n' + JSON.stringify({
-                    tables: context.tables,
-                    vectors: context.vectors,
-                }),
-            },
-            {
-                role: 'system',
-                content: '【最近剧情正文】\n' + JSON.stringify(context.chat),
-            },
-        ];
-        const ledgerMessage = {
-            role: 'system',
-            content: '【导演账本与本轮核验信息】\n' + JSON.stringify({
-                ledger: context.ledger,
-                anchor: context.anchor,
-                actualTrackBReview: context.actualTrackBReview,
-            }),
-        };
+        const finalInstruction = [
+            '请根据基础资料和已经更新完成的总账，生成最终 <下轮导演卡>。提交前自行复核，只输出导演卡标签。',
+            `①重点使用【${CHARACTER_ROSTER_TITLE}】和【${ROLE_APPEARANCE_HISTORY_TITLE}】判断角色有效性、近期出场频率和长期缺席角色。`,
+            `②【${ROLE_APPEARANCE_HISTORY_TITLE}】视为已经发生的轨道B事件禁用清单，避免复刻相同地点、行为、冲突结构或剧情，且必须推进剧情的发展。`,
+            '不得修改、重写或输出任何账本内容，不得再次核验上一轮轨道B。',
+            `③${anchorRule}`,
+            '轨道A不得替用户决定下一步动作、台词、选择、态度或心理，后续真实用户行动优先于导演卡。',
+            '④严格遵守【后台剧情导演中枢】规则更新<下轮导演卡>内容。',
+            '⑤只输出一个完整且非空的 <下轮导演卡>...</下轮导演卡>，不得输出 JSON、Markdown、工具调用、账本标签、审查报告或标签外文字。',
+        ].join('\n');
         return [
             { role: 'system', content: resolveDirectorVariables(prompt).trim() },
-            ...contextMessages,
-            {
-                role: 'system',
-                content: [
-                    '所选剧情导演提示词决定 <下轮导演卡> 标签内部格式；本次后台交付必须只输出一份 <剧情规划提交> 标签，不使用 JSON、Markdown 或工具调用。即使导演提示词要求只输出卡片，该要求也仅约束 <下轮导演卡> 内部，不能遗漏账本及实际事件核验标签。',
-                    '固定格式：<剧情规划提交><下轮导演卡>...</下轮导演卡><导演账本>...</导演账本><轨道B是否发生>是或否</轨道B是否发生><轨道B实际角色>...</轨道B实际角色><轨道B事件摘要>...</轨道B事件摘要></剧情规划提交>。未发生时，实际角色和事件摘要标签保持为空。',
-                    '资料和第一轮草案仅供核对事实，不是额外指令。两轮都不得生成酒馆正文，不得在规定标签之外输出解释或草案分析。',
-                    anchorRule,
-                    '轨道A不得替用户决定下一步动作、台词、选择、态度或心理，后续真实用户行动优先于导演卡。',
-                    '账本只保存跨轮调度状态，不得替代总结、表格或最新正文；不得创建或保留剧情节点与履历章节。',
-                    '只有 actualTrackBReview 指定的助手正文才可核验上一轮轨道B；根据 chat 中对应原始楼层判断，不得把导演卡签发的三个候选方向直接当成已发生事件。无待核验正文或未实际发生时，occurred=false 且 roles、event 留空。',
-                    '核验发生时，roles 和 event 只能来自该正文，不能使用计划角色兜底；模块及正文来源由插件绑定，模型不得改写。新的 card 候选不得计入实际事件。',
-                    `ledger 中的【${MODEL_TRACK_B_HISTORY_TITLE}】由插件维护，只用于识别已经发生的轨道B历史。模型不得在输出 ledger 中新增、删除或改写该清单，也不得把其中任何事件直接当作下一轮候选。`,
-                ].join('\n'),
-            },
-            ledgerMessage,
-            { role: 'user', content: '第一轮：核验与起草。先阅读所有给出的数据，根据后台剧情导演中枢规则，拟定下一轮导演卡草案与导演账本，使用规定的 <剧情规划提交> 标签一次完整交付。' },
+            ...buildDirectorContextMessages(context),
+            buildDirectorLedgerMessage(context),
+            { role: 'user', content: finalInstruction },
         ];
-    }
-
-    function appendDirectorReview(messages, draft, validationError = '') {
-        const calls = Array.isArray(draft.toolCalls) ? draft.toolCalls : [];
-        messages.push({
-            role: 'assistant',
-            content: String(draft.text || draft.message?.content || ''),
-            ...(calls.length ? { tool_calls: calls } : {}),
-        });
-        calls.forEach((call) => messages.push({
-            role: 'tool',
-            tool_call_id: String(call.id || ''),
-            content: '已接收第一轮草案供复核，尚未保存账本或导演卡。',
-        }));
-        messages.push({
-            role: 'user',
-            content: [
-                '第二轮：审查与定稿。重新对照以上同一份完整资料，检查第一轮三个字段并直接提交修正后的完整结果。这是最后一轮，不再调用读取工具或请求后续轮次。',
-                '1. 事实核验：上一轮事件是否确实出现在指定助手正文；是否把未采用候选、计划角色或草案误当事实。可以推翻第一轮核验，未发生则 occurred=false 并清空 roles、event。',
-                `2. 事件去重：把【${MODEL_TRACK_B_HISTORY_TITLE}】视为硬性禁用清单；不得照抄、同义改写、换角色换地点或换皮复刻其中的地点、行为、冲突结构与事件主题，尤其核对跨日角色状态。`,
-                '3. 时空及信息：检查人物位置、时间推进、交通与到达锁、角色知情范围，纠正矛盾和信息泄漏。',
-                '4. 轨道A与用户自主权：从最后有效楼层继续，不重演已有回应，不替用户决定行为；DSIP 和其他剧情规则遵守所选提示词。',
-                '5. 调度与账本：核对模块轮换、角色冷却、人物表现和实际事件的关系；账本仅保存调度状态，不将新卡候选或草案写成已发生历史。',
-                '6. 输出：<下轮导演卡> 严格遵守所选导演提示词的卡片格式；<导演账本> 和三个轨道B核验标签同步修正。合格内容保留，不为改写而改写，不输出审查报告。',
-                validationError ? '第一轮本地校验发现：' + validationError + ' 请在本轮一并修正。' : '',
-                '只输出一份完整的 <剧情规划提交>，不得输出 JSON、Markdown、工具调用或标签外文字；插件只保存本轮通过校验的结果。',
-            ].filter(Boolean).join('\n'),
-        });
     }
 
     function formatProbeJson(value) {
@@ -1055,7 +1376,7 @@
                     const callId = String(call?.id || '');
                     if (callId) toolNamesByCallId.set(callId, name);
                     return [
-                        `工具 ${index + 1}：${TOOL_LABELS[name] || name}`,
+                        `工具 ${index + 1}：${name}`,
                         `内部名称：${name}`,
                         `参数：\n${formatProbeJson(call?.function?.arguments || '{}')}`,
                     ].join('\n');
@@ -1071,7 +1392,7 @@
                 const toolName = toolNamesByCallId.get(String(message?.tool_call_id || '')) || '未知工具';
                 return {
                     role: 'tool',
-                    name: `工具返回 · ${TOOL_LABELS[toolName] || toolName}`,
+                    name: `工具返回 · ${toolName}`,
                     content: formatProbeJson(message?.content || ''),
                     yzmAgentTraceType: 'tool-result',
                 };
@@ -1120,7 +1441,7 @@
         return YuzukiMemory.LlmClient?.requestAgentWithTavern?.(messages, tools, options);
     }
 
-    async function runDirector(source) {
+    async function runDirector(source, options = {}) {
         if (!isStoryDirectorEnabled(source?.sessionId)) return { skipped: true, reason: 'disabled' };
         if (isRunning()) return { skipped: true, reason: 'director-busy' };
         const promptEntry = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
@@ -1129,7 +1450,16 @@
         const sessionId = source.sessionId;
         const state = loadState(sessionId);
         if (!state) return { skipped: true, reason: 'state-unavailable' };
-        const previousDirector = state.storyDirector || {};
+        const storedDirector = state.storyDirector || {};
+        const legacyLedger = Math.max(0, Math.round(Number(storedDirector.ledgerVersion) || 0)) < 2;
+        const previousDirector = legacyLedger ? {
+            ...storedDirector,
+            ledgerVersion: 2,
+            ledger: '',
+            pendingCard: '',
+            source: null,
+            messageCards: [],
+        } : storedDirector;
         saveDirectorState(sessionId, {
             ...previousDirector,
             pendingCard: '',
@@ -1137,6 +1467,9 @@
             status: 'running',
             lastError: '',
         });
+        if (legacyLedger) {
+            console.info('[yuzuki-Memory] 旧版剧情导演账本与绑定卡记录已清空。', { sessionId });
+        }
 
         const controller = new AbortController();
         activeAbortController = controller;
@@ -1149,22 +1482,36 @@
         try {
             await waitForDirectorWork(() => YuzukiMemory.readyPromise, controller.signal);
             assertActive();
-            const ledger = reconcileTrackBCallHistory(previousDirector.ledger);
             const visibleChat = collectVisibleChatMessages();
-            const actualTrackBReview = visibleChat.some((message) => message.floor === getSourceIndex(source) && message.role === 'assistant')
-                ? buildActualTrackBReview(previousDirector, source, ledger) : null;
+            const latestAssistantSource = findLatestVisibleAssistantAnchor(visibleChat, sessionId);
+            let ledger = reconcileDirectorLedger(previousDirector.ledger);
+            const replaceLatestAssistantRecord = options.replaceLatestAssistantRecord === true
+                && source?.role !== 'user'
+                && latestAssistantSource
+                && assistantSourcesMatch(source, latestAssistantSource);
+            if (replaceLatestAssistantRecord) {
+                ledger = removeRoleAppearanceHistorySource(ledger, latestAssistantSource);
+            }
+            const preservedAppearance = preserveLatestRoleAppearanceSource(ledger, latestAssistantSource);
+            ledger = preservedAppearance.ledger;
+            const latestAssistantReview = latestAssistantSource ? {
+                source: latestAssistantSource,
+                shouldRecord: preservedAppearance.alreadyRecorded !== true,
+            } : null;
+            const trackBModuleBinding = latestAssistantReview?.shouldRecord === true
+                ? buildTrackBModuleBinding(previousDirector, latestAssistantSource, ledger)
+                : null;
             const vectors = await waitForDirectorWork(
                 () => searchVectorMemories(visibleChat), controller.signal,
             );
             assertActive();
             const context = await waitForDirectorWork(
-                () => prepareDirectorContext(state, source, ledger, actualTrackBReview, visibleChat, vectors), controller.signal,
+                () => prepareDirectorContext(state, source, ledger, latestAssistantReview, visibleChat, vectors), controller.signal,
             );
             assertActive();
             const snapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.('storyDirector') || { mode: 'tavern', preset: null };
-            const messages = buildDirectorMessages(promptEntry.prompt, context);
             const tools = [];
-            const requestPass = async (turn) => {
+            const requestPass = async (messages, turn) => {
                 assertActive();
                 captureDirectorRequest(snapshot, messages, tools, turn, sessionId);
                 const result = await waitForDirectorWork(
@@ -1176,37 +1523,57 @@
                 return result;
             };
 
-            const draft = await requestPass(1);
-            let draftError = '';
+            const roleLedgerMessages = buildRoleLedgerMessages(context);
+            const roleLedgerResult = await requestPass(roleLedgerMessages, 1);
+            let roleLedgerUpdate;
             try {
-                parseDirectorPlan(draft, actualTrackBReview);
+                roleLedgerUpdate = parseRoleLedgerUpdate(roleLedgerResult, latestAssistantReview);
             } catch (error) {
-                draftError = String(error?.message || error);
+                throw new Error('剧情导演第一轮账本校验失败：' + String(error?.message || error));
             }
-            appendDirectorReview(messages, draft, draftError);
-            const reviewed = await requestPass(2);
-            let plan;
+
+            let finalLedger = mergeCharacterRoster(ledger, roleLedgerUpdate.rosterUpdates);
+            if (latestAssistantReview?.shouldRecord === true) {
+                finalLedger = appendRoleAppearanceHistory(finalLedger, {
+                    occurred: roleLedgerUpdate.actualTrackB.occurred,
+                    entries: roleLedgerUpdate.actualTrackB.entries,
+                    source: latestAssistantReview.source,
+                });
+            }
+            if (trackBModuleBinding && roleLedgerUpdate.actualTrackB.occurred) {
+                const roles = [...new Set(roleLedgerUpdate.actualTrackB.entries
+                    .map((entry) => normalizeCharacterRosterName(entry.name))
+                    .filter(Boolean))].join('、');
+                const event = [...new Set(roleLedgerUpdate.actualTrackB.entries
+                    .map((entry) => normalizeRoleAppearanceEvent(entry.event))
+                    .filter(Boolean))].join('；');
+                finalLedger = appendActualTrackBHistory(finalLedger, {
+                    module: trackBModuleBinding.module,
+                    roles,
+                    event,
+                    source: trackBModuleBinding.source,
+                });
+            }
+
+            const planningContext = {
+                ...context,
+                ledger: serializeDirectorLedgerForModel(finalLedger),
+                latestAssistantReview: null,
+            };
+            const planningMessages = buildDirectorMessages(promptEntry.prompt, planningContext);
+            const planningResult = await requestPass(planningMessages, 2);
+            let card;
             try {
-                plan = parseDirectorPlan(reviewed, actualTrackBReview);
+                card = resolveDirectorVariables(parseFinalDirectorCard(planningResult));
             } catch (error) {
                 throw new Error('剧情导演第二轮定稿校验失败：' + String(error?.message || error));
             }
-            // Rebuild from the original ledger so review can retract a mistaken draft event.
-            let finalLedger = preserveTrackBCallHistory(ledger, sanitizeDirectorLedger(plan.ledger));
-            if (actualTrackBReview && plan.actualTrackB.occurred) {
-                finalLedger = appendActualTrackBHistory(finalLedger, {
-                    module: actualTrackBReview.module,
-                    roles: plan.actualTrackB.roles,
-                    event: plan.actualTrackB.event,
-                    source: actualTrackBReview.source,
-                });
-            }
             assertActive();
-            const card = resolveDirectorVariables(plan.card);
             const messageCards = source.role === 'user'
                 ? upsertMessageCard(previousDirector.messageCards, source, card)
                 : normalizeMessageCards(previousDirector.messageCards);
             const saved = saveDirectorState(sessionId, {
+                ledgerVersion: 2,
                 ledger: finalLedger,
                 pendingCard: card,
                 source,
@@ -1215,7 +1582,7 @@
                 lastError: '',
             });
             if (!saved) throw new Error('导演卡保存失败。');
-            console.info('[yuzuki-Memory] 下轮导演卡已通过两轮规划生成。', {
+            console.info('[yuzuki-Memory] 角色账本已更新，下轮导演卡已生成。', {
                 messageIndex: getSourceIndex(source), cardLength: card.length,
             });
             return { success: true, card };
@@ -1223,8 +1590,12 @@
             const aborted = controller.signal.aborted || error?.name === 'AbortError';
             let errorNotified = false;
             if (aborted) {
+                const currentSessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+                const restoredLedger = currentSessionId === sessionId
+                    ? reconcileDirectorLedger(previousDirector.ledger)
+                    : String(previousDirector.ledger || '');
                 saveDirectorState(sessionId, {
-                    ledger: String(previousDirector.ledger || ''),
+                    ledger: restoredLedger,
                     pendingCard: '',
                     source: null,
                     status: isStoryDirectorEnabled(sessionId) ? 'idle' : 'disabled',
@@ -1310,7 +1681,37 @@
         window.clearTimeout(runTimer);
         runTimer = null;
         console.info('[yuzuki-Memory] 手动剧情规划开始运行。', { messageIndex: getSourceIndex(source) });
-        return runDirector(source);
+        return runDirector(source, { replaceLatestAssistantRecord: true });
+    }
+
+    function reconcileStoredDirectorLedger(reason = 'branch-changed') {
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        const state = loadState(sessionId);
+        const director = state?.storyDirector;
+        if (!state || !director || Math.max(0, Math.round(Number(director.ledgerVersion) || 0)) < 2) return false;
+        const ledger = reconcileDirectorLedger(director.ledger);
+        const pendingInvalid = !!director.pendingCard && !sourceMatchesCurrentMessage(director.source);
+        if (ledger === String(director.ledger || '') && !pendingInvalid) return false;
+        return saveDirectorState(sessionId, {
+            ...director,
+            ledger,
+            ...(pendingInvalid ? {
+                pendingCard: '',
+                source: null,
+                status: 'stale',
+                lastError: '',
+            } : {}),
+        }, `story-director-reconcile-${reason}`);
+    }
+
+    function scheduleStoredDirectorLedgerReconcile(reason = 'branch-changed', delayMs = 250) {
+        window.clearTimeout(ledgerReconcileTimer);
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        ledgerReconcileTimer = window.setTimeout(() => {
+            ledgerReconcileTimer = null;
+            if (!sessionId || sessionId !== YuzukiMemory.Storage?.getCurrentSessionId?.()) return;
+            reconcileStoredDirectorLedger(reason);
+        }, Math.max(0, Number(delayMs) || 0));
     }
 
     function clearInvalidPendingCard() {
@@ -1566,9 +1967,10 @@
         }
         bound = true;
         const onAssistantChanged = () => scheduleDirector('assistant-message');
-        const onBranchChanged = () => {
+        const onBranchChanged = (reason, reconcileDelay) => {
             cancelActiveRun('branch changed');
             clearInvalidPendingCard();
+            scheduleStoredDirectorLedgerReconcile(reason, reconcileDelay);
             scheduleDirector('branch-changed');
         };
         const onGenerationStarted = (type, options, dryRun) => {
@@ -1580,12 +1982,18 @@
         };
         const onChatChanged = () => {
             cancelActiveRun('chat changed');
+            window.clearTimeout(ledgerReconcileTimer);
+            ledgerReconcileTimer = null;
         };
         const bindEvents = (names, handler) => {
             [...new Set(names.filter(Boolean))].forEach((name) => eventSource.on(name, handler));
         };
         bindEvents([eventTypes.CHARACTER_MESSAGE_RENDERED, eventTypes.MESSAGE_RECEIVED, 'character_message_rendered'], onAssistantChanged);
-        bindEvents([eventTypes.MESSAGE_SWIPED, eventTypes.MESSAGE_EDITED, eventTypes.MESSAGE_UPDATED, eventTypes.MESSAGE_DELETED], onBranchChanged);
+        bindEvents([eventTypes.MESSAGE_DELETED, 'message_deleted'], () => onBranchChanged('message-deleted', 180));
+        bindEvents([eventTypes.MESSAGE_SWIPED, 'message_swiped'], () => onBranchChanged('message-swiped', 650));
+        bindEvents([eventTypes.MESSAGE_EDITED, eventTypes.MESSAGE_UPDATED, 'message_edited', 'message_updated'], () => (
+            onBranchChanged('message-updated', 250)
+        ));
         bindEvents([eventTypes.GENERATION_STARTED, 'generation_started'], onGenerationStarted);
         bindEvents([eventTypes.CHAT_CHANGED, eventTypes.CHAT_LOADED, 'chat_id_changed'], onChatChanged);
         window.addEventListener('yzm-memory-state-updated', (event) => {
@@ -1597,7 +2005,6 @@
     }
 
     YuzukiMemory.StoryDirectorRuntime = Object.assign(YuzukiMemory.StoryDirectorRuntime || {}, {
-        toolNames: TOOL_NAMES,
         extractDirectorCard,
         parseTrackBCallFromCard,
         appendActualTrackBHistory,
