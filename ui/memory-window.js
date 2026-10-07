@@ -4738,14 +4738,10 @@
             || (platform === 'MacIntel' && Number(navigator.maxTouchPoints) > 1);
     }
 
-    function getImmersivePwaShift(rootElement = document.documentElement, documentObject = document) {
+    function getImmersivePwaShift(rootElement = document.documentElement) {
         if (!rootElement?.classList?.contains('st-immersive-pwa-standalone')) return 0;
         const shift = Number.parseFloat(rootElement.dataset?.stImmersivePwaShift || '');
-        const headerTops = ['top-bar', 'top-settings-holder']
-            .map((id) => documentObject?.getElementById?.(id)?.getBoundingClientRect?.().top)
-            .filter(Number.isFinite)
-            .map((top) => Math.max(0, top));
-        return Math.max(Number.isFinite(shift) ? Math.max(0, shift) : 0, ...headerTops);
+        return Number.isFinite(shift) ? Math.max(0, shift) : 0;
     }
 
     function applyHostCompatibilityClasses(root) {

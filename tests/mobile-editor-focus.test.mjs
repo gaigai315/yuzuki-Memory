@@ -78,7 +78,7 @@ function detectTauriTavernMobile({ userAgent = '', platform = '', maxTouchPoints
     return sandbox.result;
 }
 
-function detectImmersivePwaShift({ active = true, shift = '', headerTops = {} } = {}) {
+function detectImmersivePwaShift({ active = true, shift = '' } = {}) {
     const sandbox = {
         result: null,
         rootElement: {
@@ -87,16 +87,11 @@ function detectImmersivePwaShift({ active = true, shift = '', headerTops = {} } 
             },
             dataset: { stImmersivePwaShift: shift },
         },
-        documentObject: {
-            getElementById: (id) => id in headerTops
-                ? { getBoundingClientRect: () => ({ top: headerTops[id] }) }
-                : null,
-        },
     };
     vm.createContext(sandbox);
     vm.runInContext([
         getFunctionSource('getImmersivePwaShift'),
-        'result = getImmersivePwaShift(rootElement, documentObject);',
+        'result = getImmersivePwaShift(rootElement);',
     ].join('\n'), sandbox);
     return sandbox.result;
 }
@@ -145,14 +140,12 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
     assert.equal(detectImmersivePwaShift({ shift: '-10' }), 0);
     assert.equal(detectImmersivePwaShift({ shift: 'invalid' }), 0);
     assert.equal(detectImmersivePwaShift({ active: false, shift: '32' }), 0);
-    assert.equal(detectImmersivePwaShift({
-        shift: '22',
-        headerTops: { 'top-bar': 32, 'top-settings-holder': 32 },
-    }), 32);
 
+    const shiftSource = getFunctionSource('getImmersivePwaShift');
     const compatibilitySource = getFunctionSource('applyHostCompatibilityClasses');
     const observerSource = getFunctionSource('bindHostCompatibilityObserver');
     const ensureRootSource = getFunctionSource('ensureRoot');
+    assert.doesNotMatch(shiftSource, /top-settings-holder|getBoundingClientRect/);
     assert.match(compatibilitySource, /yzm-immersive-pwa/);
     assert.match(compatibilitySource, /--yzm-immersive-pwa-shift/);
     assert.match(observerSource, /data-st-immersive-pwa-shift/);
