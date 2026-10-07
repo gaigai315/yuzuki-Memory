@@ -248,7 +248,7 @@ test('release metadata and update notice describe the editing and branch fixes',
     assert.match(indexSource, /const VERSION = '1\.0\.7';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /沉浸式 PWA 下记忆面板被酒馆页面覆盖/);
+    assert.match(noticeSource, /兼容「沉浸式 PWA 顶部」插件/);
     assert.match(noticeSource, /编辑正文后不再自动重新剧情规划/);
     assert.match(noticeSource, /自动清理分支点之后的剧情摘要、正文表格更新和记忆总结/);
     assert.match(noticeSource, /魔法棒菜单中长按“柚月の记忆”/);
