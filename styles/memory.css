@@ -57,6 +57,11 @@
     pointer-events: none;
 }
 
+#yzm-memory-root.yzm-immersive-pwa {
+    z-index: 2147483647 !important;
+    isolation: isolate;
+}
+
 #yzm-memory-root[data-yzm-theme="dark"],
 #yzm-memory-root .yzm-shell[data-yzm-theme="dark"],
 #yzm-memory-global-modal-root[data-yzm-theme="dark"] {
