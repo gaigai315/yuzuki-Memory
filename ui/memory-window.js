@@ -29,6 +29,9 @@
         { id: 'xftb4', label: '样式 4', file: 'ui/xftb4.png' },
         { id: 'xftb5', label: '样式 5', file: 'ui/xftb5.png' },
         { id: 'xftb6', label: '样式 6', file: 'ui/xftb6.png' },
+        { id: 'xftb7', label: '样式 7', file: 'ui/xftb7.png' },
+        { id: 'xftb8', label: '样式 8', file: 'ui/xftb8.png' },
+        { id: 'xftb9', label: '样式 9', file: 'ui/xftb9.png' },
     ]);
     const FLOATING_ICON_STYLE_MAP = new Map(FLOATING_ICON_STYLES.map((item) => [item.id, item]));
     const TAG_PRESETS_STORAGE_KEY = 'yzm_memory_global_tag_presets';

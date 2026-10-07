@@ -5708,7 +5708,7 @@
 
 #yzm-memory-root .yzm-floating-icon-picker-grid {
     display: grid;
-    grid-template-columns: repeat(6, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 7px;
     min-width: 0;
 }
