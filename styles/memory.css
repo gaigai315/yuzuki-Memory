@@ -9958,7 +9958,15 @@
         --yzm-host-safe-left: max(var(--tt-inset-left, env(safe-area-inset-left, 0px)), 0px);
     }
 
-    #yzm-memory-root.yzm-tauritavern-mobile .yzm-shell {
+    #yzm-memory-root.yzm-immersive-pwa {
+        --yzm-host-safe-top: max(env(safe-area-inset-top, 0px), var(--yzm-immersive-pwa-shift, 0px));
+        --yzm-host-safe-right: max(env(safe-area-inset-right, 0px), 0px);
+        --yzm-host-safe-bottom: max(env(safe-area-inset-bottom, 0px), 0px);
+        --yzm-host-safe-left: max(env(safe-area-inset-left, 0px), 0px);
+    }
+
+    #yzm-memory-root.yzm-tauritavern-mobile .yzm-shell,
+    #yzm-memory-root.yzm-immersive-pwa .yzm-shell {
         top: calc(6px + var(--yzm-host-safe-top));
         right: calc(6px + var(--yzm-host-safe-right));
         bottom: calc(6px + var(--yzm-host-safe-bottom));

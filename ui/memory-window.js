@@ -4738,9 +4738,45 @@
             || (platform === 'MacIntel' && Number(navigator.maxTouchPoints) > 1);
     }
 
+    function getImmersivePwaShift(rootElement = document.documentElement, documentObject = document) {
+        if (!rootElement?.classList?.contains('st-immersive-pwa-standalone')) return 0;
+        const shift = Number.parseFloat(rootElement.dataset?.stImmersivePwaShift || '');
+        const headerTops = ['top-bar', 'top-settings-holder']
+            .map((id) => documentObject?.getElementById?.(id)?.getBoundingClientRect?.().top)
+            .filter(Number.isFinite)
+            .map((top) => Math.max(0, top));
+        return Math.max(Number.isFinite(shift) ? Math.max(0, shift) : 0, ...headerTops);
+    }
+
     function applyHostCompatibilityClasses(root) {
         root.classList.remove('yzm-tauritavern-ios');
         root.classList.toggle('yzm-tauritavern-mobile', isTauriTavernMobileRuntime());
+        const immersivePwaShift = getImmersivePwaShift();
+        const immersivePwaActive = document.documentElement?.classList?.contains('st-immersive-pwa-standalone') === true;
+        root.classList.toggle('yzm-immersive-pwa', immersivePwaActive);
+        if (immersivePwaActive) {
+            root.style.setProperty('--yzm-immersive-pwa-shift', `${immersivePwaShift}px`);
+        } else {
+            root.style.removeProperty('--yzm-immersive-pwa-shift');
+        }
+    }
+
+    function bindHostCompatibilityObserver(root) {
+        applyHostCompatibilityClasses(root);
+        const documentRoot = document.documentElement;
+        if (!documentRoot || typeof MutationObserver !== 'function') return;
+
+        const existingObserver = window.yzmMemoryHostCompatibilityObserver;
+        if (existingObserver?.yzmRoot === root) return;
+        existingObserver?.disconnect?.();
+
+        const observer = new MutationObserver(() => applyHostCompatibilityClasses(root));
+        observer.yzmRoot = root;
+        observer.observe(documentRoot, {
+            attributes: true,
+            attributeFilter: ['class', 'data-st-immersive-pwa-shift'],
+        });
+        window.yzmMemoryHostCompatibilityObserver = observer;
     }
 
     function setMobileDetailOpen(root, isOpen) {
@@ -18375,7 +18411,7 @@
     function ensureRoot() {
         let root = document.getElementById(ROOT_ID);
         if (root) {
-            applyHostCompatibilityClasses(root);
+            bindHostCompatibilityObserver(root);
             root.dataset.yzmTheme = root.querySelector('.yzm-shell')?.dataset?.yzmTheme || getSavedTheme();
             ensureStoryDirectorProgressIndicator(root);
             return root;
@@ -18385,7 +18421,7 @@
         root.id = ROOT_ID;
         root.className = 'yzm-root';
         root.dataset.yzmTheme = getSavedTheme();
-        applyHostCompatibilityClasses(root);
+        bindHostCompatibilityObserver(root);
 
         const shell = document.createElement('section');
         shell.className = 'yzm-shell';

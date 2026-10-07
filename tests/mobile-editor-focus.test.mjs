@@ -78,6 +78,29 @@ function detectTauriTavernMobile({ userAgent = '', platform = '', maxTouchPoints
     return sandbox.result;
 }
 
+function detectImmersivePwaShift({ active = true, shift = '', headerTops = {} } = {}) {
+    const sandbox = {
+        result: null,
+        rootElement: {
+            classList: {
+                contains: (className) => active && className === 'st-immersive-pwa-standalone',
+            },
+            dataset: { stImmersivePwaShift: shift },
+        },
+        documentObject: {
+            getElementById: (id) => id in headerTops
+                ? { getBoundingClientRect: () => ({ top: headerTops[id] }) }
+                : null,
+        },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        getFunctionSource('getImmersivePwaShift'),
+        'result = getImmersivePwaShift(rootElement, documentObject);',
+    ].join('\n'), sandbox);
+    return sandbox.result;
+}
+
 test('editor controls do not receive initial focus on mobile layouts', () => {
     const mobile = runFocusHelper(true, { preventScroll: true, select: true });
     assert.equal(mobile.result, false);
@@ -114,6 +137,29 @@ test('TauriTavern mobile safe-area mode covers both iOS and Android', () => {
     assert.match(compatibilitySource, /yzm-tauritavern-mobile/);
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-tauritavern-mobile[\s\S]*?--tt-inset-top/);
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-tauritavern-mobile \.yzm-shell/);
+});
+
+test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
+    assert.equal(detectImmersivePwaShift({ shift: '32' }), 32);
+    assert.equal(detectImmersivePwaShift({ shift: '44.5' }), 44.5);
+    assert.equal(detectImmersivePwaShift({ shift: '-10' }), 0);
+    assert.equal(detectImmersivePwaShift({ shift: 'invalid' }), 0);
+    assert.equal(detectImmersivePwaShift({ active: false, shift: '32' }), 0);
+    assert.equal(detectImmersivePwaShift({
+        shift: '22',
+        headerTops: { 'top-bar': 32, 'top-settings-holder': 32 },
+    }), 32);
+
+    const compatibilitySource = getFunctionSource('applyHostCompatibilityClasses');
+    const observerSource = getFunctionSource('bindHostCompatibilityObserver');
+    const ensureRootSource = getFunctionSource('ensureRoot');
+    assert.match(compatibilitySource, /yzm-immersive-pwa/);
+    assert.match(compatibilitySource, /--yzm-immersive-pwa-shift/);
+    assert.match(observerSource, /data-st-immersive-pwa-shift/);
+    assert.match(observerSource, /attributeFilter:\s*\['class', 'data-st-immersive-pwa-shift'\]/);
+    assert.match(ensureRootSource, /bindHostCompatibilityObserver\(root\)/);
+    assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa[\s\S]*?--yzm-host-safe-top:[\s\S]*?--yzm-immersive-pwa-shift/);
+    assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa \.yzm-shell[\s\S]*?top: calc\(6px \+ var\(--yzm-host-safe-top\)\)/);
 });
 
 test('text editor entry points use desktop-only initial focus', () => {
