@@ -105,12 +105,14 @@ test('vector segment editor remains open without any initial focus call', () => 
     assert.doesNotMatch(source.slice(appendIndex), /\.focus\(/);
 });
 
-test('release metadata and update notice describe the Gemini Flash and story planning optimization', () => {
-    assert.equal(manifest.version, '1.0.5');
-    assert.match(indexSource, /const VERSION = '1\.0\.5';/);
+test('release metadata and update notice describe the editing and branch fixes', () => {
+    assert.equal(manifest.version, '1.0.6');
+    assert.match(indexSource, /const VERSION = '1\.0\.6';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /优化 Gemini 的 Flash 模型请求及剧情规划功能/);
+    assert.match(noticeSource, /编辑正文后不再自动重新剧情规划/);
+    assert.match(noticeSource, /自动清理分支点之后的剧情摘要、正文表格更新和记忆总结/);
+    assert.match(noticeSource, /魔法棒菜单中长按“柚月の记忆”/);
 });
 
 test('mobile summary fields provide a large synchronized text editor', () => {

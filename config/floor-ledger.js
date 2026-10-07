@@ -970,9 +970,11 @@
             }
             const activeReason = pendingReason || reason;
             pendingReason = '';
+            const shouldPruneRemoved = options.pruneRemoved === true
+                && ['message_deleted', 'session_ready'].includes(activeReason);
             const result = reconcileNow({
                 reason: activeReason,
-                pruneRemoved: options.pruneRemoved === true && activeReason === 'message_deleted',
+                pruneRemoved: shouldPruneRemoved,
                 force: options.force === true,
             });
             if (result?.reason === 'busy' || result?.reason === 'branch_busy') {
@@ -1127,7 +1129,9 @@
                 scheduleReconcile('message_rendered', 900);
             },
         );
-        window.addEventListener('yzm-memory-session-ready', () => scheduleReconcile('session_ready', 300));
+        window.addEventListener('yzm-memory-session-ready', () => scheduleReconcile('session_ready', 300, {
+            pruneRemoved: true,
+        }));
 
         bound = true;
         window.clearTimeout(bindRetryTimer);

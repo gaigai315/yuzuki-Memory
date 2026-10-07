@@ -612,9 +612,16 @@
     function buildTableMemoryMessage(state, table, options = {}) {
         const tableText = buildTableText(state, table, options);
         if (!tableText) return null;
+        const archiveReminder = table.id === PLOT_SUMMARY_TABLE_ID
+            ? '(历史存档，仅作背景参考，请勿复述或重演)'
+            : '';
         return {
             role: 'system',
-            content: `【当前世界状态参考 - ${table.name}】\n(历史存档，仅作背景参考，请勿复述或重演)\n${tableText}`,
+            content: compactLines([
+                `【当前世界状态参考 - ${table.name}】`,
+                archiveReminder,
+                tableText,
+            ]),
             name: `SYSTEM (${table.name})`,
             isGaigaiData: true,
             yzmMemoryInjectionType: 'table',

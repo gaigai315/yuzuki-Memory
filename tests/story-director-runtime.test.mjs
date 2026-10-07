@@ -1599,6 +1599,51 @@ test('runtime event bindings are deduplicated', () => {
     assert.equal(counts.chat_id_changed, 1);
 });
 
+test('confirming message edit without dialogue changes does not queue another director run', () => {
+    const { eventBindings, sandbox, requests } = createSandbox({ embeddingEnabled: false });
+    const timers = [];
+    sandbox.window.setTimeout = (callback, delay) => {
+        timers.push({ callback, delay: Number(delay) });
+        return timers.length;
+    };
+    sandbox.window.clearTimeout = () => {};
+
+    const edited = eventBindings.find((entry) => entry.name === 'message_edited');
+    assert.ok(edited);
+    edited.handler(3);
+
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 250);
+    timers.shift().callback();
+    assert.equal(timers.length, 0);
+    assert.equal(requests.length, 0);
+});
+
+test('changing message text reconciles without queueing a director rerun', () => {
+    const { eventBindings, sandbox, chat, requests } = createSandbox({ embeddingEnabled: false });
+    const timers = [];
+    sandbox.window.setTimeout = (callback, delay) => {
+        timers.push({ callback, delay: Number(delay) });
+        return timers.length;
+    };
+    sandbox.window.clearTimeout = () => {};
+
+    chat[3].mes = '手动修改后的最新正文';
+    const updated = eventBindings.find((entry) => entry.name === 'message_updated');
+    assert.ok(updated);
+    updated.handler(3);
+
+    const settleTimer = timers.shift();
+    assert.equal(settleTimer?.delay, 250);
+    settleTimer.callback();
+
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 250);
+    timers.shift().callback();
+    assert.equal(timers.length, 0);
+    assert.equal(requests.length, 0);
+});
+
 test('aborted director runs return to idle without changing the ledger', async () => {
     const { memory, dispatchedEvents, getState } = createSandbox();
     memory.LlmClient.requestAgentWithTavern = async (_messages, _tools, options) => new Promise((resolve, reject) => {

@@ -3757,9 +3757,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         return boundary;
     }
 
-    function reconcileStateAfterChatDeletion(chatLength = getChatLength()) {
+    function reconcileStateAfterChatDeletion(chatLength = getChatLength(), options = {}) {
         const state = autoTaskCallbacks.getState?.();
         if (!state) return false;
+        const reason = String(options.reason || 'message_deleted');
         const stateBeforeReconcile = cloneAutoTaskState(state);
         const limit = Math.max(0, Math.round(Number(chatLength) || 0));
         const pointers = normalizePointers(state);
@@ -3803,11 +3804,13 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         if (!invalidation.changed && !pointerChanged && !plotVisibilityChangedCount) return false;
 
         const saved = persistAutoTaskState(state, autoTaskCallbacks, {
-            saveOrigin: 'message-deleted-reconcile',
+            saveOrigin: String(options.saveOrigin || (reason === 'message_deleted'
+                ? 'message-deleted-reconcile'
+                : 'session-range-reconcile')),
         });
         if (!saved) {
             restoreAutoTaskState(state, stateBeforeReconcile);
-            console.warn('[yuzuki-Memory] 删除楼层后的总结对账保存失败，已恢复原状态。');
+            console.warn('[yuzuki-Memory] 聊天范围变化后的总结对账保存失败，已恢复原状态。');
             return false;
         }
 
@@ -3816,7 +3819,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             : false;
         const result = {
             success: true,
-            reason: 'message_deleted',
+            reason,
             chatLength: limit,
             ...invalidation,
             plotVisibilityChangedCount,
@@ -3829,7 +3832,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             },
         };
         autoTaskCallbacks.onUpdate?.(result);
-        console.info('[yuzuki-Memory] 删除楼层后已对账总结与任务指针。', result);
+        console.info('[yuzuki-Memory] 聊天范围变化后已对账总结与任务指针。', result);
         return true;
     }
 
@@ -4457,7 +4460,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         }
         window.addEventListener('yzm-memory-session-ready', () => {
             refreshAutoTaskBaseline();
-            clampPointersToChatLength(getChatLength(), 'session_ready');
+            reconcileStateAfterChatDeletion(getChatLength(), {
+                reason: 'session_ready',
+                saveOrigin: 'session-ready-reconcile',
+            });
         });
         autoTaskSessionPollTimer = window.setInterval(() => {
             const currentSessionId = getCurrentSessionId();

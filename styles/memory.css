@@ -9853,11 +9853,36 @@
 .yzm-memory-extension-entry {
     width: 100%;
     cursor: pointer;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
 }
 
 .yzm-memory-extension-row {
     align-items: center;
     justify-content: flex-start;
+    transition: opacity 120ms ease, transform 120ms ease;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+.yzm-memory-extension-entry.yzm-memory-extension-pressing .yzm-memory-extension-row {
+    opacity: 0.72;
+    transform: scale(0.985);
+}
+
+.yzm-memory-extension-entry.yzm-memory-extension-disabled .yzm-memory-extension-row {
+    opacity: 0.62;
+}
+
+.yzm-memory-extension-entry.yzm-memory-extension-disabling {
+    pointer-events: none;
+}
+
+.yzm-memory-extension-entry.yzm-memory-extension-disabling .yzm-memory-extension-row {
+    opacity: 0.52;
 }
 
 .yzm-memory-extension-row > .yzm-memory-extension-icon {

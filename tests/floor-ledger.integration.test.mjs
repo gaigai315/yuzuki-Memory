@@ -523,6 +523,52 @@ test('explicit delete event replays plot and character state despite a stale gen
     }
 });
 
+test('loading a shortened branch replays all message-backed memory to the branch point', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('开始'),
+        assistantMemoryMessage([
+            '#主线摘要',
+            '[2026年10月7日,09:00-09:10] | 内容: 爱丽丝抵达城门。',
+            '#角色档案',
+            '[爱丽丝] | 身份: 骑士',
+        ].join('\n')),
+        userMessage('继续'),
+        assistantMemoryMessage([
+            '#主线摘要',
+            '[2026年10月7日,09:20-09:30] | 内容: 爱丽丝进入王宫。',
+            '#角色状态',
+            '[爱丽丝] | 好感度: 15',
+            '#物品追踪',
+            '[王宫钥匙] | 物品描述: 打开内殿',
+            '#世界设定',
+            '[王宫宵禁] | 详细说明: 入夜后封门',
+        ].join('\n')),
+    ];
+
+    assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false }).success, true);
+    assert.equal(parser.applyMemoryText(chat[3].mes, { floor: 3, dispatch: false }).success, true);
+    assert.match(storedState.records.plot_summary[0].values.主线, /进入王宫/);
+    assert.equal(storedState.records.character_status.length, 1);
+    assert.equal(storedState.records.item_tracking.length, 1);
+    assert.equal(storedState.records.world_setting.length, 1);
+
+    chat = chat.slice(0, 2);
+    ledger.scheduleReconcile('session_ready', 0, { pruneRemoved: true });
+    flushTimers();
+
+    assert.match(storedState.records.plot_summary[0].values.主线, /抵达城门/);
+    assert.doesNotMatch(storedState.records.plot_summary[0].values.主线, /进入王宫/);
+    assert.equal(storedState.records.character_profile[0].values.身份, '骑士');
+    assert.deepEqual(storedState.records.character_status, []);
+    assert.deepEqual(storedState.records.item_tracking, []);
+    assert.deepEqual(storedState.records.world_setting, []);
+    assert.equal(storedState.floorLedger.activeEntries.length, 1);
+    assert.equal(Object.keys(storedState.floorLedger.entries).length, 1);
+});
+
 test('swipe processing consumes both rollback guards', () => {
     const parser = window.YuzukiMemory.MemoryTagParser;
     storedState = parser.createDefaultState();

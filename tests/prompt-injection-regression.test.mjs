@@ -395,6 +395,40 @@ test('vector anchors include managed table recalls when generic recall is empty'
     assert.match(fallbackVector.content, /【世界设定向量召回】/);
 });
 
+test('only plot summary table injection carries the historical archive reminder', () => {
+    const sandbox = createBaseSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    const state = {
+        tables: [
+            { id: 'plot_summary', name: '剧情摘要', columns: ['#主线', '#支线'] },
+            { id: 'item_tracking', name: '物品追踪', columns: ['物品名称', '物品描述'] },
+            { id: 'world_setting', name: '世界设定', columns: ['设定名', '详细说明'] },
+        ],
+        records: {
+            plot_summary: [{ id: 'plot', values: { 主线: '2044年03月17日,08:00-09:00 剧情事件', 支线: '' } }],
+            item_tracking: [{ id: 'item', values: { 物品名称: '旧钥匙', 物品描述: '用于开启书房' } }],
+            world_setting: [{ id: 'world', values: { 设定名: '宵禁', 详细说明: '午夜后禁止外出' } }],
+        },
+        settings: {},
+    };
+    memory.GlobalSettings = { get: (_key, fallback) => fallback };
+    memory.Storage = { loadState: () => state };
+    vm.runInContext(variableInjectorSource, sandbox, { filename: 'variable-injector.js' });
+
+    const messages = memory.VariableInjector.buildTableMessages(state);
+    const reminder = '历史存档，仅作背景参考，请勿复述或重演';
+    const plot = messages.find((message) => message.yzmMemoryTableId === 'plot_summary');
+    const item = messages.find((message) => message.yzmMemoryTableId === 'item_tracking');
+    const world = messages.find((message) => message.yzmMemoryTableId === 'world_setting');
+
+    assert.ok(plot);
+    assert.ok(item);
+    assert.ok(world);
+    assert.match(plot.content, new RegExp(reminder));
+    assert.doesNotMatch(item.content, new RegExp(reminder));
+    assert.doesNotMatch(world.content, new RegExp(reminder));
+});
+
 test('switching built-in schemes keeps the realtime prompt with existing plot records', () => {
     const sandbox = createBaseSandbox();
     const memory = sandbox.window.YuzukiMemory;

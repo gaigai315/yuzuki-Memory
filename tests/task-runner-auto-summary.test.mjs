@@ -563,6 +563,25 @@ test('silent automatic summary force-write repairs the edited Memory envelope an
     assert.equal(harness.errorToasts.length, 0);
 });
 
+test('loading a shortened branch removes inherited summaries beyond the branch point', () => {
+    const harness = createHarness({ chatLength: 52, activateAfterBind: false });
+    const state = harness.stateRef.current;
+    state.records.memory_summary = [
+        createSummaryRecord({ id: 'summary-0-30', start: 0, end: 30, floorScope: harness.floorScope, summaryType: 'manual' }),
+        createSummaryRecord({ id: 'summary-30-50', start: 30, end: 50, floorScope: harness.floorScope, summaryType: 'manual' }),
+    ];
+    state.settings.manualPointers.summary = 50;
+
+    harness.chat.length = 45;
+    harness.emitWindow('yzm-memory-session-ready');
+
+    assert.deepEqual(state.records.memory_summary.map((record) => record.id), ['summary-0-30']);
+    assert.equal(state.settings.manualPointers.summary, 30);
+    assert.equal(harness.saveCalls.length, 1);
+    assert.equal(harness.saveCalls[0].saveOptions.saveOrigin, 'session-ready-reconcile');
+    assert.equal(harness.updatePayloads[0].reason, 'session_ready');
+});
+
 test('deleting into a later manual summary removes it and restores the previous summary pointer', () => {
     const harness = createHarness();
     const state = harness.stateRef.current;

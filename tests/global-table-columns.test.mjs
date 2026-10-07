@@ -199,6 +199,141 @@ test('story director enabled state is isolated per session and legacy global val
     assert.equal(storage.loadState(fallback, disabledSessionId).storyDirector.enabled, false);
 });
 
+test('branch inheritance rebinds parent floor-bound memory to the new branch scope', () => {
+    const context = {
+        characterId: 0,
+        characters: [{ name: '测试角色', avatar: 'test.png' }],
+        name2: '测试角色',
+        chatMetadata: {
+            file_name: 'branch-chat',
+            main_chat: 'parent-chat',
+        },
+    };
+    const { storage, localStorage } = createStorageSandbox({ context });
+    const fallback = createFallbackState();
+    fallback.tables.push(
+        { id: 'memory_summary', name: '记忆总结', icon: 'memory_book', columns: ['总结标题', '楼层数', '总结内容'], hidden: false },
+        { id: 'plot_summary', name: '剧情摘要', icon: 'timeline', columns: ['摘要名称', '主线', '支线'], hidden: false },
+    );
+    fallback.records.memory_summary = [];
+    fallback.records.plot_summary = [];
+
+    const parentSessionId = 'char:0:parent-chat';
+    const branchSessionId = 'char:0:branch-chat';
+    const parentScope = storage.getCurrentFloorScope(parentSessionId);
+    const previousScope = storage.createFloorScope('char:0:older-chat', { label: '更早会话' });
+    const parentState = structuredClone(fallback);
+    parentState.sessionId = parentSessionId;
+    parentState.floorScopeVersion = 1;
+    parentState.currentFloorScope = parentScope;
+    parentState.records.memory_summary = [{
+        id: 'parent-summary',
+        floorScope: parentScope,
+        values: { 总结标题: '主线总结', 楼层数: '0-199', 总结内容: '父会话总结' },
+        summarySegments: [{
+            floor: '0-199',
+            summary: '父会话总结',
+            floorScope: parentScope,
+            range: { start: 0, end: 200, floorScope: parentScope },
+        }],
+        meta: {
+            yzmMemoryTask: {
+                kind: 'summary',
+                floorScope: parentScope,
+                range: { start: 0, end: 200, floorScope: parentScope },
+            },
+        },
+    }, {
+        id: 'older-summary',
+        floorScope: previousScope,
+        values: { 总结标题: '主线总结', 楼层数: '0-49', 总结内容: '更早会话总结' },
+        meta: { yzmMemoryTask: { kind: 'summary', floorScope: previousScope, range: { start: 0, end: 50, floorScope: previousScope } } },
+    }];
+    parentState.records.plot_summary = [{
+        id: 'parent-plot',
+        floorScope: parentScope,
+        values: { 摘要名称: '主线摘要', 主线: '父会话剧情', 支线: '' },
+        plotItemMeta: {
+            main: [{
+                text: '父会话剧情',
+                floorScope: parentScope,
+                sourceRange: { start: 0, end: 200, floorScope: parentScope },
+            }],
+            branch: [],
+        },
+    }];
+    localStorage.setItem(storage.getStorageKey(parentSessionId), JSON.stringify(parentState));
+
+    const loaded = storage.loadState(fallback, branchSessionId);
+    const summary = loaded.records.memory_summary.find((record) => record.id === 'parent-summary');
+    const olderSummary = loaded.records.memory_summary.find((record) => record.id === 'older-summary');
+    const plot = loaded.records.plot_summary[0];
+
+    assert.equal(loaded.currentFloorScope.id, branchSessionId);
+    assert.equal(summary.floorScope.id, branchSessionId);
+    assert.equal(summary.meta.yzmMemoryTask.floorScope.id, branchSessionId);
+    assert.equal(summary.meta.yzmMemoryTask.range.floorScope.id, branchSessionId);
+    assert.equal(summary.summarySegments[0].floorScope.id, branchSessionId);
+    assert.equal(summary.summarySegments[0].range.floorScope.id, branchSessionId);
+    assert.equal(plot.floorScope.id, branchSessionId);
+    assert.equal(plot.plotItemMeta.main[0].floorScope.id, branchSessionId);
+    assert.equal(plot.plotItemMeta.main[0].sourceRange.floorScope.id, branchSessionId);
+    assert.equal(olderSummary.floorScope.id, previousScope.id);
+});
+
+test('copied branch chat metadata also rebinds parent summaries to the new branch scope', () => {
+    const parentScope = { id: 'char:0:parent-chat', label: 'parent-chat', kind: 'session' };
+    const context = {
+        characterId: 0,
+        characters: [{ name: '测试角色', avatar: 'test.png' }],
+        name2: '测试角色',
+        chatMetadata: {
+            file_name: 'branch-chat',
+            main_chat: 'parent-chat',
+        },
+    };
+    const fallback = createFallbackState();
+    fallback.tables.push({
+        id: 'memory_summary',
+        name: '记忆总结',
+        icon: 'memory_book',
+        columns: ['总结标题', '楼层数', '总结内容'],
+        hidden: false,
+    });
+    fallback.records.memory_summary = [];
+    context.chatMetadata.yuzukiMemory = {
+        ...structuredClone(fallback),
+        sessionId: 'char:0:parent-chat',
+        sessionAliases: ['char:0:parent-chat'],
+        floorScopeVersion: 1,
+        currentFloorScope: parentScope,
+        records: {
+            ...structuredClone(fallback.records),
+            memory_summary: [{
+                id: 'copied-summary',
+                floorScope: parentScope,
+                values: { 总结标题: '主线总结', 楼层数: '0-199', 总结内容: '复制的父会话总结' },
+                meta: {
+                    yzmMemoryTask: {
+                        kind: 'summary',
+                        floorScope: parentScope,
+                        range: { start: 0, end: 200, floorScope: parentScope },
+                    },
+                },
+            }],
+        },
+    };
+
+    const { storage } = createStorageSandbox({ context });
+    const loaded = storage.loadState(fallback);
+    const summary = loaded.records.memory_summary[0];
+
+    assert.equal(loaded.sessionId, 'char:0:branch-chat');
+    assert.equal(loaded.currentFloorScope.id, 'char:0:branch-chat');
+    assert.equal(summary.floorScope.id, 'char:0:branch-chat');
+    assert.equal(summary.meta.yzmMemoryTask.range.floorScope.id, 'char:0:branch-chat');
+});
+
 test('legacy story director records are cleared and persisted as ledger version 2', () => {
     const { storage, localStorage } = createStorageSandbox();
     const fallback = createFallbackState();

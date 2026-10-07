@@ -54,6 +54,7 @@
 
 没有名册变更时，<角色账本更新>保持为空。没有新的Assistant正文需要记录时只输出“发生: 否”。`;
     const RUN_DELAY_MS = 1800;
+    const MESSAGE_MUTATION_SETTLE_MS = 250;
     const RUN_STATE_EVENT = 'yzm-story-director-run-state';
     const VECTOR_RECALL_TIMEOUT_MS = 20000;
     const VECTOR_LOG_PREFIX = '[yuzuki-Memory Story Director Vector]';
@@ -61,8 +62,10 @@
     let bindRetryTimer = null;
     let runTimer = null;
     let ledgerReconcileTimer = null;
+    let messageMutationTimer = null;
     let activeAbortController = null;
     let activeRunSignature = '';
+    let dialogueMutationSnapshot = '';
 
     function getContext() {
         try {
@@ -183,6 +186,36 @@
             hash = Math.imul(hash, 16777619);
         }
         return `${source.length}:${(hash >>> 0).toString(16)}`;
+    }
+
+    function buildDialogueMutationSnapshot() {
+        const context = getContext() || {};
+        const chat = Array.isArray(context.chat) ? context.chat : [];
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        const messages = [];
+        chat.forEach((message, index) => {
+            if (!isDialogueMessage(message) || isPluginMessage(message)) return;
+            messages.push([
+                index,
+                isUserMessage(message) ? 'user' : 'assistant',
+                isHiddenDialogueMessage(message) ? 'hidden' : 'visible',
+                Math.max(0, Math.round(Number(message?.swipe_id) || 0)),
+                hashText(getMessageText(message)),
+            ]);
+        });
+        return JSON.stringify({ sessionId, messages });
+    }
+
+    function rememberDialogueMutationSnapshot() {
+        dialogueMutationSnapshot = buildDialogueMutationSnapshot();
+        return dialogueMutationSnapshot;
+    }
+
+    function consumeDialogueMutation() {
+        const nextSnapshot = buildDialogueMutationSnapshot();
+        const changed = nextSnapshot !== dialogueMutationSnapshot;
+        dialogueMutationSnapshot = nextSnapshot;
+        return changed;
     }
 
     function buildAssistantAnchor(message, index, sessionId) {
@@ -1678,6 +1711,7 @@
                 error: '当前没有可用于规划的最新对话。',
             };
         }
+        rememberDialogueMutationSnapshot();
         window.clearTimeout(runTimer);
         runTimer = null;
         console.info('[yuzuki-Memory] 手动剧情规划开始运行。', { messageIndex: getSourceIndex(source) });
@@ -1790,6 +1824,7 @@
             }
             const source = getLatestAssistantAnchor();
             if (!source || !sourceIsLatestDialogue(source)) return;
+            rememberDialogueMutationSnapshot();
             const state = loadState(source.sessionId);
             const director = state?.storyDirector || {};
             if (director.pendingCard && director.source?.signature === source.signature && sourceMatchesCurrentMessage(director.source)) return;
@@ -1966,12 +2001,33 @@
             return false;
         }
         bound = true;
-        const onAssistantChanged = () => scheduleDirector('assistant-message');
+        rememberDialogueMutationSnapshot();
+        const onAssistantChanged = () => {
+            rememberDialogueMutationSnapshot();
+            scheduleDirector('assistant-message');
+        };
         const onBranchChanged = (reason, reconcileDelay) => {
+            rememberDialogueMutationSnapshot();
             cancelActiveRun('branch changed');
             clearInvalidPendingCard();
             scheduleStoredDirectorLedgerReconcile(reason, reconcileDelay);
             scheduleDirector('branch-changed');
+        };
+        const onMessageUpdated = () => {
+            // SillyTavern emits edit/update events even when the editor is confirmed without text changes.
+            window.clearTimeout(messageMutationTimer);
+            const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+            messageMutationTimer = window.setTimeout(() => {
+                messageMutationTimer = null;
+                if (!sessionId || sessionId !== YuzukiMemory.Storage?.getCurrentSessionId?.()) {
+                    rememberDialogueMutationSnapshot();
+                    return;
+                }
+                if (!consumeDialogueMutation()) return;
+                cancelActiveRun('message updated');
+                clearInvalidPendingCard();
+                scheduleStoredDirectorLedgerReconcile('message-updated', 250);
+            }, MESSAGE_MUTATION_SETTLE_MS);
         };
         const onGenerationStarted = (type, options, dryRun) => {
             const quiet = dryRun === true
@@ -1984,6 +2040,9 @@
             cancelActiveRun('chat changed');
             window.clearTimeout(ledgerReconcileTimer);
             ledgerReconcileTimer = null;
+            window.clearTimeout(messageMutationTimer);
+            messageMutationTimer = null;
+            rememberDialogueMutationSnapshot();
         };
         const bindEvents = (names, handler) => {
             [...new Set(names.filter(Boolean))].forEach((name) => eventSource.on(name, handler));
@@ -1991,9 +2050,7 @@
         bindEvents([eventTypes.CHARACTER_MESSAGE_RENDERED, eventTypes.MESSAGE_RECEIVED, 'character_message_rendered'], onAssistantChanged);
         bindEvents([eventTypes.MESSAGE_DELETED, 'message_deleted'], () => onBranchChanged('message-deleted', 180));
         bindEvents([eventTypes.MESSAGE_SWIPED, 'message_swiped'], () => onBranchChanged('message-swiped', 650));
-        bindEvents([eventTypes.MESSAGE_EDITED, eventTypes.MESSAGE_UPDATED, 'message_edited', 'message_updated'], () => (
-            onBranchChanged('message-updated', 250)
-        ));
+        bindEvents([eventTypes.MESSAGE_EDITED, eventTypes.MESSAGE_UPDATED, 'message_edited', 'message_updated'], onMessageUpdated);
         bindEvents([eventTypes.GENERATION_STARTED, 'generation_started'], onGenerationStarted);
         bindEvents([eventTypes.CHAT_CHANGED, eventTypes.CHAT_LOADED, 'chat_id_changed'], onChatChanged);
         window.addEventListener('yzm-memory-state-updated', (event) => {

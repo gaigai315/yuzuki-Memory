@@ -10,14 +10,17 @@ import { extension_settings } from '../../../extensions.js';
     'use strict';
 
     const NAMESPACE = 'YuzukiMemory';
-    const VERSION = '1.0.5';
+    const VERSION = '1.0.6';
     const baseUrl = new URL('./', import.meta.url).href;
     let resolveReady;
     const readyPromise = new Promise((resolve) => {
         resolveReady = resolve;
     });
 
-    const MODULES = [
+    const CONTROLLER_MODULES = [
+        'ui/extension-toggle.js',
+    ];
+    const FEATURE_MODULES = [
         'config/global-settings.js',
         'config/timed-prompt-settings.js',
         'config/storage.js',
@@ -49,6 +52,17 @@ import { extension_settings } from '../../../extensions.js';
         'ui/memory-window.js',
     ];
 
+    function isPluginEnabled() {
+        return extension_settings?.yuzukiMemory?.masterSwitch !== false;
+    }
+
+    async function setPluginEnabled(enabled) {
+        extension_settings.yuzukiMemory = extension_settings.yuzukiMemory || {};
+        extension_settings.yuzukiMemory.masterSwitch = enabled === true;
+        await saveSettings();
+        return extension_settings.yuzukiMemory.masterSwitch;
+    }
+
     if (window[NAMESPACE]?.loaded) {
         console.warn('[yuzuki-Memory] Already loaded, skipping duplicate init.');
         return;
@@ -63,6 +77,9 @@ import { extension_settings } from '../../../extensions.js';
             extensionSettings: extension_settings,
             saveSettings,
             saveSettingsDebounced,
+            isPluginEnabled,
+            setPluginEnabled,
+            reloadPage: () => window.location.reload(),
         }),
     });
 
@@ -70,6 +87,7 @@ import { extension_settings } from '../../../extensions.js';
         const generationType = String(type || 'normal').trim().toLowerCase();
         if (!['normal', 'regenerate', 'swipe'].includes(generationType)) return;
         await readyPromise;
+        if (!isPluginEnabled()) return;
         return window[NAMESPACE]?.StoryDirectorRuntime?.injectDirectorCardForGeneration?.(chat, {
             generationType,
         });
@@ -103,14 +121,21 @@ import { extension_settings } from '../../../extensions.js';
 
     async function bootstrap() {
         try {
-            for (const modulePath of MODULES) {
+            for (const modulePath of CONTROLLER_MODULES) {
                 await loadScript(modulePath);
+            }
+            const pluginEnabled = isPluginEnabled();
+            if (pluginEnabled) {
+                for (const modulePath of FEATURE_MODULES) {
+                    await loadScript(modulePath);
+                }
             }
             resolveReady?.();
 
             onDomReady(() => {
-                window[NAMESPACE].MemoryWindow?.mount?.();
-                console.log(`[yuzuki-Memory] v${VERSION} ready.`);
+                window[NAMESPACE].ToggleController?.mount?.();
+                if (pluginEnabled) window[NAMESPACE].MemoryWindow?.mount?.();
+                console.log(`[yuzuki-Memory] v${VERSION} ${pluginEnabled ? 'ready' : 'controller ready; features disabled'}.`);
             });
         } catch (error) {
             resolveReady?.();

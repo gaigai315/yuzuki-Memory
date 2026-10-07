@@ -3,9 +3,6 @@
 
     const YuzukiMemory = window.YuzukiMemory = window.YuzukiMemory || {};
     const ROOT_ID = 'yzm-memory-root';
-    const EXTENSION_ENTRY_ID = 'yzm-memory-extension-entry';
-    const EXTENSION_ROW_ID = 'yzm-memory-extension-row';
-    const EXTENSION_ICON_ID = 'yzm-memory-extension-icon';
     const GLOBAL_MODAL_ROOT_ID = 'yzm-memory-global-modal-root';
     const FLOATING_ROOT_ID = 'yzm-memory-floating-root';
     const FLOATING_BUTTON_ID = 'yzm-memory-floating-button';
@@ -276,7 +273,6 @@
     let loadedSessionId = null;
     let sessionStateReady = false;
     let sessionLoadRevision = 0;
-    let extensionRetryTimer = null;
     let floatingResizeController = null;
     let floatingVisibilityTimer = null;
     let shellOpenInteractionGuardUntil = 0;
@@ -14768,7 +14764,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化 Gemini 的 Flash 模型请求及剧情规划功能。',
+            '编辑正文后不再自动重新剧情规划，避免重复消耗请求；需要时可手动规划。',
+            '修复分支会话的记忆同步问题：会自动清理分支点之后的剧情摘要、正文表格更新和记忆总结，并同步回退进度。',
+            '新增一键开关：在魔法棒菜单中长按“柚月の记忆”，即可一键开启或关闭插件。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -18639,84 +18637,6 @@
         }
     }
 
-    function getExtensionMenuHost() {
-        return document.getElementById('extensionsMenu');
-    }
-
-    function createExtensionMenuEntry() {
-        const entry = document.createElement('div');
-        entry.id = EXTENSION_ENTRY_ID;
-        entry.className = 'extension_container interactable yzm-memory-extension-entry';
-        entry.title = DISPLAY_NAME;
-        entry.setAttribute('role', 'button');
-        entry.setAttribute('aria-label', DISPLAY_NAME);
-        entry.tabIndex = 0;
-
-        const row = document.createElement('div');
-        row.id = EXTENSION_ROW_ID;
-        row.className = 'list-group-item flex-container flexGap5 interactable yzm-memory-extension-row';
-        row.setAttribute('role', 'listitem');
-        row.tabIndex = 0;
-        row.title = DISPLAY_NAME;
-
-        const icon = document.createElement('div');
-        icon.id = EXTENSION_ICON_ID;
-        icon.className = 'fa-fw fa-solid fa-book-open extensionsMenuExtensionButton yzm-memory-extension-icon';
-        icon.setAttribute('role', 'button');
-        icon.tabIndex = 0;
-
-        const label = document.createElement('span');
-        label.className = 'yzm-memory-extension-label';
-        label.textContent = DISPLAY_NAME;
-
-        row.append(icon, label);
-        entry.appendChild(row);
-
-        const handleOpen = (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            toggleShell();
-        };
-
-        entry.addEventListener('click', handleOpen);
-        row.addEventListener('click', handleOpen);
-        entry.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' || event.key === ' ') handleOpen(event);
-        });
-        row.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' || event.key === ' ') handleOpen(event);
-        });
-
-        return entry;
-    }
-
-    function mountExtensionMenuEntry() {
-        const host = getExtensionMenuHost() || document.getElementById('top-settings-holder');
-        if (!host) return false;
-
-        let entry = document.getElementById(EXTENSION_ENTRY_ID);
-        if (!entry) {
-            entry = createExtensionMenuEntry();
-        }
-
-        if (entry.parentElement !== host) {
-            host.insertBefore(entry, host.firstChild);
-        }
-
-        return true;
-    }
-
-    function watchExtensionMenuButton() {
-        const button = document.getElementById('extensionsMenuButton');
-        if (!button || button.dataset.yzmMemoryBound === 'true') return;
-
-        button.dataset.yzmMemoryBound = 'true';
-        button.addEventListener('click', () => {
-            window.setTimeout(mountExtensionMenuEntry, 0);
-            window.setTimeout(mountExtensionMenuEntry, 100);
-        });
-    }
-
     function mount() {
         ensureRoot();
         applyResolvedPromptSchemeToState({ save: false });
@@ -18789,7 +18709,6 @@
                 scheduleAllManagedVectorSyncs({ delay: 0 });
             },
         });
-        watchExtensionMenuButton();
         getStorage()?.bindSessionChange?.((nextSessionId, previousSessionId) => {
             reloadStateForCurrentSession(nextSessionId, previousSessionId);
         });
@@ -18805,18 +18724,6 @@
             scheduleAllManagedVectorSyncs();
         });
 
-        if (!mountExtensionMenuEntry()) {
-            let extensionAttempts = 0;
-            window.clearInterval(extensionRetryTimer);
-            extensionRetryTimer = window.setInterval(() => {
-                extensionAttempts += 1;
-                watchExtensionMenuButton();
-                if (mountExtensionMenuEntry() || extensionAttempts >= 30) {
-                    window.clearInterval(extensionRetryTimer);
-                    extensionRetryTimer = null;
-                }
-            }, 500);
-        }
     }
 
     YuzukiMemory.MemoryWindow = Object.assign(YuzukiMemory.MemoryWindow || {}, {

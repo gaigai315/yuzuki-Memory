@@ -587,6 +587,82 @@
         return inherited;
     }
 
+    function rebaseInheritedFloorBoundRecord(record, sourceFloorScope, targetFloorScope) {
+        if (!record || typeof record !== 'object' || !sourceFloorScope || !targetFloorScope) return record;
+        const recordScope = getRecordFloorScope(record, sourceFloorScope);
+        const rebaseScope = (scope, fallback = recordScope) => {
+            const normalized = normalizeFloorScope(scope, fallback);
+            return isSameFloorScope(normalized, sourceFloorScope) ? clone(targetFloorScope) : normalized;
+        };
+        record.floorScope = rebaseScope(record.floorScope, recordScope);
+
+        const task = record?.meta?.yzmMemoryTask;
+        if (task && typeof task === 'object') {
+            task.floorScope = rebaseScope(task.floorScope, recordScope);
+            if (task.range && typeof task.range === 'object') {
+                task.range = {
+                    ...task.range,
+                    floorScope: rebaseScope(task.range.floorScope, task.floorScope),
+                };
+            }
+        }
+
+        if (Array.isArray(record.summarySegments)) {
+            record.summarySegments = record.summarySegments.map((segment) => {
+                const segmentScope = rebaseScope(segment?.floorScope, record.floorScope);
+                return {
+                    ...(segment && typeof segment === 'object' ? segment : {}),
+                    floorScope: segmentScope,
+                    ...(segment?.range && typeof segment.range === 'object' ? {
+                        range: {
+                            ...segment.range,
+                            floorScope: rebaseScope(segment.range.floorScope, segmentScope),
+                        },
+                    } : {}),
+                };
+            });
+        }
+
+        if (record.plotItemMeta && typeof record.plotItemMeta === 'object') {
+            ['main', 'branch'].forEach((kind) => {
+                if (!Array.isArray(record.plotItemMeta[kind])) return;
+                record.plotItemMeta[kind] = record.plotItemMeta[kind].map((meta) => {
+                    const metaScope = rebaseScope(meta?.floorScope, record.floorScope);
+                    return {
+                        ...(meta && typeof meta === 'object' ? meta : {}),
+                        floorScope: metaScope,
+                        ...(meta?.sourceRange && typeof meta.sourceRange === 'object' ? {
+                            sourceRange: {
+                                ...meta.sourceRange,
+                                floorScope: rebaseScope(meta.sourceRange.floorScope, metaScope),
+                            },
+                        } : {}),
+                    };
+                });
+            });
+        }
+        return record;
+    }
+
+    function rebaseBranchInheritedFloorScopes(state, sessionId) {
+        if (!state || typeof state !== 'object' || !sessionId) return state;
+        const inherited = clone(state);
+        const sourceFloorScope = normalizeFloorScope(
+            inherited.currentFloorScope,
+            getCurrentFloorScope(inherited.sessionId),
+        );
+        const targetFloorScope = getCurrentFloorScope(sessionId);
+        if (!sourceFloorScope || !targetFloorScope || isSameFloorScope(sourceFloorScope, targetFloorScope)) return inherited;
+
+        ['memory_summary', 'plot_summary'].forEach((tableId) => {
+            (inherited.records?.[tableId] || []).forEach((record) => (
+                rebaseInheritedFloorBoundRecord(record, sourceFloorScope, targetFloorScope)
+            ));
+        });
+        inherited.currentFloorScope = clone(targetFloorScope);
+        return inherited;
+    }
+
     function stampSession(state, sessionId) {
         if (!state || typeof state !== 'object') return state;
         return Object.assign({}, state, {
@@ -1120,7 +1196,13 @@
             const recoveredWorldbook = recoverNewerManualWorldbookSelection(compatibleMetadata, localStates);
             const recoveredStoryDirector = recoverNewerStoryDirectorEnabled(recoveredWorldbook.state, localStates);
             const branchParentState = compatibleMetadata ? null : loadBranchParentState(sessionId);
-            const sourceState = recoveredStoryDirector.state || branchParentState || pickBestState(localStates);
+            const sourceCandidate = recoveredStoryDirector.state || branchParentState || pickBestState(localStates);
+            const copiedBranchMetadata = !!compatibleMetadata
+                && !isCompatibleStateSession(compatibleMetadata, sessionId)
+                && getBranchParentSessionAliases(sessionId).length > 0;
+            const sourceState = sourceCandidate && (branchParentState || copiedBranchMetadata)
+                ? rebaseBranchInheritedFloorScopes(sourceCandidate, sessionId)
+                : sourceCandidate;
             const normalized = normalizeState(sourceState ? stampSession(sourceState, sessionId) : null, fallbackState);
             const storyDirectorEnabledNeedsMigration = !!sourceState
                 && typeof sourceState.storyDirector?.enabled !== 'boolean';
