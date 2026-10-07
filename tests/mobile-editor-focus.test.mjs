@@ -96,6 +96,51 @@ function detectImmersivePwaShift({ active = true, shift = '' } = {}) {
     return sandbox.result;
 }
 
+function runImmersiveShellLifecycle() {
+    const calls = [];
+    let popoverOpen = false;
+    const attributes = new Set();
+    const body = {
+        appendChild: () => calls.push('append-root'),
+    };
+    const sandbox = {
+        result: null,
+        calls,
+        console,
+        document: { body },
+        root: {
+            classList: { contains: (name) => name === 'yzm-immersive-pwa' },
+            parentElement: body,
+            style: { setProperty: () => calls.push('set-z-index') },
+        },
+        shell: {
+            hidden: true,
+            hasAttribute: (name) => attributes.has(name),
+            setAttribute: (name) => attributes.add(name),
+            removeAttribute: (name) => attributes.delete(name),
+            matches: (selector) => selector === ':popover-open' && popoverOpen,
+            showPopover: () => {
+                popoverOpen = true;
+                calls.push('show-popover');
+            },
+            hidePopover: () => {
+                popoverOpen = false;
+                calls.push('hide-popover');
+            },
+        },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        getFunctionSource('isShellPopoverOpen'),
+        getFunctionSource('setMemoryShellOpen'),
+        'setMemoryShellOpen(root, shell, true);',
+        'setMemoryShellOpen(root, shell, true);',
+        'setMemoryShellOpen(root, shell, false);',
+        "result = { calls, hidden: shell.hidden, popoverOpen: shell.matches(':popover-open') };",
+    ].join('\n'), sandbox);
+    return JSON.parse(JSON.stringify(sandbox.result));
+}
+
 test('editor controls do not receive initial focus on mobile layouts', () => {
     const mobile = runFocusHelper(true, { preventScroll: true, select: true });
     assert.equal(mobile.result, false);
@@ -140,11 +185,17 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
     assert.equal(detectImmersivePwaShift({ shift: '-10' }), 0);
     assert.equal(detectImmersivePwaShift({ shift: 'invalid' }), 0);
     assert.equal(detectImmersivePwaShift({ active: false, shift: '32' }), 0);
+    assert.deepEqual(runImmersiveShellLifecycle(), {
+        calls: ['show-popover', 'hide-popover'],
+        hidden: true,
+        popoverOpen: false,
+    });
 
     const shiftSource = getFunctionSource('getImmersivePwaShift');
     const compatibilitySource = getFunctionSource('applyHostCompatibilityClasses');
     const observerSource = getFunctionSource('bindHostCompatibilityObserver');
     const ensureRootSource = getFunctionSource('ensureRoot');
+    const shellOpenSource = getFunctionSource('setMemoryShellOpen');
     assert.doesNotMatch(shiftSource, /top-settings-holder|getBoundingClientRect/);
     assert.match(compatibilitySource, /yzm-immersive-pwa/);
     assert.match(compatibilitySource, /--yzm-immersive-pwa-shift/);
@@ -154,6 +205,11 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa[\s\S]*?--yzm-host-safe-top:[\s\S]*?--yzm-immersive-pwa-shift/);
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa\s*\{[^}]*z-index:\s*2147483647\s*!important;[^}]*isolation:\s*isolate;/);
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa \.yzm-shell[\s\S]*?top: calc\(6px \+ var\(--yzm-host-safe-top\)\)/);
+    assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa \.yzm-shell:popover-open\s*\{[^}]*margin:\s*0/);
+    assert.match(shellOpenSource, /setAttribute\('popover', 'manual'\)/);
+    assert.match(shellOpenSource, /shell\.showPopover\(\)/);
+    assert.match(shellOpenSource, /shell\.hidePopover\(\)/);
+    assert.match(shellOpenSource, /document\.body\.appendChild\(root\)/);
 });
 
 test('text editor entry points use desktop-only initial focus', () => {
@@ -188,10 +244,11 @@ test('vector segment editor remains open without any initial focus call', () => 
 });
 
 test('release metadata and update notice describe the editing and branch fixes', () => {
-    assert.equal(manifest.version, '1.0.6');
-    assert.match(indexSource, /const VERSION = '1\.0\.6';/);
+    assert.equal(manifest.version, '1.0.7');
+    assert.match(indexSource, /const VERSION = '1\.0\.7';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
+    assert.match(noticeSource, /沉浸式 PWA 下记忆面板被酒馆页面覆盖/);
     assert.match(noticeSource, /编辑正文后不再自动重新剧情规划/);
     assert.match(noticeSource, /自动清理分支点之后的剧情摘要、正文表格更新和记忆总结/);
     assert.match(noticeSource, /魔法棒菜单中长按“柚月の记忆”/);

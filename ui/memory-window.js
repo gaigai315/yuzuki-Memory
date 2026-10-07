@@ -3127,7 +3127,7 @@
 
     function isMemoryShellOpen() {
         const shell = document.getElementById(ROOT_ID)?.querySelector('.yzm-shell');
-        return !!shell && !shell.hidden;
+        return isMemoryShellElementOpen(shell);
     }
 
     function ensureStoryDirectorProgressIndicator(root = ensureRoot()) {
@@ -4744,6 +4744,72 @@
         return Number.isFinite(shift) ? Math.max(0, shift) : 0;
     }
 
+    function isShellPopoverOpen(shell) {
+        if (!shell?.matches) return false;
+        try {
+            return shell.matches(':popover-open');
+        } catch (_error) {
+            return false;
+        }
+    }
+
+    function isMemoryShellElementOpen(shell) {
+        if (!shell || shell.hidden) return false;
+        if (shell.hasAttribute('popover')) return isShellPopoverOpen(shell);
+        return true;
+    }
+
+    function setMemoryShellOpen(root, shell, open) {
+        if (!root || !shell) return false;
+        const immersivePwaActive = root.classList.contains('yzm-immersive-pwa');
+        const canUseTopLayer = immersivePwaActive
+            && typeof shell.showPopover === 'function'
+            && typeof shell.hidePopover === 'function';
+
+        if (canUseTopLayer) {
+            shell.setAttribute('popover', 'manual');
+        } else if (shell.hasAttribute('popover')) {
+            if (isShellPopoverOpen(shell)) {
+                try {
+                    shell.hidePopover();
+                } catch (_error) {
+                    // The popover may already have been closed by the host page.
+                }
+            }
+            shell.removeAttribute('popover');
+        }
+
+        if (!open) {
+            if (isShellPopoverOpen(shell)) {
+                try {
+                    shell.hidePopover();
+                } catch (_error) {
+                    // The popover may already have been closed by the host page.
+                }
+            }
+            shell.hidden = true;
+            return false;
+        }
+
+        shell.hidden = false;
+        if (canUseTopLayer) {
+            if (isShellPopoverOpen(shell)) return true;
+            try {
+                shell.showPopover();
+                return true;
+            } catch (error) {
+                console.warn('[yuzuki-Memory] Immersive PWA top-layer fallback active.', error);
+                shell.removeAttribute('popover');
+            }
+        }
+
+        if (immersivePwaActive) {
+            root.style.setProperty('z-index', '2147483647', 'important');
+            if (root.parentElement === document.body) document.body.appendChild(root);
+        }
+        return true;
+    }
+
     function applyHostCompatibilityClasses(root) {
         root.classList.remove('yzm-tauritavern-ios');
         root.classList.toggle('yzm-tauritavern-mobile', isTauriTavernMobileRuntime());
@@ -4754,7 +4820,10 @@
             root.style.setProperty('--yzm-immersive-pwa-shift', `${immersivePwaShift}px`);
         } else {
             root.style.removeProperty('--yzm-immersive-pwa-shift');
+            root.style.removeProperty('z-index');
         }
+        const shell = root.querySelector('.yzm-shell');
+        if (shell) setMemoryShellOpen(root, shell, isMemoryShellElementOpen(shell));
     }
 
     function bindHostCompatibilityObserver(root) {
@@ -14797,6 +14866,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
+            '修复沉浸式 PWA 下记忆面板被酒馆页面覆盖的问题，并刷新插件静态资源缓存。',
             '编辑正文后不再自动重新剧情规划，避免重复消耗请求；需要时可手动规划。',
             '修复分支会话的记忆同步问题：会自动清理分支点之后的剧情摘要、正文表格更新和记忆总结，并同步回退进度。',
             '新增一键开关：在魔法棒菜单中长按“柚月の记忆”，即可一键开启或关闭插件。',
@@ -18477,7 +18547,7 @@
 
         close.addEventListener('click', () => {
             blurPluginFocus(shell);
-            shell.hidden = true;
+            setMemoryShellOpen(root, shell, false);
             updateFloatingIconVisibility();
         });
 
@@ -18651,7 +18721,7 @@
         const root = ensureRoot();
         const shell = root.querySelector('.yzm-shell');
         if (!shell) return;
-        const opening = forceOpen || shell.hidden;
+        const opening = forceOpen || !isMemoryShellElementOpen(shell);
         if (opening) {
             const result = YuzukiMemory.FloorLedger?.reconcileNow?.({
                 reason: 'memory_window_open',
@@ -18662,9 +18732,9 @@
             }
             reloadStateFromStorage();
         }
-        shell.hidden = forceOpen ? false : !shell.hidden;
+        setMemoryShellOpen(root, shell, opening);
         updateFloatingIconVisibility();
-        if (!shell.hidden) {
+        if (isMemoryShellElementOpen(shell)) {
             applySavedDesktopShellGeometry(shell);
             maybeShowUpdateNotice(root);
         }

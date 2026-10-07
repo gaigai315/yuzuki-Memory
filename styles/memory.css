@@ -9980,6 +9980,10 @@
         height: auto;
     }
 
+    #yzm-memory-root.yzm-immersive-pwa .yzm-shell:popover-open {
+        margin: 0;
+    }
+
     #yzm-memory-root .yzm-shell-bar {
         flex-wrap: nowrap;
         gap: 2px;
