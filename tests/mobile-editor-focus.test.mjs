@@ -61,6 +61,23 @@ function runFocusHelper(isMobile, options = {}) {
     return { result: sandbox.result, calls };
 }
 
+function detectTauriTavernMobile({ userAgent = '', platform = '', maxTouchPoints = 0, tauri = true, tavern = true } = {}) {
+    const sandbox = {
+        result: null,
+        navigator: { userAgent, platform, maxTouchPoints },
+        window: {
+            __TAURI_RUNNING__: tauri,
+            __TAURITAVERN__: tavern ? {} : undefined,
+        },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        getFunctionSource('isTauriTavernMobileRuntime'),
+        'result = isTauriTavernMobileRuntime();',
+    ].join('\n'), sandbox);
+    return sandbox.result;
+}
+
 test('editor controls do not receive initial focus on mobile layouts', () => {
     const mobile = runFocusHelper(true, { preventScroll: true, select: true });
     assert.equal(mobile.result, false);
@@ -72,6 +89,31 @@ test('editor controls do not receive initial focus on mobile layouts', () => {
         ['focus', { preventScroll: true }],
         ['select'],
     ]);
+});
+
+test('TauriTavern mobile safe-area mode covers both iOS and Android', () => {
+    assert.equal(detectTauriTavernMobile({
+        userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)',
+        platform: 'iPhone',
+    }), true);
+    assert.equal(detectTauriTavernMobile({
+        userAgent: 'Mozilla/5.0 (Linux; Android 15; Pixel 9 Build/AP3A)',
+        platform: 'Linux armv8l',
+    }), true);
+    assert.equal(detectTauriTavernMobile({
+        userAgent: 'Mozilla/5.0 (Linux; Android 15; Pixel 9 Build/AP3A)',
+        platform: 'Linux armv8l',
+        tavern: false,
+    }), false);
+    assert.equal(detectTauriTavernMobile({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        platform: 'Win32',
+    }), false);
+
+    const compatibilitySource = getFunctionSource('applyHostCompatibilityClasses');
+    assert.match(compatibilitySource, /yzm-tauritavern-mobile/);
+    assert.match(memoryCssSource, /#yzm-memory-root\.yzm-tauritavern-mobile[\s\S]*?--tt-inset-top/);
+    assert.match(memoryCssSource, /#yzm-memory-root\.yzm-tauritavern-mobile \.yzm-shell/);
 });
 
 test('text editor entry points use desktop-only initial focus', () => {

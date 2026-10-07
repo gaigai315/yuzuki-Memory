@@ -4723,7 +4723,7 @@
         return true;
     }
 
-    function isTauriTavernIosRuntime() {
+    function isTauriTavernMobileRuntime() {
         const isTauriRuntime = window.__TAURI_RUNNING__ === true
             || window.__TAURI_INTERNALS__ !== undefined
             || typeof window.__TAURI__?.core?.invoke === 'function';
@@ -4733,13 +4733,14 @@
 
         const userAgent = String(navigator.userAgent || '');
         const platform = String(navigator.platform || '');
-        return /iphone|ipad|ipod/i.test(userAgent)
-            || /iphone|ipad|ipod/i.test(platform)
+        return /android|iphone|ipad|ipod/i.test(userAgent)
+            || /android|iphone|ipad|ipod/i.test(platform)
             || (platform === 'MacIntel' && Number(navigator.maxTouchPoints) > 1);
     }
 
     function applyHostCompatibilityClasses(root) {
-        root.classList.toggle('yzm-tauritavern-ios', isTauriTavernIosRuntime());
+        root.classList.remove('yzm-tauritavern-ios');
+        root.classList.toggle('yzm-tauritavern-mobile', isTauriTavernMobileRuntime());
     }
 
     function setMobileDetailOpen(root, isOpen) {
