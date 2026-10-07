@@ -4814,17 +4814,24 @@
     }
 
     function applyHostCompatibilityClasses(root) {
-        root.classList.remove('yzm-tauritavern-ios');
-        root.classList.toggle('yzm-tauritavern-mobile', isTauriTavernMobileRuntime());
+        const tauriTavernMobile = isTauriTavernMobileRuntime();
         const immersivePwaShift = getImmersivePwaShift();
         const immersivePwaActive = document.documentElement?.classList?.contains('st-immersive-pwa-standalone') === true;
-        root.classList.toggle('yzm-immersive-pwa', immersivePwaActive);
-        if (immersivePwaActive) {
-            root.style.setProperty('--yzm-immersive-pwa-shift', `${immersivePwaShift}px`);
-        } else {
-            root.style.removeProperty('--yzm-immersive-pwa-shift');
-            root.style.removeProperty('z-index');
-        }
+        const compatibilityRoots = [root];
+        const globalModalRoot = document.getElementById(GLOBAL_MODAL_ROOT_ID);
+        if (globalModalRoot && globalModalRoot !== root) compatibilityRoots.push(globalModalRoot);
+
+        compatibilityRoots.forEach((compatibilityRoot) => {
+            compatibilityRoot.classList.remove('yzm-tauritavern-ios');
+            compatibilityRoot.classList.toggle('yzm-tauritavern-mobile', tauriTavernMobile);
+            compatibilityRoot.classList.toggle('yzm-immersive-pwa', immersivePwaActive);
+            if (immersivePwaActive) {
+                compatibilityRoot.style.setProperty('--yzm-immersive-pwa-shift', `${immersivePwaShift}px`);
+            } else {
+                compatibilityRoot.style.removeProperty('--yzm-immersive-pwa-shift');
+                compatibilityRoot.style.removeProperty('z-index');
+            }
+        });
         const shell = root.querySelector('.yzm-shell');
         if (shell) setMemoryShellOpen(root, shell, isMemoryShellElementOpen(shell));
     }
@@ -18838,6 +18845,7 @@
         setTheme,
         renderCharacterAvatarHtml,
         syncFloatingIcon: updateFloatingIconVisibility,
+        applyHostCompatibilityClasses,
         openStoryDirectorCard,
         closeStoryDirectorCard,
         isStoryDirectorCardOpen,

@@ -4,6 +4,7 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const memoryWindowSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
+const characterGraphWindowSource = fs.readFileSync(new URL('../ui/character-graph-window.js', import.meta.url), 'utf8');
 const memoryCssSource = fs.readFileSync(new URL('../styles/memory.css', import.meta.url), 'utf8');
 const indexSource = fs.readFileSync(new URL('../index.js', import.meta.url), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
@@ -199,6 +200,7 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
     assert.doesNotMatch(shiftSource, /top-settings-holder|getBoundingClientRect/);
     assert.match(compatibilitySource, /yzm-immersive-pwa/);
     assert.match(compatibilitySource, /--yzm-immersive-pwa-shift/);
+    assert.match(compatibilitySource, /GLOBAL_MODAL_ROOT_ID/);
     assert.match(observerSource, /data-st-immersive-pwa-shift/);
     assert.match(observerSource, /attributeFilter:\s*\['class', 'data-st-immersive-pwa-shift'\]/);
     assert.match(ensureRootSource, /bindHostCompatibilityObserver\(root\)/);
@@ -206,6 +208,10 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa\s*\{[^}]*z-index:\s*2147483647\s*!important;[^}]*isolation:\s*isolate;/);
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa \.yzm-shell[\s\S]*?top: calc\(6px \+ var\(--yzm-host-safe-top\)\)/);
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa \.yzm-shell:popover-open\s*\{[^}]*margin:\s*0/);
+    assert.match(memoryWindowSource, /applyHostCompatibilityClasses,/);
+    assert.match(characterGraphWindowSource, /MemoryWindow\?\.applyHostCompatibilityClasses\?\.\(host\)/);
+    assert.match(memoryCssSource, /#yzm-memory-global-modal-root\.yzm-immersive-pwa\s*\{[^}]*--yzm-host-safe-top:[^}]*--yzm-immersive-pwa-shift/);
+    assert.match(memoryCssSource, /#yzm-memory-global-modal-root\.yzm-immersive-pwa \.yzm-character-graph-modal\s*\{[^}]*top:\s*var\(--yzm-host-safe-top\)\s*!important;[^}]*height:\s*auto;/);
     assert.match(shellOpenSource, /setAttribute\('popover', 'manual'\)/);
     assert.match(shellOpenSource, /shell\.showPopover\(\)/);
     assert.match(shellOpenSource, /shell\.hidePopover\(\)/);

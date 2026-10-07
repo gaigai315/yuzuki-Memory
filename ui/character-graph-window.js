@@ -52,6 +52,7 @@
         if (host.parentElement !== document.body) document.body.appendChild(host);
         const shellTheme = document.querySelector('#yzm-memory-root .yzm-shell')?.dataset?.yzmTheme;
         if (shellTheme) host.dataset.yzmTheme = shellTheme;
+        YuzukiMemory.MemoryWindow?.applyHostCompatibilityClasses?.(host);
         return host;
     }
 

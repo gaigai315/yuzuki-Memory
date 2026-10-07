@@ -13765,6 +13765,20 @@
 }
 
 @media (max-width: 760px) and (pointer: coarse) {
+    #yzm-memory-global-modal-root.yzm-tauritavern-mobile {
+        --yzm-host-safe-top: max(var(--tt-inset-top, env(safe-area-inset-top, 0px)), 0px);
+        --yzm-host-safe-right: max(var(--tt-inset-right, env(safe-area-inset-right, 0px)), 0px);
+        --yzm-host-safe-bottom: max(var(--tt-inset-bottom, env(safe-area-inset-bottom, 0px)), 0px);
+        --yzm-host-safe-left: max(var(--tt-inset-left, env(safe-area-inset-left, 0px)), 0px);
+    }
+
+    #yzm-memory-global-modal-root.yzm-immersive-pwa {
+        --yzm-host-safe-top: max(env(safe-area-inset-top, 0px), var(--yzm-immersive-pwa-shift, 0px));
+        --yzm-host-safe-right: max(env(safe-area-inset-right, 0px), 0px);
+        --yzm-host-safe-bottom: max(env(safe-area-inset-bottom, 0px), 0px);
+        --yzm-host-safe-left: max(env(safe-area-inset-left, 0px), 0px);
+    }
+
     #yzm-memory-global-modal-root.yzm-character-graph-host-open {
         position: fixed !important;
         inset: 0 !important;
@@ -13785,6 +13799,16 @@
         min-height: 0;
         align-items: stretch;
         padding: 7px;
+    }
+
+    #yzm-memory-global-modal-root.yzm-tauritavern-mobile .yzm-character-graph-modal,
+    #yzm-memory-global-modal-root.yzm-immersive-pwa .yzm-character-graph-modal {
+        top: var(--yzm-host-safe-top) !important;
+        right: var(--yzm-host-safe-right) !important;
+        bottom: var(--yzm-host-safe-bottom) !important;
+        left: var(--yzm-host-safe-left) !important;
+        width: auto;
+        height: auto;
     }
 
     #yzm-memory-global-modal-root .yzm-character-graph-dialog {
