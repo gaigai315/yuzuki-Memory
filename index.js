@@ -22,6 +22,7 @@ import { extension_settings } from '../../../extensions.js';
     ];
     const FEATURE_MODULES = [
         'config/global-settings.js',
+        'config/mobile-world-info-compat.js',
         'config/timed-prompt-settings.js',
         'config/storage.js',
         'config/character-name-matcher.js',

@@ -431,6 +431,25 @@ test('story director config switch reads and updates the runtime storage state i
     assert.equal(savedOptions.saveOrigin, 'manual');
 });
 
+test('opening plugin settings rerenders the current session switches', () => {
+    const interactionHandler = getFunctionSource(
+        memoryWindowSource,
+        'bindPanelInteractions',
+        'ensureRoot',
+    );
+    const configButtonStart = interactionHandler.indexOf('const configButton =');
+    const traceButtonStart = interactionHandler.indexOf('const traceButton =', configButtonStart);
+    const configButtonHandler = interactionHandler.slice(configButtonStart, traceButtonStart);
+
+    assert.ok(configButtonStart >= 0 && traceButtonStart > configButtonStart);
+    assert.match(configButtonHandler, /activeWorkspaceView = 'config'/);
+    assert.match(configButtonHandler, /renderConfigWorkspace\(root\)/);
+    assert.ok(
+        configButtonHandler.indexOf('renderConfigWorkspace(root)')
+            < configButtonHandler.indexOf('updateWorkspaceMode(root)'),
+    );
+});
+
 test('director card can replan through the shared runner and refresh in place', () => {
     const openHandler = getFunctionSource(
         memoryWindowSource,

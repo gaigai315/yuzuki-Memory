@@ -198,6 +198,7 @@
         hiddenFloorCount: 50,
         keepFirstFloorVisible: false,
         includeCharacterGreetingInTasks: false,
+        mobileWorldInfoSelect2Compat: false,
         enableFloatingIcon: false,
         floatingIconStyle: FLOATING_ICON_DEFAULT_STYLE,
         enableFilling: true,
@@ -2569,6 +2570,7 @@
             hiddenFloorCount: Math.round(normalizeNumberSetting(source.hiddenFloorCount, 0, 9999, DEFAULT_PLUGIN_SETTINGS.hiddenFloorCount, 0)),
             keepFirstFloorVisible: typeof source.keepFirstFloorVisible === 'boolean' ? source.keepFirstFloorVisible : DEFAULT_PLUGIN_SETTINGS.keepFirstFloorVisible,
             includeCharacterGreetingInTasks: typeof source.includeCharacterGreetingInTasks === 'boolean' ? source.includeCharacterGreetingInTasks : DEFAULT_PLUGIN_SETTINGS.includeCharacterGreetingInTasks,
+            mobileWorldInfoSelect2Compat: typeof source.mobileWorldInfoSelect2Compat === 'boolean' ? source.mobileWorldInfoSelect2Compat : DEFAULT_PLUGIN_SETTINGS.mobileWorldInfoSelect2Compat,
             enableFloatingIcon: typeof source.enableFloatingIcon === 'boolean' ? source.enableFloatingIcon : DEFAULT_PLUGIN_SETTINGS.enableFloatingIcon,
             floatingIconStyle: normalizeFloatingIconStyle(source.floatingIconStyle),
             enableFilling: typeof source.enableFilling === 'boolean' ? source.enableFilling : DEFAULT_PLUGIN_SETTINGS.enableFilling,
@@ -11944,6 +11946,7 @@
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
             createPluginConfigRow('首楼常驻', '开启后，酒馆第 0 楼始终保持显示；仅影响隐藏楼层，不改变填表、总结和优化任务的取材范围。', 'fa-solid fa-thumbtack', createConfigSwitch(settings.keepFirstFloorVisible, 'keepFirstFloorVisible')),
             createPluginConfigRow('任务包含角色卡开场白', '开启后，填表、总结和优化任务会额外注入角色卡的默认开场白；默认关闭，关闭时仅使用任务楼层范围内的实际聊天内容。', 'fa-solid fa-message', createConfigSwitch(settings.includeCharacterGreetingInTasks, 'includeCharacterGreetingInTasks')),
+            createPluginConfigRow('移动端世界书折叠兼容', '开启后在触屏移动设备使用折叠选择器，修复新版 Chrome 将世界书原生多选框平铺显示的问题；默认关闭。', 'fa-solid fa-layer-group', createConfigSwitch(settings.mobileWorldInfoSelect2Compat, 'mobileWorldInfoSelect2Compat')),
             createTaskWorldbookPanel()
         );
         window.setTimeout(() => refreshTaskWorldbookList(ensureRoot()), 0);
@@ -17288,6 +17291,7 @@
                 });
                 clearSidebarActionActive(root);
                 configButton.classList.add('yzm-sidebar-action-active');
+                renderConfigWorkspace(root);
                 updateWorkspaceMode(root);
                 refreshTagPresetSelect(root);
             });
@@ -18231,6 +18235,9 @@
                         }
                     } else if (pluginSettingKey) {
                         updatePluginSetting(pluginSettingKey, isOn);
+                        if (pluginSettingKey === 'mobileWorldInfoSelect2Compat') {
+                            YuzukiMemory.MobileWorldInfoCompat?.setEnabled?.(isOn);
+                        }
                         if (pluginSettingKey === 'hideFloorsEnabled' && isOn) {
                             applyHiddenFloorsFromSettings();
                         }
