@@ -9,6 +9,8 @@
     const SETTINGS_CACHE_TTL = 30000;
     const AGENT_EMPTY_RESPONSE_MAX_RETRIES = 2;
     const AGENT_EMPTY_RESPONSE_RETRY_BASE_MS = 1000;
+    const AGENT_TRANSPORT_ERROR_MAX_RETRIES = 2;
+    const AGENT_TRANSPORT_ERROR_RETRY_BASE_MS = 750;
     const OPENCODE_GO_PROVIDER = 'opencode_go';
     const OPENCODE_GO_BASE_URL = 'https://opencode.ai/zen/go/v1';
     const OPENCODE_SESSION_SALT_STORAGE_KEY = 'yzm_memory_opencode_session_salt';
@@ -1130,6 +1132,13 @@
         return String(error?.message || error || '').trim() === 'Agent API 未返回文本或工具调用';
     }
 
+    function isRetryableAgentTransportError(status, detail = '') {
+        const statusCode = Number(status) || 0;
+        if (statusCode && ![502, 503, 504].includes(statusCode)) return false;
+        const text = String(detail?.message || detail || '').trim();
+        return /(?:\bENOTFOUND\b|\bEAI_AGAIN\b|\bECONNREFUSED\b|\bETIMEDOUT\b|\bUND_ERR_CONNECT_TIMEOUT\b|getaddrinfo|temporary failure in name resolution|fetch failed|failed to fetch|network(?: request)? failed|connection timed out)/i.test(text);
+    }
+
     async function waitForAgentRetry(delayMs, signal) {
         if (signal?.aborted) return false;
         return new Promise((resolve) => {
@@ -1314,22 +1323,66 @@
             signal: options.signal,
         });
 
-        const maxRetries = Number.isInteger(options.emptyResponseMaxRetries)
+        const maxEmptyResponseRetries = Number.isInteger(options.emptyResponseMaxRetries)
             ? Math.max(0, Math.min(AGENT_EMPTY_RESPONSE_MAX_RETRIES, options.emptyResponseMaxRetries))
             : AGENT_EMPTY_RESPONSE_MAX_RETRIES;
-        for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        const maxTransportErrorRetries = Number.isInteger(options.transportErrorMaxRetries)
+            ? Math.max(0, Math.min(AGENT_TRANSPORT_ERROR_MAX_RETRIES, options.transportErrorMaxRetries))
+            : 0;
+        let emptyResponseAttempt = 0;
+        let transportErrorAttempt = 0;
+        while (true) {
             if (options.signal?.aborted) return { success: false, error: '已中断发送', aborted: true };
-            let response = await send(false);
+            let response;
+            try {
+                response = await send(false);
+            } catch (error) {
+                if (options.signal?.aborted || error?.name === 'AbortError') {
+                    return { success: false, error: '已中断发送', aborted: true };
+                }
+                if (isRetryableAgentTransportError(0, error) && transportErrorAttempt < maxTransportErrorRetries) {
+                    const delayMs = AGENT_TRANSPORT_ERROR_RETRY_BASE_MS * (2 ** transportErrorAttempt);
+                    transportErrorAttempt += 1;
+                    console.warn(`[yuzuki-Memory] Agent 网络请求失败，准备重试 (${transportErrorAttempt}/${maxTransportErrorRetries})。`, error);
+                    const shouldContinue = await waitForAgentRetry(delayMs, options.signal);
+                    if (!shouldContinue) return { success: false, error: '已中断发送', aborted: true };
+                    continue;
+                }
+                return { success: false, error: formatError(error) };
+            }
             if (!response.ok) {
                 let text = await response.text().catch(() => '');
                 if (isUnauthorized(response.status, text)) {
-                    response = await send(true);
+                    try {
+                        response = await send(true);
+                    } catch (error) {
+                        if (options.signal?.aborted || error?.name === 'AbortError') {
+                            return { success: false, error: '已中断发送', aborted: true };
+                        }
+                        return { success: false, error: formatError(error) };
+                    }
                     if (!response.ok) text = await response.text().catch(() => '');
                 }
                 if (!response.ok) {
+                    if (isRetryableAgentTransportError(response.status, text) && transportErrorAttempt < maxTransportErrorRetries) {
+                        const delayMs = AGENT_TRANSPORT_ERROR_RETRY_BASE_MS * (2 ** transportErrorAttempt);
+                        transportErrorAttempt += 1;
+                        console.warn(`[yuzuki-Memory] Agent 上游连接暂时失败，准备重试 (${transportErrorAttempt}/${maxTransportErrorRetries})。`, {
+                            status: response.status,
+                            statusText: response.statusText,
+                        });
+                        const shouldContinue = await waitForAgentRetry(delayMs, options.signal);
+                        if (!shouldContinue) return { success: false, error: '已中断发送', aborted: true };
+                        continue;
+                    }
+                    const retryNote = isRetryableAgentTransportError(response.status, text)
+                        && maxTransportErrorRetries > 0
+                        && transportErrorAttempt >= maxTransportErrorRetries
+                        ? `\n\n已对临时网络错误重试 ${maxTransportErrorRetries} 次。`
+                        : '';
                     return {
                         success: false,
-                        error: createUpstreamError(response.status, text, response.statusText),
+                        error: `${createUpstreamError(response.status, text, response.statusText)}${retryNote}`,
                         status: response.status,
                         statusText: response.statusText,
                         upstreamBody: text,
@@ -1343,17 +1396,18 @@
             } catch (error) {
                 const retryableEmptyResponse = response.status === 200
                     && isEmptyAgentResponseError(error)
-                    && attempt < maxRetries;
+                    && emptyResponseAttempt < maxEmptyResponseRetries;
                 if (retryableEmptyResponse) {
-                    const delayMs = AGENT_EMPTY_RESPONSE_RETRY_BASE_MS * (2 ** attempt);
+                    const delayMs = AGENT_EMPTY_RESPONSE_RETRY_BASE_MS * (2 ** emptyResponseAttempt);
+                    emptyResponseAttempt += 1;
                     const shouldContinue = await waitForAgentRetry(delayMs, options.signal);
                     if (!shouldContinue) return { success: false, error: '已中断发送', aborted: true };
                     continue;
                 }
                 const retryNote = response.status === 200
                     && isEmptyAgentResponseError(error)
-                    && maxRetries > 0 && attempt >= maxRetries
-                    ? `\n\n已对空响应重试 ${maxRetries} 次。`
+                    && maxEmptyResponseRetries > 0 && emptyResponseAttempt >= maxEmptyResponseRetries
+                    ? `\n\n已对空响应重试 ${maxEmptyResponseRetries} 次。`
                     : '';
                 return {
                     success: false,
@@ -1363,7 +1417,6 @@
                 };
             }
         }
-        return { success: false, error: 'Agent API 空响应重试结束。' };
     }
 
     async function requestAgentWithTavern(messages, tools, options = {}) {

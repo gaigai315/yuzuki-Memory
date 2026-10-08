@@ -494,6 +494,7 @@ test('director inventories roles first and saves the merged ledger with the seco
         assert.deepEqual(options.tools, []);
         assert.equal(Object.hasOwn(options, 'toolChoice'), false);
         assert.equal(options.emptyResponseMaxRetries, 0);
+        assert.equal(options.transportErrorMaxRetries, 2);
         assert.ok(options.signal);
     }
     assert.equal(directorCaptures.length, 2);
@@ -1430,6 +1431,7 @@ test('a custom API route receives the ledger pass followed by the card pass', as
         assert.equal(tools.length, 0);
         assert.equal(Object.hasOwn(options, 'toolChoice'), false);
         assert.equal(options.emptyResponseMaxRetries, 0);
+        assert.equal(options.transportErrorMaxRetries, 2);
         requests.push(structuredClone(messages));
         return isReview(messages) ? createCardResponse() : createRoleLedgerResponse();
     };

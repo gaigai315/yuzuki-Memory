@@ -530,6 +530,103 @@ test('agent empty-response retry does not retry HTTP errors', async () => {
     assert.match(result.error, /HTTP 429 Too Many Requests/);
 });
 
+test('agent retries explicit Tavern DNS failures when transport retries are enabled', async () => {
+    let requestCount = 0;
+    const delays = [];
+    const { client } = createClient(async () => {
+        requestCount += 1;
+        if (requestCount < 3) {
+            return createResponse({
+                error: {
+                    message: 'request to https://api.aiyuzuki.com/v1/chat/completions failed, reason: getaddrinfo ENOTFOUND api.aiyuzuki.com',
+                    code: 'ENOTFOUND',
+                    erroredSysCall: 'getaddrinfo',
+                },
+            }, { ok: false, status: 502, statusText: 'Bad Gateway' });
+        }
+        return createResponse({ choices: [{ message: { content: '<下轮导演卡>恢复成功。</下轮导演卡>' } }] });
+    }, {
+        setTimeout(callback, delay) {
+            delays.push(delay);
+            callback();
+            return delays.length;
+        },
+        clearTimeout() {},
+    });
+
+    const result = await client.requestAgentWithCustom(openCodeConfig, [
+        { role: 'user', content: 'test DNS retry' },
+    ], [], { emptyResponseMaxRetries: 0, transportErrorMaxRetries: 2 });
+
+    assert.equal(result.success, true);
+    assert.equal(requestCount, 3);
+    assert.deepEqual(delays, [750, 1500]);
+});
+
+test('agent transport retry ignores generic upstream HTTP failures', async () => {
+    let requestCount = 0;
+    let delayCount = 0;
+    const { client } = createClient(async () => {
+        requestCount += 1;
+        return createResponse({ error: { message: 'upstream rejected the request' } }, {
+            ok: false,
+            status: 502,
+            statusText: 'Bad Gateway',
+        });
+    }, {
+        setTimeout() {
+            delayCount += 1;
+            return 1;
+        },
+        clearTimeout() {},
+    });
+
+    const result = await client.requestAgentWithCustom(openCodeConfig, [
+        { role: 'user', content: 'test generic 502' },
+    ], [], { emptyResponseMaxRetries: 0, transportErrorMaxRetries: 2 });
+
+    assert.equal(result.success, false);
+    assert.equal(requestCount, 1);
+    assert.equal(delayCount, 0);
+});
+
+test('aborting during transport-error backoff cancels the retry', async () => {
+    let requestCount = 0;
+    let scheduledCallback;
+    const controller = new AbortController();
+    const { client } = createClient(async () => {
+        requestCount += 1;
+        return createResponse({
+            error: {
+                message: 'request failed, reason: getaddrinfo EAI_AGAIN api.example.com',
+                code: 'EAI_AGAIN',
+            },
+        }, { ok: false, status: 502, statusText: 'Bad Gateway' });
+    }, {
+        setTimeout(callback) {
+            scheduledCallback = callback;
+            return 1;
+        },
+        clearTimeout() {},
+    });
+
+    const pending = client.requestAgentWithCustom(openCodeConfig, [
+        { role: 'user', content: 'test abort during transport retry' },
+    ], [], {
+        signal: controller.signal,
+        emptyResponseMaxRetries: 0,
+        transportErrorMaxRetries: 2,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(typeof scheduledCallback, 'function');
+    controller.abort();
+    const result = await pending;
+
+    assert.equal(result.success, false);
+    assert.equal(result.aborted, true);
+    assert.equal(requestCount, 1);
+});
+
 test('aborting during empty-response backoff cancels the retry', async () => {
     let requestCount = 0;
     let scheduledCallback;

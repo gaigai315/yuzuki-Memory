@@ -56,6 +56,7 @@
     const RUN_DELAY_MS = 1800;
     const MESSAGE_MUTATION_SETTLE_MS = 250;
     const RUN_STATE_EVENT = 'yzm-story-director-run-state';
+    const TRANSPORT_ERROR_MAX_RETRIES = 2;
     const VECTOR_RECALL_TIMEOUT_MS = 20000;
     const VECTOR_LOG_PREFIX = '[yuzuki-Memory Story Director Vector]';
     let bound = false;
@@ -1466,6 +1467,7 @@
             stream: false,
             yzmMemoryInternalApi: true,
             emptyResponseMaxRetries: 0,
+            transportErrorMaxRetries: TRANSPORT_ERROR_MAX_RETRIES,
         };
         if (snapshot?.mode === 'custom') {
             if (!snapshot.preset) return { success: false, error: '剧情导演未找到可用的独立 API 预设。' };
