@@ -249,6 +249,15 @@ test('vector segment editor remains open without any initial focus call', () => 
     assert.doesNotMatch(source.slice(appendIndex), /\.focus\(/);
 });
 
+test('mobile vector book editor matches the full-height segment editor layout', () => {
+    assert.match(
+        memoryCssSource,
+        /@media \(max-width: 760px\) and \(pointer: coarse\) \{[\s\S]*?\.yzm-vector-book-dialog,[\s\S]*?\.yzm-vector-preview-dialog \{[^}]*height: calc\(100% - 4px\);[^}]*overflow: hidden;/,
+    );
+    assert.match(memoryCssSource, /\.yzm-vector-book-fields \{[^}]*flex: 1 1 0;[^}]*grid-template-rows: auto minmax\(0, 1fr\);[^}]*min-height: 0;/);
+    assert.match(memoryCssSource, /\.yzm-vector-book-content-field \.yzm-record-textarea \{[^}]*flex: 1 1 0;[^}]*min-height: 0;[^}]*overflow: auto;/);
+});
+
 test('release metadata and update notice describe the editing and branch fixes', () => {
     assert.equal(manifest.version, '1.0.7');
     assert.match(indexSource, /const VERSION = '1\.0\.7';/);

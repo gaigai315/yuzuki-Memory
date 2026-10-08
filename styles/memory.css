@@ -10439,13 +10439,46 @@
         padding: 7px 8px;
     }
 
+    #yzm-memory-root .yzm-vector-book-dialog,
     #yzm-memory-root .yzm-vector-preview-dialog {
         width: 100%;
         height: calc(100% - 4px);
         min-height: 0;
         max-height: 100%;
+        overflow: hidden;
         padding: 10px;
         border-radius: 12px;
+    }
+
+    #yzm-memory-root .yzm-vector-book-dialog {
+        gap: 8px;
+    }
+
+    #yzm-memory-root .yzm-vector-book-dialog > .yzm-structure-header,
+    #yzm-memory-root .yzm-vector-book-dialog > .yzm-vector-book-editor-hint,
+    #yzm-memory-root .yzm-vector-book-dialog > .yzm-record-actions {
+        flex: 0 0 auto;
+    }
+
+    #yzm-memory-root .yzm-vector-book-fields {
+        flex: 1 1 0;
+        grid-template-rows: auto minmax(0, 1fr);
+        min-height: 0;
+        overflow: hidden;
+    }
+
+    #yzm-memory-root .yzm-vector-book-content-field {
+        min-height: 0;
+    }
+
+    #yzm-memory-root .yzm-vector-book-content-field .yzm-record-textarea {
+        flex: 1 1 0;
+        min-height: 0;
+        max-height: none;
+        overflow: auto;
+        overscroll-behavior: contain;
+        touch-action: pan-y;
+        -webkit-overflow-scrolling: touch;
     }
 
     #yzm-memory-root .yzm-vector-preview-content {
