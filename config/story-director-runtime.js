@@ -2006,7 +2006,7 @@
         bound = true;
         rememberDialogueMutationSnapshot();
         const onAssistantChanged = () => {
-            rememberDialogueMutationSnapshot();
+            if (!consumeDialogueMutation()) return;
             scheduleDirector('assistant-message');
         };
         const onBranchChanged = (reason, reconcileDelay) => {

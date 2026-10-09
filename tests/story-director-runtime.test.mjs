@@ -1601,6 +1601,36 @@ test('runtime event bindings are deduplicated', () => {
     assert.equal(counts.chat_id_changed, 1);
 });
 
+test('assistant render events only queue planning when dialogue content changes', () => {
+    const { eventBindings, sandbox, chat } = createSandbox({ embeddingEnabled: false });
+    const timers = [];
+    sandbox.window.setTimeout = (callback, delay) => {
+        timers.push({ callback, delay: Number(delay) });
+        return timers.length;
+    };
+    sandbox.window.clearTimeout = () => {};
+
+    const received = eventBindings.find((entry) => entry.name === 'message_received');
+    const rendered = eventBindings.find((entry) => entry.name === 'character_message_rendered');
+    assert.ok(received);
+    assert.ok(rendered);
+
+    rendered.handler(3);
+    assert.equal(timers.length, 0);
+
+    chat.push(
+        { is_user: true, mes: '下一轮行动' },
+        { is_user: false, mes: '下一轮正文', swipe_id: 0 },
+    );
+    received.handler(5);
+    assert.equal(timers.length, 1);
+    assert.equal(timers[0].delay, 1800);
+
+    rendered.handler(5);
+    rendered.handler(5);
+    assert.equal(timers.length, 1);
+});
+
 test('confirming message edit without dialogue changes does not queue another director run', () => {
     const { eventBindings, sandbox, requests } = createSandbox({ embeddingEnabled: false });
     const timers = [];

@@ -413,11 +413,13 @@ test('mobile vector book editor matches the full-height segment editor layout', 
     assert.match(memoryCssSource, /\.yzm-vector-book-content-field \.yzm-record-textarea \{[^}]*flex: 1 1 0;[^}]*min-height: 0;[^}]*overflow: auto;/);
 });
 
-test('release metadata and update notice describe the editing and branch fixes', () => {
-    assert.equal(manifest.version, '1.0.7');
-    assert.match(indexSource, /const VERSION = '1\.0\.7';/);
+test('release metadata and update notice describe the current compatibility fixes', () => {
+    assert.equal(manifest.version, '1.0.8');
+    assert.match(indexSource, /const VERSION = '1\.0\.8';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
+    assert.match(noticeSource, /兼容 MUV 额外模型解析/);
+    assert.match(noticeSource, /重复渲染已有正文时不再二次触发剧情导演/);
     assert.match(noticeSource, /兼容「沉浸式 PWA 顶部」插件/);
     assert.match(noticeSource, /编辑正文后不再自动重新剧情规划/);
     assert.match(noticeSource, /自动清理分支点之后的剧情摘要、正文表格更新和记忆总结/);
