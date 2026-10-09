@@ -296,6 +296,51 @@ test('request probe keeps foreground generation active across quiet and dry-run 
     assert.equal(probe.getChatRequestState().foregroundGenerationActive, false);
 });
 
+test('request probe stop event clears unmatched dry-run and background generation state', () => {
+    const sandbox = createBaseSandbox();
+    const eventHandlers = new Map();
+    sandbox.SillyTavern = {
+        getContext: () => ({
+            eventSource: {
+                on(name, handler) {
+                    if (!eventHandlers.has(name)) eventHandlers.set(name, []);
+                    eventHandlers.get(name).push(handler);
+                },
+            },
+            eventTypes: {
+                GENERATION_STARTED: 'generation_started',
+                GENERATION_ENDED: 'generation_ended',
+                GENERATION_STOPPED: 'generation_stopped',
+                MESSAGE_RECEIVED: 'message_received',
+            },
+        }),
+    };
+    sandbox.window.fetch = async () => ({ ok: true });
+    sandbox.CustomEvent = class CustomEvent {
+        constructor(type, options = {}) {
+            this.type = type;
+            this.detail = options.detail;
+        }
+    };
+    sandbox.window.dispatchEvent = () => true;
+    vm.runInContext(requestProbeSource, sandbox, { filename: 'request-probe.js' });
+
+    const emit = (name, ...args) => (eventHandlers.get(name) || []).forEach((handler) => handler(...args));
+    const probe = sandbox.window.YuzukiMemory.RequestProbe;
+
+    emit('generation_started', 'normal', { dry_run: true }, true);
+    emit('generation_started', 'quiet', {}, false);
+    emit('generation_started', 'normal', {}, false);
+    assert.equal(probe.getChatRequestState().foregroundGenerationActive, true);
+
+    emit('generation_stopped');
+    assert.equal(probe.getChatRequestState().foregroundGenerationActive, false);
+
+    emit('generation_started', 'normal', {}, false);
+    emit('generation_ended');
+    assert.equal(probe.getChatRequestState().foregroundGenerationActive, false);
+});
+
 test('memory prompt fallback ignores unrelated names and schema flags without duplicating actual prompts', async () => {
     const sandbox = createBaseSandbox();
     const memory = sandbox.window.YuzukiMemory;

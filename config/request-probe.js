@@ -207,18 +207,22 @@
             foregroundGenerationActive = true;
             foregroundGenerationSequence = ++generationActivitySequence;
         });
-        [stoppedEvent, endedEvent].filter(Boolean).forEach((eventName) => {
-            eventSource.on(eventName, () => {
-                if (dryRunGenerationDepth > 0) {
-                    markDryRunGenerationFinished();
-                    return;
-                }
-                if (backgroundGenerationEventDepth > 0) {
-                    backgroundGenerationEventDepth -= 1;
-                    return;
-                }
-                foregroundGenerationActive = false;
-            });
+        eventSource.on(endedEvent, () => {
+            if (dryRunGenerationDepth > 0) {
+                markDryRunGenerationFinished();
+                return;
+            }
+            if (backgroundGenerationEventDepth > 0) {
+                backgroundGenerationEventDepth -= 1;
+                return;
+            }
+            foregroundGenerationActive = false;
+        });
+        eventSource.on(stoppedEvent, () => {
+            dryRunGenerationDepth = 0;
+            backgroundGenerationEventDepth = 0;
+            dryRunCaptureUntil = 0;
+            foregroundGenerationActive = false;
         });
         [...new Set([eventTypes?.MESSAGE_RECEIVED, 'message_received'].filter(Boolean))].forEach((eventName) => {
             eventSource.on(eventName, () => {

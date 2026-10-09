@@ -323,6 +323,25 @@ test('foreground generation check ignores stale streaming processors without exp
     assert.equal(harness.taskRunner.isForegroundGenerationBusy(), false);
 });
 
+test('stopping foreground generation overrides stale Tavern busy state and unmatched dry runs', () => {
+    const harness = createHarness({ activateAfterBind: false });
+
+    harness.emit('generation_started', 'normal', { dry_run: true }, true);
+    harness.emit('generation_started', 'normal', {}, false);
+    harness.context.streamingProcessor = { isFinished: false, isStopped: false };
+    harness.context.is_send_press = true;
+    harness.context.generationStarted = true;
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
+
+    harness.emit('generation_stopped');
+
+    assert.equal(
+        harness.taskRunner.isForegroundGenerationBusy(),
+        false,
+        'the stop event is authoritative even before SillyTavern clears compatibility flags',
+    );
+});
+
 test('loading a chat with pending summary ranges waits for the user to resume chatting', async () => {
     const harness = createHarness({ activateAfterBind: false });
 
