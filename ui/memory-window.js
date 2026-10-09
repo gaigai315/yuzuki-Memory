@@ -4764,6 +4764,67 @@
         return true;
     }
 
+    function restoreHostToastContainer() {
+        const transfer = window.yzmMemoryHostToastContainerTransfer;
+        if (!transfer) return false;
+        window.yzmMemoryHostToastContainerTransfer = null;
+
+        const { container, parent, nextSibling, shell } = transfer;
+        if (!container || !parent || container.parentNode !== shell) return false;
+        if (nextSibling?.parentNode === parent) {
+            parent.insertBefore(container, nextSibling);
+        } else {
+            parent.appendChild(container);
+        }
+        return true;
+    }
+
+    function syncHostToastContainer(root, shell) {
+        const shouldTransfer = root?.classList?.contains('yzm-immersive-pwa')
+            && isMemoryShellElementOpen(shell);
+        if (!shouldTransfer) return restoreHostToastContainer();
+
+        const container = document.getElementById('toast-container');
+        if (!container) return false;
+
+        const currentTransfer = window.yzmMemoryHostToastContainerTransfer;
+        if (currentTransfer?.container === container && container.parentNode === shell) return true;
+        if (currentTransfer) restoreHostToastContainer();
+        if (!container.parentNode || container.parentNode === shell || shell.contains?.(container)) return false;
+
+        const parent = container.parentNode;
+        const nextSibling = container.nextSibling;
+        shell.appendChild(container);
+        window.yzmMemoryHostToastContainerTransfer = {
+            container,
+            parent,
+            nextSibling,
+            shell,
+        };
+        return true;
+    }
+
+    function bindHostToastContainerObserver(root) {
+        const existingObserver = window.yzmMemoryHostToastContainerObserver;
+        const shell = root?.querySelector?.('.yzm-shell');
+        if (existingObserver?.yzmRoot === root) {
+            syncHostToastContainer(root, shell);
+            return;
+        }
+
+        existingObserver?.disconnect?.();
+        if (existingObserver) restoreHostToastContainer();
+        syncHostToastContainer(root, shell);
+        if (!document.body || typeof MutationObserver !== 'function') return;
+
+        const observer = new MutationObserver(() => {
+            syncHostToastContainer(root, root.querySelector('.yzm-shell'));
+        });
+        observer.yzmRoot = root;
+        observer.observe(document.body, { childList: true });
+        window.yzmMemoryHostToastContainerObserver = observer;
+    }
+
     function setMemoryShellOpen(root, shell, open) {
         if (!root || !shell) return false;
         const immersivePwaActive = root.classList.contains('yzm-immersive-pwa');
@@ -4793,14 +4854,19 @@
                 }
             }
             shell.hidden = true;
+            syncHostToastContainer(root, shell);
             return false;
         }
 
         shell.hidden = false;
         if (canUseTopLayer) {
-            if (isShellPopoverOpen(shell)) return true;
+            if (isShellPopoverOpen(shell)) {
+                syncHostToastContainer(root, shell);
+                return true;
+            }
             try {
                 shell.showPopover();
+                syncHostToastContainer(root, shell);
                 return true;
             } catch (error) {
                 console.warn('[yuzuki-Memory] Immersive PWA top-layer fallback active.', error);
@@ -4812,6 +4878,7 @@
             root.style.setProperty('z-index', '2147483647', 'important');
             if (root.parentElement === document.body) document.body.appendChild(root);
         }
+        syncHostToastContainer(root, shell);
         return true;
     }
 
@@ -11151,8 +11218,8 @@
             return;
         }
 
-        const modalHost = root;
-        removePluginElement(root.querySelector('.yzm-api-model-modal'));
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-api-model-modal');
 
         const overlay = document.createElement('div');
         overlay.className = 'yzm-structure-modal yzm-api-model-modal';
@@ -18496,6 +18563,7 @@
         let root = document.getElementById(ROOT_ID);
         if (root) {
             bindHostCompatibilityObserver(root);
+            bindHostToastContainerObserver(root);
             root.dataset.yzmTheme = root.querySelector('.yzm-shell')?.dataset?.yzmTheme || getSavedTheme();
             ensureStoryDirectorProgressIndicator(root);
             return root;
@@ -18555,6 +18623,7 @@
         root.append(shell);
         ensureStoryDirectorProgressIndicator(root);
         document.body.appendChild(root);
+        bindHostToastContainerObserver(root);
 
         bindDesktopShellGeometry(shell, moveHandle, resizeHandle);
         applySavedDesktopShellGeometry(shell);

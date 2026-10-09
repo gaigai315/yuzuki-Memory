@@ -9984,6 +9984,11 @@
         margin: 0;
     }
 
+    #yzm-memory-root.yzm-immersive-pwa .yzm-shell > #toast-container {
+        position: absolute !important;
+        z-index: 2147483647 !important;
+    }
+
     #yzm-memory-root .yzm-shell-bar {
         flex-wrap: nowrap;
         gap: 2px;

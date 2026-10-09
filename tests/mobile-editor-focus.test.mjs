@@ -97,6 +97,140 @@ function detectImmersivePwaShift({ active = true, shift = '' } = {}) {
     return sandbox.result;
 }
 
+function createFakeDomNode(name) {
+    const node = {
+        name,
+        hidden: false,
+        parentNode: null,
+        children: [],
+        attributes: new Set(),
+        appendChild(child) {
+            if (child.parentNode) {
+                const previousIndex = child.parentNode.children.indexOf(child);
+                if (previousIndex >= 0) child.parentNode.children.splice(previousIndex, 1);
+            }
+            child.parentNode = this;
+            this.children.push(child);
+            return child;
+        },
+        insertBefore(child, reference) {
+            if (child.parentNode) {
+                const previousIndex = child.parentNode.children.indexOf(child);
+                if (previousIndex >= 0) child.parentNode.children.splice(previousIndex, 1);
+            }
+            const referenceIndex = this.children.indexOf(reference);
+            child.parentNode = this;
+            this.children.splice(referenceIndex >= 0 ? referenceIndex : this.children.length, 0, child);
+            return child;
+        },
+        contains(target) {
+            return target === this || this.children.some((child) => child.contains?.(target));
+        },
+        hasAttribute(nameToFind) {
+            return this.attributes.has(nameToFind);
+        },
+        matches() {
+            return false;
+        },
+    };
+    Object.defineProperty(node, 'nextSibling', {
+        get() {
+            if (!this.parentNode) return null;
+            const index = this.parentNode.children.indexOf(this);
+            return index >= 0 ? this.parentNode.children[index + 1] || null : null;
+        },
+    });
+    return node;
+}
+
+function runHostToastTransferLifecycle() {
+    const body = createFakeDomNode('body');
+    const shell = createFakeDomNode('shell');
+    const container = createFakeDomNode('toast');
+    const marker = createFakeDomNode('marker');
+    body.appendChild(container);
+    body.appendChild(marker);
+
+    const sandbox = {
+        result: null,
+        immersiveActive: true,
+        window: {},
+        document: {
+            getElementById: (id) => id === 'toast-container' ? container : null,
+        },
+        root: {
+            classList: {
+                contains: (className) => className === 'yzm-immersive-pwa' && sandbox.immersiveActive,
+            },
+        },
+        shell,
+        container,
+        body,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        getFunctionSource('isShellPopoverOpen'),
+        getFunctionSource('isMemoryShellElementOpen'),
+        getFunctionSource('restoreHostToastContainer'),
+        getFunctionSource('syncHostToastContainer'),
+        'syncHostToastContainer(root, shell);',
+        'const transferredParent = container.parentNode.name;',
+        'immersiveActive = false;',
+        'syncHostToastContainer(root, shell);',
+        'result = { transferredParent, restoredParent: container.parentNode.name, bodyOrder: body.children.map((child) => child.name) };',
+    ].join('\n'), sandbox);
+    return JSON.parse(JSON.stringify(sandbox.result));
+}
+
+function runDelayedHostToastTransfer() {
+    const body = createFakeDomNode('body');
+    const shell = createFakeDomNode('shell');
+    const container = createFakeDomNode('toast');
+    const sandbox = {
+        result: null,
+        toastContainer: null,
+        observerCallback: null,
+        observerOptions: null,
+        window: {},
+        document: {
+            body,
+            getElementById: (id) => id === 'toast-container' ? sandbox.toastContainer : null,
+        },
+        MutationObserver: class {
+            constructor(callback) {
+                sandbox.observerCallback = callback;
+            }
+
+            observe(_target, options) {
+                sandbox.observerOptions = options;
+            }
+
+            disconnect() {}
+        },
+        root: {
+            classList: { contains: (className) => className === 'yzm-immersive-pwa' },
+            querySelector: (selector) => selector === '.yzm-shell' ? shell : null,
+        },
+        shell,
+        container,
+        body,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        getFunctionSource('isShellPopoverOpen'),
+        getFunctionSource('isMemoryShellElementOpen'),
+        getFunctionSource('restoreHostToastContainer'),
+        getFunctionSource('syncHostToastContainer'),
+        getFunctionSource('bindHostToastContainerObserver'),
+        'bindHostToastContainerObserver(root);',
+        'toastContainer = container;',
+        'body.appendChild(container);',
+        'observerCallback([]);',
+        'result = { parent: container.parentNode.name, observerOptions };',
+    ].join('\n'), sandbox);
+    return JSON.parse(JSON.stringify(sandbox.result));
+}
+
 function runImmersiveShellLifecycle() {
     const calls = [];
     let popoverOpen = false;
@@ -108,7 +242,8 @@ function runImmersiveShellLifecycle() {
         result: null,
         calls,
         console,
-        document: { body },
+        window: {},
+        document: { body, getElementById: () => null },
         root: {
             classList: { contains: (name) => name === 'yzm-immersive-pwa' },
             parentElement: body,
@@ -133,6 +268,9 @@ function runImmersiveShellLifecycle() {
     vm.createContext(sandbox);
     vm.runInContext([
         getFunctionSource('isShellPopoverOpen'),
+        getFunctionSource('isMemoryShellElementOpen'),
+        getFunctionSource('restoreHostToastContainer'),
+        getFunctionSource('syncHostToastContainer'),
         getFunctionSource('setMemoryShellOpen'),
         'setMemoryShellOpen(root, shell, true);',
         'setMemoryShellOpen(root, shell, true);',
@@ -191,12 +329,23 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
         hidden: true,
         popoverOpen: false,
     });
+    assert.deepEqual(runHostToastTransferLifecycle(), {
+        transferredParent: 'shell',
+        restoredParent: 'body',
+        bodyOrder: ['toast', 'marker'],
+    });
+    assert.deepEqual(runDelayedHostToastTransfer(), {
+        parent: 'shell',
+        observerOptions: { childList: true },
+    });
 
     const shiftSource = getFunctionSource('getImmersivePwaShift');
     const compatibilitySource = getFunctionSource('applyHostCompatibilityClasses');
     const observerSource = getFunctionSource('bindHostCompatibilityObserver');
+    const toastObserverSource = getFunctionSource('bindHostToastContainerObserver');
     const ensureRootSource = getFunctionSource('ensureRoot');
     const shellOpenSource = getFunctionSource('setMemoryShellOpen');
+    const modelDialogSource = getFunctionSource('showLlmModelSelectDialog');
     assert.doesNotMatch(shiftSource, /top-settings-holder|getBoundingClientRect/);
     assert.match(compatibilitySource, /yzm-immersive-pwa/);
     assert.match(compatibilitySource, /--yzm-immersive-pwa-shift/);
@@ -204,6 +353,8 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
     assert.match(observerSource, /data-st-immersive-pwa-shift/);
     assert.match(observerSource, /attributeFilter:\s*\['class', 'data-st-immersive-pwa-shift'\]/);
     assert.match(ensureRootSource, /bindHostCompatibilityObserver\(root\)/);
+    assert.match(ensureRootSource, /bindHostToastContainerObserver\(root\)/);
+    assert.match(toastObserverSource, /observer\.observe\(document\.body, \{ childList: true \}\)/);
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa[\s\S]*?--yzm-host-safe-top:[\s\S]*?--yzm-immersive-pwa-shift/);
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa\s*\{[^}]*z-index:\s*2147483647\s*!important;[^}]*isolation:\s*isolate;/);
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa \.yzm-shell[\s\S]*?top: calc\(6px \+ var\(--yzm-host-safe-top\)\)/);
@@ -216,6 +367,10 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
     assert.match(shellOpenSource, /shell\.showPopover\(\)/);
     assert.match(shellOpenSource, /shell\.hidePopover\(\)/);
     assert.match(shellOpenSource, /document\.body\.appendChild\(root\)/);
+    assert.match(shellOpenSource, /syncHostToastContainer\(root, shell\)/);
+    assert.match(modelDialogSource, /const modalHost = getModalHost\(root\)/);
+    assert.match(modelDialogSource, /removeModal\(root, '\.yzm-api-model-modal'\)/);
+    assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa \.yzm-shell > #toast-container\s*\{[^}]*position:\s*absolute\s*!important;[^}]*z-index:\s*2147483647\s*!important;/);
 });
 
 test('text editor entry points use desktop-only initial focus', () => {
