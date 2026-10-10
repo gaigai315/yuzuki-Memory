@@ -145,11 +145,12 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.doesNotMatch(director.prompt, /当前角色正向：顺从\/接纳\/主动/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
     assert.match(director.prompt, /所有模块权重相同/);
-    assert.match(director.prompt, /近10轮中出现未出现或次数最少的模块/);
-    assert.match(director.prompt, /连续4轮未出现时强制调用/);
+    assert.match(director.prompt, /近20轮中出现未出现或次数最少的模块/);
+    assert.match(director.prompt, /连续5轮未出现时强制调用/);
     assert.match(director.prompt, /核对近20轮账本中的正文实际事件/);
     assert.match(director.prompt, /禁止轨道B复用相同的剧情/);
-    assert.match(director.prompt, /登场角色：角色A、角色B、角色C/);
+    assert.match(director.prompt, /登场角色：角色A、角色B/);
+    assert.match(director.prompt, /Module5\(己方阵营\/日常事务\/主动谋划\)/);
     assert.match(director.prompt, /所属模块：Module 1/);
     assert.match(director.prompt, /备选1\(直球升温\)/);
     assert.match(director.prompt, /情感\/追求\/误会\/私心/);
