@@ -419,6 +419,8 @@ test('release metadata and update notice describe version 1.0.9', () => {
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
     assert.match(noticeSource, /【优化】剧情规划界面支持编辑导演规划内容。/);
+    assert.match(noticeSource, /【优化】剧情导演与柚月の手机互通，将手机内的微信消息\/朋友圈\/通话app内的数据作为剧情规划的上下文背景资料。/);
+    assert.match(noticeSource, /【优化】优化插件界面渲染，减少酒馆美化主题对插件样式的影响。/);
     assert.doesNotMatch(noticeSource, /兼容 MUV 额外模型解析/);
     assert.doesNotMatch(noticeSource, /修复快速取消正文生成后的剧情规划锁定/);
     assert.doesNotMatch(noticeSource, /修复会话向量书归属/);
@@ -427,6 +429,37 @@ test('release metadata and update notice describe version 1.0.9', () => {
     assert.doesNotMatch(noticeSource, /编辑正文后不再自动重新剧情规划/);
     assert.doesNotMatch(noticeSource, /自动清理分支点之后的剧情摘要、正文表格更新和记忆总结/);
     assert.doesNotMatch(noticeSource, /魔法棒菜单中长按“柚月の记忆”/);
+});
+
+test('plugin form layout resists broad host theme selectors', () => {
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-api-field \{[^}]*align-items:\s*stretch\s*!important;/,
+    );
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-api-field-inline \{[^}]*align-items:\s*center\s*!important;/,
+    );
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-api-input-wrap,\s*#yzm-memory-root \.yzm-api-select-wrap \{[^}]*width:\s*100%;/,
+    );
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-api-input,\s*#yzm-memory-root \.yzm-api-select \{[^}]*margin:\s*0\s*!important;[^}]*border:\s*1px solid var\(--yzm-border\)\s*!important;/,
+    );
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-api-select \{[^}]*padding-right:\s*34px\s*!important;[^}]*background-image:\s*none\s*!important;[^}]*appearance:\s*none\s*!important;/,
+    );
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-preset-field \{[^}]*align-items:\s*stretch\s*!important;/,
+    );
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-record-field \{[^}]*align-items:\s*stretch\s*!important;[^}]*width:\s*100%;/,
+    );
 });
 
 test('mobile summary fields provide a large synchronized text editor', () => {

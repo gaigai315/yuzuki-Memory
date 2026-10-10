@@ -1052,10 +1052,14 @@
 #yzm-memory-root .yzm-structure-name-input,
 #yzm-memory-root .yzm-structure-columns-input,
 #yzm-memory-root .yzm-record-input {
+    margin: 0 !important;
     color: var(--yzm-text) !important;
     background: var(--yzm-input-bg) !important;
     border-color: var(--yzm-border) !important;
     box-shadow: none !important;
+    filter: none !important;
+    font-family: inherit !important;
+    font-weight: inherit !important;
 }
 
 #yzm-memory-root .yzm-preset-name-input::placeholder,
@@ -5099,6 +5103,7 @@
 #yzm-memory-root .yzm-api-field {
     display: flex;
     flex-direction: column;
+    align-items: stretch !important;
     gap: 5px;
     min-width: 0;
 }
@@ -5109,7 +5114,7 @@
 
 #yzm-memory-root .yzm-api-field-inline {
     flex-direction: row;
-    align-items: center;
+    align-items: center !important;
     justify-content: space-between;
     min-height: 38px;
 }
@@ -5123,6 +5128,7 @@
 #yzm-memory-root .yzm-api-input-wrap,
 #yzm-memory-root .yzm-api-select-wrap {
     position: relative;
+    width: 100%;
     min-width: 0;
 }
 
@@ -5130,15 +5136,19 @@
 #yzm-memory-root .yzm-api-select {
     width: 100%;
     min-height: 34px;
+    margin: 0 !important;
     padding: 0 10px;
     color: var(--yzm-text) !important;
     background: var(--yzm-input-bg) !important;
-    border: 1px solid var(--yzm-border);
+    border: 1px solid var(--yzm-border) !important;
     border-radius: 9px;
-    box-shadow: none;
+    box-shadow: none !important;
     box-sizing: border-box;
     font: inherit;
+    font-family: inherit !important;
     font-size: 12px;
+    font-weight: inherit !important;
+    filter: none !important;
     outline: 0;
 }
 
@@ -5159,10 +5169,11 @@
 }
 
 #yzm-memory-root .yzm-api-select {
-    padding-right: 34px;
+    padding-right: 34px !important;
+    background-image: none !important;
     cursor: pointer;
-    appearance: none;
-    -webkit-appearance: none;
+    appearance: none !important;
+    -webkit-appearance: none !important;
 }
 
 #yzm-memory-root .yzm-api-select-wrap i {
@@ -5449,6 +5460,7 @@
 #yzm-memory-root .yzm-api-range-field {
     display: flex;
     flex-direction: column;
+    align-items: stretch !important;
     gap: 8px;
     min-width: 0;
 }
@@ -6593,6 +6605,7 @@
 #yzm-memory-root .yzm-preset-field {
     display: flex;
     flex-direction: column;
+    align-items: stretch !important;
     gap: 8px;
     margin-top: 16px;
 }
@@ -6634,9 +6647,13 @@
 }
 
 #yzm-memory-root .yzm-preset-select {
+    margin: 0 !important;
+    padding-right: 34px !important;
+    background-image: none !important;
+    border: 1px solid var(--yzm-border) !important;
     cursor: pointer;
-    appearance: none;
-    -webkit-appearance: none;
+    appearance: none !important;
+    -webkit-appearance: none !important;
 }
 
 #yzm-memory-root .yzm-preset-name-input {
@@ -9524,7 +9541,9 @@
 #yzm-memory-root .yzm-record-field {
     display: flex;
     flex-direction: column;
+    align-items: stretch !important;
     gap: 6px;
+    width: 100%;
     min-width: 0;
     color: var(--yzm-text);
     font-size: 13px;
@@ -9719,6 +9738,11 @@
 }
 
 #yzm-memory-root .yzm-character-todo-priority-select {
+    margin: 0 !important;
+    padding-right: 28px !important;
+    background-image: none !important;
+    appearance: auto !important;
+    -webkit-appearance: menulist !important;
     cursor: pointer;
 }
 
@@ -11688,7 +11712,7 @@
     }
 
     #yzm-memory-root .yzm-api-select {
-        padding-right: 28px;
+        padding-right: 28px !important;
     }
 
     #yzm-memory-root .yzm-api-select-wrap i {

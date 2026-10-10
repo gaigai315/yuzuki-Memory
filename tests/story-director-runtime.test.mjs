@@ -74,6 +74,9 @@ function readContext(messages) {
         content: String(message?.content || ''),
     }));
     const worldbooks = readSection(messages, '世界书信息', false, false);
+    const phoneMessages = messages.filter((message) => /^【最近(?:微信聊天记录|微信朋友圈聊天记录|通话APP聊天记录)】/.test(
+        String(message?.content || ''),
+    ));
     const memoryMessages = messages.filter((message) => {
         const name = String(message?.name || '');
         const content = String(message?.content || '');
@@ -103,6 +106,7 @@ function readContext(messages) {
         profileMessages,
         worldbooks,
         memoryMessages,
+        phoneMessages,
         tables,
         vectors,
         chat,
@@ -141,6 +145,28 @@ function createSandbox(options = {}) {
     const infoLogs = [];
     const warningLogs = [];
     const initialLedger = Object.hasOwn(options, 'initialLedger') ? String(options.initialLedger || '') : '旧账本';
+    const phone = options.phone || null;
+    const virtualPhone = phone ? {
+        storage: {
+            get(key, fallback) {
+                return Object.hasOwn(phone.settings || {}, key) ? phone.settings[key] : fallback;
+            },
+        },
+        wechatApp: {
+            wechatData: {
+                getChatList: () => phone.chats || [],
+                getMessages: (chatId) => phone.messages?.[chatId] || [],
+                getMoments: () => phone.moments || [],
+                getUserInfo: () => phone.userInfo || {},
+            },
+        },
+        phoneApp: {
+            phoneCallData: {
+                getCallHistory: () => phone.callHistory || [],
+                getSmsConversations: () => phone.smsConversations || [],
+            },
+        },
+    } : null;
     let state = {
         tables: [
             { id: 'memory_summary', name: '记忆总结', columns: ['总结内容'], hidden: false },
@@ -319,6 +345,7 @@ function createSandbox(options = {}) {
         SillyTavern: { getContext: () => context },
         window: {
             YuzukiMemory: memory,
+            ...(virtualPhone ? { VirtualPhone: virtualPhone } : {}),
             setTimeout() { return 1; },
             clearTimeout() {},
             addEventListener() {},
@@ -513,6 +540,143 @@ test('director inventories roles first and saves the merged ledger with the seco
     const regenerateClone = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(regenerateClone, { generationType: 'regenerate' }), true);
     assert.match(regenerateClone.at(-1).mes, /下一步怎么办？\n\n<下轮导演卡>/);
+});
+
+test('director injects configured phone history immediately before recent story text and freezes it for both passes', async () => {
+    const phone = {
+        settings: {
+            'offline-single-chat-enabled': true,
+            'offline-group-chat-enabled': true,
+            'offline-moments-history-enabled': true,
+            'offline-phone-call-history-enabled': true,
+            'wechat-single-chat-limit': 2,
+            'wechat-group-chat-limit': 1,
+            'wechat-moments-context-limit': 2,
+            'phone-call-limit': 2,
+        },
+        userInfo: { name: '手机昵称' },
+        chats: [
+            { id: 'single', name: '好友甲', type: 'single' },
+            { id: 'group', name: '测试群', type: 'group' },
+        ],
+        messages: {
+            single: [
+                { from: '好友甲', type: 'text', content: '单聊旧消息', date: '2035年07月18日', time: '09:00' },
+                { from: '好友甲', type: 'text', content: '单聊保留一', date: '2035年07月19日', time: '09:01' },
+                { from: '好友甲', type: 'text', content: '隐藏消息', hiddenFromPrompt: true, time: '09:02' },
+                { from: 'me', type: 'voice', voiceText: '单聊保留二', time: '09:03' },
+            ],
+            group: [
+                { from: '群友甲', type: 'text', content: '群聊旧消息', time: '10:00' },
+                { from: '群友乙', type: 'location', locationText: '群聊保留位置', time: '10:01' },
+            ],
+        },
+        moments: [
+            { name: '好友甲', text: '朋友圈保留一', date: '2035年07月19日', time: '08:00' },
+            { name: '手机昵称', text: '朋友圈保留二', date: '2035年07月18日', time: '08:00' },
+            { name: '好友乙', text: '朋友圈旧动态', date: '2035年07月17日', time: '08:00' },
+        ],
+        callHistory: [{
+            id: 100,
+            caller: '好友甲',
+            status: 'answered',
+            date: '2035年07月19日',
+            time: '11:00',
+            duration: '03:20',
+            transcript: [
+                { from: '好友甲', text: '电话旧消息' },
+                { from: 'me', text: '电话保留一' },
+                { from: '好友甲', text: '电话保留二' },
+            ],
+        }],
+        smsConversations: [{
+            name: '好友乙',
+            updatedAt: 200,
+            messages: [
+                { direction: 'incoming', text: '短信旧消息', time: '12:00', createdAt: 100 },
+                { direction: 'outgoing', text: '短信保留一', time: '12:01', createdAt: 101 },
+                { direction: 'incoming', text: '短信保留二', time: '12:02', createdAt: 102 },
+            ],
+        }],
+    };
+    const { memory, requests } = createSandbox({ phone });
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        requests.push(structuredClone(messages));
+        if (isReview(messages)) return createCardResponse();
+        phone.messages.single.push({ from: '好友甲', type: 'text', content: '第一轮后新增微信' });
+        phone.moments.unshift({ name: '好友甲', text: '第一轮后新增朋友圈' });
+        phone.callHistory[0].transcript.push({ from: '好友甲', text: '第一轮后新增电话' });
+        phone.smsConversations[0].messages.push({ direction: 'incoming', text: '第一轮后新增短信' });
+        return createRoleLedgerResponse({ roster: [{ name: '甲', type: '配角', status: '有效' }] });
+    };
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(requests.length, 2);
+
+    requests.forEach((messages) => {
+        const storyIndex = messages.findIndex((message) => message.content?.startsWith('【最近剧情正文】'));
+        assert.ok(storyIndex >= 3);
+        assert.deepEqual(messages.slice(storyIndex - 3, storyIndex).map((message) => message.content.split('\n')[0]), [
+            '【最近微信聊天记录】',
+            '【最近微信朋友圈聊天记录】',
+            '【最近通话APP聊天记录】',
+        ]);
+    });
+
+    const firstPhoneMessages = readContext(requests[0]).phoneMessages;
+    const secondPhoneMessages = readContext(requests[1]).phoneMessages;
+    assert.deepEqual(secondPhoneMessages, firstPhoneMessages);
+    assert.equal(firstPhoneMessages.length, 3);
+
+    const [wechat, moments, phoneApp] = firstPhoneMessages;
+    assert.match(wechat.content, /酒馆用户“用户”与微信昵称“手机昵称”是同一个人/);
+    assert.match(wechat.content, /单聊保留一|单聊保留二/);
+    assert.doesNotMatch(wechat.content, /单聊旧消息|隐藏消息/);
+    assert.match(wechat.content, /群聊保留位置/);
+    assert.doesNotMatch(wechat.content, /群聊旧消息/);
+    assert.match(moments.content, /朋友圈保留一|朋友圈保留二/);
+    assert.doesNotMatch(moments.content, /朋友圈旧动态/);
+    assert.match(phoneApp.content, /电话保留一|电话保留二|短信保留一|短信保留二/);
+    assert.doesNotMatch(phoneApp.content, /电话旧消息|短信旧消息/);
+    assert.doesNotMatch(JSON.stringify(secondPhoneMessages), /第一轮后新增/);
+});
+
+test('director omits phone sections when existing phone switches or zero limits disable them', async () => {
+    const phone = {
+        settings: {
+            'offline-single-chat-enabled': true,
+            'offline-group-chat-enabled': false,
+            'offline-moments-history-enabled': true,
+            'offline-phone-call-history-enabled': false,
+            'wechat-single-chat-limit': 0,
+            'wechat-group-chat-limit': 5,
+            'wechat-moments-context-limit': 0,
+            'phone-call-limit': 5,
+        },
+        chats: [
+            { id: 'single', name: '好友甲', type: 'single' },
+            { id: 'group', name: '测试群', type: 'group' },
+        ],
+        messages: {
+            single: [{ from: '好友甲', type: 'text', content: '不应注入单聊' }],
+            group: [{ from: '群友甲', type: 'text', content: '不应注入群聊' }],
+        },
+        moments: [{ name: '好友甲', text: '不应注入朋友圈' }],
+        callHistory: [{
+            caller: '好友甲',
+            status: 'answered',
+            transcript: [{ from: '好友甲', text: '不应注入电话' }],
+        }],
+        smsConversations: [{
+            name: '好友乙',
+            messages: [{ direction: 'incoming', text: '不应注入短信' }],
+        }],
+    };
+    const { memory, requests } = createSandbox({ phone });
+
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.deepEqual(readContext(requests[0]).phoneMessages, []);
+    assert.doesNotMatch(JSON.stringify(requests), /不应注入单聊|不应注入群聊|不应注入朋友圈|不应注入电话|不应注入短信/);
 });
 
 test('director reads the same blacklist and whitelist filtered chat used by memory tasks', async () => {

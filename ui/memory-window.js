@@ -15055,6 +15055,8 @@
         const list = document.createElement('ul');
         [
             '【优化】剧情规划界面支持编辑导演规划内容。',
+            '【优化】剧情导演与柚月の手机互通，将手机内的微信消息/朋友圈/通话app内的数据作为剧情规划的上下文背景资料。',
+            '【优化】优化插件界面渲染，减少酒馆美化主题对插件样式的影响。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

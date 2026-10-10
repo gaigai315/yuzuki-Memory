@@ -159,7 +159,8 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /用户独处：否/);
     assert.match(director.prompt, /处于真性独处[^\n]*跳过描写\{\{user\}\}所在场景[^\n]*主角视角生成轨道A[^\n]*不需要输出分支A\/B/);
     assert.match(director.prompt, /【打破静默】：[^\n]*通过通讯\/上门\/路上偶遇打破用户独处/);
-    assert.match(director.prompt, /角色动作必须产生触达主角的事实媒介/);
+    assert.match(director.prompt, /角色行动必须在关系网络中形成实质性的“因果扰动与事实落点”/);
+    assert.match(director.prompt, /严禁停留在对现实毫无影响的孤立内心活动/);
     assert.doesNotMatch(director.prompt, /跳过执行轨道B/);
 });
 
