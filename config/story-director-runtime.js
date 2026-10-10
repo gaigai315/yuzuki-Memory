@@ -1981,6 +1981,53 @@
         return null;
     }
 
+    function updateCurrentDirectorCard(content = '') {
+        if (isRunning()) {
+            return { success: false, error: '剧情导演正在运行，请等待规划完成后再编辑。' };
+        }
+        const normalizedContent = unwrapDirectorCard(content);
+        if (!normalizedContent) {
+            return { success: false, error: '导演卡内容不能为空；若本轮不需要，请使用删除按钮。' };
+        }
+        const current = getCurrentDirectorCard();
+        if (!current || !['pending', 'bound'].includes(current.origin)) {
+            return { success: false, error: '当前没有可编辑的导演卡。' };
+        }
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        const state = loadState(sessionId);
+        const director = state?.storyDirector;
+        if (!state || !director) return { success: false, error: '当前会话的导演卡状态不可用。' };
+
+        const card = `<下轮导演卡>\n${normalizedContent}\n</下轮导演卡>`;
+        const nextDirector = {
+            ...director,
+            status: 'ready',
+            lastError: '',
+        };
+        if (current.origin === 'pending') {
+            if (!sourceIsLatestDialogue(director.source)) {
+                return { success: false, error: '导演卡来源已经变化，请重新打开后再编辑。' };
+            }
+            nextDirector.pendingCard = card;
+            if (director.source?.role === 'user') {
+                nextDirector.messageCards = upsertMessageCard(director.messageCards, director.source, card);
+            }
+        } else {
+            if (!sourceMatchesCurrentMessage(current.source)) {
+                return { success: false, error: '导演卡绑定的用户消息已经变化，请重新打开后再编辑。' };
+            }
+            nextDirector.messageCards = upsertMessageCard(director.messageCards, current.source, card);
+            if (director.pendingCard && pendingCardTargetsUser(director, current.source)) {
+                nextDirector.pendingCard = card;
+            }
+        }
+
+        const saved = saveDirectorState(sessionId, nextDirector, 'story-director-edit-card');
+        return saved
+            ? { success: true, card, content: normalizedContent, origin: current.origin }
+            : { success: false, error: '导演卡保存失败。' };
+    }
+
     function injectDirectorCardForGeneration(chat, options = {}) {
         const generationType = String(options.generationType || 'normal').toLowerCase();
         const resolved = resolveInjectableCard({ generationType });
@@ -2100,6 +2147,7 @@
         unwrapDirectorCard,
         getCurrentDirectorCard,
         getCurrentTurnDirectorCard: getCurrentDirectorCard,
+        updateCurrentDirectorCard,
         injectDirectorCardForGeneration,
         clearPendingCard,
         discardPendingCard,

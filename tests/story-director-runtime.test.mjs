@@ -651,6 +651,46 @@ test('current director card prefers the latest pending card and never falls back
     assert.equal(runtime.getCurrentDirectorCard().origin, 'bound');
 });
 
+test('editing a pending director card changes the stored card and the next normal injection', async () => {
+    const { memory, chat, getState } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+
+    const empty = runtime.updateCurrentDirectorCard('   ');
+    assert.equal(empty.success, false);
+    assert.match(empty.error, /不能为空/);
+
+    const edited = runtime.updateCurrentDirectorCard('只保留轨道B第二项。');
+    assert.equal(edited.success, true);
+    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>\n只保留轨道B第二项。\n</下轮导演卡>');
+    assert.equal(runtime.getCurrentDirectorCard().content, '只保留轨道B第二项。');
+
+    chat.push({ is_user: true, mes: '采用编辑后的规划' });
+    const generationClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
+    assert.match(generationClone.at(-1).mes, /<下轮导演卡>\n只保留轨道B第二项。\n<\/下轮导演卡>/);
+});
+
+test('editing a bound director card updates regenerate and its matching pending copy', async () => {
+    const { memory, chat, getState } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+
+    chat.push({ is_user: true, mes: '等待当前轮回复' });
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+    assert.equal(runtime.getCurrentDirectorCard().origin, 'bound');
+
+    const edited = runtime.updateCurrentDirectorCard('绑定卡只保留这一条。');
+    assert.equal(edited.success, true);
+    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>\n绑定卡只保留这一条。\n</下轮导演卡>');
+    assert.equal(getState().storyDirector.messageCards.at(-1).card, '<下轮导演卡>\n绑定卡只保留这一条。\n</下轮导演卡>');
+
+    const regenerateClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(regenerateClone, { generationType: 'regenerate' }), true);
+    assert.match(regenerateClone.at(-1).mes, /绑定卡只保留这一条/);
+    assert.doesNotMatch(regenerateClone.at(-1).mes, /推进支线/);
+});
+
 test('director ledger removes plot history sections and only applies first-pass roster updates', async () => {
     const oldLedger = `【模块轮换】
 - 上轮 Module 2
@@ -1987,6 +2027,12 @@ test('director card modal exposes a pending-only clear action', () => {
     assert.match(memoryWindowSource, /下次发送不会注入/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-actions/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-clear/);
+    assert.match(memoryWindowSource, /className = 'yzm-story-director-card-edit'/);
+    assert.match(memoryWindowSource, /className = 'yzm-story-director-card-editor'/);
+    assert.match(memoryWindowSource, /updateCurrentDirectorCard\?\.\(editor\.value\)/);
+    assert.match(memoryCssSource, /\.yzm-story-director-card-edit-save/);
+    assert.match(memoryCssSource, /\.yzm-story-director-card-editor \{[\s\S]*?right: auto;[\s\S]*?bottom: auto;[\s\S]*?width: 79%;[\s\S]*?height: 61%;/);
+    assert.match(memoryCssSource, /@media \(max-width: 760px\)[\s\S]*?\.yzm-story-director-card-editor \{[\s\S]*?width: 81%;[\s\S]*?height: 59%;/);
 });
 
 test('turning off the switch stops an already scheduled plan', async () => {

@@ -12727,7 +12727,8 @@
     outline: 0;
 }
 
-#yzm-memory-global-modal-root .yzm-story-director-card-content {
+#yzm-memory-global-modal-root .yzm-story-director-card-content,
+#yzm-memory-global-modal-root .yzm-story-director-card-editor {
     position: absolute;
     z-index: 1;
     top: 28.5%;
@@ -12754,11 +12755,34 @@
     word-break: break-word;
 }
 
-#yzm-memory-global-modal-root .yzm-story-director-card-content::-webkit-scrollbar {
+#yzm-memory-global-modal-root .yzm-story-director-card-editor {
+    right: auto;
+    bottom: auto;
+    width: 79%;
+    max-width: 79%;
+    height: 61%;
+    max-height: 61%;
+    resize: none;
+    background: rgba(255, 252, 245, 0.62);
+    border: 1px solid rgba(96, 70, 49, 0.28);
+    border-radius: 6px;
+    box-shadow: inset 0 1px 4px rgba(75, 51, 33, 0.08);
+    font-family: inherit;
+    outline: 0;
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-editor:focus {
+    background: rgba(255, 253, 248, 0.82);
+    border-color: rgba(96, 70, 49, 0.5);
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-content::-webkit-scrollbar,
+#yzm-memory-global-modal-root .yzm-story-director-card-editor::-webkit-scrollbar {
     width: 6px;
 }
 
-#yzm-memory-global-modal-root .yzm-story-director-card-content::-webkit-scrollbar-thumb {
+#yzm-memory-global-modal-root .yzm-story-director-card-content::-webkit-scrollbar-thumb,
+#yzm-memory-global-modal-root .yzm-story-director-card-editor::-webkit-scrollbar-thumb {
     background: rgba(104, 75, 52, 0.38);
     border-radius: 6px;
 }
@@ -12785,7 +12809,10 @@
 }
 
 #yzm-memory-global-modal-root .yzm-story-director-card-replan,
-#yzm-memory-global-modal-root .yzm-story-director-card-clear {
+#yzm-memory-global-modal-root .yzm-story-director-card-clear,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit-cancel,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit-save {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -12811,10 +12838,22 @@
     border-color: rgba(143, 37, 29, 0.28);
 }
 
+#yzm-memory-global-modal-root .yzm-story-director-card-edit-save {
+    color: #2f6144;
+    background: rgba(241, 251, 244, 0.88);
+    border-color: rgba(47, 97, 68, 0.3);
+}
+
 #yzm-memory-global-modal-root .yzm-story-director-card-replan:hover,
 #yzm-memory-global-modal-root .yzm-story-director-card-replan:focus-visible,
 #yzm-memory-global-modal-root .yzm-story-director-card-clear:hover,
-#yzm-memory-global-modal-root .yzm-story-director-card-clear:focus-visible {
+#yzm-memory-global-modal-root .yzm-story-director-card-clear:focus-visible,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit:hover,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit:focus-visible,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit-cancel:hover,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit-cancel:focus-visible,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit-save:hover,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit-save:focus-visible {
     color: #2e2118;
     background: rgba(255, 252, 245, 0.94);
     border-color: rgba(96, 70, 49, 0.38);
@@ -12822,7 +12861,10 @@
 }
 
 #yzm-memory-global-modal-root .yzm-story-director-card-replan:disabled,
-#yzm-memory-global-modal-root .yzm-story-director-card-clear:disabled {
+#yzm-memory-global-modal-root .yzm-story-director-card-clear:disabled,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit:disabled,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit-cancel:disabled,
+#yzm-memory-global-modal-root .yzm-story-director-card-edit-save:disabled {
     cursor: wait;
     opacity: 0.62;
 }
@@ -12867,7 +12909,8 @@
         font-size: 15px;
     }
 
-    #yzm-memory-global-modal-root .yzm-story-director-card-content {
+    #yzm-memory-global-modal-root .yzm-story-director-card-content,
+    #yzm-memory-global-modal-root .yzm-story-director-card-editor {
         right: 9.5%;
         bottom: 12.5%;
         left: 9.5%;
@@ -12876,8 +12919,20 @@
         line-height: 1.68;
     }
 
+    #yzm-memory-global-modal-root .yzm-story-director-card-editor {
+        right: auto;
+        bottom: auto;
+        width: 81%;
+        max-width: 81%;
+        height: 59%;
+        max-height: 59%;
+    }
+
     #yzm-memory-global-modal-root .yzm-story-director-card-replan,
-    #yzm-memory-global-modal-root .yzm-story-director-card-clear {
+    #yzm-memory-global-modal-root .yzm-story-director-card-clear,
+    #yzm-memory-global-modal-root .yzm-story-director-card-edit,
+    #yzm-memory-global-modal-root .yzm-story-director-card-edit-cancel,
+    #yzm-memory-global-modal-root .yzm-story-director-card-edit-save {
         width: 34px;
         height: 34px;
         font-size: 15px;

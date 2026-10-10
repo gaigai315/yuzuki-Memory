@@ -2891,6 +2891,12 @@
             : 'yzm-story-director-card-content yzm-story-director-card-empty';
         body.textContent = content || '当前导演卡尚未生成';
 
+        const editor = document.createElement('textarea');
+        editor.className = 'yzm-story-director-card-editor';
+        editor.setAttribute('aria-label', '编辑导演卡内容');
+        editor.spellcheck = false;
+        editor.hidden = true;
+
         const replanButton = document.createElement('button');
         replanButton.type = 'button';
         replanButton.className = 'yzm-story-director-card-replan';
@@ -2905,33 +2911,90 @@
         clearButton.setAttribute('aria-label', clearButton.title);
         clearButton.innerHTML = '<i class="fa-regular fa-trash-can" aria-hidden="true"></i>';
 
+        const editButton = document.createElement('button');
+        editButton.type = 'button';
+        editButton.className = 'yzm-story-director-card-edit';
+        editButton.title = '编辑导演卡';
+        editButton.setAttribute('aria-label', editButton.title);
+        editButton.innerHTML = '<i class="fa-solid fa-pen" aria-hidden="true"></i>';
+
+        const cancelEditButton = document.createElement('button');
+        cancelEditButton.type = 'button';
+        cancelEditButton.className = 'yzm-story-director-card-edit-cancel';
+        cancelEditButton.title = '取消编辑';
+        cancelEditButton.setAttribute('aria-label', cancelEditButton.title);
+        cancelEditButton.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        cancelEditButton.hidden = true;
+
+        const saveEditButton = document.createElement('button');
+        saveEditButton.type = 'button';
+        saveEditButton.className = 'yzm-story-director-card-edit-save';
+        saveEditButton.title = '保存导演卡';
+        saveEditButton.setAttribute('aria-label', saveEditButton.title);
+        saveEditButton.innerHTML = '<i class="fa-solid fa-floppy-disk" aria-hidden="true"></i>';
+        saveEditButton.hidden = true;
+
         const actionBar = document.createElement('div');
         actionBar.className = 'yzm-story-director-card-actions';
-        actionBar.append(clearButton, replanButton);
+        actionBar.append(clearButton, replanButton, editButton, cancelEditButton, saveEditButton);
+
+        const syncEditSaveButton = () => {
+            saveEditButton.disabled = !String(editor.value || '').trim()
+                || YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true;
+        };
+
+        const setEditing = (editing) => {
+            const active = editing === true;
+            sheet.classList.toggle('yzm-story-director-card-editing', active);
+            body.hidden = active;
+            editor.hidden = !active;
+            clearButton.hidden = active || clearButton.dataset.yzmAvailable !== 'true';
+            editButton.hidden = active || editButton.dataset.yzmAvailable !== 'true';
+            replanButton.hidden = active;
+            cancelEditButton.hidden = !active;
+            saveEditButton.hidden = !active;
+            if (active) {
+                syncEditSaveButton();
+                editor.focus({ preventScroll: true });
+                editor.setSelectionRange(editor.value.length, editor.value.length);
+            }
+        };
 
         const syncClearButton = (latest, latestContent) => {
             const canClear = latest?.origin === 'pending'
                 && !!latestContent
                 && YuzukiMemory.StoryDirectorRuntime?.isRunning?.() !== true;
-            clearButton.hidden = !canClear;
+            clearButton.dataset.yzmAvailable = canClear ? 'true' : 'false';
+            clearButton.hidden = sheet.classList.contains('yzm-story-director-card-editing') || !canClear;
             clearButton.disabled = !canClear;
+        };
+
+        const syncEditButton = (latest, latestContent) => {
+            const available = ['pending', 'bound'].includes(latest?.origin) && !!latestContent;
+            editButton.dataset.yzmAvailable = available ? 'true' : 'false';
+            editButton.hidden = sheet.classList.contains('yzm-story-director-card-editing') || !available;
+            editButton.disabled = !available || YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true;
+            syncEditSaveButton();
         };
 
         const refreshCardContent = () => {
             const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
             const latestContent = String(latest?.content || '').trim();
+            setEditing(false);
             body.classList.toggle('yzm-story-director-card-empty', !latestContent);
             body.textContent = latestContent || '当前导演卡尚未生成';
             syncClearButton(latest, latestContent);
+            syncEditButton(latest, latestContent);
             body.scrollTop = 0;
         };
 
         syncClearButton(current, content);
-        sheet.append(closeButton, body, actionBar);
+        syncEditButton(current, content);
+        sheet.append(closeButton, body, editor, actionBar);
         overlay.appendChild(sheet);
         host.appendChild(overlay);
         host.classList.add('yzm-story-director-card-host-open');
-        activeStoryDirectorCardWindow = { host, overlay, abortController, syncClearButton };
+        activeStoryDirectorCardWindow = { host, overlay, abortController, syncClearButton, syncEditButton };
         updateStoryDirectorActionButton(replanButton, YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true);
 
         closeButton.addEventListener('click', closeStoryDirectorCard, { signal: abortController.signal });
@@ -2950,6 +3013,35 @@
                 cleared ? 'success' : 'warning',
             );
         }, { signal: abortController.signal });
+        editButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
+            const latestContent = String(latest?.content || '').trim();
+            if (!latestContent || !['pending', 'bound'].includes(latest?.origin)) {
+                refreshCardContent();
+                return;
+            }
+            editor.value = latestContent;
+            setEditing(true);
+        }, { signal: abortController.signal });
+        cancelEditButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            refreshCardContent();
+        }, { signal: abortController.signal });
+        editor.addEventListener('input', syncEditSaveButton, { signal: abortController.signal });
+        saveEditButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const result = YuzukiMemory.StoryDirectorRuntime?.updateCurrentDirectorCard?.(editor.value);
+            if (!result?.success) {
+                showTaskToast(String(result?.error || '导演卡保存失败。'), 'warning');
+                return;
+            }
+            refreshCardContent();
+            showTaskToast('导演卡已更新', 'success');
+        }, { signal: abortController.signal });
         replanButton.addEventListener('click', async (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -2961,6 +3053,18 @@
             if (event.target === overlay) closeStoryDirectorCard();
         }, { signal: abortController.signal });
         document.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter'
+                && (event.ctrlKey || event.metaKey)
+                && sheet.classList.contains('yzm-story-director-card-editing')) {
+                event.preventDefault();
+                saveEditButton.click();
+                return;
+            }
+            if (event.key === 'Escape' && sheet.classList.contains('yzm-story-director-card-editing')) {
+                event.preventDefault();
+                refreshCardContent();
+                return;
+            }
             if (event.key === 'Escape') closeStoryDirectorCard();
         }, { signal: abortController.signal });
 
@@ -3943,7 +4047,9 @@
         document.querySelectorAll('[data-yzm-story-director-replan], .yzm-story-director-card-replan')
             .forEach((button) => updateStoryDirectorActionButton(button, running));
         const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
-        activeStoryDirectorCardWindow?.syncClearButton?.(latest, String(latest?.content || '').trim());
+        const content = String(latest?.content || '').trim();
+        activeStoryDirectorCardWindow?.syncClearButton?.(latest, content);
+        activeStoryDirectorCardWindow?.syncEditButton?.(latest, content);
     }
 
     async function runManualStoryDirector(button) {
@@ -14948,9 +15054,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '兼容 MUV 额外模型解析：重复渲染已有正文时不再二次触发剧情导演，正常新回复仍只规划一次。',
-            '修复快速取消正文生成后的剧情规划锁定：发送消息后立即停止时，不再误判为“正文仍在生成”。',
-            '修复会话向量书归属：表格生成的向量书仅在所属会话显示，删除会话时同步清理，同名导入书仍保持全局且不会误绑定。',
+            '【优化】剧情规划界面支持编辑导演规划内容。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

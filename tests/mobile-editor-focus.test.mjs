@@ -413,18 +413,15 @@ test('mobile vector book editor matches the full-height segment editor layout', 
     assert.match(memoryCssSource, /\.yzm-vector-book-content-field \.yzm-record-textarea \{[^}]*flex: 1 1 0;[^}]*min-height: 0;[^}]*overflow: auto;/);
 });
 
-test('release metadata stays unchanged and update notice only lists current fixes', () => {
-    assert.equal(manifest.version, '1.0.8');
-    assert.match(indexSource, /const VERSION = '1\.0\.8';/);
+test('release metadata and update notice describe version 1.0.9', () => {
+    assert.equal(manifest.version, '1.0.9');
+    assert.match(indexSource, /const VERSION = '1\.0\.9';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /兼容 MUV 额外模型解析/);
-    assert.match(noticeSource, /重复渲染已有正文时不再二次触发剧情导演/);
-    assert.match(noticeSource, /修复快速取消正文生成后的剧情规划锁定/);
-    assert.match(noticeSource, /不再误判为“正文仍在生成”/);
-    assert.match(noticeSource, /修复会话向量书归属/);
-    assert.match(noticeSource, /删除会话时同步清理/);
-    assert.match(noticeSource, /同名导入书仍保持全局且不会误绑定/);
+    assert.match(noticeSource, /【优化】剧情规划界面支持编辑导演规划内容。/);
+    assert.doesNotMatch(noticeSource, /兼容 MUV 额外模型解析/);
+    assert.doesNotMatch(noticeSource, /修复快速取消正文生成后的剧情规划锁定/);
+    assert.doesNotMatch(noticeSource, /修复会话向量书归属/);
     assert.doesNotMatch(noticeSource, /新增移动端世界书折叠兼容/);
     assert.doesNotMatch(noticeSource, /兼容「沉浸式 PWA 顶部」插件/);
     assert.doesNotMatch(noticeSource, /编辑正文后不再自动重新剧情规划/);
