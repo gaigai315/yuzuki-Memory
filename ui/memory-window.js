@@ -8,6 +8,7 @@
     const FLOATING_BUTTON_ID = 'yzm-memory-floating-button';
     const STORY_DIRECTOR_PROGRESS_ID = 'yzm-story-director-progress';
     const STORY_DIRECTOR_RUN_STATE_EVENT = 'yzm-story-director-run-state';
+    const VECTOR_LIBRARY_CHANGED_EVENT = 'yzm-vector-library-changed';
     const FLOATING_LONG_PRESS_MS = 650;
     const FLOATING_DOUBLE_TAP_MS = 360;
     const TEXT_CONTROL_SELECTOR = [
@@ -281,6 +282,7 @@
     let floatingVisibilityTimer = null;
     let shellOpenInteractionGuardUntil = 0;
     let chatContextRefreshBound = false;
+    let vectorLibraryRefreshBound = false;
     let vectorBookNameSyncTimer = null;
     let vectorBookNameSyncKey = '';
     let vectorBookNameSyncRunning = false;
@@ -4128,7 +4130,7 @@
     }
 
     function renderVectorWorkspace(root, options = {}) {
-        if (options.selectFirstVisible === true) syncVectorSelectedBookToFirstVisible();
+        syncVectorSelectedBookToFirstVisible(options.selectFirstVisible === true);
         const primaryView = root.querySelector('.yzm-vector-primary-view');
         const workspaceView = root.querySelector('.yzm-vector-workspace-view');
         if (primaryView) primaryView.replaceWith(createVectorPrimaryView());
@@ -4137,12 +4139,12 @@
         bindPanelInteractions(root);
     }
 
-    function syncVectorSelectedBookToFirstVisible() {
+    function syncVectorSelectedBookToFirstVisible(forceFirst = false) {
         const store = getVectorStore();
-        const firstBook = store?.listBooks?.()[0];
-        if (firstBook && store.selectedBookId !== firstBook.id) {
-            store.selectBook(firstBook.id);
-        }
+        const visibleBooks = store?.listBooks?.() || [];
+        const selectedIsVisible = visibleBooks.some((book) => book.id === store?.selectedBookId);
+        if (!forceFirst && selectedIsVisible) return;
+        store?.selectBook?.(visibleBooks[0]?.id || '');
     }
 
     function createOverviewRow() {
@@ -14948,6 +14950,7 @@
         [
             '兼容 MUV 额外模型解析：重复渲染已有正文时不再二次触发剧情导演，正常新回复仍只规划一次。',
             '修复快速取消正文生成后的剧情规划锁定：发送消息后立即停止时，不再误判为“正文仍在生成”。',
+            '修复会话向量书归属：表格生成的向量书仅在所属会话显示，删除会话时同步清理，同名导入书仍保持全局且不会误绑定。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -18773,6 +18776,13 @@
     }
 
     function bindChatContextRefresh() {
+        if (!vectorLibraryRefreshBound) {
+            vectorLibraryRefreshBound = true;
+            window.addEventListener(VECTOR_LIBRARY_CHANGED_EVENT, () => {
+                const root = document.getElementById(ROOT_ID);
+                if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root, { selectFirstVisible: true });
+            });
+        }
         if (chatContextRefreshBound) return;
         const context = getContext();
         const eventSource = context?.eventSource || window.eventSource;

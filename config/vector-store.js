@@ -6,7 +6,7 @@
     const LEGACY_STORAGE_BOOK_NAME = 'Memory_Vector_Database';
     const STORAGE_BOOK_NAMES = [STORAGE_BOOK_NAME, LEGACY_STORAGE_BOOK_NAME];
     const STORAGE_EXTENSION_KEY = 'yuzuki_memory_vector_library';
-    const STORAGE_FORMAT_VERSION = 3;
+    const STORAGE_FORMAT_VERSION = 4;
     const STORAGE_ENTRY_CONTENT = 'Yuzuki Memory 内部向量目录，实际索引由外部向量存储管理，请勿启用或编辑。';
     const VECTOR_STORAGE_ENCODING = 'float32-base64';
     const VECTOR_BACKEND_SOURCE = 'webllm';
@@ -26,12 +26,15 @@
     const BOOK_KIND_CHARACTER_PROFILE = 'character_profile';
     const BOOK_KIND_ITEM_TRACKING = 'item_tracking';
     const BOOK_KIND_WORLD_SETTING = 'world_setting';
+    const BOOK_OWNER_SESSION = 'session';
     const AUTO_NAMED_BOOK_KINDS = [
         BOOK_KIND_SUMMARY,
         BOOK_KIND_CHARACTER_PROFILE,
         BOOK_KIND_ITEM_TRACKING,
         BOOK_KIND_WORLD_SETTING,
     ];
+    const VECTOR_LIBRARY_CHANGED_EVENT = 'yzm-vector-library-changed';
+    const DELETE_TARGET_TTL_MS = 120000;
     const MAX_VECTOR_BATCH_CHARS = 16000;
     const MAX_QUERY_VECTOR_CACHE_ENTRIES = 96;
     const HELPER_API_SHIELD_KEY = '__yzmMemoryStorageBookShield';
@@ -57,7 +60,11 @@
             this.saveCompletedSerial = 0;
             this.saveLoopRunning = false;
             this.saveWaiters = [];
+            this.lifecycleEventSource = null;
+            this.deleteTargetCaptureBound = false;
+            this.pendingDeleteTarget = null;
             this.installStorageBookApiShield();
+            this.bindChatLifecycleEvents();
             this.ready = this.loadLibrary()
                 .then(async (library) => {
                     const migration = await this.migrateEmbeddedVectorsToExternalStore();
@@ -76,6 +83,7 @@
                     this.isLoaded = true;
                     this.hideStorageBookFromUI();
                     this.installStorageBookApiShield();
+                    this.bindChatLifecycleEvents();
                 });
         }
 
@@ -89,6 +97,321 @@
                 return SillyTavern.getContext();
             }
             return null;
+        }
+
+        normalizeChatId(value) {
+            return String(value || '').trim().replace(/\.jsonl$/i, '');
+        }
+
+        extractChatIdFromSessionId(sessionId) {
+            const value = String(sessionId || '').trim();
+            if (value.startsWith('char:') || value.startsWith('group:')) return value.split(':').slice(2).join(':');
+            if (value.startsWith('chat:')) return value.slice(5);
+            return value;
+        }
+
+        getCurrentSessionId() {
+            return String(YuzukiMemory.Storage?.getCurrentSessionId?.() || '').trim();
+        }
+
+        getCurrentSessionAliases() {
+            const aliases = YuzukiMemory.Storage?.getCurrentSessionAliases?.();
+            const current = this.getCurrentSessionId();
+            return [...new Set([current, ...(Array.isArray(aliases) ? aliases : [])].map((value) => String(value || '').trim()).filter(Boolean))];
+        }
+
+        getSessionOwner(sessionId = this.getCurrentSessionId(), overrides = {}) {
+            const context = this.getContext();
+            const character = Array.isArray(context?.characters) ? context.characters[context.characterId] : null;
+            const currentChatId = context?.chatMetadata?.file_name
+                || window.chat_metadata?.file_name
+                || context?.chatId
+                || this.extractChatIdFromSessionId(sessionId);
+            return {
+                sessionId: String(sessionId || '').trim(),
+                chatId: this.normalizeChatId(overrides.chatId || currentChatId),
+                groupId: String(overrides.groupId ?? context?.groupId ?? '').trim(),
+                characterAvatar: String(overrides.characterAvatar ?? character?.avatar ?? '').trim(),
+            };
+        }
+
+        normalizeSessionOwner(owner, sessionId = '') {
+            const source = owner && typeof owner === 'object' ? owner : {};
+            const normalizedSessionId = String(source.sessionId || sessionId || '').trim();
+            return {
+                sessionId: normalizedSessionId,
+                chatId: this.normalizeChatId(source.chatId || this.extractChatIdFromSessionId(normalizedSessionId)),
+                groupId: String(source.groupId || '').trim(),
+                characterAvatar: String(source.characterAvatar || '').trim(),
+            };
+        }
+
+        getBookKind(bookId, book = this.library[bookId]) {
+            const kind = String(book?.kind || '').trim();
+            if (AUTO_NAMED_BOOK_KINDS.includes(kind)) return kind;
+            const id = String(bookId || '');
+            if (id.startsWith('yzm_summary_book_')) return BOOK_KIND_SUMMARY;
+            if (id.startsWith('yzm_character_book_')) return BOOK_KIND_CHARACTER_PROFILE;
+            if (id.startsWith('yzm_item_tracking_book_')) return BOOK_KIND_ITEM_TRACKING;
+            if (id.startsWith('yzm_world_setting_book_')) return BOOK_KIND_WORLD_SETTING;
+            return '';
+        }
+
+        isGeneratedSessionBookId(bookId, kind = '') {
+            const expectedKind = String(kind || '').trim();
+            const prefix = {
+                [BOOK_KIND_SUMMARY]: 'yzm_summary_book_',
+                [BOOK_KIND_CHARACTER_PROFILE]: 'yzm_character_book_',
+                [BOOK_KIND_ITEM_TRACKING]: 'yzm_item_tracking_book_',
+                [BOOK_KIND_WORLD_SETTING]: 'yzm_world_setting_book_',
+            }[expectedKind];
+            return Boolean(prefix && String(bookId || '').startsWith(prefix));
+        }
+
+        isSessionOwnedBook(bookId, book = this.library[bookId]) {
+            if (!book) return false;
+            if (book.ownerType === BOOK_OWNER_SESSION) return true;
+            const kind = this.getBookKind(bookId, book);
+            return Boolean(book.sessionId && AUTO_NAMED_BOOK_KINDS.includes(kind) && this.isGeneratedSessionBookId(bookId, kind));
+        }
+
+        getBookSessionOwner(bookId, book = this.library[bookId]) {
+            if (!this.isSessionOwnedBook(bookId, book)) return null;
+            return this.normalizeSessionOwner(book?.owner, book?.sessionId);
+        }
+
+        isBookVisibleInSession(bookId, sessionId = this.getCurrentSessionId()) {
+            const book = this.library[bookId];
+            if (!book || !this.isSessionOwnedBook(bookId, book)) return Boolean(book);
+            const normalizedSessionId = String(sessionId || '').trim();
+            if (!normalizedSessionId) return false;
+            if (String(book.sessionId || '') === normalizedSessionId) return true;
+            if (this.getCurrentSessionAliases().includes(String(book.sessionId || ''))) return true;
+
+            const owner = this.getBookSessionOwner(bookId, book);
+            const currentOwner = this.getSessionOwner(normalizedSessionId);
+            if (!owner?.chatId || owner.chatId !== currentOwner.chatId) return false;
+            if (owner.groupId || currentOwner.groupId) return Boolean(owner.groupId && owner.groupId === currentOwner.groupId);
+            return Boolean(owner.characterAvatar && owner.characterAvatar === currentOwner.characterAvatar);
+        }
+
+        listVisibleBooks(sessionId = this.getCurrentSessionId()) {
+            return this.listBooks({ sessionId });
+        }
+
+        findSessionBookId(kind, sessionId = this.getCurrentSessionId()) {
+            const expectedKind = String(kind || '').trim();
+            const normalizedSessionId = String(sessionId || '').trim();
+            const exact = Object.entries(this.library).find(([bookId, book]) => (
+                this.isSessionOwnedBook(bookId, book)
+                && this.getBookKind(bookId, book) === expectedKind
+                && String(book.sessionId || '') === normalizedSessionId
+            ));
+            if (exact) return exact[0];
+            return Object.entries(this.library).find(([bookId, book]) => (
+                this.isSessionOwnedBook(bookId, book)
+                && this.getBookKind(bookId, book) === expectedKind
+                && this.isBookVisibleInSession(bookId, normalizedSessionId)
+            ))?.[0] || '';
+        }
+
+        captureRecentChatDeleteTarget(event) {
+            const target = event?.target;
+            const deleteButton = target?.closest?.('.deleteChat');
+            const chatItem = deleteButton?.closest?.('.recentChat');
+            if (!chatItem) return;
+            const read = (name) => String(chatItem.dataset?.[name] || chatItem.getAttribute?.(`data-${name}`) || '').trim();
+            this.pendingDeleteTarget = {
+                chatId: this.normalizeChatId(read('file')),
+                groupId: read('group'),
+                characterAvatar: read('avatar'),
+                expiresAt: Date.now() + DELETE_TARGET_TTL_MS,
+            };
+        }
+
+        consumeDeleteTarget(chatId, type = '') {
+            const pending = this.pendingDeleteTarget;
+            this.pendingDeleteTarget = null;
+            if (!pending || pending.expiresAt < Date.now() || pending.chatId !== chatId) return null;
+            if (type === 'group' && !pending.groupId) return null;
+            if (type === 'character' && !pending.characterAvatar) return null;
+            return pending;
+        }
+
+        getCurrentDeleteTarget(chatId, type = '') {
+            const context = this.getContext();
+            const character = Array.isArray(context?.characters) ? context.characters[context.characterId] : null;
+            return {
+                chatId,
+                groupId: type === 'group' ? String(context?.groupId || '').trim() : '',
+                characterAvatar: type === 'character' ? String(character?.avatar || '').trim() : '',
+            };
+        }
+
+        getTargetCharacterIds(characterAvatar = '') {
+            const context = this.getContext();
+            const values = [characterAvatar];
+            if (Array.isArray(context?.characters) && characterAvatar) {
+                const index = context.characters.findIndex((character) => character?.avatar === characterAvatar);
+                const character = index >= 0 ? context.characters[index] : null;
+                values.push(index >= 0 ? index : '', character?.name);
+            }
+            return [...new Set(values.map((value) => String(value ?? '').trim()).filter(Boolean))];
+        }
+
+        bookMatchesDeleteTarget(bookId, book, target, type = '') {
+            const owner = this.getBookSessionOwner(bookId, book);
+            if (!owner || owner.chatId !== target.chatId) return false;
+            if (type === 'group') {
+                if (target.groupId && owner.groupId) return target.groupId === owner.groupId;
+                return target.groupId
+                    ? String(book.sessionId || '').startsWith(`group:${target.groupId}:`)
+                    : true;
+            }
+            if (type === 'character') {
+                if (target.characterAvatar && owner.characterAvatar) return target.characterAvatar === owner.characterAvatar;
+                const characterIds = this.getTargetCharacterIds(target.characterAvatar);
+                return characterIds.length
+                    ? characterIds.some((characterId) => String(book.sessionId || '').startsWith(`char:${characterId}:`))
+                    : true;
+            }
+            return true;
+        }
+
+        getSessionOwnedBookIdsForChat(chatId, options = {}) {
+            const normalizedChatId = this.normalizeChatId(chatId);
+            if (!normalizedChatId) return [];
+            const type = String(options.type || '').trim();
+            const target = {
+                chatId: normalizedChatId,
+                groupId: String(options.groupId || '').trim(),
+                characterAvatar: String(options.characterAvatar || '').trim(),
+            };
+            const candidates = Object.entries(this.library).filter(([bookId, book]) => {
+                const owner = this.getBookSessionOwner(bookId, book);
+                return owner?.chatId === normalizedChatId;
+            });
+            if (!candidates.length) return [];
+
+            const narrowed = candidates.filter(([bookId, book]) => this.bookMatchesDeleteTarget(bookId, book, target, type));
+            if (target.groupId || target.characterAvatar) return narrowed.map(([bookId]) => bookId);
+
+            const sessionOwners = new Set(candidates.map(([bookId, book]) => {
+                const owner = this.getBookSessionOwner(bookId, book);
+                return owner?.sessionId || book.sessionId || bookId;
+            }));
+            if (sessionOwners.size === 1) return candidates.map(([bookId]) => bookId);
+
+            console.warn('[yuzuki-Memory] Skipped ambiguous session vector cleanup.', {
+                chatId: normalizedChatId,
+                type,
+                candidateCount: candidates.length,
+            });
+            return [];
+        }
+
+        async deleteSessionOwnedBooksForChat(chatId, options = {}) {
+            await this.whenReady();
+            const bookIds = this.getSessionOwnedBookIdsForChat(chatId, options);
+            if (!bookIds.length) return { success: true, removed: 0, bookIds: [] };
+
+            for (const bookId of bookIds) {
+                try {
+                    await this.purgeBackendBook(bookId);
+                } catch (error) {
+                    console.warn(`[yuzuki-Memory] Failed to purge deleted chat vector backend book ${bookId}.`, error);
+                }
+                try {
+                    await this.purgeLocalBook(bookId);
+                } catch (error) {
+                    console.warn(`[yuzuki-Memory] Failed to purge deleted chat local vector book ${bookId}.`, error);
+                }
+                delete this.library[bookId];
+            }
+
+            this.setActiveBooks(this.getActiveBooks().filter((bookId) => !bookIds.includes(bookId)));
+            if (bookIds.includes(this.selectedBookId)) this.selectedBookId = this.listVisibleBooks()[0]?.id || '';
+            const saved = await this.saveLibrary();
+            if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
+                window.dispatchEvent(new CustomEvent(VECTOR_LIBRARY_CHANGED_EVENT, {
+                    detail: { reason: 'chat-deleted', chatId: this.normalizeChatId(chatId), bookIds },
+                }));
+            }
+            return { success: saved !== false, removed: bookIds.length, bookIds };
+        }
+
+        replaceSessionChatId(sessionId, oldChatId, newChatId) {
+            const source = String(sessionId || '').trim();
+            const oldId = this.normalizeChatId(oldChatId);
+            const nextId = this.normalizeChatId(newChatId);
+            if (!source || !oldId || !nextId) return source;
+            for (const separator of [':', '_']) {
+                const suffix = `${separator}${oldId}`;
+                if (source.endsWith(suffix)) return `${source.slice(0, -suffix.length)}${separator}${nextId}`;
+            }
+            return source === oldId ? nextId : source;
+        }
+
+        async handleChatRenamed(payload = {}) {
+            await this.whenReady();
+            const oldChatId = this.normalizeChatId(payload.oldFileName);
+            const newChatId = this.normalizeChatId(payload.newFileName);
+            if (!oldChatId || !newChatId || oldChatId === newChatId) return;
+            const type = payload.groupId ? 'group' : 'character';
+            const bookIds = this.getSessionOwnedBookIdsForChat(oldChatId, {
+                type,
+                groupId: payload.groupId,
+                characterAvatar: payload.avatarId,
+            });
+            if (!bookIds.length) return;
+            bookIds.forEach((bookId) => {
+                const book = this.library[bookId];
+                const sessionId = this.replaceSessionChatId(book.sessionId, oldChatId, newChatId);
+                book.sessionId = sessionId;
+                book.ownerType = BOOK_OWNER_SESSION;
+                book.owner = this.normalizeSessionOwner({
+                    ...book.owner,
+                    sessionId,
+                    chatId: newChatId,
+                    groupId: payload.groupId || book.owner?.groupId,
+                    characterAvatar: payload.avatarId || book.owner?.characterAvatar,
+                }, sessionId);
+                book.updateTime = Date.now();
+            });
+            await this.saveLibrary();
+        }
+
+        bindChatLifecycleEvents() {
+            if (!this.deleteTargetCaptureBound && typeof document?.addEventListener === 'function') {
+                document.addEventListener('click', (event) => this.captureRecentChatDeleteTarget(event), true);
+                this.deleteTargetCaptureBound = true;
+            }
+
+            const context = this.getContext();
+            const eventSource = context?.eventSource || window.eventSource;
+            const eventTypes = context?.eventTypes || context?.event_types || window.event_types;
+            if (!eventSource || typeof eventSource.on !== 'function' || this.lifecycleEventSource === eventSource) return;
+            this.lifecycleEventSource = eventSource;
+
+            const bindDelete = (eventType, type) => {
+                if (!eventType) return;
+                eventSource.on(eventType, async (deletedChatId) => {
+                    const chatId = this.normalizeChatId(deletedChatId);
+                    const target = this.consumeDeleteTarget(chatId, type) || this.getCurrentDeleteTarget(chatId, type);
+                    try {
+                        await this.deleteSessionOwnedBooksForChat(chatId, { type, ...target });
+                    } catch (error) {
+                        console.warn('[yuzuki-Memory] Failed to clean session vector books after chat deletion.', error);
+                    }
+                });
+            };
+            bindDelete(eventTypes?.CHAT_DELETED || 'chat_deleted', 'character');
+            bindDelete(eventTypes?.GROUP_CHAT_DELETED || 'group_chat_deleted', 'group');
+            if (eventTypes?.CHAT_RENAMED) {
+                eventSource.on(eventTypes.CHAT_RENAMED, (payload) => this.handleChatRenamed(payload).catch((error) => {
+                    console.warn('[yuzuki-Memory] Failed to rebind session vector books after chat rename.', error);
+                }));
+            }
         }
 
         getChatMetadataForActiveBooks(context = this.getContext()) {
@@ -232,13 +555,19 @@
                 Math.max(0, Number.parseInt(book?.vectorDimension, 10) || 0)
             );
             const kind = String(book?.kind || '').trim();
+            const sessionId = String(book?.sessionId || '').trim();
+            const ownerType = String(book?.ownerType || '').trim();
             return {
                 name: String(book?.name || fallbackName).trim() || fallbackName,
                 kind,
                 autoName: typeof book?.autoName === 'boolean'
                     ? book.autoName
                     : AUTO_NAMED_BOOK_KINDS.includes(kind),
-                sessionId: String(book?.sessionId || '').trim(),
+                ownerType,
+                owner: ownerType === BOOK_OWNER_SESSION
+                    ? this.normalizeSessionOwner(book?.owner, sessionId)
+                    : null,
+                sessionId,
                 chunks,
                 vectors: normalizedVectors,
                 vectorized: chunkRecords.map(({ index }, normalizedIndex) => Boolean(
@@ -270,7 +599,16 @@
             if (!rawLibrary || typeof rawLibrary !== 'object') return {};
             return Object.fromEntries(Object.entries(rawLibrary)
                 .filter(([_id, book]) => book && typeof book === 'object')
-                .map(([id, book]) => [String(id), this.normalizeBook(book)]));
+                .map(([id, book]) => {
+                    const normalizedId = String(id);
+                    const normalizedBook = this.normalizeBook(book);
+                    if (this.isSessionOwnedBook(normalizedId, normalizedBook)) {
+                        normalizedBook.ownerType = BOOK_OWNER_SESSION;
+                        normalizedBook.owner = this.normalizeSessionOwner(normalizedBook.owner, normalizedBook.sessionId);
+                        normalizedBook.kind = this.getBookKind(normalizedId, normalizedBook);
+                    }
+                    return [normalizedId, normalizedBook];
+                }));
         }
 
         encodeLibraryForStorage() {
@@ -1037,7 +1375,9 @@
             const activeBooks = Array.isArray(metadata?.[ACTIVE_BOOKS_KEY])
                 ? metadata[ACTIVE_BOOKS_KEY]
                 : (metadata?.[LEGACY_ACTIVE_BOOKS_KEY] || []);
-            return [...new Set(Array.isArray(activeBooks) ? activeBooks.filter((id) => this.library[id]) : [])];
+            return [...new Set(Array.isArray(activeBooks)
+                ? activeBooks.filter((id) => this.library[id] && this.isBookVisibleInSession(id))
+                : [])];
         }
 
         setActiveBooks(bookIds) {
@@ -1045,7 +1385,8 @@
             if (!context) return false;
             const metadata = this.getChatMetadataForWrite(context);
             if (!metadata) return false;
-            metadata[ACTIVE_BOOKS_KEY] = [...new Set(Array.isArray(bookIds) ? bookIds : [])].filter((id) => this.library[id]);
+            metadata[ACTIVE_BOOKS_KEY] = [...new Set(Array.isArray(bookIds) ? bookIds : [])]
+                .filter((id) => this.library[id] && this.isBookVisibleInSession(id));
 
             if (typeof context.saveChat === 'function') {
                 context.saveChat();
@@ -1065,6 +1406,7 @@
         }
 
         toggleActiveBook(bookId, isActive) {
+            if (Boolean(isActive) && !this.isBookVisibleInSession(bookId)) return false;
             const activeBooks = this.getActiveBooks();
             const currentlyActive = activeBooks.includes(bookId);
             if (currentlyActive === Boolean(isActive)) return true;
@@ -1087,10 +1429,14 @@
             return { total, done, dimension, progress, status };
         }
 
-        listBooks() {
+        listBooks(options = {}) {
             const activeBooks = this.getActiveBooks();
             const activeOrder = new Map(activeBooks.map((id, index) => [id, index]));
-            return Object.entries(this.library).map(([id, book]) => {
+            const sessionId = String(options.sessionId ?? this.getCurrentSessionId()).trim();
+            const includeHidden = options.includeHidden === true;
+            return Object.entries(this.library)
+                .filter(([id]) => includeHidden || this.isBookVisibleInSession(id, sessionId))
+                .map(([id, book]) => {
                 const stats = this.getBookStats(book);
                 return {
                     id,
@@ -1104,6 +1450,7 @@
                     active: activeBooks.includes(id),
                     kind: book.kind || '',
                     sessionId: book.sessionId || '',
+                    ownerType: book.ownerType || '',
                     createTime: book.createTime,
                     updateTime: book.updateTime,
                 };
@@ -1220,7 +1567,9 @@
 
         async syncSummaryToBook(chunks, sessionId = 'default', bookName = '') {
             const normalizedChunks = await this.normalizeChunks(chunks);
-            const id = `yzm_summary_book_${String(sessionId || 'default').replace(/[^\w-]/g, '_')}`;
+            const normalizedSessionId = String(sessionId || 'default');
+            const id = this.findSessionBookId(BOOK_KIND_SUMMARY, normalizedSessionId)
+                || `yzm_summary_book_${normalizedSessionId.replace(/[^\w-]/g, '_')}`;
             const oldBook = this.library[id];
             if (!normalizedChunks.length) {
                 if (!oldBook) return { success: true, bookId: id, count: 0, unchanged: true, removed: false };
@@ -1232,7 +1581,6 @@
             const oldName = String(oldBook?.name || '').trim();
             const autoName = oldBook ? oldBook.autoName !== false : true;
             const nextName = autoName ? normalizedName : (oldName || normalizedName);
-            const normalizedSessionId = String(sessionId || 'default');
             const unchanged = oldBook
                 && oldBook.name === nextName
                 && oldBook.kind === BOOK_KIND_SUMMARY
@@ -1249,6 +1597,8 @@
                 name: nextName,
                 kind: BOOK_KIND_SUMMARY,
                 autoName,
+                ownerType: BOOK_OWNER_SESSION,
+                owner: this.getSessionOwner(normalizedSessionId),
                 sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 ...preserved,
@@ -1266,8 +1616,9 @@
         }
 
         isCharacterProfileBook(bookId) {
-            return this.library[bookId]?.kind === BOOK_KIND_CHARACTER_PROFILE
-                || String(bookId || '').startsWith('yzm_character_book_');
+            const book = this.library[bookId];
+            return this.isSessionOwnedBook(bookId, book)
+                && this.getBookKind(bookId, book) === BOOK_KIND_CHARACTER_PROFILE;
         }
 
         getItemTrackingBookId(sessionId = 'default') {
@@ -1275,8 +1626,9 @@
         }
 
         isItemTrackingBook(bookId) {
-            return this.library[bookId]?.kind === BOOK_KIND_ITEM_TRACKING
-                || String(bookId || '').startsWith('yzm_item_tracking_book_');
+            const book = this.library[bookId];
+            return this.isSessionOwnedBook(bookId, book)
+                && this.getBookKind(bookId, book) === BOOK_KIND_ITEM_TRACKING;
         }
 
         getWorldSettingBookId(sessionId = 'default') {
@@ -1284,8 +1636,9 @@
         }
 
         isWorldSettingBook(bookId) {
-            return this.library[bookId]?.kind === BOOK_KIND_WORLD_SETTING
-                || String(bookId || '').startsWith('yzm_world_setting_book_');
+            const book = this.library[bookId];
+            return this.isSessionOwnedBook(bookId, book)
+                && this.getBookKind(bookId, book) === BOOK_KIND_WORLD_SETTING;
         }
 
         isManagedTableVectorBook(bookId) {
@@ -1314,7 +1667,7 @@
             let changed = 0;
             const now = Date.now();
             Object.entries(this.library).forEach(([bookId, book]) => {
-                if (!book || String(book.sessionId || '') !== normalizedSessionId || book.autoName === false) return;
+                if (!book || !this.isSessionOwnedBook(bookId, book) || String(book.sessionId || '') !== normalizedSessionId || book.autoName === false) return;
                 let kind = book.kind;
                 if (kind !== BOOK_KIND_SUMMARY) {
                     if (this.isCharacterProfileBook(bookId)) kind = BOOK_KIND_CHARACTER_PROFILE;
@@ -1347,10 +1700,11 @@
 
         async syncCharacterProfilesToBook(chunks, sessionId = 'default', bookName = '') {
             const normalizedChunks = await this.normalizeChunks(chunks);
-            const id = this.getCharacterProfileBookId(sessionId);
+            const normalizedSessionId = String(sessionId || 'default');
+            const id = this.findSessionBookId(BOOK_KIND_CHARACTER_PROFILE, normalizedSessionId)
+                || this.getCharacterProfileBookId(normalizedSessionId);
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话角色档案';
-            const normalizedSessionId = String(sessionId || 'default');
             const autoName = oldBook ? oldBook.autoName !== false : true;
             const nextName = autoName ? normalizedName : String(oldBook?.name || normalizedName);
             const unchanged = oldBook
@@ -1369,6 +1723,8 @@
                 name: nextName,
                 kind: BOOK_KIND_CHARACTER_PROFILE,
                 autoName,
+                ownerType: BOOK_OWNER_SESSION,
+                owner: this.getSessionOwner(normalizedSessionId),
                 sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 ...preserved,
@@ -1383,10 +1739,11 @@
 
         async syncItemTrackingToBook(chunks, sessionId = 'default', bookName = '') {
             const normalizedChunks = await this.normalizeChunks(chunks);
-            const id = this.getItemTrackingBookId(sessionId);
+            const normalizedSessionId = String(sessionId || 'default');
+            const id = this.findSessionBookId(BOOK_KIND_ITEM_TRACKING, normalizedSessionId)
+                || this.getItemTrackingBookId(normalizedSessionId);
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话物品追踪';
-            const normalizedSessionId = String(sessionId || 'default');
             const autoName = oldBook ? oldBook.autoName !== false : true;
             const nextName = autoName ? normalizedName : String(oldBook?.name || normalizedName);
             const unchanged = oldBook
@@ -1405,6 +1762,8 @@
                 name: nextName,
                 kind: BOOK_KIND_ITEM_TRACKING,
                 autoName,
+                ownerType: BOOK_OWNER_SESSION,
+                owner: this.getSessionOwner(normalizedSessionId),
                 sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 ...preserved,
@@ -1419,10 +1778,11 @@
 
         async syncWorldSettingsToBook(chunks, sessionId = 'default', bookName = '') {
             const normalizedChunks = await this.normalizeChunks(chunks);
-            const id = this.getWorldSettingBookId(sessionId);
+            const normalizedSessionId = String(sessionId || 'default');
+            const id = this.findSessionBookId(BOOK_KIND_WORLD_SETTING, normalizedSessionId)
+                || this.getWorldSettingBookId(normalizedSessionId);
             const oldBook = this.library[id];
             const normalizedName = String(bookName || '').trim() || '当前会话世界设定';
-            const normalizedSessionId = String(sessionId || 'default');
             const autoName = oldBook ? oldBook.autoName !== false : true;
             const nextName = autoName ? normalizedName : String(oldBook?.name || normalizedName);
             const unchanged = oldBook
@@ -1441,6 +1801,8 @@
                 name: nextName,
                 kind: BOOK_KIND_WORLD_SETTING,
                 autoName,
+                ownerType: BOOK_OWNER_SESSION,
+                owner: this.getSessionOwner(normalizedSessionId),
                 sessionId: normalizedSessionId,
                 chunks: normalizedChunks,
                 ...preserved,
@@ -2048,7 +2410,7 @@
             await this.purgeLocalBook(bookId);
             delete this.library[bookId];
             this.setActiveBooks(this.getActiveBooks().filter((id) => id !== bookId));
-            if (this.selectedBookId === bookId) this.selectedBookId = Object.keys(this.library)[0] || '';
+            if (this.selectedBookId === bookId) this.selectedBookId = this.listVisibleBooks()[0]?.id || '';
             await this.saveLibrary();
             return true;
         }
@@ -2110,6 +2472,11 @@
                 }
                 imported[nextId] = {
                     ...book,
+                    kind: '',
+                    autoName: false,
+                    ownerType: '',
+                    owner: null,
+                    sessionId: '',
                     ...(!book.vectors.some((vector) => this.isVectorReference(vector)) ? {
                         vectorized: book.chunks.map(() => false),
                         vectorHashes: book.chunks.map(() => null),

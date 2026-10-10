@@ -8,6 +8,7 @@ const vectorStoreSource = fs.readFileSync(new URL('../config/vector-store.js', i
 
 function createEmbeddingSandbox(options = {}) {
     const tokenCounter = options.tokenCounter;
+    const context = options.context || {};
     const sandbox = {
         console: {
             log() {},
@@ -33,8 +34,9 @@ function createEmbeddingSandbox(options = {}) {
     if (typeof tokenCounter === 'function') {
         sandbox.SillyTavern = {
             getContext: () => ({
+                ...context,
                 getTokenCountAsync: tokenCounter,
-                chatMetadata: {},
+                chatMetadata: context.chatMetadata || {},
             }),
         };
     }
@@ -47,9 +49,10 @@ function codePointCounter(text) {
     return Array.from(String(text || '')).length;
 }
 
-async function createVectorStoreSandbox() {
+async function createVectorStoreSandbox(options = {}) {
     const sandbox = createEmbeddingSandbox({
         tokenCounter: codePointCounter,
+        context: options.context,
         fetchImpl: async () => ({
             ok: false,
             status: 404,
@@ -220,6 +223,157 @@ test('empty summary synchronization removes its vector book and indexes', async 
     assert.equal(store.getBook(created.bookId), null);
     assert.equal(purgedBackendBook, created.bookId);
     assert.equal(purgedLocalBook, created.bookId);
+});
+
+test('session-managed books are scoped to their chat while imported books remain global', async () => {
+    const sandbox = await createVectorStoreSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    const store = memory.VectorStore;
+    memory.Storage = {
+        getCurrentSessionId: () => 'char:0:shared-name',
+        getCurrentSessionAliases: () => ['char:0:shared-name', 'char:hero.png:shared-name', 'chat:shared-name'],
+    };
+    const metadata = sandbox.window.chat_metadata = {};
+    store.library = {
+        current: store.normalizeBook({
+            name: '同名书',
+            kind: 'character_profile',
+            ownerType: 'session',
+            owner: { sessionId: 'char:0:shared-name', chatId: 'shared-name', characterAvatar: 'hero.png' },
+            sessionId: 'char:0:shared-name',
+            chunks: ['当前会话内容'],
+        }),
+        other: store.normalizeBook({
+            name: '同名书',
+            kind: 'character_profile',
+            ownerType: 'session',
+            owner: { sessionId: 'char:1:shared-name', chatId: 'shared-name', characterAvatar: 'other.png' },
+            sessionId: 'char:1:shared-name',
+            chunks: ['其他会话内容'],
+        }),
+        global: store.normalizeBook({ name: '同名书', chunks: ['全局导入内容'] }),
+    };
+    metadata.yzm_memory_active_vector_books = ['current', 'other', 'global'];
+
+    assert.deepEqual(Array.from(store.listBooks(), (book) => book.id).sort(), ['current', 'global']);
+    assert.deepEqual(Array.from(store.getActiveBooks()).sort(), ['current', 'global']);
+
+    const imported = store.importBooksAsNew({
+        yzm_character_book_old: {
+            name: '同名书',
+            kind: 'character_profile',
+            ownerType: 'session',
+            owner: { sessionId: 'char:0:shared-name', chatId: 'shared-name', characterAvatar: 'hero.png' },
+            sessionId: 'char:0:shared-name',
+            chunks: ['搬家导入内容'],
+        },
+    });
+    const importedBook = Object.values(imported)[0];
+    assert.equal(importedBook.kind, '');
+    assert.equal(importedBook.ownerType, '');
+    assert.equal(importedBook.sessionId, '');
+});
+
+test('deleting a chat removes only its owned books and preserves same-name global or other-character books', async () => {
+    const sandbox = await createVectorStoreSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    const store = memory.VectorStore;
+    memory.Storage = {
+        getCurrentSessionId: () => 'char:0:shared-name',
+        getCurrentSessionAliases: () => ['char:0:shared-name', 'char:hero.png:shared-name'],
+    };
+    store.library = {
+        profile: store.normalizeBook({
+            name: '同名书',
+            kind: 'character_profile',
+            ownerType: 'session',
+            owner: { sessionId: 'char:0:shared-name', chatId: 'shared-name', characterAvatar: 'hero.png' },
+            sessionId: 'char:0:shared-name',
+            chunks: ['角色档案'],
+        }),
+        summary: store.normalizeBook({
+            name: '同名书',
+            kind: 'summary',
+            ownerType: 'session',
+            owner: { sessionId: 'char:0:shared-name', chatId: 'shared-name', characterAvatar: 'hero.png' },
+            sessionId: 'char:0:shared-name',
+            chunks: ['总结'],
+        }),
+        other: store.normalizeBook({
+            name: '同名书',
+            kind: 'world_setting',
+            ownerType: 'session',
+            owner: { sessionId: 'char:1:shared-name', chatId: 'shared-name', characterAvatar: 'other.png' },
+            sessionId: 'char:1:shared-name',
+            chunks: ['其他角色会话'],
+        }),
+        global: store.normalizeBook({ name: '同名书', chunks: ['全局导入内容'] }),
+    };
+    const purged = [];
+    store.purgeBackendBook = async (bookId) => { purged.push(`backend:${bookId}`); return true; };
+    store.purgeLocalBook = async (bookId) => { purged.push(`local:${bookId}`); return true; };
+    store.saveLibrary = async () => true;
+
+    const result = await store.deleteSessionOwnedBooksForChat('shared-name', {
+        type: 'character',
+        characterAvatar: 'hero.png',
+    });
+
+    assert.equal(result.removed, 2);
+    assert.equal(store.getBook('profile'), null);
+    assert.equal(store.getBook('summary'), null);
+    assert.ok(store.getBook('other'));
+    assert.ok(store.getBook('global'));
+    assert.deepEqual(purged.sort(), ['backend:profile', 'backend:summary', 'local:profile', 'local:summary']);
+});
+
+test('chat deleted event uses the captured recent-chat owner and never falls back to another same-name owner', async () => {
+    const handlers = new Map();
+    const eventSource = {
+        on(type, handler) {
+            handlers.set(type, handler);
+        },
+    };
+    const sandbox = await createVectorStoreSandbox({
+        context: {
+            eventSource,
+            eventTypes: {
+                CHAT_DELETED: 'chat_deleted',
+                GROUP_CHAT_DELETED: 'group_chat_deleted',
+            },
+            characters: [{ avatar: 'current.png' }],
+            characterId: 0,
+        },
+    });
+    const store = sandbox.window.YuzukiMemory.VectorStore;
+    store.library = {
+        other: store.normalizeBook({
+            name: '同名会话的其他角色书',
+            kind: 'summary',
+            ownerType: 'session',
+            owner: { sessionId: 'char:other.png:shared-name', chatId: 'shared-name', characterAvatar: 'other.png' },
+            sessionId: 'char:other.png:shared-name',
+            chunks: ['不能误删'],
+        }),
+    };
+    store.saveLibrary = async () => true;
+    store.purgeBackendBook = async () => true;
+    store.purgeLocalBook = async () => true;
+    const chatItem = {
+        dataset: { file: 'shared-name.jsonl', avatar: 'hero.png', group: '' },
+    };
+    const deleteButton = {
+        closest: (selector) => selector === '.recentChat' ? chatItem : null,
+    };
+    store.captureRecentChatDeleteTarget({
+        target: {
+            closest: (selector) => selector === '.deleteChat' ? deleteButton : null,
+        },
+    });
+
+    await handlers.get('chat_deleted')('shared-name');
+
+    assert.ok(store.getBook('other'));
 });
 
 test('director search can use active vector books without enabling foreground vector injection', async () => {

@@ -1356,6 +1356,7 @@
 
     YuzukiMemory.Storage = Object.assign(YuzukiMemory.Storage || {}, {
         getCurrentSessionId,
+        getCurrentSessionAliases,
         getCurrentFloorScope,
         createFloorScope,
         createLegacyFloorScope,
