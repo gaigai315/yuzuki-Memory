@@ -1161,7 +1161,7 @@
         const statusCode = Number(status) || 0;
         if (statusCode && ![502, 503, 504].includes(statusCode)) return false;
         const text = String(detail?.message || detail || '').trim();
-        return /(?:\bENOTFOUND\b|\bEAI_AGAIN\b|\bECONNREFUSED\b|\bETIMEDOUT\b|\bUND_ERR_CONNECT_TIMEOUT\b|getaddrinfo|temporary failure in name resolution|fetch failed|failed to fetch|network(?: request)? failed|connection timed out)/i.test(text);
+        return /(?:\bENOTFOUND\b|\bEAI_AGAIN\b|\bECONNREFUSED\b|\bECONNRESET\b|\bECONNABORTED\b|\bEPIPE\b|\bETIMEDOUT\b|\bUND_ERR_CONNECT_TIMEOUT\b|getaddrinfo|temporary failure in name resolution|fetch failed|failed to fetch|network(?: request)? failed|connection timed out|connection reset by peer|socket hang up|client network socket disconnected before secure TLS connection was established|TLS handshake (?:timeout|timed out))/i.test(text);
     }
 
     async function waitForAgentRetry(delayMs, signal) {

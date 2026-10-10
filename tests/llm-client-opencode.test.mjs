@@ -598,6 +598,40 @@ test('agent retries explicit Tavern DNS failures when transport retries are enab
     assert.deepEqual(delays, [750, 1500]);
 });
 
+test('agent retries Tavern ECONNRESET failures before the TLS connection is established', async () => {
+    let requestCount = 0;
+    const delays = [];
+    const { client } = createClient(async () => {
+        requestCount += 1;
+        if (requestCount < 3) {
+            return createResponse({
+                error: {
+                    message: 'request to https://cpa.aiyuzuki.com/v1/chat/completions failed, reason: Client network socket disconnected before secure TLS connection was established',
+                    type: 'system',
+                    errno: 'ECONNRESET',
+                    code: 'ECONNRESET',
+                },
+            }, { ok: false, status: 502, statusText: 'Bad Gateway' });
+        }
+        return createResponse({ choices: [{ message: { content: '<下轮导演卡>连接恢复。</下轮导演卡>' } }] });
+    }, {
+        setTimeout(callback, delay) {
+            delays.push(delay);
+            callback();
+            return delays.length;
+        },
+        clearTimeout() {},
+    });
+
+    const result = await client.requestAgentWithCustom(openCodeConfig, [
+        { role: 'user', content: 'test TLS connection reset retry' },
+    ], [], { emptyResponseMaxRetries: 0, transportErrorMaxRetries: 2 });
+
+    assert.equal(result.success, true);
+    assert.equal(requestCount, 3);
+    assert.deepEqual(delays, [750, 1500]);
+});
+
 test('agent transport retry ignores generic upstream HTTP failures', async () => {
     let requestCount = 0;
     let delayCount = 0;
