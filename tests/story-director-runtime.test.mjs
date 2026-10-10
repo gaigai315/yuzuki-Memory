@@ -16,7 +16,7 @@ function createRoleLedgerResponse({ roster = [], occurred = false, entries = [] 
         '</角色账本更新>',
         '<轨道B最后一轮角色出场账本>',
         `发生: ${occurred ? '是' : '否'}`,
-        ...(occurred ? entries.map((entry) => `[${entry.name}] | ${entry.event}`) : []),
+        ...(occurred ? entries.map((entry) => `[${entry.name}] | ${entry.module || 'Module1'} | ${entry.event}`) : []),
         '</轨道B最后一轮角色出场账本>',
     ].join('\n');
     return { success: true, message: { role: 'assistant', content: text }, text, toolCalls: [] };
@@ -430,6 +430,8 @@ test('director inventories roles first and saves the merged ledger with the seco
     assert.match(requests[0][0].content, /^Role: 剧情角色账本维护专家/);
     assert.match(requests[0][0].content, /【轨道A\(主角层\)】定义：聚焦于与用户同场景下的角色故事。/);
     assert.match(requests[0][0].content, /【轨道B\(世界层\)】定义：必须构建不同于轨道A的场景下的不同角色支线剧情。/);
+    assert.match(requests[0][0].content, /Module5\(己方阵营\/日常事务\/主动谋划\)/);
+    assert.match(requests[0][0].content, /\[张三\] \| Module2 \| 张三在最后一条Assistant正文中实际参与的简要剧情/);
     assert.doesNotMatch(requests[0][0].content, /\{\{user\}\}/);
     assert.equal(requests[0][1].content, '【用户卡】\n用户卡中的背景资料');
     assert.equal(requests[0][2].name, 'SYSTEM (角色卡 - 角色)');
@@ -720,7 +722,7 @@ test('Track B history survives a model ledger overwrite without adding unused ca
     assert.doesNotMatch(modelLedger, /【轨道B调用历史（近10轮）】/);
     assert.match(modelLedger, /Module 1｜出场角色：NPC01/);
     const ledger = getState().storyDirector.ledger;
-    const entries = ledger.split('\n').filter((line) => /^- Module [1-4]｜出场角色：/.test(line));
+    const entries = ledger.split('\n').filter((line) => /^- Module [1-5]｜出场角色：/.test(line));
     assert.equal(entries.length, 10);
     assert.match(entries[0], /NPC01/);
     assert.match(entries.at(-1), /Module 2｜出场角色：NPC10/);
@@ -732,7 +734,7 @@ test('Track B history survives a model ledger overwrite without adding unused ca
 test('two-pass planning records only the reviewed body event once and invalidates it after a swipe', async () => {
     const { memory, requests, getState, chat } = createSandbox({ initialLedger: '' });
     const cards = [
-        createTrackBCard('林雪', 'Module 1', '候选A：城西马场休息；候选B：马会观赛；候选C：马术训练'),
+        createTrackBCard('林雪', 'Module 5', '候选A：城西马场休息；候选B：马会观赛；候选C：马术训练'),
         createTrackBCard('陈舟', 'Module 4', '下一轮候选'),
         createTrackBCard('赵衡', 'Module 2', '手动重规划候选'),
     ];
@@ -751,6 +753,7 @@ test('two-pass planning records only the reviewed body event once and invalidate
                     occurred = true;
                     entries = [{
                         name: '林雪',
+                        module: 'Module5',
                         event: actualReviewPasses === 1
                             ? '林雪在城西马场短暂休整后返回府邸'
                             : '林雪重新核验后确认已从城西马场返回府邸',
@@ -782,16 +785,16 @@ test('two-pass planning records only the reviewed body event once and invalidate
     const repeatedReviewTarget = requests[4].find((message) => message.role === 'assistant' && message.content.includes('城西马场，只短暂休整'));
     assert.match(repeatedReviewTarget.content, /^\[楼层 5\] 当前核验目标为此楼正文；根据此楼内容更新<角色账本更新>及<轨道B最后一轮角色出场账本>。/);
     const ledger = getState().storyDirector.ledger;
-    assert.match(ledger, /Module 1｜出场角色：林雪｜实际事件：林雪在城西马场短暂休整后返回府邸｜正文来源：5\/0\//);
-    assert.match(ledger, /距今1轮轨道B剧情: \[林雪\] \| 林雪重新核验后确认已从城西马场返回府邸｜正文来源：5\/0\//);
-    assert.doesNotMatch(ledger, /距今1轮轨道B剧情: \[林雪\] \| 林雪在城西马场短暂休整后返回府邸/);
+    assert.match(ledger, /Module 5｜出场角色：林雪｜实际事件：林雪在城西马场短暂休整后返回府邸｜正文来源：5\/0\//);
+    assert.match(ledger, /距今1轮轨道B剧情: \[林雪\] \| Module 5 \| 林雪重新核验后确认已从城西马场返回府邸｜正文来源：5\/0\//);
+    assert.doesNotMatch(ledger, /距今1轮轨道B剧情: \[林雪\] \| Module 5 \| 林雪在城西马场短暂休整后返回府邸/);
     assert.equal((ledger.match(/正文来源：5\/0\//g) || []).length, 2);
     assert.doesNotMatch(ledger, /候选A|候选B|候选C|马会观赛|马术训练/);
     const sourceSignature = ledger.match(/正文来源：5\/0\/([^｜|\s]+)/)?.[1] || '';
     assert.ok(sourceSignature);
     const modelLedger = readContext(requests[3]).ledger;
     assert.match(modelLedger, /【严禁调用以下轨道B已经发生过的历史（近10轮）】/);
-    assert.match(modelLedger, /Module 1｜出场角色：林雪｜实际事件：林雪在城西马场短暂休整后返回府邸/);
+    assert.match(modelLedger, /Module 5｜出场角色：林雪｜实际事件：林雪在城西马场短暂休整后返回府邸/);
     assert.doesNotMatch(modelLedger, /正文来源/);
     assert.equal(modelLedger.includes(sourceSignature), false);
     assert.match(modelLedger, /轨道B最近20轮角色出场账本/);
@@ -877,12 +880,12 @@ test('a trailing user turn does not record the same latest assistant body twice'
     assert.equal((await runtime.replanLatest()).success, true);
 
     assert.deepEqual(readContext(requests[2]).latestAssistantReview, { assistantFloor: 3, shouldRecord: false });
-    assert.doesNotMatch(JSON.stringify(requests[2]), /boundCard|所属模块|推进支线。/);
+    assert.doesNotMatch(JSON.stringify(requests[2]), /boundCard|所属模块\s*[：:]\s*Module|推进支线。/);
     const historyLines = getState().storyDirector.ledger
         .split('\n')
         .filter((line) => /^距今\d+轮轨道B剧情:/.test(line));
     assert.equal(historyLines.length, 1);
-    assert.match(historyLines[0], /\[甲\] \| 甲在最新Assistant正文中完成了交谈｜正文来源：3\/0\//);
+    assert.match(historyLines[0], /\[甲\] \| Module 1 \| 甲在最新Assistant正文中完成了交谈｜正文来源：3\/0\//);
     assert.equal((getState().storyDirector.ledger.match(/最新Assistant正文中完成了交谈/g) || []).length, 1);
 });
 

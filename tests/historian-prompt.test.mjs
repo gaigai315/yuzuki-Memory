@@ -144,7 +144,7 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /预案内容严禁预设\{\{user\}\}的言行或决定/);
     assert.doesNotMatch(director.prompt, /当前角色正向：顺从\/接纳\/主动/);
     assert.doesNotMatch(director.prompt, /当前\{\{user\}\}可能做出的反应/);
-    assert.match(director.prompt, /所有模块权重相同/);
+    assert.match(director.prompt, /五大模块类型:所有模块权重相同/);
     assert.match(director.prompt, /近20轮中出现未出现或次数最少的模块/);
     assert.match(director.prompt, /连续5轮未出现时强制调用/);
     assert.match(director.prompt, /核对近20轮账本中的正文实际事件/);

@@ -34,12 +34,27 @@
 【轨道A(主角层)】定义：聚焦于与{{user}}同场景下的角色故事。
 【轨道B(世界层)】定义：必须构建不同于轨道A的场景下的不同角色支线剧情。
 
+一、五大模块类型:所有模块权重相同
+① Module1(情感/追求/误会/私心)：爱慕者/恋人/情人主动追求、邀约或联系;关系升温、吃醋、竞争、情感误会、私心与暧昧张力.任何角色可主动联系(突击查岗、手机通讯)、场外准备(在其住处等待、准备惊喜/算计)或突发上门介入剧情,打破主角（无论男女主）单调节奏.角色动作必须产生触达主角的事实媒介（例如必须发出了消息、送出了东西、或者人已经在主角门口敲门）
+
+② Module2(敌对/陷害/野心/博弈)：敌对势力的算计博弈(试探、布局、陷害、栽赃、造谣、制约、侵入、攻击或实质反扑)
+
+③ Module3(松弛/烟火日常/人际趣事)：任何角色(含NPC)的兴趣爱好展开及生活切片、朋友邀约、聚会、出游、节假日或兴趣活动;古代可触发游船、马球、蹴鞠、诗会、赏花等,现代可触发聚餐、旅行、游戏等.或反派纯粹的私人生活切片(如反派的奢靡宴席、家族内耗、私密玩乐、个人怪癖、消遣活动等,展示其作为活人而非单纯恶势力的真实日常).
+
+④ Module4(社会偶发/环境突变/第三方盲盒)：引入非既定人际网的外在变量与偶然性冲击，打破既有阵营闭环。必须从以下三大外在动力源中调度，严禁使用已知角色之间的日常纠葛：
+- 公域突发异动（不可控环境/中立事件）：天时异象、公域秩序瘫痪（暴乱/火警/宵禁/路网瘫痪）、突发社会热点舆论、无差别的公共安全/意外事件。
+- 边缘因果与旧识回流（非主线旧人/偶然交集）：尘封的旧日关系偶然重逢、陌生路人引发的链式反应、意外捕获/遗失关键无主之物（如机密碎屑、无主凭证、意外横财）。
+-第三方独立势力撞轨（破局增量）：完全独立于当前敌我双方的中立机构、监察/执法力量巡查、地方隐秘势力、全新潜在买家/雇主等带入的新主线端倪。
+
+⑤ Module5(己方阵营/日常事务/主动谋划)：【己方阵营主场】主角/主角团或其所属势力/组织的一切主动事务推进.
+
 1. 核验系统提供的 latestAssistantReview 指定的最后一条实际Assistant正文，是否有新登场的角色需要记录或旧角色需要状态更新。
-2. 核验角色卡、世界设定、向量资料、表格、旧名册和旧正文中所有角色，是否有设定角色却遗漏没有记录的,必须在当前<角色账本更新>,务必新增进账本。
-2. 记录 latestAssistantReview 指定的最后一条实际Assistant正文内，属于【轨道B(世界层)】的角色出场及简要剧情；仅被提及、回忆、讨论、等待或作为计划对象不算实际出场。
-3. 多名角色参与不同正文事件时，按角色及其所在场景分别记录。同一角色有多个独立场景时允许分成多行。
-4. 如果该Assistant正文没有需要记录的实际角色场景，必须填写“发生: 否”，并且不得输出任何角色行。
-5. latestAssistantReview为空或 shouldRecord=false，表示没有新的Assistant正文或该正文已经入账，必须填写“发生: 否”。
+2. 核验角色卡、世界设定、向量资料、表格、旧名册和旧正文中所有角色，是否有设定角色却遗漏没有记录的，必须在当前<角色账本更新>中补录。
+3. 记录 latestAssistantReview 指定的最后一条实际Assistant正文内，属于【轨道B(世界层)】的角色出场、所属模块及简要剧情；仅被提及、回忆、讨论、等待或作为计划对象不算实际出场。
+4. 多名角色参与不同正文事件时，按角色及其所在场景分别记录。同一角色有多个独立场景时允许分成多行。
+5. 每条轨道B记录的模块只能填写 Module1、Module2、Module3、Module4 或 Module5，且必须依据正文中已经实际发生的事件判断。
+6. 如果该Assistant正文没有需要记录的实际角色场景，必须填写“发生: 否”，并且不得输出任何角色行。
+7. latestAssistantReview为空或 shouldRecord=false，表示没有新的Assistant正文或该正文已经入账，必须填写“发生: 否”。
 
 严格只输出以下两个标签，不得输出JSON、Markdown代码块或标签外文字：
 <角色账本更新>
@@ -49,9 +64,10 @@
 
 <轨道B最后一轮角色出场账本>
 发生: 是
-[张三] | 张三在最后一条Assistant正文中实际参与的简要剧情
-[李四] | 李四在最后一条Assistant正文中实际参与的简要剧情
+[张三] | Module2 | 张三在最后一条Assistant正文中实际参与的简要剧情
+[李四] | Module1 | 李四在最后一条Assistant正文中实际参与的简要剧情
 </轨道B最后一轮角色出场账本>
+
 
 没有名册变更时，<角色账本更新>保持为空。没有新的Assistant正文需要记录时只输出“发生: 否”。`;
     const RUN_DELAY_MS = 1800;
@@ -517,8 +533,10 @@
         const match = String(line || '').trim().match(/^\[([^\]\r\n]+)\]\s*[|｜]\s*([\s\S]+)$/);
         if (!match) return null;
         const name = normalizeCharacterRosterName(match[1]);
-        const event = normalizeRoleAppearanceEvent(match[2]);
-        return name && event ? { name, event } : null;
+        const moduleMatch = match[2].match(/^\s*(Module\s*[1-5])\s*[|｜]\s*([\s\S]+)$/i);
+        const module = normalizeTrackBModule(moduleMatch?.[1]);
+        const event = normalizeRoleAppearanceEvent(moduleMatch?.[2] || match[2]);
+        return name && event ? { name, ...(module ? { module } : {}), event } : null;
     }
 
     function parseRoleAppearanceHistoryLine(line = '') {
@@ -567,8 +585,13 @@
             const distance = entries.length - index;
             const content = entry?.occurred === true
                 ? (Array.isArray(entry.entries) ? entry.entries : [])
-                    .map((item) => `[${normalizeCharacterRosterName(item?.name)}] | ${normalizeRoleAppearanceEvent(item?.event)}`)
-                    .filter((item) => !/^\[\]\s*[|｜]/.test(item))
+                    .map((item) => {
+                        const name = normalizeCharacterRosterName(item?.name);
+                        const module = normalizeTrackBModule(item?.module);
+                        const event = normalizeRoleAppearanceEvent(item?.event);
+                        return name && event ? `[${name}] | ${module ? `${module} | ` : ''}${event}` : '';
+                    })
+                    .filter(Boolean)
                     .join('；')
                 : '未发生';
             const source = includeSource && entry?.source && Number.isInteger(Number(entry.source.assistantIndex))
@@ -590,7 +613,9 @@
             return sanitizeDirectorLedger(ledger);
         }
         const entries = (Array.isArray(entry.entries) ? entry.entries : [])
-            .map((item) => parseRoleAppearanceLine(`[${item?.name || ''}] | ${item?.event || ''}`))
+            .map((item) => parseRoleAppearanceLine(
+                `[${item?.name || ''}] | ${item?.module ? `${item.module} | ` : ''}${item?.event || ''}`
+            ))
             .filter(Boolean);
         const occurred = entry.occurred === true && entries.length > 0;
         const history = readRoleAppearanceHistory(ledger).filter((item) => !item.source
@@ -692,7 +717,7 @@
         let text = String(value || '').trim();
         const bracketMatch = text.match(/^\[\s*([\s\S]*?)\s*\]$/);
         if (bracketMatch) text = bracketMatch[1].trim();
-        const match = text.match(/^module\s*([1-4])$/i);
+        const match = text.match(/^module\s*([1-5])$/i);
         return match ? `Module ${match[1]}` : '';
     }
 
@@ -727,7 +752,7 @@
     }
 
     function parseTrackBHistoryLine(line = '') {
-        const match = String(line || '').match(/^\s*[-*+]\s*(Module\s*[1-4])\s*(?:｜|\|)\s*出场角色\s*[：:]\s*(.*?)\s*$/i);
+        const match = String(line || '').match(/^\s*[-*+]\s*(Module\s*[1-5])\s*(?:｜|\|)\s*出场角色\s*[：:]\s*(.*?)\s*$/i);
         if (!match) return null;
         const module = normalizeTrackBModule(match[1]);
         const sourceMatch = match[2].match(/^([\s\S]*?)\s*(?:｜|\|)\s*正文来源\s*[：:]\s*(\d+)\/(\d+)\/([^｜|\s]+)\s*$/i);
@@ -1223,6 +1248,7 @@
         const entries = appearanceLines.map((line) => {
             const entry = parseRoleAppearanceLine(line);
             if (!entry) throw new Error('<轨道B最后一轮角色出场账本> 中存在格式错误的角色剧情记录。');
+            if (!entry.module) throw new Error('<轨道B最后一轮角色出场账本> 的每条角色剧情记录必须包含 Module1 至 Module5。');
             return entry;
         });
         if (!occurred && entries.length) throw new Error('轨道B未发生时不得输出角色剧情记录。');
