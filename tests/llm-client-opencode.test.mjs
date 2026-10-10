@@ -146,6 +146,41 @@ test('OpenCode session header is preserved through proxy failure and direct fall
     assert.equal(findHeader(directHeaders, 'authorization'), 'Bearer go-test-key');
 });
 
+test('custom Gemini proxy failure exposes only the final upstream response', async () => {
+    const requests = [];
+    const finalBody = {
+        error: {
+            message: 'request failed, reason: self-signed certificate',
+            code: 'DEPTH_ZERO_SELF_SIGNED_CERT',
+        },
+    };
+    const { client } = createClient(async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        if (requests.length < 3) {
+            return createResponse({ error: true }, { ok: false, status: 500, statusText: 'Internal Server Error' });
+        }
+        return createResponse(finalBody, { ok: false, status: 502, statusText: 'Bad Gateway' });
+    });
+
+    const result = await client.generateWithCustom({
+        provider: 'proxy_only',
+        baseUrl: 'https://gcli.example.dev',
+        apiKey: 'test-key',
+        model: 'gemini-2.5-pro',
+        stream: false,
+    }, [{ role: 'user', content: 'test' }]);
+
+    assert.equal(result.success, false);
+    assert.equal(requests.length, 3);
+    assert.equal(result.status, 502);
+    assert.equal(result.upstreamBody, JSON.stringify(finalBody));
+    assert.equal(result.error, `HTTP 502 Bad Gateway\n${JSON.stringify(finalBody)}`);
+    assert.doesNotMatch(result.error, /Gemini 反代兼容|追加 \/v1|降级 OpenAI 协议/);
+    assert.match(result.diagnostics, /Gemini 反代兼容/);
+    assert.match(result.diagnostics, /追加 \/v1/);
+    assert.match(result.diagnostics, /降级 OpenAI 协议/);
+});
+
 test('OpenCode model listing carries the same required headers', async () => {
     let capturedPayload;
     const { client } = createClient(async (url, init) => {

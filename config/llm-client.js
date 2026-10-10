@@ -151,6 +151,31 @@
         return [head, text].filter(Boolean).join('\n');
     }
 
+    function formatAttemptDiagnostics(attempts = []) {
+        return attempts
+            .map(({ label, result, fallback }) => {
+                const detail = String(result?.diagnostics || result?.error || fallback || '请求失败').trim();
+                return detail ? `[${label}]\n${detail}` : '';
+            })
+            .filter(Boolean)
+            .join('\n\n');
+    }
+
+    function finalizeFailedAttempt(finalResult, attempts = [], overrides = {}) {
+        const fallback = String(overrides.fallback || '请求失败');
+        const result = finalResult && typeof finalResult === 'object'
+            ? finalResult
+            : { success: false, error: fallback };
+        const diagnostics = formatAttemptDiagnostics(attempts);
+        return {
+            ...result,
+            ...overrides,
+            success: false,
+            error: String(result.error || fallback),
+            ...(diagnostics ? { diagnostics } : {}),
+        };
+    }
+
     function stripThinking(text = '') {
         return String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/^[\s\S]*?<\/think>/i, '').trim();
     }
@@ -1627,10 +1652,10 @@
         if (stream && !options.signal?.aborted) {
             const retryResult = await postTavernGenerate(resolveProxyGeminiPayload(config, messages, targetUrl, false), options);
             if (retryResult?.success) return { ...retryResult, config, fallback: 'proxy-gemini-makersuite-non-stream' };
-            return {
-                success: false,
-                error: `${result?.error || 'Gemini 反代流式请求失败'}\n\n[非流式重试]\n${retryResult?.error || '请求失败'}`,
-            };
+            return finalizeFailedAttempt(retryResult, [
+                { label: '流式请求', result, fallback: 'Gemini 反代流式请求失败' },
+                { label: '非流式重试', result: retryResult },
+            ]);
         }
         return result;
     }
@@ -1645,11 +1670,10 @@
         const v1Result = await tryProxyGeminiGenerate(config, messages, v1Url, wantsStream, options);
         if (v1Result?.success) return v1Result;
 
-        return {
-            success: false,
-            error: `[Gemini 反代兼容]\n${cleanUrlResult?.error || '纯净 URL 请求失败'}\n\n[追加 /v1]\n${v1Result?.error || '请求失败'}`,
-            config,
-        };
+        return finalizeFailedAttempt(v1Result, [
+            { label: 'Gemini 反代兼容', result: cleanUrlResult, fallback: '纯净 URL 请求失败' },
+            { label: '追加 /v1', result: v1Result },
+        ], { config });
     }
 
     async function generateWithCustom(rawConfig, messages, options = {}) {
@@ -1671,12 +1695,14 @@
         const cleanMessages = normalizeMessages(messages);
         if (!cleanMessages.length) return { success: false, error: '消息数组为空' };
 
-        let proxyError = '';
+        const failedAttempts = [];
+        let lastFailure = null;
         let skipCustomProxy = false;
         if (shouldUseProxyGeminiCompat(config)) {
             const proxyGeminiResult = await generateWithProxyGeminiCompat(config, cleanMessages, options);
             if (proxyGeminiResult?.success) return proxyGeminiResult;
-            proxyError = proxyGeminiResult?.error || 'Gemini 反代兼容请求失败';
+            lastFailure = proxyGeminiResult;
+            failedAttempts.push({ label: 'Gemini 反代兼容', result: proxyGeminiResult, fallback: 'Gemini 反代兼容请求失败' });
             skipCustomProxy = true;
         }
 
@@ -1684,7 +1710,8 @@
             const payload = resolveCustomProxyPayload(config, cleanMessages, options);
             const result = await postTavernGenerate(payload, options);
             if (result?.success) return { ...result, config };
-            proxyError = result?.error || '后端代理请求失败';
+            lastFailure = result;
+            failedAttempts.push({ label: '后端代理', result, fallback: '后端代理请求失败' });
         }
         if ((config.provider === 'proxy_only' || config.provider === 'compatible')
             && !isOfficialOpenCodeGoUrl(config.apiUrl)
@@ -1705,28 +1732,24 @@
             };
             const retryResult = await postTavernGenerate(retryPayload, options);
             if (retryResult?.success) return { ...retryResult, config: retryConfig, fallback: 'openai' };
-            proxyError = `${proxyError}\n\n[降级 OpenAI 协议]\n${retryResult.error || '请求失败'}`;
+            lastFailure = retryResult;
+            failedAttempts.push({ label: '降级 OpenAI 协议', result: retryResult });
         }
 
         if ([OPENCODE_GO_PROVIDER, 'compatible', 'openai', 'deepseek', 'siliconflow', 'gemini'].includes(config.provider)) {
             try {
                 const directResult = await postDirectGenerate(config, cleanMessages, options);
                 if (directResult?.success) return { ...directResult, config, fallback: 'direct' };
-                return {
-                    success: false,
-                    error: `${proxyError}\n\n[浏览器直连]\n${directResult?.error || '请求失败'}`,
-                    config,
-                };
+                failedAttempts.push({ label: '浏览器直连', result: directResult });
+                return finalizeFailedAttempt(directResult, failedAttempts, { config });
             } catch (error) {
-                return {
-                    success: false,
-                    error: `${proxyError}\n\n[浏览器直连]\n${formatError(error)}`,
-                    config,
-                };
+                const directFailure = { success: false, error: formatError(error) };
+                failedAttempts.push({ label: '浏览器直连', result: directFailure });
+                return finalizeFailedAttempt(directFailure, failedAttempts, { config });
             }
         }
 
-        return { success: false, error: proxyError, config };
+        return finalizeFailedAttempt(lastFailure, failedAttempts, { config });
     }
 
     function parseModelsResponse(data) {

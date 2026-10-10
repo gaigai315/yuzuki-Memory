@@ -18874,7 +18874,7 @@
                 if (!root) return false;
                 return openTaskResultConfirmDialog(root, {
                     title: `${payload.taskTitle || '自动任务'}失败`,
-                    description: '以下为完整错误与模型原始回复，此次结果未写入。',
+                    description: '以下为本次请求最终返回的错误信息，此次结果未写入。',
                     result: { text: String(payload.message || '未知错误') },
                     readOnly: true,
                     retryLabel: '重试',
