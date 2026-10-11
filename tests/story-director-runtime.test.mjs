@@ -1838,6 +1838,76 @@ test('assistant render events only queue planning when dialogue content changes'
     assert.equal(timers.length, 1);
 });
 
+test('aborting an empty generated swipe preserves the first swipe card and does not rerun planning', async () => {
+    const { eventBindings, sandbox, memory, chat, requests, getState } = createSandbox({ embeddingEnabled: false });
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.replanLatest()).success, true);
+    const savedDirector = structuredClone(getState().storyDirector);
+    const requestCount = requests.length;
+    const timers = [];
+    sandbox.window.setTimeout = (callback, delay) => {
+        timers.push({ callback, delay: Number(delay) });
+        return timers.length;
+    };
+    sandbox.window.clearTimeout = () => {};
+
+    chat[3].swipes = [chat[3].mes];
+    chat[3].swipe_id = chat[3].swipes.length;
+    const swiped = eventBindings.find((entry) => entry.name === 'message_swiped');
+    assert.ok(swiped);
+    swiped.handler(3);
+
+    assert.equal(timers.length, 0);
+    assert.equal(requests.length, requestCount);
+    assert.deepEqual(getState().storyDirector, savedDirector);
+
+    runtime.scheduleDirector('memory-updated', 0);
+    assert.equal(timers.length, 1);
+    await timers.shift().callback();
+    assert.equal(requests.length, requestCount);
+    assert.deepEqual(getState().storyDirector, savedDirector);
+
+    chat[3].swipe_id = 0;
+    assert.equal(runtime.getCurrentDirectorCard()?.card, savedDirector.pendingCard);
+    assert.equal(requests.length, requestCount);
+});
+
+test('a generated swipe waits for completed assistant text before replacing the director card', async () => {
+    const { eventBindings, sandbox, memory, chat, requests, getState } = createSandbox({ embeddingEnabled: false });
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.replanLatest()).success, true);
+    const previousCard = getState().storyDirector.pendingCard;
+    const requestCount = requests.length;
+    const timers = [];
+    sandbox.window.setTimeout = (callback, delay) => {
+        timers.push({ callback, delay: Number(delay) });
+        return timers.length;
+    };
+    sandbox.window.clearTimeout = () => {};
+
+    chat[3].swipes = [chat[3].mes];
+    chat[3].swipe_id = chat[3].swipes.length;
+    eventBindings.find((entry) => entry.name === 'message_swiped').handler(3);
+    assert.equal(timers.length, 0);
+    assert.equal(getState().storyDirector.pendingCard, previousCard);
+
+    chat[3].mes = '成功生成的第二轮正文';
+    chat[3].swipes.push(chat[3].mes);
+    const received = eventBindings.find((entry) => entry.name === 'message_received');
+    assert.ok(received);
+    received.handler(3, 'swipe');
+
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.deepEqual(timers.map((timer) => timer.delay), [250, 1800]);
+    await timers.shift().callback();
+    await timers.shift().callback();
+
+    assert.equal(requests.length, requestCount + 2);
+    assert.equal(getState().storyDirector.status, 'ready');
+    assert.equal(getState().storyDirector.source.swipeId, 1);
+    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>推进支线。</下轮导演卡>');
+});
+
 test('confirming message edit without dialogue changes does not queue another director run', () => {
     const { eventBindings, sandbox, requests } = createSandbox({ embeddingEnabled: false });
     const timers = [];

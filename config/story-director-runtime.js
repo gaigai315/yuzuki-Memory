@@ -238,8 +238,23 @@
         return changed;
     }
 
+    function isPendingGeneratedSwipe(messageIndex = null) {
+        const chat = getContext()?.chat;
+        if (!Array.isArray(chat) || !chat.length) return false;
+        const hasMessageIndex = messageIndex !== null && messageIndex !== undefined && messageIndex !== '';
+        const parsedIndex = hasMessageIndex ? Number(messageIndex) : Number.NaN;
+        const index = Number.isInteger(parsedIndex) && parsedIndex >= 0 && parsedIndex < chat.length
+            ? parsedIndex
+            : chat.length - 1;
+        const message = chat[index];
+        if (!isAssistantMessage(message) || !Array.isArray(message?.swipes)) return false;
+        const swipeId = Number(message.swipe_id);
+        return Number.isInteger(swipeId) && swipeId >= message.swipes.length;
+    }
+
     function buildAssistantAnchor(message, index, sessionId) {
         if (!isAssistantMessage(message) || message?.is_system === true || isPluginMessage(message)) return null;
+        if (isPendingGeneratedSwipe(index)) return null;
         const text = getMessageText(message);
         if (!text.trim()) return null;
         const swipeId = Math.max(0, Math.round(Number(message?.swipe_id) || 0));
@@ -2287,6 +2302,7 @@
         runTimer = window.setTimeout(async () => {
             runTimer = null;
             if (!isStoryDirectorEnabled()) return;
+            if (isPendingGeneratedSwipe()) return;
             clearInvalidPendingCard();
             const promptEntry = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
             if (!promptEntry) {
@@ -2529,11 +2545,19 @@
         }
         bound = true;
         rememberDialogueMutationSnapshot();
-        const onAssistantChanged = () => {
+        const onAssistantChanged = (_messageIndex, generationType) => {
             if (!consumeDialogueMutation()) return;
+            if (String(generationType || '').toLowerCase() === 'swipe') {
+                clearInvalidPendingCard();
+                scheduleStoredDirectorLedgerReconcile('message-swiped-complete', 250);
+            }
             scheduleDirector('assistant-message');
         };
-        const onBranchChanged = (reason, reconcileDelay) => {
+        const onBranchChanged = (reason, reconcileDelay, messageIndex = null) => {
+            if (reason === 'message-swiped' && isPendingGeneratedSwipe(messageIndex)) {
+                cancelActiveRun('swipe generation pending');
+                return;
+            }
             rememberDialogueMutationSnapshot();
             cancelActiveRun('branch changed');
             clearInvalidPendingCard();
@@ -2576,7 +2600,7 @@
         };
         bindEvents([eventTypes.CHARACTER_MESSAGE_RENDERED, eventTypes.MESSAGE_RECEIVED, 'character_message_rendered'], onAssistantChanged);
         bindEvents([eventTypes.MESSAGE_DELETED, 'message_deleted'], () => onBranchChanged('message-deleted', 180));
-        bindEvents([eventTypes.MESSAGE_SWIPED, 'message_swiped'], () => onBranchChanged('message-swiped', 650));
+        bindEvents([eventTypes.MESSAGE_SWIPED, 'message_swiped'], (messageIndex) => onBranchChanged('message-swiped', 650, messageIndex));
         bindEvents([eventTypes.MESSAGE_EDITED, eventTypes.MESSAGE_UPDATED, 'message_edited', 'message_updated'], onMessageUpdated);
         bindEvents([eventTypes.GENERATION_STARTED, 'generation_started'], onGenerationStarted);
         bindEvents([eventTypes.CHAT_CHANGED, eventTypes.CHAT_LOADED, 'chat_id_changed'], onChatChanged);
