@@ -1,9 +1,49 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
 
 const memoryWindowSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
 const memoryCssSource = fs.readFileSync(new URL('../styles/memory.css', import.meta.url), 'utf8');
+
+test('keyboard viewport changes preserve the intended icon position without measurement feedback', () => {
+    const window = { visualViewport: { width: 390, height: 800, offsetLeft: 0, offsetTop: 0 } };
+    let writes = 0;
+    const values = {};
+    const style = new Proxy(values, { set(target, key, value) { writes++; target[key] = value; return true; } });
+    const button = {
+        isConnected: true, hidden: false, dataset: {}, style,
+        classList: { contains: () => false },
+        getBoundingClientRect() { throw new Error('screen measurements must not affect placement'); },
+    };
+    const context = vm.createContext({
+        window, document: { documentElement: {} }, Number, Math,
+        getFloatingIconSize: () => 34, getFloatingIconEdgeInset: () => 0,
+        isMemoryShellOpen: () => false, isStoryDirectorCardOpen: () => false,
+        YuzukiMemory: {}, saveFloatingIconPosition() { throw new Error('resize must not save'); },
+    });
+    const start = memoryWindowSource.indexOf('    function clampFloatingIconPosition(');
+    const end = memoryWindowSource.indexOf('    function armShellOpenInteractionGuard(', start);
+    vm.runInContext(memoryWindowSource.slice(start, end), context);
+    context.applyFloatingIconPosition(button, 356, 576);
+    window.visualViewport.height = 400;
+    window.visualViewport.offsetTop = 80;
+    context.ensureFloatingIconVisible(button);
+    assert.equal(style.top, '446px');
+    assert.equal(button.dataset.yzmFloatingTop, '576');
+    window.visualViewport.height = 800;
+    window.visualViewport.offsetTop = 0;
+    context.ensureFloatingIconVisible(button);
+    assert.equal(style.top, '576px');
+    const stableWrites = writes;
+    // right/bottom are unchanged; left/top must remain untouched on repeated checks.
+    for (let i = 0; i < 20; i++) context.ensureFloatingIconVisible(button);
+    assert.equal(writes - stableWrites, 40);
+    button.classList.contains = () => true;
+    window.visualViewport.height = 300;
+    context.ensureFloatingIconVisible(button);
+    assert.equal(style.top, '576px');
+});
 
 test('all nine floating icon styles are registered with bundled assets', () => {
     const stylesBlock = memoryWindowSource.match(

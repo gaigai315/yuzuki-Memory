@@ -279,6 +279,7 @@
     let sessionStateReady = false;
     let sessionLoadRevision = 0;
     let floatingResizeController = null;
+    let floatingResizeTimer = null;
     let floatingVisibilityTimer = null;
     let shellOpenInteractionGuardUntil = 0;
     let chatContextRefreshBound = false;
@@ -2779,19 +2780,29 @@
         const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || size;
         const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || size;
         const minEdge = getFloatingIconEdgeInset();
-        const maxLeft = Math.max(minEdge, viewportWidth - size - minEdge);
-        const maxTop = Math.max(minEdge, viewportHeight - size - minEdge);
+        const offsetLeft = window.visualViewport?.offsetLeft || 0;
+        const offsetTop = window.visualViewport?.offsetTop || 0;
+        const minLeft = offsetLeft + minEdge;
+        const minTop = offsetTop + minEdge;
+        const maxLeft = Math.max(minLeft, offsetLeft + viewportWidth - size - minEdge);
+        const maxTop = Math.max(minTop, offsetTop + viewportHeight - size - minEdge);
         return {
-            left: Math.max(minEdge, Math.min(maxLeft, Number(left) || minEdge)),
-            top: Math.max(minEdge, Math.min(maxTop, Number(top) || minEdge)),
+            left: Math.max(minLeft, Math.min(maxLeft, Number(left) || 0)),
+            top: Math.max(minTop, Math.min(maxTop, Number(top) || 0)),
         };
     }
 
     function applyFloatingIconPosition(button, left, top, options = {}) {
         if (!button) return;
         const next = clampFloatingIconPosition(left, top, button);
-        button.style.left = `${next.left}px`;
-        button.style.top = `${next.top}px`;
+        // Keep the intended position separate from temporary keyboard/pan bounds.
+        // Never feed transformed screen measurements back into fixed coordinates.
+        if (!options.viewportOnly) {
+            button.dataset.yzmFloatingLeft = String(next.left);
+            button.dataset.yzmFloatingTop = String(next.top);
+        }
+        if (button.style.left !== `${next.left}px`) button.style.left = `${next.left}px`;
+        if (button.style.top !== `${next.top}px`) button.style.top = `${next.top}px`;
         button.style.right = 'auto';
         button.style.bottom = 'auto';
         if (options.persist) saveFloatingIconPosition(next.left, next.top);
@@ -2823,17 +2834,11 @@
     function ensureFloatingIconVisible(button) {
         if (!button?.isConnected) return;
         if (button.hidden || isMemoryShellOpen() || YuzukiMemory.CharacterGraphWindow?.isOpen?.() || isStoryDirectorCardOpen()) return;
-        const rect = button.getBoundingClientRect();
-        const viewportWidth = window.visualViewport?.width || window.innerWidth || document.documentElement.clientWidth || rect.width;
-        const viewportHeight = window.visualViewport?.height || window.innerHeight || document.documentElement.clientHeight || rect.height;
-        const outside = rect.right < 0 || rect.left > viewportWidth || rect.bottom < 0 || rect.top > viewportHeight;
-        if (outside) {
-            const saved = migrateSavedFloatingIconPosition(getSavedFloatingIconPosition(), button);
-            if (saved) applyFloatingIconPosition(button, saved.left, saved.top, { persist: false });
-            else positionFloatingIcon(button);
-        } else {
-            applyFloatingIconPosition(button, rect.left, rect.top, { persist: false });
-        }
+        if (button.classList.contains('yzm-floating-button-dragging')) return;
+        const left = Number(button.dataset.yzmFloatingLeft);
+        const top = Number(button.dataset.yzmFloatingTop);
+        if (!Number.isFinite(left) || !Number.isFinite(top)) positionFloatingIcon(button);
+        else applyFloatingIconPosition(button, left, top, { viewportOnly: true });
     }
 
     function armShellOpenInteractionGuard(duration = 600) {
@@ -3154,8 +3159,7 @@
 
             if (moved && !cancelled) {
                 cancelPendingShellOpen(true);
-                const rect = button.getBoundingClientRect();
-                applyFloatingIconPosition(button, rect.left, rect.top, { persist: true });
+                applyFloatingIconPosition(button, parseFloat(button.style.left), parseFloat(button.style.top), { persist: true });
             } else if (shouldOpenDirectorCard) {
                 scheduleDirectorCardOpen();
             } else if (!cancelled) {
@@ -3192,9 +3196,8 @@
             pointerId = event.pointerId;
             startX = event.clientX;
             startY = event.clientY;
-            const rect = button.getBoundingClientRect();
-            startLeft = rect.left;
-            startTop = rect.top;
+            startLeft = parseFloat(button.style.left) || 0;
+            startTop = parseFloat(button.style.top) || 0;
             moved = false;
             longPressed = false;
             window.clearTimeout(graphOpenTimer);
@@ -3374,7 +3377,13 @@
 
         if (!floatingResizeController) {
             floatingResizeController = new AbortController();
-            const reposition = () => ensureFloatingIconVisible(button);
+            const reposition = () => {
+                window.clearTimeout(floatingResizeTimer);
+                floatingResizeTimer = window.setTimeout(() => {
+                    floatingResizeTimer = null;
+                    ensureFloatingIconVisible(button);
+                }, 120);
+            };
             window.addEventListener('resize', reposition, { passive: true, signal: floatingResizeController.signal });
             window.visualViewport?.addEventListener?.('resize', reposition, { passive: true, signal: floatingResizeController.signal });
             window.visualViewport?.addEventListener?.('scroll', reposition, { passive: true, signal: floatingResizeController.signal });
@@ -3386,6 +3395,8 @@
     }
 
     function unmountFloatingIcon() {
+        window.clearTimeout(floatingResizeTimer);
+        floatingResizeTimer = null;
         floatingResizeController?.abort?.();
         floatingResizeController = null;
         window.clearInterval(floatingVisibilityTimer);
