@@ -413,14 +413,59 @@ test('mobile vector book editor matches the full-height segment editor layout', 
     assert.match(memoryCssSource, /\.yzm-vector-book-content-field \.yzm-record-textarea \{[^}]*flex: 1 1 0;[^}]*min-height: 0;[^}]*overflow: auto;/);
 });
 
-test('release metadata and update notice describe version 1.0.9', () => {
-    assert.equal(manifest.version, '1.0.9');
-    assert.match(indexSource, /const VERSION = '1\.0\.9';/);
+test('embedding form saves and restores independent ordinary and summary recall limits', () => {
+    const inputs = {
+        threshold: { value: '0.30' },
+        recallLimit: { value: '4' },
+        summaryRecallLimit: { value: '2' },
+        contextDepth: { value: '3' },
+    };
+    const ranges = [{ value: '0.30' }];
+    const fields = { embeddingProvider: 'siliconflow', embeddingModel: 'test-model', embeddingBaseUrl: '', embeddingApiKey: '' };
+    let persisted;
+    let chatSettings;
+    const sandbox = {
+        DEFAULT_VECTOR_SEARCH_SETTINGS: { threshold: 0.3, recallLimit: 6, summaryRecallLimit: 6, contextDepth: 2 },
+        YuzukiMemory: { EmbeddingClient: {
+            saveSettings: (settings) => { persisted = settings; return settings; },
+            normalizeSettings: (settings) => settings,
+        } },
+        root: {
+            querySelector: (selector) => selector.includes('yzm-api-range-number') ? inputs.threshold
+                : inputs[selector.match(/data-yzm-vector-search-setting="([^"]+)"/)?.[1]],
+            querySelectorAll: () => ranges,
+        },
+        getApiFieldValue: (_root, field) => fields[field],
+        setApiFieldValue: (_root, field, value) => { fields[field] = value; },
+        updateVectorSearchSettings: (settings) => { chatSettings = settings; },
+        syncEmbeddingProviderPlaceholders() {},
+        restored: { provider: 'gemini', recallLimit: 8, summaryRecallLimit: 5, threshold: 0.4, contextDepth: 1 },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        ...['clampNumber', 'normalizeNumberSetting', 'readEmbeddingApiForm', 'applyEmbeddingApiForm', 'saveEmbeddingSettingsFromForm'].map(getFunctionSource),
+        'saveEmbeddingSettingsFromForm(root, false);',
+        'applyEmbeddingApiForm(root, restored);',
+    ].join('\n'), sandbox);
+    assert.equal(persisted.recallLimit, 4);
+    assert.equal(persisted.summaryRecallLimit, 2);
+    assert.equal(chatSettings.summaryRecallLimit, 2);
+    assert.equal(inputs.recallLimit.value, '8');
+    assert.equal(inputs.summaryRecallLimit.value, '5');
+    inputs.summaryRecallLimit.value = '';
+    vm.runInContext('saveEmbeddingSettingsFromForm(root, false);', sandbox);
+    assert.equal(persisted.summaryRecallLimit, 6);
+});
+
+test('release metadata and update notice describe version 1.0.10', () => {
+    assert.equal(manifest.version, '1.0.10');
+    assert.match(indexSource, /const VERSION = '1\.0\.10';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /【优化】剧情规划界面支持编辑导演规划内容。/);
-    assert.match(noticeSource, /【优化】剧情导演与柚月の手机互通，将手机内的微信消息\/朋友圈\/通话app内的数据作为剧情规划的上下文背景资料。/);
-    assert.match(noticeSource, /【优化】优化插件界面渲染，减少酒馆美化主题对插件样式的影响。/);
+    assert.match(noticeSource, /【优化】优化向量化召回条数，总结与普通书籍独立设置。/);
+    assert.match(noticeSource, /【优化】优化向量化自动分段功能。/);
+    assert.match(noticeSource, /【优化】优化部分 CSS 渲染。/);
+    assert.doesNotMatch(noticeSource, /剧情规划界面支持编辑|剧情导演与柚月の手机互通/);
     assert.doesNotMatch(noticeSource, /兼容 MUV 额外模型解析/);
     assert.doesNotMatch(noticeSource, /修复快速取消正文生成后的剧情规划锁定/);
     assert.doesNotMatch(noticeSource, /修复会话向量书归属/);

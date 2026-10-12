@@ -54,6 +54,7 @@
             this.encodedVectorCache = new WeakMap();
             this.pendingEmbeddings = new Map();
             this.vectorizeQueues = new Map();
+            this.vectorJobs = new Map();
             this.vectorBackendState = 'unknown';
             this.localVectorStore = null;
             this.saveRequestedSerial = 0;
@@ -1445,7 +1446,8 @@
                     vectorizedCount: stats.done,
                     dimension: stats.dimension,
                     progress: stats.progress,
-                    status: stats.status,
+                    status: this.vectorJobs.get(id)?.running ? 'running'
+                        : this.vectorJobs.get(id)?.phase === 'failed' ? 'failed' : stats.status,
                     selected: id === this.selectedBookId,
                     active: activeBooks.includes(id),
                     kind: book.kind || '',
@@ -1932,7 +1934,7 @@
             const normalizedChunks = await this.normalizeChunks([text]);
             if (!normalizedChunks.length) throw new Error('分段内容不能为空');
             if (normalizedChunks.length !== 1) {
-                throw new Error(`单个分段不能超过 ${YuzukiMemory.EmbeddingClient?.inputTokenLimit || 8192} Token，请在整书编辑中拆分后保存`);
+                throw new Error(`单个分段不能超过约 ${YuzukiMemory.EmbeddingClient?.inputTokenBudget || 7600} Token 的安全预算，请在整书编辑中拆分后保存`);
             }
 
             const nextText = normalizedChunks[0];
@@ -1974,7 +1976,43 @@
             }
         }
 
+        getVectorJob(bookId = this.selectedBookId) {
+            const job = this.vectorJobs.get(bookId);
+            return job ? { ...job } : null;
+        }
+
+        reportVectorProgress(bookId, progressCallback, update = {}) {
+            const job = this.vectorJobs.get(bookId);
+            if (!job) return;
+            Object.assign(job, update);
+            const stats = this.getBookStats(this.getBook(bookId));
+            job.done = stats.done;
+            job.total = stats.total;
+            try {
+                progressCallback?.(stats.done, stats.total, { ...job });
+            } catch (error) {
+                console.warn('[yuzuki-Memory] Vector progress callback failed.', error);
+            }
+        }
+
         async runVectorizeBook(bookId, progressCallback = null, options = {}) {
+            this.vectorJobs.set(bookId, { running: true, phase: 'preparing', error: '', retries: 0 });
+            this.reportVectorProgress(bookId, progressCallback);
+            try {
+                const result = await this.performVectorizeBook(bookId, progressCallback, options);
+                this.reportVectorProgress(bookId, progressCallback, {
+                    running: false, phase: result.errors ? 'failed' : 'done', error: result.error || '',
+                });
+                return result;
+            } catch (error) {
+                this.reportVectorProgress(bookId, progressCallback, {
+                    running: false, phase: 'failed', error: String(error?.message || error),
+                });
+                throw error;
+            }
+        }
+
+        async performVectorizeBook(bookId, progressCallback = null, options = {}) {
             await this.whenReady();
             const book = this.library[bookId];
             if (!book) throw new Error('向量书不存在');
@@ -2083,6 +2121,7 @@
             let errors = 0;
             let firstError = '';
             let batchSize = VECTOR_BACKEND_BATCH_SIZE;
+            let retryAttempt = 0;
             let nextCheckpoint = 50;
             for (let cursor = 0; cursor < pending.length;) {
                 const batchStart = cursor;
@@ -2097,7 +2136,7 @@
                     cursor += 1;
                 }
                 try {
-                    progressCallback?.(Math.min(cursor, pending.length), pending.length);
+                    this.reportVectorProgress(bookId, progressCallback, { phase: 'requesting' });
                     const vectors = await YuzukiMemory.EmbeddingClient.embed(batch.map((item) => item.chunk));
                     const firstVector = vectors.find((vector) => this.isRuntimeVector(vector));
                     if (!backendInitialized) await initializeBackend(firstVector?.length || 0);
@@ -2125,6 +2164,8 @@
                     }
                     book.vectorized = book.chunks.map((_chunk, index) => savedHashes.has(vectorHashes[index]));
                     book.vectors = book.chunks.map(() => null);
+                    retryAttempt = 0;
+                    this.reportVectorProgress(bookId, progressCallback, { phase: 'requesting', retries: 0 });
                     if (success >= nextCheckpoint) {
                         book.updateTime = Date.now();
                         await this.saveLibrary();
@@ -2133,15 +2174,21 @@
                     await this.yieldToMainThread();
                 } catch (error) {
                     const message = String(error?.message || error || '');
-                    if (/429|rate|limit/i.test(message) && batchSize > 1) {
-                        batchSize = Math.max(1, Math.floor(batchSize / 2));
+                    const transient = error?.code === 'embedding_network_error'
+                        || error?.status === 429 || [500, 502, 503, 504].includes(error?.status);
+                    if (transient && retryAttempt < 2) {
+                        retryAttempt += 1;
+                        if (error?.status === 429) batchSize = Math.max(1, Math.floor(batchSize / 2));
                         cursor = batchStart;
-                        await new Promise((resolve) => setTimeout(resolve, 10000));
+                        this.reportVectorProgress(bookId, progressCallback, { phase: 'retrying', retries: retryAttempt });
+                        await new Promise((resolve) => window.setTimeout(resolve, retryAttempt * 1500));
                         continue;
                     }
-                    errors += batch.length;
+                    // 持续断连/限流或确定性错误时停止，保留已成功的索引供下次续传。
+                    errors += pending.length - batchStart;
                     if (!firstError) firstError = message || '向量化批次失败';
                     console.warn('[yuzuki-Memory] Vectorize batch failed.', error);
+                    break;
                 }
             }
             book.updateTime = Date.now();
@@ -2222,10 +2269,6 @@
             }
             const pendingUpdates = bookIds.map((bookId) => this.vectorizeQueues.get(String(bookId || ''))).filter(Boolean);
             if (pendingUpdates.length) await Promise.allSettled(pendingUpdates);
-            const targetCount = Math.max(1, Number.parseInt(settings.recallLimit, 10) || 6);
-            const recallCount = rerankSettings.enabled ? targetCount * 2 : targetCount;
-            const initialThreshold = rerankSettings.enabled ? 0.1 : settings.threshold;
-
             const queryVector = await this.getEmbedding(sourceQuery, { keepEnd: true });
             const queryDimension = this.isRuntimeVector(queryVector) ? queryVector.length : 0;
             if (!queryDimension) {
@@ -2267,6 +2310,32 @@
                     emptyBooks,
                 });
             }
+            // Split before candidate truncation and reranking so each source keeps
+            // its own quota. All groups reuse this request's query embedding.
+            const bookGroups = new Map();
+            matchedBookIds.forEach((id) => {
+                const kind = this.getBookKind(id);
+                if (!bookGroups.has(kind)) bookGroups.set(kind, []);
+                bookGroups.get(kind).push(id);
+            });
+            const groupResults = await Promise.all([...bookGroups].map(([kind, ids]) => {
+                const limit = kind === BOOK_KIND_SUMMARY ? (settings.summaryRecallLimit ?? settings.recallLimit) : settings.recallLimit;
+                return this.searchBookGroup(ids, sourceQuery, queryVector, queryScope, settings, rerankSettings, limit, kind);
+            }));
+            const results = groupResults.flat();
+            const seen = new Set();
+            return results.sort((a, b) => b.score - a.score).filter((item) => {
+                if (seen.has(item.text)) return false;
+                seen.add(item.text);
+                return true;
+            });
+        }
+
+        async searchBookGroup(matchedBookIds, sourceQuery, queryVector, queryScope, settings, rerankSettings, limit, kind) {
+            const targetCount = Math.max(1, Math.min(999, Number.parseInt(limit, 10) || 6));
+            const recallCount = rerankSettings.enabled ? targetCount * 2 : targetCount;
+            const initialThreshold = rerankSettings.enabled ? 0.1 : settings.threshold;
+            const queryDimension = queryVector.length;
             let storageMode = this.vectorBackendState === 'unavailable' ? 'local' : 'backend';
             let results = [];
             if (storageMode === 'local') {
@@ -2348,7 +2417,7 @@
                 .slice(0, recallCount);
             console.info('[yuzuki-Memory Vector] 向量初筛完成', {
                 books: matchedBookIds.length,
-                skippedBooks: bookIds.length - matchedBookIds.length,
+                kind: kind || 'ordinary',
                 queryDimension,
                 candidates: candidates.length,
                 rawMatches: results.length,
@@ -2505,12 +2574,17 @@
         }
 
         async importLibrary(fileOrText) {
-            const text = typeof fileOrText === 'string' ? fileOrText : await this.readFile(fileOrText);
+            const text = String(typeof fileOrText === 'string' ? fileOrText : await this.readFile(fileOrText)).trim();
             if (this.isLegacyLibraryBackup(text)) {
                 return this.importLegacyLibrary(text);
             }
             const jsonText = text.startsWith(BACKUP_HEADER) ? text.slice(BACKUP_HEADER.length).trim() : text.trim();
-            const parsed = JSON.parse(jsonText);
+            let parsed;
+            try {
+                parsed = JSON.parse(jsonText);
+            } catch (_error) {
+                throw new Error('此入口用于导入插件导出的书籍备份。普通小说 TXT 请使用“更多 → 导入新书（TXT）”；如果选择的确实是备份，请检查文件是否完整。');
+            }
             const nextLibrary = this.importBooksAsNew(parsed.library || parsed);
             Object.assign(this.library, nextLibrary);
             const importedIds = Object.keys(nextLibrary);

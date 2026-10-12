@@ -1608,6 +1608,7 @@
                 contextDepth: query.depth,
                 threshold: settings.threshold,
                 recallLimit: settings.recallLimit,
+                summaryRecallLimit: settings.summaryRecallLimit,
                 rerank: rerankSettings.enabled === true,
             });
             const timeoutError = new Error('向量检索超时');

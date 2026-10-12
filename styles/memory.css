@@ -97,6 +97,26 @@
     --yzm-todo-low-border: rgba(131, 207, 150, 0.28);
 }
 
+/* Font Awesome glyphs must use the plugin's icon/state color, not host-theme
+   pseudo-element paint. Keep font/content/transform intact for glyphs/spinners. */
+:is(#yzm-memory-root, #yzm-memory-global-modal-root) :is(.fa, .fas, .far, .fab, .fa-solid, .fa-regular, .fa-brands),
+:is(#yzm-memory-root, #yzm-memory-global-modal-root) :is(.fa, .fas, .far, .fab, .fa-solid, .fa-regular, .fa-brands)::before,
+:is(#yzm-memory-root, #yzm-memory-global-modal-root) :is(.fa, .fas, .far, .fab, .fa-solid, .fa-regular, .fa-brands)::after {
+    -webkit-text-fill-color: currentColor !important;
+    -webkit-text-stroke: 0 !important;
+    text-shadow: none !important;
+    filter: none !important;
+    mix-blend-mode: normal !important;
+}
+
+:is(#yzm-memory-root, #yzm-memory-global-modal-root) :is(.fa, .fas, .far, .fab, .fa-solid, .fa-regular, .fa-brands)::before,
+:is(#yzm-memory-root, #yzm-memory-global-modal-root) :is(.fa, .fas, .far, .fab, .fa-solid, .fa-regular, .fa-brands)::after {
+    color: inherit !important;
+    background: none !important;
+    box-shadow: none !important;
+    opacity: 1 !important;
+}
+
 #yzm-memory-root .yzm-shell[hidden] {
     display: none !important;
 }
@@ -6350,6 +6370,37 @@
     color: var(--yzm-icon);
 }
 
+#yzm-memory-root .yzm-auto-summary-reset {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 26px;
+    width: 26px;
+    min-width: 26px;
+    height: 26px;
+    min-height: 26px;
+    margin: 0;
+    padding: 0;
+    color: var(--yzm-icon) !important;
+    background: transparent !important;
+    border: 0 !important;
+    border-radius: 6px;
+    box-shadow: none !important;
+    box-sizing: border-box;
+    font-size: 12px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+#yzm-memory-root .yzm-auto-summary-reset:hover {
+    background: var(--yzm-hover) !important;
+}
+
+#yzm-memory-root .yzm-auto-summary-reset:focus-visible {
+    outline: 2px solid var(--yzm-selected-color);
+    outline-offset: 2px;
+}
+
 #yzm-memory-root .yzm-auto-summary-control-row {
     display: flex;
     align-items: center;
@@ -6518,20 +6569,6 @@
     font-size: 11px;
     font-weight: 600;
     line-height: 1.4;
-}
-
-#yzm-memory-root .yzm-auto-summary-footer {
-    display: grid;
-    grid-template-columns: auto auto;
-    align-items: center;
-    gap: 10px;
-    min-width: 0;
-}
-
-#yzm-memory-root .yzm-auto-summary-footer .yzm-api-button {
-    min-height: 34px;
-    padding: 0 16px;
-    font-size: 12px;
 }
 
 #yzm-memory-root .yzm-plugin-config-hint {
@@ -10084,6 +10121,15 @@
         border-radius: 12px;
     }
 
+    #yzm-memory-root .yzm-task-result-body > .yzm-task-result-preview,
+    #yzm-memory-global-modal-root .yzm-task-result-body > .yzm-task-result-preview {
+        display: block;
+        height: 100%;
+        min-height: 0;
+        max-height: none;
+        resize: none;
+    }
+
     #yzm-memory-root .yzm-task-result-body > .yzm-task-result-compare,
     #yzm-memory-global-modal-root .yzm-task-result-body > .yzm-task-result-compare {
         grid-template-rows: repeat(2, minmax(280px, 1fr));
@@ -11967,18 +12013,6 @@
 
     #yzm-memory-root .yzm-auto-summary-vector-button,
     #yzm-memory-root .yzm-auto-summary-worldbook-button {
-        width: 100%;
-        min-height: 28px;
-        padding: 0 8px;
-        font-size: 11px;
-    }
-
-    #yzm-memory-root .yzm-auto-summary-footer {
-        grid-template-columns: 1fr;
-        gap: 6px;
-    }
-
-    #yzm-memory-root .yzm-auto-summary-footer .yzm-api-button {
         width: 100%;
         min-height: 28px;
         padding: 0 8px;

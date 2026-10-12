@@ -933,6 +933,7 @@
                 queryLength: query.length,
                 threshold: settings.threshold,
                 recallLimit: settings.recallLimit,
+                summaryRecallLimit: settings.summaryRecallLimit,
                 rerank: rerankSettings.enabled === true,
             });
             const characterBookIds = typeof store.getActiveBooksByKind === 'function'

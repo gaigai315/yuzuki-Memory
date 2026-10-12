@@ -187,6 +187,7 @@
     const DEFAULT_VECTOR_SEARCH_SETTINGS = {
         threshold: 0.3,
         recallLimit: 6,
+        summaryRecallLimit: 6,
         contextDepth: 2,
     };
     const DEFAULT_PLUGIN_SETTINGS = {
@@ -788,9 +789,11 @@
         state.settings = state.settings && typeof state.settings === 'object' ? state.settings : {};
         state.settings.vectorSearch = state.settings.vectorSearch && typeof state.settings.vectorSearch === 'object' ? state.settings.vectorSearch : {};
         const settings = state.settings.vectorSearch;
+        const recallLimit = Math.round(normalizeNumberSetting(settings.recallLimit, 1, 999, DEFAULT_VECTOR_SEARCH_SETTINGS.recallLimit, 0));
         const normalized = {
             threshold: normalizeNumberSetting(settings.threshold, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold, 2),
-            recallLimit: Math.round(normalizeNumberSetting(settings.recallLimit, 1, 999, DEFAULT_VECTOR_SEARCH_SETTINGS.recallLimit, 0)),
+            recallLimit,
+            summaryRecallLimit: Math.round(normalizeNumberSetting(settings.summaryRecallLimit, 1, 999, recallLimit, 0)),
             contextDepth: Math.round(normalizeNumberSetting(settings.contextDepth, 0, 99, DEFAULT_VECTOR_SEARCH_SETTINGS.contextDepth, 0)),
         };
         state.settings.vectorSearch = normalized;
@@ -5194,7 +5197,7 @@
         });
 
         const vectorizeButton = createIconButton('向量化', 'fa-solid fa-wand-magic-sparkles', 'yzm-record-action-delete yzm-record-action-muted');
-        vectorizeButton.disabled = false;
+        vectorizeButton.disabled = store.vectorizeQueues?.has(bookId) === true;
         vectorizeButton.addEventListener('click', async (event) => {
             event.preventDefault();
             event.stopPropagation();
@@ -5755,7 +5758,58 @@
             createVectorCompletionCard(book),
             createVectorSegmentPanel(book)
         );
+        updateVectorProgressView(view);
         return view;
+    }
+
+    function updateVectorProgressView(root) {
+        const store = getVectorStore();
+        const book = store?.getBook?.();
+        if (!book) return;
+        const stats = store.getBookStats(book);
+        const job = store.getVectorJob?.();
+        const setText = (selector, value) => {
+            const node = root.querySelector(selector);
+            if (node && node.textContent !== String(value)) node.textContent = String(value);
+        };
+        setText('.yzm-vector-detail-title-text', job?.running
+            ? `${book.name}（${stats.done}/${stats.total}）` : book.name);
+        setText('[data-yzm-vector-metric="维度"] strong', stats.dimension || '未生成');
+        setText('[data-yzm-vector-metric="进度"] strong', `${stats.progress}%`);
+        const fill = root.querySelector('.yzm-vector-metric-bar > span');
+        if (fill) fill.style.width = `${stats.progress}%`;
+        setText('[data-yzm-vector-stat="总分段"] strong', stats.total.toLocaleString());
+        setText('[data-yzm-vector-stat="已向量化"] strong', stats.done.toLocaleString());
+        setText('[data-yzm-vector-stat="待处理"] strong', Math.max(0, stats.total - stats.done).toLocaleString());
+        setText('[data-yzm-vector-stat="更新时间"] strong', formatVectorDate(book.updateTime));
+        const complete = stats.total > 0 && stats.done >= stats.total;
+        const label = job?.running ? (job.phase === 'retrying' ? '连接重试中' : '正在向量化')
+            : job?.phase === 'failed' ? '向量化已停止' : complete ? '向量化已完成' : '等待向量化';
+        const title = root.querySelector('.yzm-vector-complete-title');
+        if (title?.lastChild) title.lastChild.textContent = label;
+        setText('.yzm-vector-complete-desc', job?.running
+            ? job.phase === 'retrying' ? `请求暂时失败，正在重试（${job.retries}/2）；已完成分段保留。`
+                : `已完成 ${stats.done}/${stats.total} 段，正在等待本批结果。`
+            : job?.phase === 'failed' ? `已完成 ${stats.done}/${stats.total} 段。${job.error} 修复后可再次向量化，继续未完成分段。`
+                : complete ? '当前书籍所有分段已建立索引。' : '当前书籍仍有分段未建立索引。');
+        root.querySelectorAll('[data-yzm-vector-segment-index]').forEach((row) => {
+            const status = row.querySelector('.yzm-vector-status');
+            const done = book.vectorized?.[Number(row.dataset.yzmVectorSegmentIndex)] === true;
+            if (status) {
+                status.className = `yzm-vector-status yzm-vector-status-${done ? 'done' : 'pending'}`;
+                status.textContent = done ? '已完成' : '待向量化';
+            }
+        });
+        root.querySelectorAll('[data-yzm-vector-book-id]').forEach((row) => {
+            const id = row.dataset.yzmVectorBookId;
+            const rowBook = store.getBook(id);
+            const status = row.querySelector('.yzm-vector-status');
+            if (!rowBook || !status) return;
+            const rowJob = store.getVectorJob?.(id);
+            const state = rowJob?.running ? 'running' : rowJob?.phase === 'failed' ? 'failed' : store.getBookStats(rowBook).status;
+            status.className = `yzm-vector-status yzm-vector-status-${state}`;
+            status.textContent = getVectorStatusText(state);
+        });
     }
 
     function createVectorEmptyDetail() {
@@ -5818,6 +5872,7 @@
     function createVectorMetric(label, value, withBar = false, progress = 0) {
         const metric = document.createElement('div');
         metric.className = 'yzm-vector-metric';
+        metric.dataset.yzmVectorMetric = label;
         const labelNode = document.createElement('span');
         labelNode.textContent = label;
         const valueNode = document.createElement('strong');
@@ -5846,7 +5901,7 @@
         menu.append(
             createVectorActionButton('new-book', '新建空白书', 'fa-solid fa-plus'),
             createVectorActionButton('import-book', '导入新书（TXT）', 'fa-solid fa-file-import'),
-            createVectorActionButton('import-backup', '导入书籍', 'fa-solid fa-box-archive'),
+            createVectorActionButton('import-backup', '导入书籍备份', 'fa-solid fa-box-archive'),
             exportCurrentButton,
             createVectorActionButton('export-backup', '导出全部书籍备份', 'fa-solid fa-upload'),
             createVectorActionButton('clear-all', '清空全部书籍', 'fa-solid fa-trash-can', true)
@@ -5895,6 +5950,7 @@
     function createVectorStat(label, value) {
         const item = document.createElement('div');
         item.className = 'yzm-vector-stat';
+        item.dataset.yzmVectorStat = label;
         const labelNode = document.createElement('span');
         labelNode.textContent = label;
         const valueNode = document.createElement('strong');
@@ -6514,20 +6570,21 @@
         if (action === 'vectorize-current-book') {
             const book = store.getBook();
             if (!book) return;
+            const bookId = store.selectedBookId;
+            if (store.vectorizeQueues?.has(bookId)) return;
             try {
                 const stats = store.getBookStats(book);
                 const force = stats.total > 0 && stats.done >= stats.total;
-                const result = await store.vectorizeBook(store.selectedBookId, (done, total) => {
-                    const title = root.querySelector('.yzm-vector-detail-title-text');
-                    if (title) title.textContent = `${book.name}（向量化 ${done}/${total}）`;
+                const result = await store.vectorizeBook(bookId, () => {
+                    updateVectorProgressView(root);
                 }, { force });
-                refreshVectorAfterAction(root);
+                updateVectorProgressView(root);
                 const actionText = force ? '重新向量化完成' : '向量化完成';
                 const errorDetail = result.error ? `\n原因：${result.error}` : '';
-                window.alert(result.errors ? `${actionText}：成功 ${result.count} 条，失败 ${result.errors} 条。${errorDetail}` : `${actionText}：完成 ${result.count} 条。`);
+                window.alert(result.errors ? `向量化已停止：本次成功 ${result.count} 条，仍有 ${result.errors} 条未完成。${errorDetail}` : `${actionText}：完成 ${result.count} 条。`);
             } catch (error) {
                 window.alert(String(error?.message || error || '向量化失败'));
-                refreshVectorAfterAction(root);
+                updateVectorProgressView(root);
             }
             return;
         }
@@ -10508,9 +10565,11 @@
             createApiCard('检索参数', 'fa-solid fa-sliders', [
                 createApiRangeField('相似度阈值', searchSettings.threshold),
                 createApiGrid([
-                    createApiField('最大召回条数', createVectorSearchNumberInput('recallLimit', searchSettings.recallLimit, 1, 999)),
+                    createApiField('普通书籍召回条数', createVectorSearchNumberInput('recallLimit', searchSettings.recallLimit, 1, 999)),
+                    createApiField('总结召回条数', createVectorSearchNumberInput('summaryRecallLimit', searchSettings.summaryRecallLimit, 1, 999)),
                     createApiField('检索上下文深度', createVectorSearchNumberInput('contextDepth', searchSettings.contextDepth, 0, 99)),
                 ]),
+                createApiTitleNote('总结与普通书籍分别按条数上限召回，相关内容不足时不会补足。'),
                 createApiActions([
                     ['保存设置', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveEmbeddingSettings'],
                 ]),
@@ -10814,22 +10873,26 @@
     function saveVectorSearchSettingsFromForm(root) {
         const thresholdInput = root.querySelector('.yzm-api-view .yzm-api-range-number');
         const recallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="recallLimit"]');
+        const summaryRecallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="summaryRecallLimit"]');
         const depthInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="contextDepth"]');
         const threshold = Number(clampNumber(thresholdInput?.value, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold).toFixed(2));
         const recallLimit = Math.round(clampNumber(recallInput?.value, 1, 999, DEFAULT_VECTOR_SEARCH_SETTINGS.recallLimit));
         const contextDepth = Math.round(clampNumber(depthInput?.value, 0, 99, DEFAULT_VECTOR_SEARCH_SETTINGS.contextDepth));
-        updateVectorSearchSettings({ threshold, recallLimit, contextDepth });
+        const summaryRecallLimit = Math.round(normalizeNumberSetting(summaryRecallInput?.value, 1, 999, DEFAULT_VECTOR_SEARCH_SETTINGS.summaryRecallLimit));
+        updateVectorSearchSettings({ threshold, recallLimit, summaryRecallLimit, contextDepth });
         if (thresholdInput) thresholdInput.value = threshold.toFixed(2);
         root.querySelectorAll('.yzm-api-view .yzm-api-range').forEach((range) => {
             range.value = threshold.toFixed(2);
         });
         if (recallInput) recallInput.value = String(recallLimit);
+        if (summaryRecallInput) summaryRecallInput.value = String(summaryRecallLimit);
         if (depthInput) depthInput.value = String(contextDepth);
     }
 
     function readEmbeddingApiForm(root) {
         const thresholdInput = root.querySelector('.yzm-api-view .yzm-api-range-number');
         const recallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="recallLimit"]');
+        const summaryRecallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="summaryRecallLimit"]');
         const depthInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="contextDepth"]');
         return {
             enabled: true,
@@ -10839,6 +10902,7 @@
             model: getApiFieldValue(root, 'embeddingModel'),
             threshold: Number(clampNumber(thresholdInput?.value, 0, 1, DEFAULT_VECTOR_SEARCH_SETTINGS.threshold).toFixed(2)),
             recallLimit: Math.round(clampNumber(recallInput?.value, 1, 999, DEFAULT_VECTOR_SEARCH_SETTINGS.recallLimit)),
+            summaryRecallLimit: Math.round(normalizeNumberSetting(summaryRecallInput?.value, 1, 999, DEFAULT_VECTOR_SEARCH_SETTINGS.summaryRecallLimit)),
             contextDepth: Math.round(clampNumber(depthInput?.value, 0, 99, DEFAULT_VECTOR_SEARCH_SETTINGS.contextDepth)),
         };
     }
@@ -10856,8 +10920,10 @@
             range.value = threshold.toFixed(2);
         });
         const recallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="recallLimit"]');
+        const summaryRecallInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="summaryRecallLimit"]');
         const depthInput = root.querySelector('.yzm-api-view [data-yzm-vector-search-setting="contextDepth"]');
         if (recallInput) recallInput.value = String(Math.round(normalized.recallLimit));
+        if (summaryRecallInput) summaryRecallInput.value = String(Math.round(normalized.summaryRecallLimit));
         if (depthInput) depthInput.value = String(Math.round(normalized.contextDepth));
         syncEmbeddingProviderPlaceholders(root);
     }
@@ -10867,6 +10933,7 @@
         updateVectorSearchSettings({
             threshold: settings.threshold,
             recallLimit: settings.recallLimit,
+            summaryRecallLimit: settings.summaryRecallLimit,
             contextDepth: settings.contextDepth,
         });
         const saved = YuzukiMemory.EmbeddingClient?.saveSettings?.(settings);
@@ -12720,8 +12787,7 @@
             createAutoSummaryRulesCard(settings),
             modeGrid,
             createAutoSummaryVectorCard(settings),
-            createAutoSummaryContextCard(settings),
-            createAutoSummaryFooter()
+            createAutoSummaryContextCard(settings)
         );
         return panel;
     }
@@ -12733,6 +12799,13 @@
         const titleNode = document.createElement('div');
         titleNode.className = 'yzm-auto-summary-card-title';
         titleNode.append(createIconNode(iconClassName, ''), document.createTextNode(title));
+        if (enabledKey === 'summaryEnabled') {
+            const reset = createButton('', 'yzm-auto-summary-reset');
+            reset.title = '恢复自动总结默认设置';
+            reset.setAttribute('aria-label', reset.title);
+            reset.appendChild(createIconNode('fa-solid fa-rotate-left', ''));
+            titleNode.appendChild(reset);
+        }
 
         const row = document.createElement('div');
         row.className = 'yzm-auto-summary-control-row';
@@ -12843,16 +12916,6 @@
         return card;
     }
 
-    function createAutoSummaryFooter() {
-        const footer = document.createElement('div');
-        footer.className = 'yzm-auto-summary-footer';
-        footer.append(
-            createIconButton('保存配置', 'fa-regular fa-floppy-disk', 'yzm-api-button yzm-api-button-primary yzm-auto-summary-save'),
-            createIconButton('恢复默认', 'fa-solid fa-rotate-left', 'yzm-api-button yzm-auto-summary-reset')
-        );
-        return footer;
-    }
-
     function createAutoSummaryNumberPhrase(prefix, settingKey, value, suffix) {
         const wrap = document.createElement('div');
         wrap.className = 'yzm-auto-summary-number-phrase';
@@ -12899,28 +12962,6 @@
         const fallback = DEFAULT_AUTO_SUMMARY_SETTINGS[key] ?? min;
         const value = Math.round(normalizeNumberSetting(input.value, min, 9999, fallback, 0));
         input.value = String(value);
-    }
-
-    function saveAutoSummarySettingsFromForm(root) {
-        const nextSettings = getAutoSummarySettings();
-        root.querySelectorAll('.yzm-config-view [data-yzm-auto-summary-setting]').forEach((node) => {
-            const key = node.dataset.yzmAutoSummarySetting;
-            if (!(key in nextSettings)) return;
-            if (node.classList.contains('yzm-config-switch')) {
-                nextSettings[key] = node.classList.contains('yzm-config-switch-on');
-                return;
-            }
-            if (node.classList.contains('yzm-auto-summary-check')) {
-                nextSettings[key] = node.classList.contains('yzm-auto-summary-check-on');
-                return;
-            }
-            if (node.classList.contains('yzm-auto-summary-number-input')) {
-                normalizeAutoSummaryNumberInput(node);
-                nextSettings[key] = Number(node.value);
-            }
-        });
-        const saved = saveAutoSummarySettings(nextSettings);
-        if (saved.hideSummaryFloors) updatePluginSetting('hideFloorsEnabled', false);
     }
 
     async function syncAutoSummaryVectorBook(root, button = null) {
@@ -15065,9 +15106,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】剧情规划界面支持编辑导演规划内容。',
-            '【优化】剧情导演与柚月の手机互通，将手机内的微信消息/朋友圈/通话app内的数据作为剧情规划的上下文背景资料。',
-            '【优化】优化插件界面渲染，减少酒馆美化主题对插件样式的影响。',
+            '【优化】优化向量化召回条数，总结与普通书籍独立设置。',
+            '【优化】优化向量化自动分段功能。',
+            '【优化】优化部分 CSS 渲染。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -17625,7 +17666,9 @@
                     event.stopPropagation();
                     const delta = Number(pager.dataset.yzmVectorPageDelta) || 0;
                     if (pager.dataset.yzmVectorPage === 'segment') vectorUiState.segmentPage += delta;
-                    renderVectorWorkspace(root);
+                    const book = getVectorStore()?.getBook?.();
+                    if (book) root.querySelector('.yzm-vector-segment-panel')?.replaceWith(createVectorSegmentPanel(book));
+                    updateVectorProgressView(root);
                 }
             });
 
@@ -18247,7 +18290,6 @@
                 const tagDiagnosticButton = target?.closest?.('.yzm-tag-diagnostic-button');
                 const fillModeButton = target?.closest?.('[data-yzm-fill-mode]');
                 const configSwitch = target?.closest?.('.yzm-config-switch');
-                const autoSummarySave = target?.closest?.('.yzm-auto-summary-save');
                 const autoSummaryReset = target?.closest?.('.yzm-auto-summary-reset');
                 const autoSummaryCheck = target?.closest?.('.yzm-auto-summary-check');
                 const autoSummaryVectorButton = target?.closest?.('.yzm-auto-summary-vector-button');
@@ -18341,11 +18383,6 @@
 
                 if (autoSummaryWorldbookButton) {
                     void syncAutoSummaryWorldbook(autoSummaryWorldbookButton);
-                    return;
-                }
-
-                if (autoSummarySave) {
-                    saveAutoSummarySettingsFromForm(root);
                     return;
                 }
 
