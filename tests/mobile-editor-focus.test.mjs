@@ -40,6 +40,25 @@ function getFunctionSource(name) {
     assert.fail(`${name} should have a complete function body`);
 }
 
+test('primary search remains applied after a record-list rerender', () => {
+    const matchingItem = { textContent: '江晚简藏三角梅花瓣', hidden: false };
+    const unrelatedItem = { textContent: '潮汐法式餐厅', hidden: false };
+    const divider = { hidden: false };
+    const root = {
+        querySelector: (selector) => selector === '.yzm-primary-search .yzm-search-input' ? { value: '三角梅' } : null,
+        querySelectorAll: (selector) => selector.includes('yzm-primary-hidden-divider')
+            ? [divider]
+            : [matchingItem, unrelatedItem],
+    };
+    const sandbox = { root };
+    vm.createContext(sandbox);
+    vm.runInContext(`${getFunctionSource('applyPrimaryListSearch')}\napplyPrimaryListSearch(root);`, sandbox);
+
+    assert.equal(matchingItem.hidden, false);
+    assert.equal(unrelatedItem.hidden, true);
+    assert.equal(divider.hidden, true);
+});
+
 function runFocusHelper(isMobile, options = {}) {
     const calls = [];
     const sandbox = {
@@ -457,9 +476,9 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.0.10', () => {
-    assert.equal(manifest.version, '1.0.10');
-    assert.match(indexSource, /const VERSION = '1\.0\.10';/);
+test('release metadata and update notice describe version 1.1.0', () => {
+    assert.equal(manifest.version, '1.1.0');
+    assert.match(indexSource, /const VERSION = '1\.1\.0';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
     assert.match(noticeSource, /【优化】优化向量化召回条数，总结与普通书籍独立设置。/);

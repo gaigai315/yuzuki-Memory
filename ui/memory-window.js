@@ -5299,6 +5299,17 @@
         list.scrollTop = scrollTop;
     }
 
+    function applyPrimaryListSearch(root) {
+        const query = String(root?.querySelector?.('.yzm-primary-search .yzm-search-input')?.value || '').trim().toLowerCase();
+        root?.querySelectorAll?.('.yzm-primary-list .yzm-primary-item').forEach((item) => {
+            const name = item.textContent?.toLowerCase() || '';
+            item.hidden = !!query && !name.includes(query);
+        });
+        root?.querySelectorAll?.('.yzm-primary-list .yzm-primary-hidden-divider').forEach((divider) => {
+            divider.hidden = !!query;
+        });
+    }
+
     function renderPrimaryList(root) {
         const list = root.querySelector('.yzm-primary-list');
         const table = getActiveTable();
@@ -5344,6 +5355,7 @@
             nodes.push(item);
         });
         replacePrimaryListChildren(list, nodes);
+        applyPrimaryListSearch(root);
     }
 
     function renderSummaryPrimaryList(list, table, activeRecordId) {
@@ -18697,11 +18709,7 @@
                     bindPanelInteractions(root);
                     return;
                 }
-                const query = primarySearchInput.value.trim().toLowerCase();
-                root.querySelectorAll('.yzm-primary-item').forEach((item) => {
-                    const name = item.textContent?.toLowerCase() || '';
-                    item.hidden = !!query && !name.includes(query);
-                });
+                applyPrimaryListSearch(root);
             });
             primarySearchInput.addEventListener('keydown', (event) => {
                 if (event.key !== 'Enter' || event.isComposing) return;
