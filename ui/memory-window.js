@@ -2902,6 +2902,7 @@
         const editor = document.createElement('textarea');
         editor.className = 'yzm-story-director-card-editor';
         editor.setAttribute('aria-label', '编辑导演卡内容');
+        editor.placeholder = '清空内容后保存，可删除当前导演卡';
         editor.spellcheck = false;
         editor.hidden = true;
 
@@ -2915,7 +2916,7 @@
         const clearButton = document.createElement('button');
         clearButton.type = 'button';
         clearButton.className = 'yzm-story-director-card-clear';
-        clearButton.title = '清理待用导演卡';
+        clearButton.title = '删除当前导演卡';
         clearButton.setAttribute('aria-label', clearButton.title);
         clearButton.innerHTML = '<i class="fa-regular fa-trash-can" aria-hidden="true"></i>';
 
@@ -2947,8 +2948,7 @@
         actionBar.append(clearButton, replanButton, editButton, cancelEditButton, saveEditButton);
 
         const syncEditSaveButton = () => {
-            saveEditButton.disabled = !String(editor.value || '').trim()
-                || YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true;
+            saveEditButton.disabled = YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true;
         };
 
         const setEditing = (editing) => {
@@ -2969,7 +2969,7 @@
         };
 
         const syncClearButton = (latest, latestContent) => {
-            const canClear = latest?.origin === 'pending'
+            const canClear = ['pending', 'bound'].includes(latest?.origin)
                 && !!latestContent
                 && YuzukiMemory.StoryDirectorRuntime?.isRunning?.() !== true;
             clearButton.dataset.yzmAvailable = canClear ? 'true' : 'false';
@@ -3009,16 +3009,11 @@
         clearButton.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
-            const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
-            if (latest?.origin !== 'pending') {
-                refreshCardContent();
-                return;
-            }
-            const cleared = YuzukiMemory.StoryDirectorRuntime?.discardPendingCard?.('idle') === true;
+            const result = YuzukiMemory.StoryDirectorRuntime?.updateCurrentDirectorCard?.('');
             refreshCardContent();
             showTaskToast(
-                cleared ? '已清理待用导演卡，下次发送不会注入' : '当前没有可清理的待用导演卡',
-                cleared ? 'success' : 'warning',
+                result?.success ? '导演卡已删除，后续生成不再注入此卡' : String(result?.error || '导演卡删除失败。'),
+                result?.success ? 'success' : 'warning',
             );
         }, { signal: abortController.signal });
         editButton.addEventListener('click', (event) => {
@@ -3048,7 +3043,7 @@
                 return;
             }
             refreshCardContent();
-            showTaskToast('导演卡已更新', 'success');
+            showTaskToast(result.deleted ? '导演卡已删除，后续生成不再注入此卡' : '导演卡已更新', 'success');
         }, { signal: abortController.signal });
         replanButton.addEventListener('click', async (event) => {
             event.preventDefault();

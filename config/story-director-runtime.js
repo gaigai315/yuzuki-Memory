@@ -268,7 +268,8 @@
     }
 
     function buildUserAnchor(message, index, sessionId) {
-        if (!isUserMessage(message) || isHiddenDialogueMessage(message) || isPluginMessage(message)) return null;
+        // An anchor identifies the turn; history visibility must not invalidate it.
+        if (!isUserMessage(message) || isPluginMessage(message)) return null;
         const text = getMessageText(message);
         if (!text.trim()) return null;
         const swipeId = Math.max(0, Math.round(Number(message?.swipe_id) || 0));
@@ -1526,7 +1527,7 @@
         return String(filtered || '').trim();
     }
 
-    function collectVisibleChatMessages() {
+    function collectVisibleChatMessages(planningSource = null) {
         const context = getContext() || {};
         const chat = Array.isArray(context.chat) ? context.chat : [];
         const userName = String(context.name1 || context.userName || context.playerName || 'User');
@@ -1534,7 +1535,14 @@
         const charName = String(character?.name || context.name2 || context.characterName || context.name || 'Character');
         const messages = [];
         chat.forEach((message, index) => {
-            if (!isDialogueMessage(message) || isPluginMessage(message) || isHiddenDialogueMessage(message)) return;
+            if (!isDialogueMessage(message) || isPluginMessage(message)) return;
+            // A manual plan must see the current user action even after rolling back
+            // into hidden history. Older hidden messages remain excluded.
+            const currentUserAction = planningSource?.role === 'user'
+                && index === getSourceIndex(planningSource)
+                && isUserMessage(message)
+                && sourceIsLatestDialogue(planningSource);
+            if (isHiddenDialogueMessage(message) && !currentUserAction) return;
             const content = filterDirectorChatContent(getMessageText(message));
             if (!content) return;
             const user = isUserMessage(message);
@@ -2011,7 +2019,7 @@
         try {
             await waitForDirectorWork(() => YuzukiMemory.readyPromise, controller.signal);
             assertActive();
-            const visibleChat = collectVisibleChatMessages();
+            const visibleChat = collectVisibleChatMessages(source);
             const latestAssistantSource = findLatestVisibleAssistantAnchor(visibleChat, sessionId);
             let ledger = reconcileDirectorLedger(previousDirector.ledger);
             const replaceLatestAssistantRecord = options.replaceLatestAssistantRecord === true
@@ -2454,9 +2462,6 @@
             return { success: false, error: '剧情导演正在运行，请等待规划完成后再编辑。' };
         }
         const normalizedContent = unwrapDirectorCard(content);
-        if (!normalizedContent) {
-            return { success: false, error: '导演卡内容不能为空；若本轮不需要，请使用删除按钮。' };
-        }
         const current = getCurrentDirectorCard();
         if (!current || !['pending', 'bound'].includes(current.origin)) {
             return { success: false, error: '当前没有可编辑的导演卡。' };
@@ -2465,6 +2470,23 @@
         const state = loadState(sessionId);
         const director = state?.storyDirector;
         if (!state || !director) return { success: false, error: '当前会话的导演卡状态不可用。' };
+
+        // Blank saves and the delete button share the same persisted removal path.
+        if (!normalizedContent) {
+            const clearPending = current.origin === 'pending' || pendingCardTargetsUser(director, current.source);
+            const user = current.source?.role === 'user' ? current.source : null;
+            const saved = saveDirectorState(sessionId, {
+                ...director,
+                messageCards: normalizeMessageCards(director.messageCards)
+                    .filter((entry) => !user || !userAnchorsMatch(entry.user, user)),
+                ...(clearPending ? { pendingCard: '', source: null } : {}),
+                status: 'idle',
+                lastError: '',
+            }, 'story-director-delete-card');
+            return saved
+                ? { success: true, deleted: true, content: '', origin: current.origin }
+                : { success: false, error: '导演卡删除失败。' };
+        }
 
         const card = `<下轮导演卡>\n${normalizedContent}\n</下轮导演卡>`;
         const nextDirector = {

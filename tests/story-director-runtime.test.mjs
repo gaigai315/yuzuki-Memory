@@ -820,10 +820,6 @@ test('editing a pending director card changes the stored card and the next norma
     const runtime = memory.StoryDirectorRuntime;
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
 
-    const empty = runtime.updateCurrentDirectorCard('   ');
-    assert.equal(empty.success, false);
-    assert.match(empty.error, /不能为空/);
-
     const edited = runtime.updateCurrentDirectorCard('只保留轨道B第二项。');
     assert.equal(edited.success, true);
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>\n只保留轨道B第二项。\n</下轮导演卡>');
@@ -1969,6 +1965,50 @@ test('aborted director runs return to idle without changing the ledger', async (
     assert.equal(dispatchedEvents.some((event) => event.type === 'yzm-story-director-error'), false);
 });
 
+test('bulk deletion ending at a visible user still permits planning at its original floor', async () => {
+    const { memory, chat, getState, eventBindings } = createSandbox();
+    chat[0].is_system = false;
+    delete chat[0].is_yzm_hidden_floor;
+    chat.splice(1);
+    eventBindings.find((entry) => entry.name === 'message_deleted').handler();
+    const result = await memory.StoryDirectorRuntime.replanLatest();
+    assert.equal(result.success, true);
+    assert.equal(getState().storyDirector.source.role, 'user');
+    assert.equal(getState().storyDirector.source.messageIndex, 0);
+});
+
+test('bulk deletion ending at a hidden user plans its current action without unhiding history', async () => {
+    for (const pluginHidden of [false, true]) {
+        const { memory, chat, requests, eventBindings, getState } = createSandbox();
+        chat[2].is_system = true;
+        chat[2].is_yzm_hidden_floor = pluginHidden;
+        chat.push({ is_user: true, mes: '要回删的后续输入' }, { is_user: false, mes: '要回删的后续回复' });
+        chat.splice(3);
+        const originalChat = structuredClone(chat);
+        eventBindings.find((entry) => entry.name === 'message_deleted').handler();
+        const runtime = memory.StoryDirectorRuntime;
+        assert.equal((await runtime.replanLatest()).success, true);
+        assert.equal(requests.length, 2);
+        for (const request of requests) {
+            const context = readContext(request);
+            assert.deepEqual(context.anchor, { floor: 2, role: 'user' });
+            assert.deepEqual(context.chat.messages.map(({ role, content }) => ({ role, content })),
+                [{ role: 'user', content: '当前行动' }]);
+            assert.equal(context.latestAssistantReview, null);
+        }
+        assert.match(readDirectorRules(requests[1]), /对这条 User 消息的首次回应/);
+        assert.deepEqual(chat, originalChat);
+        assert.equal(getState().storyDirector.source.messageIndex, 2);
+        assert.equal(runtime.getCurrentDirectorCard().origin, 'pending');
+        assert.equal(runtime.updateCurrentDirectorCard('修改后的规划').success, true);
+        assert.match(runtime.getInjectableCard({ generationType: 'regenerate' }), /修改后的规划/);
+        assert.equal(runtime.updateCurrentDirectorCard('').deleted, true);
+        assert.equal(runtime.getCurrentDirectorCard(), null);
+        assert.equal(runtime.getInjectableCard({ generationType: 'normal' }), '');
+        assert.deepEqual(chat, originalChat);
+    }
+});
+
 test('manual replan after deleting the last assistant sees all visible dialogue and enabled tables', async () => {
     const { memory, chat, requests, getState } = createSandbox();
     chat.splice(2, 2,
@@ -2254,11 +2294,59 @@ test('discarding a user-anchored pending card also removes its same-turn bound c
     assert.equal(regenerateClone.at(-1).mes, '当前行动');
 });
 
-test('director card modal exposes a pending-only clear action', () => {
+test('blank saves remove pending cards and any same-turn binding', async () => {
+    for (const userAnchored of [false, true]) {
+        const { memory, chat, getState } = createSandbox();
+        const runtime = memory.StoryDirectorRuntime;
+        if (userAnchored) chat.pop();
+        assert.equal((await runtime.replanLatest()).success, true);
+        const ledger = getState().storyDirector.ledger;
+        const result = runtime.updateCurrentDirectorCard(' \n\t ');
+        assert.equal(result.success, true);
+        assert.equal(result.deleted, true);
+        assert.equal(runtime.getCurrentDirectorCard(), null);
+        assert.equal(getState().storyDirector.pendingCard, '');
+        assert.equal(getState().storyDirector.messageCards.length, 0);
+        assert.equal(getState().storyDirector.ledger, ledger);
+        if (!userAnchored) chat.push({ is_user: true, mes: '下一轮' });
+        for (const generationType of ['normal', 'regenerate', 'swipe']) {
+            assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType }), false);
+        }
+    }
+});
+
+test('blank saving a bound card after deleting the AI reply prevents reinjection and preserves older bindings', async () => {
+    const { memory, chat, getState } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.replanLatest()).success, true);
+    chat.push({ is_user: true, mes: '第一轮输入' });
+    runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' });
+    const olderBinding = structuredClone(getState().storyDirector.messageCards[0]);
+    chat.push({ is_user: false, mes: '第一轮回复' });
+    assert.equal((await runtime.replanLatest()).success, true);
+    chat.push({ is_user: true, mes: '第二轮输入' });
+    runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' });
+    chat.push({ is_user: false, mes: '要删除的回复' });
+    chat.pop();
+    assert.equal(runtime.getCurrentDirectorCard().origin, 'bound');
+    const ledger = getState().storyDirector.ledger;
+    assert.equal(runtime.updateCurrentDirectorCard('').deleted, true);
+    assert.equal(runtime.getCurrentDirectorCard(), null);
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.deepEqual(structuredClone(getState().storyDirector.messageCards), [olderBinding]);
+    assert.equal(getState().storyDirector.ledger, ledger);
+    for (const generationType of ['normal', 'regenerate', 'swipe']) {
+        const request = structuredClone(chat);
+        assert.equal(runtime.injectDirectorCardForGeneration(request, { generationType }), false);
+        assert.equal(request.at(-1).mes, '第二轮输入');
+    }
+});
+
+test('director card modal exposes deletion for pending and bound cards', () => {
     assert.match(memoryWindowSource, /className = 'yzm-story-director-card-clear'/);
-    assert.match(memoryWindowSource, /latest\?\.origin === 'pending'/);
-    assert.match(memoryWindowSource, /discardPendingCard\?\.\('idle'\)/);
-    assert.match(memoryWindowSource, /下次发送不会注入/);
+    assert.match(memoryWindowSource, /\['pending', 'bound'\]\.includes\(latest\?\.origin\)/);
+    assert.match(memoryWindowSource, /updateCurrentDirectorCard\?\.\(''\)/);
+    assert.match(memoryWindowSource, /后续生成不再注入此卡/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-actions/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-clear/);
     assert.match(memoryWindowSource, /className = 'yzm-story-director-card-edit'/);
