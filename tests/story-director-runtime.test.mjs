@@ -1949,6 +1949,27 @@ test('changing message text reconciles without queueing a director rerun', () =>
     assert.equal(requests.length, 0);
 });
 
+test('render emitted while an Assistant edit settles does not queue automatic replanning', () => {
+    const { eventBindings, sandbox, chat, requests } = createSandbox({ embeddingEnabled: false });
+    const timers = [];
+    sandbox.window.setTimeout = (callback, delay) => {
+        timers.push({ callback, delay: Number(delay) });
+        return timers.length;
+    };
+    sandbox.window.clearTimeout = () => {};
+
+    chat[3].mes = '手动修改后重新渲染的 Assistant 正文';
+    eventBindings.find((entry) => entry.name === 'message_updated').handler(3);
+    eventBindings.find((entry) => entry.name === 'character_message_rendered').handler(3);
+
+    assert.deepEqual(timers.map((timer) => timer.delay), [250]);
+    timers.shift().callback();
+    assert.deepEqual(timers.map((timer) => timer.delay), [250]);
+    timers.shift().callback();
+    assert.equal(timers.length, 0);
+    assert.equal(requests.length, 0);
+});
+
 test('aborted director runs return to idle without changing the ledger', async () => {
     const { memory, dispatchedEvents, getState } = createSandbox();
     memory.LlmClient.requestAgentWithTavern = async (_messages, _tools, options) => new Promise((resolve, reject) => {

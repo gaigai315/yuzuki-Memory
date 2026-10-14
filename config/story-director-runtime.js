@@ -2569,6 +2569,10 @@
         bound = true;
         rememberDialogueMutationSnapshot();
         const onAssistantChanged = (_messageIndex, generationType) => {
+            // Saving an edited Assistant message also emits a render event. Let the
+            // edit/update settle path consume that mutation so it only invalidates
+            // stale director state and never masquerades as a newly generated reply.
+            if (messageMutationTimer) return;
             if (!consumeDialogueMutation()) return;
             if (String(generationType || '').toLowerCase() === 'swipe') {
                 clearInvalidPendingCard();
