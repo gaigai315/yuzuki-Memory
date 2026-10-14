@@ -1924,8 +1924,12 @@ test('confirming message edit without dialogue changes does not queue another di
     assert.equal(requests.length, 0);
 });
 
-test('changing message text reconciles without queueing a director rerun', () => {
-    const { eventBindings, sandbox, chat, requests } = createSandbox({ embeddingEnabled: false });
+test('changing Assistant text preserves its director card without queueing a director rerun', async () => {
+    const { eventBindings, sandbox, memory, chat, requests, getState } = createSandbox({ embeddingEnabled: false });
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    const savedCard = getState().storyDirector.pendingCard;
+    const savedSignature = getState().storyDirector.source.signature;
+    const requestCount = requests.length;
     const timers = [];
     sandbox.window.setTimeout = (callback, delay) => {
         timers.push({ callback, delay: Number(delay) });
@@ -1946,7 +1950,39 @@ test('changing message text reconciles without queueing a director rerun', () =>
     assert.equal(timers[0].delay, 250);
     timers.shift().callback();
     assert.equal(timers.length, 0);
-    assert.equal(requests.length, 0);
+    assert.equal(requests.length, requestCount);
+    assert.equal(getState().storyDirector.pendingCard, savedCard);
+    assert.notEqual(getState().storyDirector.source.signature, savedSignature);
+    assert.equal(memory.StoryDirectorRuntime.getCurrentDirectorCard()?.card, savedCard);
+});
+
+test('changing User text preserves and rebinds its director card without replanning', async () => {
+    const { eventBindings, sandbox, memory, chat, requests, getState } = createSandbox({ embeddingEnabled: false });
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.replanLatest()).success, true);
+    const savedCard = getState().storyDirector.pendingCard;
+    chat.push({ is_user: true, mes: '编辑前的用户正文' });
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+    const savedSignature = getState().storyDirector.messageCards.at(-1).user.signature;
+    const requestCount = requests.length;
+    const timers = [];
+    sandbox.window.setTimeout = (callback, delay) => {
+        timers.push({ callback, delay: Number(delay) });
+        return timers.length;
+    };
+    sandbox.window.clearTimeout = () => {};
+
+    chat[4].mes = '编辑后的用户正文';
+    eventBindings.find((entry) => entry.name === 'message_edited').handler(4);
+    timers.shift().callback();
+    timers.shift().callback();
+
+    assert.equal(requests.length, requestCount);
+    assert.equal(getState().storyDirector.pendingCard, savedCard);
+    assert.notEqual(getState().storyDirector.messageCards.at(-1).user.signature, savedSignature);
+    const request = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(request, { generationType: 'regenerate' }), true);
+    assert.match(request[4].mes, /<下轮导演卡>/);
 });
 
 test('render emitted while an Assistant edit settles does not queue automatic replanning', () => {

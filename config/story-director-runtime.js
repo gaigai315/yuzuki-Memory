@@ -2222,6 +2222,43 @@
         return runDirector(source, { replaceLatestAssistantRecord: true });
     }
 
+    function refreshDirectorCardAnchorsAfterEdit(messageIndex) {
+        const index = Number(messageIndex);
+        if (!Number.isInteger(index) || index < 0) return false;
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        const chat = getContext()?.chat;
+        const message = Array.isArray(chat) ? chat[index] : null;
+        const state = loadState(sessionId);
+        const director = state?.storyDirector;
+        if (!message || !director) return false;
+
+        const currentAssistant = buildAssistantAnchor(message, index, sessionId);
+        const currentUser = buildUserAnchor(message, index, sessionId);
+        let source = director.source;
+        let changed = false;
+        if (source && getSourceIndex(source) === index) {
+            const current = source.role === 'user' ? currentUser : currentAssistant;
+            if (current && current.swipeId === Number(source.swipeId || 0)) {
+                source = current;
+                changed = current.signature !== String(director.source.signature || '');
+            }
+        }
+
+        const messageCards = normalizeMessageCards(director.messageCards).map((entry) => {
+            if (!currentUser
+                || entry.user.messageIndex !== index
+                || entry.user.swipeId !== currentUser.swipeId) return entry;
+            if (entry.user.signature !== currentUser.signature) changed = true;
+            return { ...entry, user: currentUser };
+        });
+        if (!changed) return false;
+        return saveDirectorState(sessionId, {
+            ...director,
+            source,
+            messageCards,
+        }, 'story-director-refresh-edited-anchor');
+    }
+
     function reconcileStoredDirectorLedger(reason = 'branch-changed') {
         const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
         const state = loadState(sessionId);
@@ -2591,7 +2628,7 @@
             scheduleStoredDirectorLedgerReconcile(reason, reconcileDelay);
             scheduleDirector('branch-changed');
         };
-        const onMessageUpdated = () => {
+        const onMessageUpdated = (messageIndex) => {
             // SillyTavern emits edit/update events even when the editor is confirmed without text changes.
             window.clearTimeout(messageMutationTimer);
             const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
@@ -2603,6 +2640,7 @@
                 }
                 if (!consumeDialogueMutation()) return;
                 cancelActiveRun('message updated');
+                refreshDirectorCardAnchorsAfterEdit(messageIndex);
                 clearInvalidPendingCard();
                 scheduleStoredDirectorLedgerReconcile('message-updated', 250);
             }, MESSAGE_MUTATION_SETTLE_MS);
