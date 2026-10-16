@@ -530,15 +530,6 @@
         return !/\/v1(?:\/|$|[?#])/i.test(apiUrl);
     }
 
-    function supportsAssistantPrefill(config = {}) {
-        const provider = String(config?.provider || config?.source || '').trim().toLowerCase();
-        const model = String(config?.model || '').trim().toLowerCase();
-        if (provider === 'makersuite' || shouldUseGeminiNative(config)) return false;
-        const isGeminiModel = model.includes('gemini');
-        if (isGeminiModel && /(?:^|[-_.])flash(?:[-_.]|$)/.test(model)) return false;
-        return isGeminiModel;
-    }
-
     function resolveGeminiGenerateUrl(apiUrl, model, apiKey = '') {
         const source = String(apiUrl || '').trim();
         if (!source) return '';
@@ -1956,7 +1947,6 @@
         getProviderDefaultMaxTokens,
         validateCustomHeaders,
         isOfficialOpenCodeGoUrl,
-        supportsAssistantPrefill,
         getTavernStatus,
         generateWithTavern,
         generateWithCustom,

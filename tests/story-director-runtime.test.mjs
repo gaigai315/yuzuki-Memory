@@ -4,6 +4,8 @@ import test from 'node:test';
 import vm from 'node:vm';
 
 const source = fs.readFileSync(new URL('../config/story-director-runtime.js', import.meta.url), 'utf8');
+const taskRunnerSource = fs.readFileSync(new URL('../config/task-runner.js', import.meta.url), 'utf8');
+const taskBoundary = '========================================\n【以上为待处理的虚拟小说文本片段，剧情对话到此结束】\n========================================';
 const variableInjectorSource = fs.readFileSync(new URL('../config/variable-injector.js', import.meta.url), 'utf8');
 const vectorStoreSource = fs.readFileSync(new URL('../config/vector-store.js', import.meta.url), 'utf8');
 const memoryWindowSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
@@ -51,7 +53,9 @@ function readChatContext(messages) {
     for (let index = markerIndex + 1; index < messages.length; index += 1) {
         const message = messages[index];
         if (message.role !== 'user' && message.role !== 'assistant') break;
-        visibleMessages.push(message);
+        const content = String(message.content || '').split(taskBoundary)[0].trimEnd();
+        if (content) visibleMessages.push({ ...message, content });
+        if (message.content.includes(taskBoundary)) break;
     }
     const chatMessages = visibleMessages.map((message) => {
         const rawContent = String(message.content || '');
@@ -128,12 +132,12 @@ function withoutReviewFloorMarkers(context) {
 function readDirectorRules(messages) {
     const message = messages.at(-1);
     assert.equal(message?.role, 'user', 'director runtime rules must be the final user instruction');
-    assert.match(message?.content || '', /^请根据基础资料和已经更新完成的总账/);
+    assert.match(message?.content || '', /请根据基础资料和已经更新完成的总账/);
     return message.content;
 }
 
 function isReview(messages) {
-    return messages.at(-1)?.content?.startsWith('请根据基础资料和已经更新完成的总账') === true;
+    return messages.at(-1)?.content?.includes('请根据基础资料和已经更新完成的总账') === true;
 }
 
 function createSandbox(options = {}) {
@@ -354,6 +358,9 @@ function createSandbox(options = {}) {
     };
     sandbox.window.window = sandbox.window;
     vm.createContext(sandbox);
+    const taskRunnerStubs = { ...memory.TaskRunner };
+    vm.runInContext(taskRunnerSource, sandbox, { filename: 'task-runner.js' });
+    Object.assign(memory.TaskRunner, taskRunnerStubs);
     vm.runInContext(source, sandbox, { filename: 'story-director-runtime.js' });
     vm.runInContext(variableInjectorSource, sandbox, { filename: 'variable-injector.js' });
     return {
@@ -452,17 +459,17 @@ test('director inventories roles first and saves the merged ledger with the seco
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>推进支线。</下轮导演卡>');
     assert.equal(getState().storyDirector.status, 'ready');
     assert.deepEqual(requests[0].map((message) => message.role), [
-        'system', 'system', 'system', 'system', 'system', 'system', 'system', 'user', 'assistant', 'system', 'user',
+        'system', 'system', 'system', 'system', 'system', 'system', 'system', 'user', 'assistant', 'user',
     ]);
-    assert.match(requests[0][0].content, /^Role: 剧情角色账本维护专家/);
-    assert.match(requests[0][0].content, /【轨道A\(主角层\)】定义：聚焦于与用户同场景下的角色故事。/);
-    assert.match(requests[0][0].content, /【轨道B\(世界层\)】定义：必须构建不同于轨道A的场景下的不同角色支线剧情。/);
-    assert.match(requests[0][0].content, /Module5\(己方阵营\/日常事务\/主动谋划\)/);
-    assert.match(requests[0][0].content, /\[张三\] \| Module2 \| 张三在最后一条Assistant正文中实际参与的简要剧情/);
-    assert.doesNotMatch(requests[0][0].content, /\{\{user\}\}/);
-    assert.equal(requests[0][1].content, '【用户卡】\n用户卡中的背景资料');
-    assert.equal(requests[0][2].name, 'SYSTEM (角色卡 - 角色)');
-    assert.equal(requests[0][2].content, '【角色卡：角色】\n' + [
+    assert.match(requests[0].at(-1).content, /Role: 剧情角色账本维护专家/);
+    assert.match(requests[0].at(-1).content, /【轨道A\(主角层\)】定义：聚焦于与用户同场景下的角色故事。/);
+    assert.match(requests[0].at(-1).content, /【轨道B\(世界层\)】定义：必须构建不同于轨道A的场景下的不同角色支线剧情。/);
+    assert.match(requests[0].at(-1).content, /Module5\(己方阵营\/日常事务\/主动谋划\)/);
+    assert.match(requests[0].at(-1).content, /\[张三\] \| Module2 \| 张三在最后一条Assistant正文中实际参与的简要剧情/);
+    assert.doesNotMatch(requests[0].at(-1).content, /\{\{user\}\}/);
+    assert.equal(requests[0][0].content, '【用户卡】\n用户卡中的背景资料');
+    assert.equal(requests[0][1].name, 'SYSTEM (角色卡 - 角色)');
+    assert.equal(requests[0][1].content, '【角色卡：角色】\n' + [
         '角色卡中的人物描述',
         '冷静而谨慎',
         '角色卡中的故事背景',
@@ -473,24 +480,24 @@ test('director inventories roles first and saves the merged ledger with the seco
         '角色卡后置提示',
         '角色卡深度提示',
     ].join('\n\n'));
-    assert.match(requests[0][3].content, /^【世界书信息】/);
-    assert.equal(requests[0][4].name, 'SYSTEM(总结1)');
-    assert.match(requests[0][4].content, /前100楼总结/);
-    assert.equal(requests[0][5].name, 'SYSTEM (角色档案)');
-    assert.match(requests[0][5].content, /【当前世界状态参考 - 角色档案】/);
+    assert.match(requests[0][2].content, /^【世界书信息】/);
+    assert.equal(requests[0][3].name, 'SYSTEM(总结1)');
+    assert.match(requests[0][3].content, /前100楼总结/);
+    assert.equal(requests[0][4].name, 'SYSTEM (角色档案)');
+    assert.match(requests[0][4].content, /【当前世界状态参考 - 角色档案】/);
     assert.match(requests[0][6].content, /^【最近剧情正文】/);
     assert.equal(requests[0][7].role, 'user');
     assert.equal(requests[0][7].content, '当前行动');
     assert.equal(requests[0][8].role, 'assistant');
     assert.match(requests[0][8].content, /^\[楼层 3\] 当前核验目标为此楼正文；根据此楼内容更新<角色账本更新>及<轨道B最后一轮角色出场账本>。\n最新正文$/);
-    assert.match(requests[0][9].content, /^【导演账本与本轮核验信息】/);
-    assert.match(requests[0].at(-1).content, /^第一轮：只更新角色账本/);
+    assert.match(requests[0][5].content, /^【导演账本与本轮核验信息】/);
+    assert.match(requests[0].at(-1).content, /第一轮：只更新角色账本/);
     assert.equal(requests[0].filter((message) => message.role === 'user').length, 2);
     assert.doesNotMatch(JSON.stringify(requests[0]), /【本轮完整资料】/);
     const context = readContext(requests[0]);
     assert.deepEqual(context.profileMessages, [
         { name: 'SYSTEM (用户卡)', content: '【用户卡】\n用户卡中的背景资料' },
-        { name: 'SYSTEM (角色卡 - 角色)', content: requests[0][2].content },
+        { name: 'SYSTEM (角色卡 - 角色)', content: requests[0][1].content },
     ]);
     assert.match(context.worldbooks, /世界书中的已选条目/);
     assert.match(JSON.stringify(context.tables), /前100楼总结/);
@@ -506,7 +513,7 @@ test('director inventories roles first and saves the merged ledger with the seco
     assert.equal(context.ledger, '旧账本');
     assert.deepEqual(context.anchor, { floor: 3, role: 'assistant' });
     const planningContext = readContext(requests[1]);
-    assert.equal(requests[1][0].content, 'DEFAULT_STORY_DIRECTOR_PROMPT');
+    assert.ok(requests[1].at(-1).content.includes(`${taskBoundary}\n\nDEFAULT_STORY_DIRECTOR_PROMPT`));
     assert.deepEqual(withoutReviewFloorMarkers({
         ...planningContext,
         ledger: context.ledger,
@@ -515,7 +522,7 @@ test('director inventories roles first and saves the merged ledger with the seco
     assert.match(planningContext.ledger, /剧情角色名册|轨道B最近20轮角色出场账本/);
     assert.deepEqual(context.latestAssistantReview, { assistantFloor: 3, shouldRecord: true });
     assert.equal(planningContext.latestAssistantReview, null);
-    assert.match(requests[1].at(-1).content, /^请根据基础资料和已经更新完成的总账/);
+    assert.match(requests[1].at(-1).content, /请根据基础资料和已经更新完成的总账/);
     assert.equal(requests[1].some((message) => message.role === 'system'
         && message.content?.includes('这是第二轮最终规划')), false);
     assert.deepEqual(chat, originalChat);
@@ -527,6 +534,11 @@ test('director inventories roles first and saves the merged ledger with the seco
         assert.ok(options.signal);
     }
     assert.equal(directorCaptures.length, 2);
+    requests.forEach((messages, index) => {
+        assert.equal(messages.at(-1).role, 'user');
+        assert.equal(messages.at(-1).content.split(taskBoundary).length, 2);
+        assert.deepEqual(directorCaptures[index].body.messages, messages);
+    });
     assert.deepEqual(directorCaptures.map((item) => item.options.agentTurn), [1, 2]);
     assert.equal(directorCaptures[0].options.sessionId, 'chat:test');
     assert.match(JSON.stringify(directorCaptures[0]), /前100楼总结|世界书中的已选条目/);
@@ -616,7 +628,7 @@ test('director injects configured phone history immediately before recent story 
     requests.forEach((messages) => {
         const storyIndex = messages.findIndex((message) => message.content?.startsWith('【最近剧情正文】'));
         assert.ok(storyIndex >= 3);
-        assert.deepEqual(messages.slice(storyIndex - 3, storyIndex).map((message) => message.content.split('\n')[0]), [
+        assert.deepEqual(messages.slice(storyIndex - 4, storyIndex - 1).map((message) => message.content.split('\n')[0]), [
             '【最近微信聊天记录】',
             '【最近微信朋友圈聊天记录】',
             '【最近通话APP聊天记录】',
@@ -717,8 +729,8 @@ test('manual replan uses the currently selected story director prompt', async ()
 
     assert.equal(result.success, true);
     assert.equal(requests[0][0].role, 'system');
-    assert.match(requests[0][0].content, /^Role: 剧情角色账本维护专家/);
-    assert.equal(requests[1][0].content, 'CUSTOM_STORY_DIRECTOR_PROMPT');
+    assert.match(requests[0].at(-1).content, /Role: 剧情角色账本维护专家/);
+    assert.ok(requests[1].at(-1).content.includes(`${taskBoundary}\n\nCUSTOM_STORY_DIRECTOR_PROMPT`));
 });
 
 test('story director resolves user and character variables in prompts and cards', async () => {
@@ -738,7 +750,7 @@ test('story director resolves user and character variables in prompts and cards'
 
     const runtime = memory.StoryDirectorRuntime;
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
-    assert.equal(requests[1][0].content, '为 用户 与 角色 规划下一轮：自定义宏已展开。');
+    assert.ok(requests[1].at(-1).content.includes(`${taskBoundary}\n\n为 用户 与 角色 规划下一轮：自定义宏已展开。`));
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>角色 回应 用户 的行动，自定义宏已展开。</下轮导演卡>');
     assert.equal(runtime.getCurrentDirectorCard().content, '角色 回应 用户 的行动，自定义宏已展开。');
 
@@ -1640,8 +1652,8 @@ test('a custom API route receives the ledger pass followed by the card pass', as
     };
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(requests.length, 2);
-    assert.match(requests[0][0].content, /^Role: 剧情角色账本维护专家/);
-    assert.equal(requests[1][0].content, 'DEFAULT_STORY_DIRECTOR_PROMPT');
+    assert.match(requests[0].at(-1).content, /Role: 剧情角色账本维护专家/);
+    assert.ok(requests[1].at(-1).content.includes(`${taskBoundary}\n\nDEFAULT_STORY_DIRECTOR_PROMPT`));
     assert.equal(getState().storyDirector.status, 'ready');
 });
 
@@ -2086,6 +2098,12 @@ test('manual replan after deleting the last assistant sees all visible dialogue 
     assert.match(readDirectorRules(requests[1]), /最新用户消息/);
     assert.match(readDirectorRules(requests[1]), /对这条 User 消息的首次回应/);
     assert.equal(requests.length, 2);
+    requests.forEach((messages) => {
+        assert.equal(messages.at(-1).role, 'user');
+        assert.ok(messages.at(-1).content.startsWith(`最后的用户消息\n\n${taskBoundary}\n\n`));
+        assert.equal(messages.filter((message) => message.role === 'user').length, 2);
+        assert.equal(messages.at(-1).content.split(taskBoundary).length, 2);
+    });
     const contextResult = readContext(requests[0]);
     assert.deepEqual(contextResult.latestAssistantReview, { assistantFloor: 3, shouldRecord: true });
     assert.deepEqual(contextResult.tables.map((table) => table.name), ['记忆总结', '角色档案']);

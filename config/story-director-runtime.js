@@ -1822,6 +1822,7 @@
             }))
             .filter((message) => message.content));
         messages.push(
+            buildDirectorLedgerMessage(context),
             {
                 role: 'system',
                 content: '【最近剧情正文】\n以下为最近剧情正文',
@@ -1852,15 +1853,13 @@
     }
 
     function buildRoleLedgerMessages(context) {
-        return [
-            { role: 'system', content: resolveDirectorVariables(ROLE_LEDGER_PROMPT) },
-            ...buildDirectorContextMessages(context, { markLatestAssistant: true }),
-            buildDirectorLedgerMessage(context),
-            {
-                role: 'user',
-                content: '第一轮：只更新角色账本。根据全部资料输出一次 <角色账本更新> 和一次 <轨道B最后一轮角色出场账本>，不得生成或讨论 <下轮导演卡>。',
-            },
-        ];
+        return YuzukiMemory.TaskRunner.appendTaskInstructions(
+            buildDirectorContextMessages(context, { markLatestAssistant: true }),
+            [
+                resolveDirectorVariables(ROLE_LEDGER_PROMPT),
+                '第一轮：只更新角色账本。根据全部资料输出一次 <角色账本更新> 和一次 <轨道B最后一轮角色出场账本>，不得生成或讨论 <下轮导演卡>。',
+            ],
+        );
     }
 
     function buildDirectorMessages(prompt, context) {
@@ -1877,12 +1876,10 @@
             '④严格遵守【后台剧情导演中枢】规则更新<下轮导演卡>内容。',
             '⑤只输出一个完整且非空的 <下轮导演卡>...</下轮导演卡>，不得输出 JSON、Markdown、工具调用、账本标签、审查报告或标签外文字。',
         ].join('\n');
-        return [
-            { role: 'system', content: resolveDirectorVariables(prompt).trim() },
-            ...buildDirectorContextMessages(context),
-            buildDirectorLedgerMessage(context),
-            { role: 'user', content: finalInstruction },
-        ];
+        return YuzukiMemory.TaskRunner.appendTaskInstructions(
+            buildDirectorContextMessages(context),
+            [resolveDirectorVariables(prompt).trim(), finalInstruction],
+        );
     }
 
     function formatProbeJson(value) {

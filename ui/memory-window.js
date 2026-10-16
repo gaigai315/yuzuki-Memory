@@ -15113,9 +15113,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】优化向量化召回条数，总结与普通书籍独立设置。',
-            '【优化】优化向量化自动分段功能。',
-            '【优化】优化部分 CSS 渲染。',
+            '【优化】优化任务请求格式，提升总结、填表等功能的模型兼容性。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

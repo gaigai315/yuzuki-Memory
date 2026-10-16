@@ -476,14 +476,13 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.1.0', () => {
-    assert.equal(manifest.version, '1.1.0');
-    assert.match(indexSource, /const VERSION = '1\.1\.0';/);
+test('release metadata and update notice describe version 1.1.1', () => {
+    assert.equal(manifest.version, '1.1.1');
+    assert.match(indexSource, /const VERSION = '1\.1\.1';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /【优化】优化向量化召回条数，总结与普通书籍独立设置。/);
-    assert.match(noticeSource, /【优化】优化向量化自动分段功能。/);
-    assert.match(noticeSource, /【优化】优化部分 CSS 渲染。/);
+    assert.match(noticeSource, /【优化】优化任务请求格式，提升总结、填表等功能的模型兼容性。/);
+    assert.doesNotMatch(noticeSource, /优化向量化召回条数|优化向量化自动分段功能|优化部分 CSS 渲染/);
     assert.doesNotMatch(noticeSource, /剧情规划界面支持编辑|剧情导演与柚月の手机互通/);
     assert.doesNotMatch(noticeSource, /兼容 MUV 额外模型解析/);
     assert.doesNotMatch(noticeSource, /修复快速取消正文生成后的剧情规划锁定/);

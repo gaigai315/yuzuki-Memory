@@ -148,7 +148,6 @@ function createHarness(options = {}) {
                 },
                 LlmClient: {
                     getTavernStatus: async () => ({}),
-                    supportsAssistantPrefill: () => false,
                     generateWithTavern: async () => {
                         generatedCount += 1;
                         if (typeof options.generateWithTavern === 'function') {

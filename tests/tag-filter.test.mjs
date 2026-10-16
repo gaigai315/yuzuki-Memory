@@ -14,6 +14,133 @@ vm.runInContext(source, sandbox, { filename: 'task-runner.js' });
 
 const filterContentByTags = sandbox.window.YuzukiMemory.TaskRunner.filterContentByTags;
 
+const taskBoundary = '========================================\n【以上为待处理的虚拟小说文本片段，剧情对话到此结束】\n========================================';
+
+test('task instructions append to a user copy or create a user after assistant/system/empty context', () => {
+    const append = sandbox.window.YuzukiMemory.TaskRunner.appendTaskInstructions;
+    for (const role of ['user', 'assistant', 'system', null]) {
+        const input = role ? [{ role, content: '原始材料', name: '保留名称' }] : [];
+        const original = structuredClone(input);
+        const result = append([...input, null, { role: 'user', content: ' ' }], ['任务提示词', '', '执行指令']);
+        assert.deepEqual(input, original);
+        assert.equal(result.length, role === 'user' || !role ? 1 : 2);
+        assert.equal(result.at(-1).role, 'user');
+        assert.equal(result.at(-1).content,
+            `${role === 'user' ? '原始材料\n\n' : ''}${taskBoundary}\n\n任务提示词\n\n执行指令`);
+        if (role === 'user') assert.equal(result[0].name, '保留名称');
+        if (role && role !== 'user') assert.deepEqual({ ...result[0] }, original[0]);
+    }
+});
+
+test('every plugin task sends instructions after source material for all model routes', async (t) => {
+    const cases = [
+        ['runTrace', 'TRACE_TASK', {}],
+        ['runTrace', 'TRACE_TASK', { autoTaskType: 'trace' }],
+        ['runSummary', 'SUMMARY_TASK', {}],
+        ['runSummary', 'SUMMARY_TASK', { autoTaskType: 'summary' }],
+        ['runSummary', 'SUMMARY_TASK', { autoTaskType: 'history' }],
+        ['runTraceOptimize', 'TRACE_OPTIMIZE_TASK', {}],
+        ['runSummaryOptimize', 'SUMMARY_OPTIMIZE_TASK', {}],
+        ['runCharacterGrowthTasks', 'GROWTH_TASK', { recordId: 'status' }],
+        ['runTagDiagnostic', '你是一个剧情记录系统的标签过滤专家', {}],
+    ];
+    const snapshots = [
+        { mode: 'tavern', preset: null },
+        ...['gemini-2.5-pro', 'gemini-3-flash-preview', 'claude-sonnet', 'gpt-5', 'deepseek-chat'].map((model) => ({
+            mode: 'custom', preset: { provider: 'openai', model, stream: false },
+        })),
+        { mode: 'custom', preset: { provider: 'gemini', model: 'gemini-2.5-pro', stream: false } },
+    ];
+    for (const lastRole of ['user', 'assistant']) {
+        await t.test(`source ends with ${lastRole}`, async () => {
+            const chat = [
+                { is_user: true, name: '用户', mes: '最初行动' },
+                { is_user: false, name: '角色', mes: '<content>待处理正文</content>' },
+                ...(lastRole === 'user' ? [{ is_user: true, name: '用户', mes: '最后行动' }] : []),
+            ];
+            const originalChat = structuredClone(chat);
+            const requests = [];
+            const captures = [];
+            const prompts = {
+                traceBatch: 'TRACE_TASK', summary: 'SUMMARY_TASK',
+                traceOptimize: 'TRACE_OPTIMIZE_TASK', summaryOptimize: 'SUMMARY_OPTIMIZE_TASK',
+            };
+            const capture = async (messages, options) => {
+                requests.push(structuredClone({ messages, options }));
+                return { success: false, error: 'request captured' };
+            };
+            const memory = {
+                GlobalSettings: { get(key, fallback) {
+                    if (key === 'yzm_memory_global_plugin_settings') return { enableFilling: true, fillMode: 'batch' };
+                    if (key === 'yzm_memory_global_character_status_prompts') {
+                        return [{ id: 'status', prompt: 'STATUS_TASK', growthPrompt: 'GROWTH_TASK' }];
+                    }
+                    return fallback;
+                } },
+                PromptLibrary: {
+                    getDefaultSchemes: () => [{ id: 'default', prompts }],
+                    mergeSchemePrompts: (scheme) => scheme.prompts,
+                },
+                CharacterStatus: { getColumnLayout: () => ({ attributeColumns: ['体力'], transactionColumns: ['奇遇'] }) },
+                LlmClient: {
+                    getTavernStatus: () => { throw new Error('task assembly must not query model capabilities'); },
+                    generateWithTavern: capture,
+                    generateWithCustom: (_preset, messages, options) => capture(messages, options),
+                },
+                RequestProbe: { captureFromBody: (body) => captures.push(structuredClone(body.messages)) },
+            };
+            const taskSandbox = {
+                console, localStorage: { getItem: () => null },
+                SillyTavern: { getContext: () => ({ chat, name1: '用户', name2: '角色' }) },
+                window: { YuzukiMemory: memory },
+            };
+            vm.createContext(taskSandbox);
+            vm.runInContext(source, taskSandbox);
+            const state = {
+                characterStatusPromptId: 'status', settings: {},
+                tables: [
+                    { id: 'character_status', name: '角色状态', columns: ['角色名', '体力', '奇遇'] },
+                    { id: 'memory_summary', name: '记忆总结', columns: ['总结标题', '总结内容'] },
+                ],
+                records: {
+                    character_status: [{ id: 'status', values: { 角色名: '角色', 体力: '10', 奇遇: '' } }],
+                    memory_summary: [{ id: 'summary', values: { 总结标题: '旧总结', 总结内容: '旧事件' } }],
+                },
+            };
+            for (const llmSnapshot of snapshots) {
+                for (const [method, marker, extraOptions] of cases) {
+                    const options = { start: 0, end: chat.length, previewOnly: true, includeWorldbook: false, llmSnapshot, ...extraOptions };
+                    const result = method === 'runTagDiagnostic'
+                        ? await memory.TaskRunner[method](options)
+                        : await memory.TaskRunner[method](state, options);
+                    const label = `${method}/${llmSnapshot.preset?.model || 'tavern'}`;
+                    assert.equal(result.error, 'request captured', label);
+                    const messages = requests.at(-1).messages;
+                    const tail = messages.at(-1);
+                    assert.equal(tail.role, 'user', label);
+                    assert.equal(tail.content.split(taskBoundary).length, 2, label);
+                    assert.ok(tail.content.indexOf(marker) > tail.content.indexOf(taskBoundary), label);
+                    assert.equal(messages.slice(0, -1).some((message) => message.content.includes(marker)), false, label);
+                    assert.deepEqual(captures.at(-1), messages, 'probe must show exactly the prepared request');
+                    if (['runTrace', 'runSummary', 'runCharacterGrowthTasks'].includes(method)) {
+                        assert.equal(messages.filter((message) => message.role === 'user').length,
+                            chat.filter((message) => message.is_user).length + (lastRole === 'assistant' ? 1 : 0), label);
+                        if (lastRole === 'user') assert.match(tail.content, /^\[楼层 2\] 用户: 最后行动/);
+                        else assert.match(messages.at(-2).content, /待处理正文/);
+                    }
+                    if (method === 'runTrace') assert.match(tail.content, /STATUS_TASK/);
+                    if (method === 'runSummary') assert.ok(tail.content.endsWith('不得遗漏最后结尾</Memory>标签。'));
+                    if (method === 'runCharacterGrowthTasks') {
+                        assert.match(tail.content, /GROWTH_TASK[\s\S]*【本次任务生成边界】[\s\S]*请为 角色/);
+                    }
+                    if (method === 'runTagDiagnostic') assert.ok(tail.content.startsWith('<content>待处理正文</content>\n\n'));
+                }
+            }
+            assert.deepEqual(chat, originalChat);
+        });
+    }
+});
+
 test('blacklist removes paired and closing-only thinking blocks', () => {
     const preset = { blacklist: ['thinking'], whitelist: [] };
 
@@ -113,7 +240,6 @@ test('trace uses the global historian selection and injects populated non-summar
                 },
                 LlmClient: {
                     getTavernStatus: async () => ({}),
-                    supportsAssistantPrefill: () => false,
                     generateWithTavern: async (messages) => {
                         capturedRequests.push(messages);
                         return {

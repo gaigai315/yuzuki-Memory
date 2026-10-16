@@ -46,11 +46,7 @@
 - HTML 注释：用 "!--" 表示。
 
 【分析任务】
-请分析以下 AI 回复的原始文本，判断正文的位置，并给出最简洁的过滤方案。
-文本内容：
----
-{{RAW_TEXT}}
----
+请分析以上 AI 回复的原始文本，判断正文的位置，并给出最简洁的过滤方案。
 
 【输出要求】
 请仅输出纯 JSON 格式，严格遵循以下结构：
@@ -1104,7 +1100,7 @@
         const preset = mode === 'custom'
             ? (snapshot && 'preset' in snapshot ? snapshot.preset : getTaskLlmPreset(options.kind))
             : null;
-        const requestMessages = await prepareTaskMessages(messages, mode, preset, taskOptions);
+        const requestMessages = normalizeTaskMessages(messages);
         if (isForegroundGenerationBusy()) {
             return {
                 success: false,
@@ -1332,28 +1328,24 @@
             .filter((message) => message?.content && String(message.content).trim());
     }
 
-    function withMemoryPrefill(messages = [], prefill = '<Memory>\n') {
-        const normalized = normalizeTaskMessages(messages);
+    // Only change request copies; historical assistant turns remain source material.
+    function appendTaskInstructions(messages = [], instructions = []) {
+        const normalized = normalizeTaskMessages(messages).map((message) => ({ ...message }));
+        const taskText = instructions.map((text) => String(text || '').trim()).filter(Boolean).join('\n\n');
+        const content = [
+            '========================================',
+            '【以上为待处理的虚拟小说文本片段，剧情对话到此结束】',
+            '========================================',
+            '',
+            taskText,
+        ].join('\n');
         const last = normalized[normalized.length - 1];
-        if (last && ['assistant', 'model'].includes(String(last.role || '').toLowerCase())
-            && /^<Memory(?:\s+[^>]*)?>/i.test(String(last.content || '').trim())) {
-            return normalized;
+        if (last?.role === 'user') {
+            last.content = `${last.content}\n\n${content}`;
+        } else {
+            normalized.push({ role: 'user', content });
         }
-        return [...normalized, { role: 'assistant', content: prefill }];
-    }
-
-    async function prepareTaskMessages(messages, mode, preset, options = {}) {
-        let config = preset;
-        if (mode !== 'custom') {
-            try {
-                config = await YuzukiMemory.LlmClient?.getTavernStatus?.(options);
-            } catch (_error) {
-                config = null;
-            }
-        }
-        return YuzukiMemory.LlmClient?.supportsAssistantPrefill?.(config)
-            ? withMemoryPrefill(messages)
-            : normalizeTaskMessages(messages);
+        return normalized;
     }
 
     function normalizeMemoryEnvelope(text = '') {
@@ -3031,17 +3023,18 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             : '';
         const targetRestriction = buildTraceTargetRestrictionText(state, options);
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const messages = normalizeTaskMessages([
+        const messages = appendTaskInstructions([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText() },
             worldbookMessage,
             ...buildTraceReferenceMessages(state),
             { role: 'system', content: buildTaskRangeText(range, 'trace') },
             ...range.messages,
-            { role: 'system', content: tracePrompt },
-            characterStatusPrompt ? { role: 'system', content: `【角色状态专用提示词】\n${characterStatusPrompt}` } : null,
-            targetRestriction ? { role: 'system', content: targetRestriction } : null,
-            { role: 'user', content: '请立即根据以上待填表聊天内容和填表提示词执行任务。' },
+        ], [
+            tracePrompt,
+            characterStatusPrompt ? `【角色状态专用提示词】\n${characterStatusPrompt}` : '',
+            targetRestriction,
+            '请立即根据以上待填表聊天内容和填表提示词执行任务。',
         ]);
         return { messages, range };
     }
@@ -3058,14 +3051,15 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             suppressMemoryTables: true,
         });
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const messages = normalizeTaskMessages([
+        const messages = appendTaskInstructions([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
             worldbookMessage,
             { role: 'system', content: buildTaskRangeText(range, 'summary') },
             ...range.messages,
-            { role: 'system', content: summaryPrompt },
-            { role: 'user', content: '请立即根据以上待总结聊天内容和总结提示词执行任务。不得遗漏最后结尾</Memory>标签。' },
+        ], [
+            summaryPrompt,
+            '请立即根据以上待总结聊天内容和总结提示词执行任务。不得遗漏最后结尾</Memory>标签。',
         ]);
         return { messages, range };
     }
@@ -3232,15 +3226,16 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             `可写入的事务列：${transactionColumns.join('、')}`,
             '不得返回以上列表之外的属性或事务列。不得直接修改角色属性数值。',
         ]);
-        const messages = normalizeTaskMessages([
-            { role: 'system', content: prompt },
+        const messages = appendTaskInstructions([
             { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
             profileText ? { role: 'system', content: `【当前角色档案】\n${profileText}` } : null,
             { role: 'system', content: `【当前角色状态】\n${statusText}` },
             summaryText ? { role: 'system', content: `【记忆总结】\n${summaryText}` } : null,
             ...visibleChat.messages,
-            { role: 'system', content: taskBoundary },
-            { role: 'user', content: `请为 ${characterName} 生成可选的属性成长任务，并严格按指定 JSON 格式回复。` },
+        ], [
+            prompt,
+            taskBoundary,
+            `请为 ${characterName} 生成可选的属性成长任务，并严格按指定 JSON 格式回复。`,
         ]);
         const response = await generate(messages, { ...options, kind: 'characterGrowth', stream: false });
         if (!response.success) return response;
@@ -3370,13 +3365,16 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
         const note = String(options.note || '').trim();
         const tableText = tablesToReferenceText(state, options) || '（暂无）';
-        const messages = normalizeTaskMessages([
+        const messages = appendTaskInstructions([
             historianPrompt ? { role: 'system', content: historianPrompt } : null,
             { role: 'system', content: buildRuntimeBackgroundText() },
             worldbookMessage,
             recentContextMessage,
             { role: 'system', content: `【待优化表格】\n${tableText}` },
-            { role: 'user', content: `${prompt}${note ? `\n\n【本次重点优化建议】\n${note}` : ''}\n\n请根据以上待优化表格和优化要求输出优化后的结果。` },
+        ], [
+            prompt,
+            note ? `【本次重点优化建议】\n${note}` : '',
+            '请根据以上待优化表格和优化要求输出优化后的结果。',
         ]);
         const response = await generate(messages, { ...options, kind: 'traceOptimize' });
         if (!response.success) return response;
@@ -3420,13 +3418,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             : (schemePrompt || getDefaultOptimizePrompt('summary'));
         const prompt = resolveTaskPromptVariables(promptSource, state, options);
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const messages = normalizeTaskMessages([
+        const messages = appendTaskInstructions([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
             worldbookMessage,
             { role: 'user', content: `【待优化总结】\n${summaries || '（暂无）'}` },
-            { role: 'system', content: prompt },
-            { role: 'user', content: '请立即根据以上待优化总结和优化要求输出优化后的 <Memory> 总结。' },
+        ], [
+            prompt,
+            '请立即根据以上待优化总结和优化要求输出优化后的 <Memory> 总结。',
         ]);
         const response = await generate(messages, { ...options, kind: 'summaryOptimize' });
         if (!response.success) return response;
@@ -3487,8 +3486,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             };
         }
 
-        const prompt = AI_TAG_DIAGNOSTIC_PROMPT.replace('{{RAW_TEXT}}', rawText);
-        const response = await generate([{ role: 'user', content: prompt }], {
+        const messages = appendTaskInstructions([
+            { role: 'user', content: rawText },
+        ], [AI_TAG_DIAGNOSTIC_PROMPT]);
+        const response = await generate(messages, {
             ...options,
             kind: 'tagDiagnostic',
             silent: true,
@@ -4482,6 +4483,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     }
 
     YuzukiMemory.TaskRunner = Object.assign(YuzukiMemory.TaskRunner || {}, {
+        appendTaskInstructions,
         filterContentByTags,
         runTrace,
         runSummary,
