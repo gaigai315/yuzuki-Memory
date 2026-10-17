@@ -534,11 +534,12 @@
     function mergeAppendValue(current, expected, rebuilt, table, options = {}) {
         if (table?.id === 'character_profile'
             && options.fieldName === '待办事项'
-            && Array.isArray(options.deletedTodoIdentities)
-            && options.deletedTodoIdentities.length) {
-            return YuzukiMemory.TodoManager?.reconcileTodoTexts?.(current, expected, rebuilt, {
+            && typeof YuzukiMemory.TodoManager?.reconcileTodoTexts === 'function') {
+            // Expiry cleanup renumbers todos even without a manual deletion marker.
+            // Compare individual identities so formatting changes cannot preserve a deleted floor's list.
+            return YuzukiMemory.TodoManager.reconcileTodoTexts(current, expected, rebuilt, {
                 deletedIdentities: options.deletedTodoIdentities,
-            }) ?? String(current || '');
+            });
         }
         const currentItems = splitAppendValue(current, table);
         const expectedItems = splitAppendValue(expected, table);

@@ -707,8 +707,15 @@
     }
 
     function reconcileTodoTexts(current = '', expected = '', rebuilt = '', options = {}) {
-        const currentItems = parseTodoItems(current);
-        const expectedItems = parseTodoItems(expected);
+        // Legacy undated append cells use Chinese semicolons without item markers.
+        // Keep their item boundaries while dated todo descriptions stay intact.
+        const parseReplayItems = (text) => parseTodoItems(text).flatMap((item) => (
+            !item.dateTime && item.rawContent.includes('；')
+                ? parseTodoItems(item.rawContent.replace(/；/g, '\n'))
+                : [item]
+        ));
+        const currentItems = parseReplayItems(current);
+        const expectedItems = parseReplayItems(expected);
         const deletedIdentities = normalizeDeletedTodoIdentities(options?.deletedIdentities);
         const deleted = new Set(deletedIdentities);
         const currentByIdentity = new Map(currentItems.map((item) => [getTodoIdentity(item), item]));
@@ -717,7 +724,7 @@
             .map(getTodoIdentity)
             .filter((identity) => !currentByIdentity.has(identity)));
 
-        const restored = parseTodoItems(rebuilt)
+        const restored = parseReplayItems(rebuilt)
             .filter((item) => {
                 const identity = getTodoIdentity(item);
                 return !deleted.has(identity) && !externallyRemoved.has(identity);

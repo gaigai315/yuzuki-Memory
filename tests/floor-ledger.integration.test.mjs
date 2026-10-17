@@ -720,8 +720,97 @@ test('deleting assistant floors removes their append items but keeps later manua
     assert.equal(rebuiltRecord.values.角色名, '爱丽丝');
     assert.equal(rebuiltRecord.values.身份, '');
     assert.equal(rebuiltRecord.values.当前位置, '');
-    assert.equal(rebuiltRecord.values.待办事项, '用户手工补充');
+    assert.deepEqual(
+        window.YuzukiMemory.TodoManager.parseTodoItems(rebuiltRecord.values.待办事项).map((item) => item.text),
+        ['用户手工补充'],
+    );
     assert.equal(rebuiltRecord.values.约定, '用户手工约定');
+});
+
+test('deleting a source floor removes its renumbered todos after automatic expiry cleanup', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const todoManager = window.YuzukiMemory.TodoManager;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('2540年1月1日 15:25，进入贸易港'),
+        assistantMemoryMessage([
+            '#角色档案',
+            '[巴隆] | 年龄: 45 | 身份: 管事 | #待办事项: 〔1〕2540-01-01 15:30·检查仓库（低）;〔2〕2540-01-01 16:15·接收展品（高）;〔3〕2540-01-01 20:00·主持晚间营业（中）',
+        ].join('\n')),
+    ];
+    assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1, dispatch: false }).success, true);
+    storedState.activeRecordIds.character_profile = storedState.records.character_profile[0].id;
+
+    const storage = window.YuzukiMemory.Storage;
+    const previousGetSessionId = storage.getCurrentSessionId;
+    storage.getCurrentSessionId = () => 'chat:test';
+    try {
+        const cleanup = todoManager.cleanupExpiredTodos({
+            storyTime: todoManager.parseStoryTimeText('<globalTime>2540年1月1日 16:05</globalTime>'),
+        });
+        assert.equal(cleanup.todoRemovedCount, 1);
+    } finally {
+        if (previousGetSessionId) storage.getCurrentSessionId = previousGetSessionId;
+        else delete storage.getCurrentSessionId;
+    }
+    assert.match(storedState.records.character_profile[0].values.待办事项, /^〔1〕2540-01-01 16:15/);
+
+    chat.pop();
+    assert.equal(ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true }).changed, true);
+    assert.deepEqual(storedState.records.character_profile, [], 'expired-item renumbering must not turn surviving AI todos into manual additions');
+    assert.equal(storedState.activeRecordIds.character_profile, undefined);
+});
+
+test('deleting a middle floor removes only its todos after list renumbering', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const todoManager = window.YuzukiMemory.TodoManager;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [
+        userMessage('开始'),
+        assistantMemoryMessage('#角色档案\n[巴隆] | 身份: 管事 | #待办事项: 〔1〕2540-01-01 15:30·检查仓库（低）;〔2〕2540-01-01 16:15·接收展品（高）'),
+        userMessage('继续'),
+        assistantMemoryMessage('#角色档案\n[巴隆] | 当前位置: 贸易港 | #待办事项: 〔1〕2540-01-01 20:00·主持晚间营业（中）'),
+    ];
+    for (const floor of [1, 3]) {
+        assert.equal(parser.applyMemoryText(chat[floor].mes, { floor, dispatch: false }).success, true);
+    }
+    const record = storedState.records.character_profile[0];
+    record.values.待办事项 = todoManager.pruneTodoText(
+        record.values.待办事项,
+        todoManager.parseStoryTimeText('<globalTime>2540年1月1日 16:05</globalTime>'),
+    ).value;
+
+    chat.splice(1, 1);
+    ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
+    const rebuilt = storedState.records.character_profile[0];
+    assert.equal(rebuilt.values.身份, '');
+    assert.equal(rebuilt.values.当前位置, '贸易港');
+    assert.deepEqual(todoManager.parseTodoItems(rebuilt.values.待办事项).map((item) => item.text), ['主持晚间营业']);
+});
+
+test('deleting a floor keeps individually edited and added todos without keeping its unchanged todos', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const todoManager = window.YuzukiMemory.TodoManager;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [assistantMemoryMessage('#角色档案\n[巴隆] | 身份: 管事 | #待办事项: 〔1〕2540-01-01 16:15·接收展品（高）;〔2〕2540-01-01 20:00·主持晚间营业（中）')];
+    assert.equal(parser.applyMemoryText(chat[0].mes, { floor: 0, dispatch: false }).success, true);
+    const record = storedState.records.character_profile[0];
+    record.values.待办事项 = todoManager.updateTodoItemAt(record.values.待办事项, 0, {
+        text: '用户修改的接收安排',
+    }).value;
+    record.values.待办事项 = todoManager.mergeTodoTexts(record.values.待办事项, '〔1〕2540-01-01 21:00·用户补充的安排（低）');
+
+    chat = [];
+    ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
+    const rebuilt = storedState.records.character_profile[0];
+    assert.equal(rebuilt.values.身份, '');
+    assert.deepEqual(todoManager.parseTodoItems(rebuilt.values.待办事项).map((item) => item.text), [
+        '用户修改的接收安排',
+        '用户补充的安排',
+    ]);
 });
 
 test('user-deleted todos do not return in later assistant floors or ledger replay', () => {

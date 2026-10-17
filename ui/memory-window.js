@@ -15114,6 +15114,8 @@
         const list = document.createElement('ul');
         [
             '【优化】优化任务请求格式，提升总结、填表等功能的模型兼容性。',
+            '【优化】自动填表、总结失败后停止本次任务并弹窗显示错误，由用户点击“重试”重新执行，取消后台定时自动重试。',
+            '【修复】修复删除聊天楼层后待办事项及角色空记录残留的问题，正确撤回被删楼层生成的待办，并保留手工修改和其他楼层的数据。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
