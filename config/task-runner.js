@@ -69,7 +69,6 @@
     let autoTaskMessageSignature = '';
     let autoTaskMessageStableSince = 0;
     let autoTaskRetryPending = false;
-    let autoTaskRetryAttempt = 0;
     let foregroundGenerationState = 'unknown';
     let autoTaskAbortController = null;
     let autoTaskRequestPromise = null;
@@ -80,8 +79,6 @@
     let summaryDeletionSyncRunning = false;
     const AUTO_TASK_MESSAGE_STABLE_MS = 1200;
     const SUMMARY_DELETION_SYNC_DELAY_MS = 250;
-    const AUTO_TASK_RETRY_BASE_MS = 2500;
-    const AUTO_TASK_RETRY_MAX_MS = 30000;
 
     function isPluginTaskBusy() {
         return window.isSummarizing === true
@@ -155,17 +152,6 @@
 
     function resetAutoTaskRetry() {
         autoTaskRetryPending = false;
-        autoTaskRetryAttempt = 0;
-    }
-
-    function queueAutoTaskRetry() {
-        autoTaskRetryPending = true;
-        autoTaskRetryAttempt += 1;
-        autoTaskArmed = true;
-        return Math.min(
-            AUTO_TASK_RETRY_MAX_MS,
-            AUTO_TASK_RETRY_BASE_MS * (2 ** Math.min(autoTaskRetryAttempt - 1, 4))
-        );
     }
 
     function retryPendingAutoTask(expectedSessionId = '') {
@@ -178,18 +164,9 @@
         autoTaskSessionActivated = true;
         autoTaskArmed = true;
         autoTaskRetryPending = true;
-        autoTaskRetryAttempt = 0;
         scheduleAutoSummary(autoTaskCallbacks, 0);
         console.info('[yuzuki-Memory] 用户已将失败的自动记忆任务重新加入后台队列。');
         return true;
-    }
-
-    function isRetryableAutoTaskFailure(failure) {
-        if (failure?.aborted === true) return false;
-        const status = Number(failure?.status ?? failure?.upstreamError?.code);
-        if ([408, 409, 425, 429, 500, 502, 503, 504].includes(status)) return true;
-        const detail = String(failure?.error?.message || failure?.error || failure?.message || '').toLowerCase();
-        return /(?:busy|concurr|parallel|already generating|generation in progress|rate.?limit|too many requests|timeout|timed out|network|fetch failed|socket|econn|gateway|temporar|正在生成|生成中|请求进行中|并发|繁忙|限流|超时|网关)/i.test(detail);
     }
 
     function formatDisplayFloorRange(start, end) {
@@ -199,15 +176,16 @@
     }
 
     function notifyAutoTaskFailure(task = {}, error = '', callbacks = {}) {
+        window.clearTimeout(autoSummaryTimer);
+        autoTaskArmed = false;
+        resetAutoTaskRetry();
         const taskTitle = String(task?.title || '自动记忆任务').trim();
         const failure = error && typeof error === 'object' ? error : { error };
         const message = String(failure?.error?.message || failure?.error || failure?.message || '未知错误').trim();
         const range = Number.isFinite(Number(task?.start)) && Number.isFinite(Number(task?.end))
             ? `（楼层 ${formatDisplayFloorRange(task.start, task.end)}）`
             : '';
-        const retryHint = isRetryableAutoTaskFailure(failure)
-            ? '指针未推进，任务已保留在后台队列并将自动重试。'
-            : (task?.type === 'trace' ? '填表指针未推进，后续正文结束后会继续尝试补跑。' : '总结指针未推进，后续正文结束后会继续尝试补跑。');
+        const retryHint = '进度未推进，本次任务已停止，可点击“重试”手动重新执行。';
         const notification = `${taskTitle}失败${range}。${retryHint}`;
         const detail = message
             ? `${taskTitle}失败${range}：${message}\n${retryHint}`
@@ -3643,7 +3621,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             busy: true,
             saveFailed: true,
             range: { start: task.start, end: task.end },
-            error: `${task.title}${stage}失败，未标记为完成，任务将稍后重试。`,
+            error: `${task.title}${stage}失败，未标记为完成，请手动重试。`,
         };
     }
 
@@ -4292,10 +4270,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                     if (result?.success === false) {
                         console.warn('[yuzuki-Memory] Auto task skipped:', result.error);
                         notifyAutoTaskFailure(activeTask, result, callbacks);
-                        if (isRetryableAutoTaskFailure(result)) {
-                            nextScheduleDelay = queueAutoTaskRetry();
-                            console.info(`[yuzuki-Memory] ${activeTask.title} 已保留在后台队列，${nextScheduleDelay}ms 后重试。`);
-                        }
                         break;
                     }
                     if (result?.skipped || result?.postponed) {
@@ -4348,10 +4322,6 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 } else {
                     console.warn('[yuzuki-Memory] Auto task failed:', error);
                     notifyAutoTaskFailure(task, error, callbacks);
-                    if (isRetryableAutoTaskFailure(error)) {
-                        nextScheduleDelay = queueAutoTaskRetry();
-                        console.info(`[yuzuki-Memory] ${task.title} 已保留在后台队列，${nextScheduleDelay}ms 后重试。`);
-                    }
                 }
             } finally {
                 autoTaskAbortController = null;

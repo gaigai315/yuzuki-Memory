@@ -101,11 +101,13 @@ function createHarness(options = {}) {
         autoVectorizeAfterHistory: options.autoVectorizeAfterHistory === true,
         autoSyncSummaryWorldbook: options.autoSyncSummaryWorldbook === true,
         hideSummaryFloors: false,
+        ...options.autoSummarySettings,
     };
     const pluginSettings = {
         enableFilling: false,
         fillMode: 'realtime',
         traceBatchEnabled: false,
+        ...options.pluginSettings,
     };
     const summaryResponse = options.summaryResponse
         || '<Memory>\n【主线总结】\n某日,10:00-10:05 [测试地点] 测试事件完成。\n</Memory>';
@@ -483,11 +485,81 @@ test('failed automatic summary persistence never reports task success', async ()
     assert.equal(harness.stateRef.current.records.memory_summary.length, 0);
 });
 
+for (const taskType of ['trace', 'summary', 'history']) {
+    for (const throwsError of [false, true]) {
+        test(`${taskType} failure (${throwsError ? 'thrown timeout' : 'temporary API error'}) stops until manually retried`, async () => {
+            const harness = createHarness({
+                autoSummarySettings: {
+                    summaryEnabled: taskType === 'summary',
+                    historyEnabled: taskType === 'history',
+                },
+                pluginSettings: taskType === 'trace' ? {
+                    enableFilling: true,
+                    fillMode: 'batch',
+                    traceBatchEnabled: true,
+                    traceRunMode: 'silent',
+                } : {},
+                generateWithTavern: () => {
+                    if (throwsError) throw new Error('network timeout');
+                    return { success: false, status: taskType === 'summary' ? 429 : 503, error: 'service busy' };
+                },
+            });
+
+            harness.advance();
+            await harness.runNextTimer();
+
+            assert.equal(harness.generatedCount, 1);
+            assert.equal(harness.pendingTimerCount, 0, 'failure must not schedule a background retry');
+            assert.equal(harness.failurePayloads.length, 1);
+            assert.equal(harness.failurePayloads[0].task.type, taskType);
+            assert.match(harness.failurePayloads[0].retryHint, /手动/);
+            assert.equal(harness.taskRunner.isBackgroundWorkPending(), false);
+            assert.equal(harness.stateRef.current.settings.manualPointers[taskType === 'history' ? 'historySummary' : taskType], 0);
+
+            harness.advance(60000);
+            harness.emit('character_message_rendered');
+            harness.emit('generation_ended');
+            assert.equal(harness.pendingTimerCount, 0, 'duplicate events for the same response must not retry');
+            assert.equal(harness.taskRunner.retryPendingAutoTask('another-chat'), false);
+            assert.equal(harness.pendingTimerCount, 0);
+            assert.equal(harness.taskRunner.retryPendingAutoTask(harness.stateRef.current.sessionId), true);
+            harness.advance();
+            await harness.runNextTimer();
+            assert.equal(harness.generatedCount, 2, 'the retry button must allow one new attempt');
+            assert.equal(harness.pendingTimerCount, 0, 'a failed manual retry must stop again');
+            assert.equal(harness.failurePayloads.length, 2);
+        });
+    }
+}
+
+test('foreground interruption still resumes automatically without a failure dialog', async () => {
+    const harness = createHarness({
+        generateWithTavern: (attempt, summaryResponse) => {
+            if (attempt === 1) {
+                harness.emit('generation_started', 'normal', {}, false);
+                return { success: false, aborted: true, error: '已中断发送' };
+            }
+            return { success: true, text: summaryResponse };
+        },
+    });
+
+    harness.advance();
+    await harness.runNextTimer();
+    assert.equal(harness.generatedCount, 1);
+    assert.equal(harness.failurePayloads.length, 0);
+    harness.emit('generation_ended');
+    harness.advance();
+    await harness.runNextTimer();
+    assert.equal(harness.generatedCount, 2);
+    assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 200);
+    assert.equal(harness.failurePayloads.length, 0);
+});
+
 test('explicit retry immediately requeues a failed automatic task for the same chat', async () => {
     const harness = createHarness({
         generateWithTavern: (attempt, summaryResponse) => (
             attempt === 1
-                ? { success: false, status: 400, error: 'invalid upstream response' }
+                ? { success: false, status: 503, error: 'service temporarily unavailable' }
                 : { success: true, text: summaryResponse }
         ),
     });
@@ -496,7 +568,7 @@ test('explicit retry immediately requeues a failed automatic task for the same c
     await harness.runNextTimer();
 
     assert.equal(harness.generatedCount, 1);
-    assert.equal(harness.pendingTimerCount, 0, 'a non-retryable failure must wait for the user retry');
+    assert.equal(harness.pendingTimerCount, 0, 'even a temporary failure must wait for the user retry');
     assert.equal(harness.failurePayloads.length, 1);
     assert.equal(harness.failurePayloads[0].sessionId, harness.stateRef.current.sessionId);
     assert.equal(harness.taskRunner.retryPendingAutoTask(harness.failurePayloads[0].sessionId), true);

@@ -19029,7 +19029,7 @@
                 if (!root) return false;
                 return openTaskResultConfirmDialog(root, {
                     title: `${payload.taskTitle || '自动任务'}失败`,
-                    description: '以下为本次请求最终返回的错误信息，此次结果未写入。',
+                    description: '以下为本次请求最终返回的错误信息，此次结果未写入。任务已停止，请自行决定是否点击“重试”。',
                     result: { text: String(payload.message || '未知错误') },
                     readOnly: true,
                     retryLabel: '重试',
