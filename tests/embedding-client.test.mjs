@@ -544,6 +544,37 @@ test('empty summary synchronization removes its vector book and indexes', async 
     assert.equal(purgedLocalBook, created.bookId);
 });
 
+for (const managedBook of [
+    { label: 'character profile', sync: 'syncCharacterProfilesToBook' },
+    { label: 'item tracking', sync: 'syncItemTrackingToBook' },
+    { label: 'world setting', sync: 'syncWorldSettingsToBook' },
+]) {
+    test(`empty ${managedBook.label} synchronization removes its vector book and indexes`, async () => {
+        const sandbox = await createVectorStoreSandbox();
+        const store = sandbox.window.YuzukiMemory.VectorStore;
+        const created = await store[managedBook.sync](['仍然有效的表格记录'], 'chat:test', '测试托管书');
+        const purgedBackendBooks = [];
+        const purgedLocalBooks = [];
+        store.purgeBackendBook = async (bookId) => {
+            purgedBackendBooks.push(bookId);
+            return true;
+        };
+        store.purgeLocalBook = async (bookId) => {
+            purgedLocalBooks.push(bookId);
+            return true;
+        };
+
+        const cleared = await store[managedBook.sync]([], 'chat:test', '测试托管书');
+
+        assert.equal(cleared.success, true);
+        assert.equal(cleared.removed, true);
+        assert.equal(cleared.bookId, created.bookId);
+        assert.equal(store.getBook(created.bookId), null);
+        assert.deepEqual(purgedBackendBooks, [created.bookId]);
+        assert.deepEqual(purgedLocalBooks, [created.bookId]);
+    });
+}
+
 test('session-managed books are scoped to their chat while imported books remain global', async () => {
     const sandbox = await createVectorStoreSandbox();
     const memory = sandbox.window.YuzukiMemory;

@@ -1706,6 +1706,11 @@
             const id = this.findSessionBookId(BOOK_KIND_CHARACTER_PROFILE, normalizedSessionId)
                 || this.getCharacterProfileBookId(normalizedSessionId);
             const oldBook = this.library[id];
+            if (!normalizedChunks.length) {
+                if (!oldBook) return { success: true, bookId: id, count: 0, unchanged: true, removed: false };
+                await this.deleteBook(id);
+                return { success: true, bookId: id, count: 0, removed: true };
+            }
             const normalizedName = String(bookName || '').trim() || '当前会话角色档案';
             const autoName = oldBook ? oldBook.autoName !== false : true;
             const nextName = autoName ? normalizedName : String(oldBook?.name || normalizedName);
@@ -1745,6 +1750,11 @@
             const id = this.findSessionBookId(BOOK_KIND_ITEM_TRACKING, normalizedSessionId)
                 || this.getItemTrackingBookId(normalizedSessionId);
             const oldBook = this.library[id];
+            if (!normalizedChunks.length) {
+                if (!oldBook) return { success: true, bookId: id, count: 0, unchanged: true, removed: false };
+                await this.deleteBook(id);
+                return { success: true, bookId: id, count: 0, removed: true };
+            }
             const normalizedName = String(bookName || '').trim() || '当前会话物品追踪';
             const autoName = oldBook ? oldBook.autoName !== false : true;
             const nextName = autoName ? normalizedName : String(oldBook?.name || normalizedName);
@@ -1784,6 +1794,11 @@
             const id = this.findSessionBookId(BOOK_KIND_WORLD_SETTING, normalizedSessionId)
                 || this.getWorldSettingBookId(normalizedSessionId);
             const oldBook = this.library[id];
+            if (!normalizedChunks.length) {
+                if (!oldBook) return { success: true, bookId: id, count: 0, unchanged: true, removed: false };
+                await this.deleteBook(id);
+                return { success: true, bookId: id, count: 0, removed: true };
+            }
             const normalizedName = String(bookName || '').trim() || '当前会话世界设定';
             const autoName = oldBook ? oldBook.autoName !== false : true;
             const nextName = autoName ? normalizedName : String(oldBook?.name || normalizedName);

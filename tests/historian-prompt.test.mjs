@@ -396,7 +396,7 @@ test('story director config switch reads and updates the runtime storage state i
                     queriedSessionId = sessionId;
                     return sessionId === 'chat:test';
                 },
-                cancelActiveRun: () => { cancelled = true; },
+                disableAutomaticPlanning: () => { cancelled = true; },
             },
         },
         getStorage: () => storage,
@@ -428,7 +428,7 @@ test('story director config switch reads and updates the runtime storage state i
     assert.equal(cancelled, true);
     assert.equal(savedState.storyDirector.enabled, false);
     assert.equal(savedState.storyDirector.ledger, '保留导演账本');
-    assert.equal(savedState.storyDirector.pendingCard, '');
+    assert.equal(savedState.storyDirector.pendingCard, '<下轮导演卡>保留卡片</下轮导演卡>');
     assert.equal(savedState.records.character_profile[0].values.角色名, '柚月');
     assert.equal(savedOptions.immediate, true);
     assert.equal(savedOptions.saveOrigin, 'manual');

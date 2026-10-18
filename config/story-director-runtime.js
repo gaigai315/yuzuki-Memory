@@ -83,6 +83,7 @@
     let messageMutationTimer = null;
     let activeAbortController = null;
     let activeRunSignature = '';
+    let activeRunIsManual = false;
     let dialogueMutationSnapshot = '';
     let phoneWechatDataLoading = null;
     let phoneCallDataLoading = null;
@@ -1976,7 +1977,8 @@
     }
 
     async function runDirector(source, options = {}) {
-        if (!isStoryDirectorEnabled(source?.sessionId)) return { skipped: true, reason: 'disabled' };
+        const manualRun = options.manual === true;
+        if (!manualRun && !isStoryDirectorEnabled(source?.sessionId)) return { skipped: true, reason: 'disabled' };
         if (isRunning()) return { skipped: true, reason: 'director-busy' };
         const promptEntry = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
         if (!promptEntry || !String(promptEntry.prompt || '').trim()) return { skipped: true, reason: 'disabled' };
@@ -2008,9 +2010,10 @@
         const controller = new AbortController();
         activeAbortController = controller;
         activeRunSignature = source.signature;
+        activeRunIsManual = manualRun;
         dispatchRunState(true, sessionId);
         const assertActive = () => {
-            if (controller.signal.aborted || !isStoryDirectorEnabled(sessionId)) throw new DOMException('Aborted', 'AbortError');
+            if (controller.signal.aborted || (!manualRun && !isStoryDirectorEnabled(sessionId))) throw new DOMException('Aborted', 'AbortError');
             if (!sourceIsLatestDialogue(source)) throw new Error('导演完成前正文分支或会话已经变化。');
         };
         try {
@@ -2156,20 +2159,15 @@
             return { success: false, aborted, errorNotified, error: String(error?.message || error || '') };
         } finally {
             if (activeAbortController === controller) activeAbortController = null;
-            if (activeRunSignature === source.signature) activeRunSignature = '';
+            if (activeRunSignature === source.signature) {
+                activeRunSignature = '';
+                activeRunIsManual = false;
+            }
             dispatchRunState(false, sessionId);
         }
     }
 
     async function replanLatest() {
-        if (!isStoryDirectorEnabled()) {
-            return {
-                success: false,
-                skipped: true,
-                reason: 'disabled',
-                error: '请先在插件配置中开启剧情规划。',
-            };
-        }
         const promptEntry = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
         if (!promptEntry || !String(promptEntry.prompt || '').trim()) {
             return {
@@ -2216,7 +2214,7 @@
         window.clearTimeout(runTimer);
         runTimer = null;
         console.info('[yuzuki-Memory] 手动剧情规划开始运行。', { messageIndex: getSourceIndex(source) });
-        return runDirector(source, { replaceLatestAssistantRecord: true });
+        return runDirector(source, { manual: true, replaceLatestAssistantRecord: true });
     }
 
     function refreshDirectorCardAnchorsAfterEdit(messageIndex) {
@@ -2382,6 +2380,12 @@
         activeAbortController?.abort?.(reason);
     }
 
+    function disableAutomaticPlanning(reason = 'automatic story director disabled') {
+        window.clearTimeout(runTimer);
+        runTimer = null;
+        if (!activeRunIsManual) activeAbortController?.abort?.(reason);
+    }
+
     function getGenerationTargetUser(generationType = 'normal') {
         const normalizedType = String(generationType || 'normal').toLowerCase();
         const chat = getContext()?.chat;
@@ -2418,7 +2422,6 @@
     }
 
     function resolveInjectableCard(options = {}) {
-        if (!isStoryDirectorEnabled()) return '';
         if (!YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.()) return '';
         const generationType = String(options.generationType || 'normal').toLowerCase();
         if (!['normal', 'regenerate', 'swipe'].includes(generationType)) return '';
@@ -2690,6 +2693,7 @@
         discardPendingCard,
         scheduleDirector,
         cancelActiveRun,
+        disableAutomaticPlanning,
         isStoryDirectorEnabled,
         isRunning,
         runDirector,

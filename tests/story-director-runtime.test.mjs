@@ -2302,7 +2302,7 @@ test('automatic planning does not notify when its request fails', async () => {
     assert.equal(notifications.length, 0);
 });
 
-test('missing or disabled switch prevents requests and card injection until enabled', async () => {
+test('disabled automatic planning still allows manual planning and card injection', async () => {
     const { sandbox, memory, chat, requests, getState, setEnabled } = createSandbox({ enabled: null });
     const runtime = memory.StoryDirectorRuntime;
     let scheduledCount = 0;
@@ -2311,16 +2311,13 @@ test('missing or disabled switch prevents requests and card injection until enab
     runtime.scheduleDirector('assistant-updated', 0);
     assert.equal(scheduledCount, 0);
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).reason, 'disabled');
-    assert.match((await runtime.replanLatest()).error, /开启剧情规划/);
-    assert.equal(requests.length, 0);
-
-    setEnabled(true);
     assert.equal((await runtime.replanLatest()).success, true);
+    assert.equal(requests.length, 2);
     const savedLedger = getState().storyDirector.ledger;
     chat.push({ is_user: true, mes: '下一轮' });
     setEnabled(false);
-    assert.equal(runtime.getInjectableCard(), '');
-    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), false);
+    assert.match(runtime.getInjectableCard(), /<下轮导演卡>/);
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
     runtime.clearPendingCard('disabled');
     assert.equal(getState().storyDirector.pendingCard, '');
     assert.equal(getState().storyDirector.ledger, savedLedger);

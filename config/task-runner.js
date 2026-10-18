@@ -233,7 +233,8 @@
         const range = Number.isFinite(Number(task?.start)) && Number.isFinite(Number(task?.end))
             ? `（楼层 ${formatDisplayFloorRange(task.start, task.end)}）`
             : '';
-        const detail = `${taskTitle}已开始${range}，正在后台请求填表 API，可继续发送正文。`;
+        const apiLabel = task?.type === 'trace' ? '填表 API' : '总结 API';
+        const detail = `${taskTitle}已开始${range}，正在后台请求${apiLabel}，请等待完成后再继续发送正文。`;
         try {
             if (typeof toastr !== 'undefined' && typeof toastr.info === 'function') {
                 toastr.info(detail, '柚月记忆', { timeOut: 5000, preventDuplicates: true });

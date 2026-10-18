@@ -229,9 +229,9 @@
     };
     const FIXED_TABLE_ID = 'memory_summary';
     const MANAGED_VECTOR_TABLES = {
-        character_profile: { queue: 'character', syncFlag: 'characterVectorSynced', label: '角色档案' },
-        item_tracking: { queue: 'itemTracking', syncFlag: 'itemTrackingVectorSynced', label: '物品追踪' },
-        world_setting: { queue: 'worldSetting', syncFlag: 'worldSettingVectorSynced', label: '世界设定' },
+        character_profile: { queue: 'character', kind: 'character_profile', syncFlag: 'characterVectorSynced', label: '角色档案' },
+        item_tracking: { queue: 'itemTracking', kind: 'item_tracking', syncFlag: 'itemTrackingVectorSynced', label: '物品追踪' },
+        world_setting: { queue: 'worldSetting', kind: 'world_setting', syncFlag: 'worldSettingVectorSynced', label: '世界设定' },
     };
     const DEFAULT_STATE_REVISION = 16;
     const DEFAULT_TABLES = [
@@ -2652,17 +2652,15 @@
         const director = state.storyDirector && typeof state.storyDirector === 'object'
             ? state.storyDirector
             : {};
-        if (!enabled) YuzukiMemory.StoryDirectorRuntime?.cancelActiveRun?.('story director disabled');
+        if (!enabled) YuzukiMemory.StoryDirectorRuntime?.disableAutomaticPlanning?.('automatic story director disabled');
         state.storyDirector = {
             ...director,
             enabled,
             enabledUpdatedAt: Date.now(),
-            pendingCard: enabled ? String(director.pendingCard || '') : '',
-            source: enabled && director.source && typeof director.source === 'object' ? director.source : null,
-            status: enabled
-                ? (director.status === 'disabled' ? 'idle' : String(director.status || 'idle'))
-                : 'disabled',
-            lastError: enabled ? String(director.lastError || '') : '',
+            pendingCard: String(director.pendingCard || ''),
+            source: director.source && typeof director.source === 'object' ? director.source : null,
+            status: director.status === 'disabled' ? 'idle' : String(director.status || 'idle'),
+            lastError: String(director.lastError || ''),
         };
         const saved = getStorage()?.saveState?.(state, createDefaultState(), sessionId, {
             force: true,
@@ -6187,7 +6185,7 @@
         if (!store) return { success: false, error: '向量书模块尚未加载' };
         const result = await store.syncCharacterProfilesToBook(getCharacterVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', `${getCurrentChatVectorBookName()} · 角色档案`);
         if (!result.success) return result;
-        if (options.vectorize === true) {
+        if (options.vectorize === true && result.removed !== true && result.count > 0) {
             const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
             return { ...result, vectorized: true, vectorizeResult };
         }
@@ -6199,7 +6197,7 @@
         if (!store) return { success: false, error: '向量书模块尚未加载' };
         const result = await store.syncItemTrackingToBook(getItemTrackingVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', `${getCurrentChatVectorBookName()} · 物品追踪`);
         if (!result.success) return result;
-        if (options.vectorize === true) {
+        if (options.vectorize === true && result.removed !== true && result.count > 0) {
             const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
             return { ...result, vectorized: true, vectorizeResult };
         }
@@ -6211,7 +6209,7 @@
         if (!store) return { success: false, error: '向量书模块尚未加载' };
         const result = await store.syncWorldSettingsToBook(getWorldSettingVectorChunks(), getStorage()?.getCurrentSessionId?.() || 'default', `${getCurrentChatVectorBookName()} · 世界设定`);
         if (!result.success) return result;
-        if (options.vectorize === true) {
+        if (options.vectorize === true && result.removed !== true && result.count > 0) {
             const vectorizeResult = await store.vectorizeBook(result.bookId, options.onProgress || null);
             return { ...result, vectorized: true, vectorizeResult };
         }
@@ -6231,6 +6229,20 @@
     function hasWorldSettingVectorRecords() {
         return isTableAutoVectorizeEnabled('world_setting')
             || getRecords('world_setting').some((record) => record?.worldSettingVectorSynced === true);
+    }
+
+    function hasManagedVectorBook(tableId) {
+        const config = getManagedVectorTableConfig(tableId);
+        const store = getVectorStore();
+        const sessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId || 'default';
+        return Boolean(config?.kind && store?.findSessionBookId?.(config.kind, sessionId));
+    }
+
+    async function syncExistingSummaryVectorBook() {
+        const store = await ensureVectorStoreReady();
+        const sessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId || 'default';
+        if (!store?.findSessionBookId?.('summary', sessionId)) return { success: true, unchanged: true };
+        return syncSummaryToVectorBook({ vectorize: false });
     }
 
     function getManagedVectorTableByQueue(kind) {
@@ -6345,7 +6357,7 @@
     }
 
     function scheduleCharacterVectorSync(options = {}) {
-        if (!hasCharacterVectorRecords() && options.force !== true) {
+        if (!hasCharacterVectorRecords() && !hasManagedVectorBook('character_profile') && options.force !== true) {
             clearManagedVectorRetry('character');
             return;
         }
@@ -6353,7 +6365,7 @@
     }
 
     function scheduleItemTrackingVectorSync(options = {}) {
-        if (!hasItemTrackingVectorRecords() && options.force !== true) {
+        if (!hasItemTrackingVectorRecords() && !hasManagedVectorBook('item_tracking') && options.force !== true) {
             clearManagedVectorRetry('itemTracking');
             return;
         }
@@ -6361,7 +6373,7 @@
     }
 
     function scheduleWorldSettingVectorSync(options = {}) {
-        if (!hasWorldSettingVectorRecords() && options.force !== true) {
+        if (!hasWorldSettingVectorRecords() && !hasManagedVectorBook('world_setting') && options.force !== true) {
             clearManagedVectorRetry('worldSetting');
             return;
         }
@@ -12198,9 +12210,9 @@
 
         card.append(
             createPluginConfigHeader(),
-            createPluginConfigRow('注入记忆', '处理 {{MEMORY}}、{{MEMORY_TABLE_表名}}、{{MEMORY_SUMMARY_标题或序号}} 等变量，并按表/总结分消息注入。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
-            createPluginConfigRow('注入向量记忆', '开启后处理 {{VECTOR_MEMORY}}，或在没有占位符时自动注入向量召回内容。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
-            createPluginConfigRow('剧情规划', '仅对当前会话生效。开启后在正文与记忆任务完成时规划下一轮；关闭后不运行导演，也不注入导演卡。', 'fa-solid fa-clapperboard', createConfigSwitch(getStoryDirectorEnabled(), 'storyDirectorEnabled')),
+            createPluginConfigRow('注入记忆', '将表格内容及总结内容注入正文请求中。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
+            createPluginConfigRow('注入向量化记忆', '启用向量化功能，并将召回的记忆注入请求中。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
+            createPluginConfigRow('自动剧情规划', '开启后，AI 正文回复后自动规划；不开启则为手动规划。', 'fa-solid fa-clapperboard', createConfigSwitch(getStoryDirectorEnabled(), 'storyDirectorEnabled')),
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
             createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标；单击打开记忆，双击打开角色图谱，长按查看当前最新导演卡。图标样式和拖动位置都会记住。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon'), createFloatingIconStylePicker(settings.floatingIconStyle)),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
@@ -15113,9 +15125,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '【优化】优化任务请求格式，提升总结、填表等功能的模型兼容性。',
-            '【优化】自动填表、总结失败后停止本次任务并弹窗显示错误，由用户点击“重试”重新执行，取消后台定时自动重试。',
-            '【修复】修复删除聊天楼层后待办事项及角色空记录残留的问题，正确撤回被删楼层生成的待办，并保留手工修改和其他楼层的数据。',
+            '自动剧情规划关闭后，仍可手动点击规划。',
+            '表格或总结清空后，自动删除对应的向量化书。',
+            '修正自动填表与总结的运行提示。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -18441,7 +18453,7 @@
                     if (pluginSettingKey === 'storyDirectorEnabled') {
                         if (!updateStoryDirectorEnabled(isOn)) {
                             setConfigSwitchState(configSwitch, !isOn);
-                            showTaskToast('当前会话尚未就绪，剧情规划开关未保存。', 'error');
+                            showTaskToast('当前会话尚未就绪，自动剧情规划开关未保存。', 'error');
                         }
                     } else if (pluginSettingKey === 'taskWorldbookEnabled') {
                         const saved = saveTaskWorldbookSelection({ enabled: isOn, initialized: getTaskWorldbookSelection().initialized });
@@ -18833,6 +18845,7 @@
                 scheduleCharacterVectorSync();
                 scheduleItemTrackingVectorSync();
                 scheduleWorldSettingVectorSync();
+                void syncExistingSummaryVectorBook();
             }
         }, 220);
 
@@ -18848,6 +18861,7 @@
         if (taskRunnerBusy && event?.detail?.source === 'task-runner') {
             refreshActiveWorkspace(root);
             scheduleAllManagedVectorSyncs();
+            void syncExistingSummaryVectorBook();
             return;
         }
         loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
@@ -18859,6 +18873,7 @@
         applyResolvedPromptSchemeToState({ save: false });
         refreshActiveWorkspace(root);
         scheduleAllManagedVectorSyncs();
+        void syncExistingSummaryVectorBook();
     }
 
     function bindMemoryStateUpdateListener() {
@@ -19061,6 +19076,7 @@
                     if (activeWorkspaceView === 'vector') renderVectorWorkspace(root);
                 }
                 scheduleAllManagedVectorSyncs({ delay: 0 });
+                void syncExistingSummaryVectorBook();
             },
         });
         getStorage()?.bindSessionChange?.((nextSessionId, previousSessionId) => {
@@ -19076,6 +19092,7 @@
             const root = document.getElementById(ROOT_ID);
             if (root) renderVectorWorkspace(root);
             scheduleAllManagedVectorSyncs();
+            void syncExistingSummaryVectorBook();
         });
 
     }

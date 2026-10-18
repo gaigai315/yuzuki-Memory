@@ -15,6 +15,7 @@ function createHarness(options = {}) {
     const saveCalls = [];
     const successToasts = [];
     const errorToasts = [];
+    const infoToasts = [];
     const promptedTasks = [];
     const resultConfirmations = [];
     const failurePayloads = [];
@@ -124,7 +125,9 @@ function createHarness(options = {}) {
             error(message) {
                 errorToasts.push(message);
             },
-            info() {},
+            info(message) {
+                infoToasts.push(message);
+            },
         },
         SillyTavern: { getContext: () => context },
         window: {
@@ -267,6 +270,7 @@ function createHarness(options = {}) {
         saveCalls,
         successToasts,
         errorToasts,
+        infoToasts,
         promptedTasks,
         resultConfirmations,
         failurePayloads,
@@ -483,6 +487,30 @@ test('failed automatic summary persistence never reports task success', async ()
     assert.equal(harness.updateCount, 0);
     assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 0);
     assert.equal(harness.stateRef.current.records.memory_summary.length, 0);
+});
+
+test('automatic batch trace asks users to wait before sending more story text', async () => {
+    const harness = createHarness({
+        pluginSettings: {
+            enableFilling: true,
+            fillMode: 'batch',
+            traceBatchEnabled: true,
+            traceRunMode: 'silent',
+        },
+        autoSummarySettings: {
+            summaryEnabled: false,
+            historyEnabled: false,
+        },
+        generateWithTavern: () => ({ success: false, status: 503, error: 'service busy' }),
+    });
+
+    harness.advance();
+    await harness.runNextTimer();
+
+    assert.equal(harness.infoToasts.length, 1);
+    assert.match(harness.infoToasts[0], /自动批量填表已开始/);
+    assert.match(harness.infoToasts[0], /正在后台请求填表 API，请等待完成后再继续发送正文/);
+    assert.doesNotMatch(harness.infoToasts[0], /可继续发送正文/);
 });
 
 for (const taskType of ['trace', 'summary', 'history']) {
