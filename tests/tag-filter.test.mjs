@@ -54,13 +54,14 @@ test('every plugin task sends instructions after source material for all model r
     for (const lastRole of ['user', 'assistant']) {
         await t.test(`source ends with ${lastRole}`, async () => {
             const chat = [
-                { is_user: true, name: '用户', mes: '最初行动' },
-                { is_user: false, name: '角色', mes: '<content>待处理正文</content>' },
+                { is_user: true, name: '用户', mes: '最初行动\n<thinking>FILTERED_OPEN_SUFFIX' },
+                { is_user: false, name: '角色', mes: 'FILTERED_CLOSING_PREFIX</thinking>\n<content>待处理正文</content>\n<thinking>FILTERED_PAIRED</thinking>\n<Memory>FILTERED_MEMORY</Memory>' },
                 ...(lastRole === 'user' ? [{ is_user: true, name: '用户', mes: '最后行动' }] : []),
             ];
             const originalChat = structuredClone(chat);
             const requests = [];
             const captures = [];
+            let activeTagPreset = { id: 'request-blacklist', blacklist: ['thinking'], whitelist: [] };
             const prompts = {
                 traceBatch: 'TRACE_TASK', summary: 'SUMMARY_TASK',
                 traceOptimize: 'TRACE_OPTIMIZE_TASK', summaryOptimize: 'SUMMARY_OPTIMIZE_TASK',
@@ -72,6 +73,8 @@ test('every plugin task sends instructions after source material for all model r
             const memory = {
                 GlobalSettings: { get(key, fallback) {
                     if (key === 'yzm_memory_global_plugin_settings') return { enableFilling: true, fillMode: 'batch' };
+                    if (key === 'yzm_memory_global_tag_presets') return [activeTagPreset];
+                    if (key === 'yzm_memory_global_tag_active_preset') return activeTagPreset.id;
                     if (key === 'yzm_memory_global_character_status_prompts') {
                         return [{ id: 'status', prompt: 'STATUS_TASK', growthPrompt: 'GROWTH_TASK' }];
                     }
@@ -117,12 +120,29 @@ test('every plugin task sends instructions after source material for all model r
                     assert.equal(result.error, 'request captured', label);
                     const messages = requests.at(-1).messages;
                     const tail = messages.at(-1);
-                    assert.equal(tail.role, 'user', label);
-                    assert.equal(tail.content.split(taskBoundary).length, 2, label);
-                    assert.ok(tail.content.indexOf(marker) > tail.content.indexOf(taskBoundary), label);
-                    assert.equal(messages.slice(0, -1).some((message) => message.content.includes(marker)), false, label);
-                    assert.deepEqual(captures.at(-1), messages, 'probe must show exactly the prepared request');
+                    const packedTask = ['runTrace', 'runSummary'].includes(method);
+                    if (packedTask) {
+                        const sourceMessages = messages.filter((message) => message.role === 'user');
+                        assert.equal(sourceMessages.length, 1, label);
+                        assert.equal(messages.some((message) => message.role === 'assistant'), false, label);
+                        assert.equal(sourceMessages[0].content.split(taskBoundary).length, 2, label);
+                        assert.ok(sourceMessages[0].content.endsWith(taskBoundary), label);
+                        assert.ok(sourceMessages[0].content.indexOf('[楼层 0]') < sourceMessages[0].content.indexOf('[楼层 1]'), label);
+                        assert.equal(tail.role, 'system', label);
+                        assert.ok(tail.content.includes(marker), label);
+                        assert.equal(messages.slice(0, -1).some((message) => message.content.includes(marker)), false, label);
+                    } else {
+                        assert.equal(tail.role, 'user', label);
+                        assert.equal(tail.content.split(taskBoundary).length, 2, label);
+                        assert.ok(tail.content.indexOf(marker) > tail.content.indexOf(taskBoundary), label);
+                        assert.equal(messages.slice(0, -1).some((message) => message.content.includes(marker)), false, label);
+                    }
+                    const requestText = messages.map((message) => message.content).join('\n');
                     if (['runTrace', 'runSummary', 'runCharacterGrowthTasks'].includes(method)) {
+                        assert.doesNotMatch(requestText, /FILTERED_OPEN_SUFFIX|FILTERED_CLOSING_PREFIX|FILTERED_PAIRED|FILTERED_MEMORY/, label);
+                    }
+                    assert.deepEqual(captures.at(-1), messages, 'probe must show exactly the prepared request');
+                    if (method === 'runCharacterGrowthTasks') {
                         assert.equal(messages.filter((message) => message.role === 'user').length,
                             chat.filter((message) => message.is_user).length + (lastRole === 'assistant' ? 1 : 0), label);
                         if (lastRole === 'user') assert.match(tail.content, /^\[楼层 2\] 用户: 最后行动/);
@@ -133,9 +153,26 @@ test('every plugin task sends instructions after source material for all model r
                     if (method === 'runCharacterGrowthTasks') {
                         assert.match(tail.content, /GROWTH_TASK[\s\S]*【本次任务生成边界】[\s\S]*请为 角色/);
                     }
-                    if (method === 'runTagDiagnostic') assert.ok(tail.content.startsWith('<content>待处理正文</content>\n\n'));
+                    if (method === 'runTagDiagnostic') {
+                        assert.ok(tail.content.startsWith('FILTERED_CLOSING_PREFIX</thinking>\n<content>待处理正文</content>'));
+                    }
                 }
             }
+
+            activeTagPreset = { id: 'request-whitelist', blacklist: [], whitelist: ['content'] };
+            const whitelistResult = await memory.TaskRunner.runSummary(state, {
+                start: 0,
+                end: chat.length,
+                previewOnly: true,
+                includeWorldbook: false,
+                llmSnapshot: snapshots[0],
+            });
+            assert.equal(whitelistResult.error, 'request captured');
+            const whitelistMessages = requests.at(-1).messages;
+            const whitelistSources = whitelistMessages.filter((message) => message.role === 'user');
+            assert.equal(whitelistSources.length, 1);
+            assert.match(whitelistSources[0].content, /^\[楼层 1\] 角色: 待处理正文/);
+            assert.doesNotMatch(whitelistSources[0].content, /最初行动|最后行动|<content>|FILTERED_/);
             assert.deepEqual(chat, originalChat);
         });
     }
@@ -175,6 +212,7 @@ test('whitelist extracts content from either unpaired boundary', () => {
 
     assert.equal(filterContentByTags('<content>剧情正文', preset), '剧情正文');
     assert.equal(filterContentByTags('剧情正文</content>\n后台文本', preset), '剧情正文');
+    assert.equal(filterContentByTags('没有白名单标签的后台文本', preset), '');
 });
 
 test('closing-only blacklist keeps an earlier whitelisted block available for extraction', () => {
@@ -315,14 +353,16 @@ test('trace uses the global historian selection and injects populated non-summar
         const messageContents = capturedMessages.map((message) => String(message.content || ''));
         const characterIndex = messageContents.findIndex((content) => content.includes('当前位置: 旧地点'));
         const itemIndex = messageContents.findIndex((content) => content.includes('物品名称: 旧钥匙'));
-        const firstChatIndex = messageContents.findIndex((content) => content.startsWith('[楼层 0]'));
-        const lastChatIndex = messageContents.findIndex((content) => content.startsWith('[楼层 1]'));
+        const sourceIndex = capturedMessages.findIndex((message) => message.role === 'user');
+        const sourceContent = String(capturedMessages[sourceIndex]?.content || '');
         const tracePromptIndex = messageContents.findIndex((content) => content.includes('TRACE_PROMPT_MARKER'));
 
         assert.ok(characterIndex >= 0, `${mode}应注入自动向量化表的现有记录`);
         assert.ok(itemIndex >= 0, `${mode}应注入有数据的普通表`);
-        assert.ok(characterIndex < firstChatIndex && itemIndex < firstChatIndex, `${mode}的现有表格应位于聊天记录之前`);
-        assert.ok(tracePromptIndex > lastChatIndex, `${mode}的填表提示词应位于聊天记录之后`);
+        assert.equal(capturedMessages.filter((message) => message.role === 'user').length, 1, `${mode}应把正文合并为单条用户材料`);
+        assert.ok(sourceContent.indexOf('[楼层 0]') < sourceContent.indexOf('[楼层 1]'), `${mode}应保留原始楼层顺序`);
+        assert.ok(characterIndex < sourceIndex && itemIndex < sourceIndex, `${mode}的现有表格应位于聊天记录之前`);
+        assert.ok(tracePromptIndex > sourceIndex, `${mode}的填表提示词应位于聊天记录之后`);
         assert.equal(messageContents.some((content) => content.includes('INDEPENDENT_HISTORIAN_MARKER')), true, `${mode}应使用独立选择的史官破限`);
         assert.equal(messageContents.some((content) => content.includes('LEGACY_SCHEME_HISTORIAN_MUST_NOT_APPEAR')), false, `${mode}不应继续读取记忆方案内的旧破限`);
         assert.equal(messageContents.join('\n').match(/体力: 10/g)?.length, 1, `${mode}的角色状态当前内容只应注入一次`);

@@ -1307,6 +1307,7 @@
             if (config.presencePenalty !== undefined) payload.presence_penalty = config.presencePenalty;
             if (config.topP !== undefined) payload.top_p = config.topP;
             if (config.model) payload.model = config.model;
+            if (options.yzmMemoryTask) payload.tool_choice = 'none';
             if (config.reverseProxy) {
                 payload.reverse_proxy = config.reverseProxy;
                 payload.custom_url = config.reverseProxy;
@@ -1356,12 +1357,15 @@
     }
 
     async function postTavernGenerate(payload, options = {}) {
+        const requestPayload = options.yzmMemoryTask
+            ? { ...payload, tool_choice: 'none' }
+            : payload;
         const send = async (forceRefresh = false) => fetch('/api/backends/chat-completions/generate', {
             method: 'POST',
             headers: await getJsonHeaders({ forceRefresh }),
             credentials: 'include',
             yzmMemoryInternalApi: true,
-            body: JSON.stringify(payload),
+            body: JSON.stringify(requestPayload),
             signal: options.signal,
         });
 
@@ -1385,7 +1389,7 @@
 
         try {
             const contentType = response.headers.get('content-type') || '';
-            const result = await parseGenerateResponse(response, payload.stream === true || contentType.includes('text/event-stream'));
+            const result = await parseGenerateResponse(response, requestPayload.stream === true || contentType.includes('text/event-stream'));
             return { ...result };
         } catch (error) {
             return {

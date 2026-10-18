@@ -24,6 +24,11 @@
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
     const CHARACTER_PROFILE_TABLE_ID = 'character_profile';
     const CHARACTER_STATUS_TABLE_ID = 'character_status';
+    const TASK_SOURCE_BOUNDARY = [
+        '========================================',
+        '【以上为待处理的虚拟小说文本片段，剧情对话到此结束】',
+        '========================================',
+    ].join('\n');
     const AI_TAG_DIAGNOSTIC_PROMPT = `你是一个剧情记录系统的标签过滤专家。你的任务是分析 AI 的回复文本，制定最优的标签过滤方案（黑名单或白名单）。
 
 【系统过滤机制说明】
@@ -388,7 +393,7 @@
                     if (text) extracted.push(text);
                 }
             });
-            if (extracted.length) result = extracted.join('\n\n');
+            result = extracted.join('\n\n');
         }
         return result.trim();
     }
@@ -1312,9 +1317,7 @@
         const normalized = normalizeTaskMessages(messages).map((message) => ({ ...message }));
         const taskText = instructions.map((text) => String(text || '').trim()).filter(Boolean).join('\n\n');
         const content = [
-            '========================================',
-            '【以上为待处理的虚拟小说文本片段，剧情对话到此结束】',
-            '========================================',
+            TASK_SOURCE_BOUNDARY,
             '',
             taskText,
         ].join('\n');
@@ -1324,6 +1327,25 @@
         } else {
             normalized.push({ role: 'user', content });
         }
+        return normalized;
+    }
+
+    function buildTaskSourceMaterialMessage(messages = []) {
+        const content = normalizeTaskMessages(messages)
+            .map((message) => String(message.content || '').trim())
+            .filter(Boolean)
+            .join('\n\n');
+        if (!content) return null;
+        return {
+            role: 'user',
+            content: `${content}\n\n${TASK_SOURCE_BOUNDARY}`,
+        };
+    }
+
+    function appendTaskSystemInstructions(messages = [], instructions = []) {
+        const normalized = normalizeTaskMessages(messages).map((message) => ({ ...message }));
+        const taskText = instructions.map((text) => String(text || '').trim()).filter(Boolean).join('\n\n');
+        if (taskText) normalized.push({ role: 'system', content: taskText });
         return normalized;
     }
 
@@ -3002,13 +3024,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             : '';
         const targetRestriction = buildTraceTargetRestrictionText(state, options);
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const messages = appendTaskInstructions([
+        const sourceMessage = buildTaskSourceMaterialMessage(range.messages);
+        const messages = appendTaskSystemInstructions([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText() },
             worldbookMessage,
             ...buildTraceReferenceMessages(state),
             { role: 'system', content: buildTaskRangeText(range, 'trace') },
-            ...range.messages,
+            sourceMessage,
         ], [
             tracePrompt,
             characterStatusPrompt ? `【角色状态专用提示词】\n${characterStatusPrompt}` : '',
@@ -3030,12 +3053,13 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             suppressMemoryTables: true,
         });
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const messages = appendTaskInstructions([
+        const sourceMessage = buildTaskSourceMaterialMessage(range.messages);
+        const messages = appendTaskSystemInstructions([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
             worldbookMessage,
             { role: 'system', content: buildTaskRangeText(range, 'summary') },
-            ...range.messages,
+            sourceMessage,
         ], [
             summaryPrompt,
             '请立即根据以上待总结聊天内容和总结提示词执行任务。不得遗漏最后结尾</Memory>标签。',

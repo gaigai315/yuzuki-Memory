@@ -215,6 +215,42 @@ test('follow-SillyTavern mode preserves custom headers and adds OpenCode session
     assert.match(payload.custom_include_headers, /^x-opencode-session: [a-f0-9-]{36}$/m);
 });
 
+test('memory tasks declare tool_choice none without changing ordinary generation requests', async () => {
+    const requests = [];
+    const settings = {
+        oai_settings: {
+            chat_completion_source: 'deepseek',
+            deepseek_model: 'deepseek-chat',
+            openai_max_tokens: 128,
+        },
+    };
+    const { client } = createClient(async (url, init) => {
+        if (url === '/api/settings/get') return createResponse({ settings });
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    });
+
+    await client.generateWithTavern([{ role: 'user', content: 'ordinary' }], { stream: false });
+    await client.generateWithTavern([{ role: 'user', content: 'task' }], {
+        stream: false,
+        yzmMemoryTask: { kind: 'summary' },
+    });
+    await client.generateWithCustom({
+        provider: 'compatible',
+        baseUrl: 'https://example.com/v1',
+        apiKey: 'example-key',
+        model: 'example-model',
+        stream: false,
+    }, [{ role: 'user', content: 'custom task' }], {
+        stream: false,
+        yzmMemoryTask: { kind: 'trace' },
+    });
+
+    assert.equal(Object.hasOwn(requests[0], 'tool_choice'), false);
+    assert.equal(requests[1].tool_choice, 'none');
+    assert.equal(requests[2].tool_choice, 'none');
+});
+
 test('follow-SillyTavern mode uses the selected DeepSeek model instead of the OpenAI model', async () => {
     const requests = [];
     const settings = {
