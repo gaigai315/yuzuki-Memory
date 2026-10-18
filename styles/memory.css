@@ -3103,6 +3103,11 @@
     gap: 8px;
 }
 
+#yzm-memory-root .yzm-llm-api-panel [data-yzm-llm-custom-only][hidden],
+#yzm-memory-root .yzm-llm-api-panel [data-yzm-llm-tavern-only][hidden] {
+    display: none !important;
+}
+
 #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:first-child,
 #yzm-memory-root .yzm-llm-api-panel > .yzm-api-card:last-child {
     grid-column: 1 / -1;

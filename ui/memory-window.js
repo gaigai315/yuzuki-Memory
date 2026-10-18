@@ -10476,29 +10476,28 @@
         customHeadersField.hidden = true;
         const panel = document.createElement('section');
         panel.className = 'yzm-api-panel yzm-llm-api-panel';
-        panel.append(
-            createApiCard('API 模式', 'fa-solid fa-route', [
+        const modeCard = createApiCard('API 模式', 'fa-solid fa-route', [
                 createApiChoiceGroup([
                     { label: '使用酒馆 API', description: '沿用 SillyTavern 当前模型配置', value: 'tavern', active: mode !== 'custom' },
                     { label: '使用独立 API', description: '为记忆插件单独配置模型与密钥', value: 'custom', active: mode === 'custom' },
                 ], 'llmMode'),
-            ], '', createApiTitleNote('配置记忆生成、总结与结构化填表所使用的大语言模型。')),
-            createApiCard('预设管理', 'fa-regular fa-bookmark', [
+            ], '', createApiTitleNote('配置记忆生成、总结与结构化填表所使用的大语言模型。'));
+        const presetCard = createApiCard('预设管理', 'fa-regular fa-bookmark', [
                 createApiField('选择预设', createLlmApiPresetSelect()),
                 createApiActions([
                     ['新增', 'fa-solid fa-plus', '', 'newLlmPreset'],
                     ['保存', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveLlmPreset'],
                     ['删除', 'fa-regular fa-trash-can', 'yzm-api-button-danger', 'deleteLlmPreset'],
                 ]),
-            ]),
-            createApiCard('任务 API 绑定', 'fa-solid fa-link', [
+            ]);
+        const taskRouteCard = createApiCard('任务 API 绑定', 'fa-solid fa-link', [
                 createApiGrid([
                     createApiField('填表', createLlmApiTaskRouteSelect('trace')),
                     createApiField('总结', createLlmApiTaskRouteSelect('summary')),
                     createApiField('剧情导演', createLlmApiTaskRouteSelect('storyDirector')),
                 ]),
-            ], '', createApiTitleNote('绑定后，该用途的手动、自动与优化任务统一使用所选预设；未绑定时跟随当前预设。')),
-            createApiCard('连接配置', 'fa-solid fa-link', [
+            ], '', createApiTitleNote('绑定后，该用途的手动、自动与优化任务统一使用所选预设；未绑定时跟随当前预设。'));
+        const connectionCard = createApiCard('连接配置', 'fa-solid fa-link', [
                 createApiGrid([
                     createApiField('服务商', createApiSelect('', [{ label: '选择服务商', value: '' }, ...getLlmProviderOptions()], 'provider')),
                     createApiField('Base URL', createApiInput('输入 Base URL', 'text', false, '', 'baseUrl')),
@@ -10511,9 +10510,31 @@
                 createApiConnectionFooter(createApiField('流式响应', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
                     ['测试连接', 'fa-solid fa-plug-circle-check', '', 'testLlmConnection'],
                 ])),
-            ]),
-        );
+            ]);
+        [presetCard, taskRouteCard, connectionCard].forEach((card) => {
+            card.dataset.yzmLlmCustomOnly = 'true';
+        });
+
+        const tavernTestActions = createApiActions([
+            ['测试连接', 'fa-solid fa-plug-circle-check', '', 'testLlmConnection'],
+        ]);
+        tavernTestActions.classList.add('yzm-llm-tavern-test-actions');
+        tavernTestActions.dataset.yzmLlmTavernOnly = 'true';
+
+        modeCard.appendChild(tavernTestActions);
+        panel.append(modeCard, presetCard, taskRouteCard, connectionCard);
+        syncLlmApiModeVisibility(panel, mode);
         return panel;
+    }
+
+    function syncLlmApiModeVisibility(root, mode = getGlobalLlmApiMode()) {
+        const isCustom = mode === 'custom';
+        root.querySelectorAll('[data-yzm-llm-custom-only]').forEach((node) => {
+            node.hidden = !isCustom;
+        });
+        root.querySelectorAll('[data-yzm-llm-tavern-only]').forEach((node) => {
+            node.hidden = isCustom;
+        });
     }
 
     function getLlmProviderOptions() {
@@ -15128,6 +15149,7 @@
             '自动剧情规划关闭后，仍可手动点击规划。',
             '表格或总结清空后，自动删除对应的向量化书。',
             '修正自动填表与总结的运行提示。',
+            '修复酒馆 API 模式下 Vertex 渠道无法正常调用的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -18222,7 +18244,9 @@
                         choice.querySelector('i')?.classList.toggle('fa-circle', !isActive);
                     });
                     if (apiChoice.dataset.yzmApiField === 'llmMode') {
-                        saveGlobalLlmApiMode(apiChoice.dataset.yzmApiValue || 'tavern');
+                        const mode = apiChoice.dataset.yzmApiValue || 'tavern';
+                        saveGlobalLlmApiMode(mode);
+                        syncLlmApiModeVisibility(apiView, mode);
                     }
                     return;
                 }

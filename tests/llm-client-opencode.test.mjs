@@ -48,6 +48,11 @@ function createClient(fetchImpl, options = {}) {
             },
         },
     };
+    if (options.liveSettings) {
+        const sillyTavern = { getContext: () => ({ chatCompletionSettings: options.liveSettings }) };
+        sandbox.SillyTavern = sillyTavern;
+        sandbox.window.SillyTavern = sillyTavern;
+    }
     sandbox.window.window = sandbox.window;
     vm.createContext(sandbox);
     vm.runInContext(source, sandbox, { filename: 'llm-client.js' });
@@ -261,6 +266,102 @@ test('follow-SillyTavern mode prefers the live model selector over cached settin
     assert.equal(result.success, true);
     assert.equal(result.config.model, 'deepseek-v4-flash');
     assert.equal(requests[0].model, 'deepseek-v4-flash');
+});
+
+test('follow-SillyTavern mode uses live Vertex service account settings', async () => {
+    const requests = [];
+    const settings = {
+        oai_settings: {
+            chat_completion_source: 'vertexai',
+            vertexai_model: 'gemini-2.5-flash',
+            vertexai_auth_mode: 'express',
+            vertexai_region: 'us-central1',
+            vertexai_express_project_id: 'stale-project',
+            openai_max_tokens: 128,
+        },
+    };
+    const liveSettings = {
+        chat_completion_source: 'vertexai',
+        vertexai_model: 'gemini-3.8-flash',
+        vertexai_auth_mode: 'full',
+        vertexai_region: 'global',
+        vertexai_express_project_id: '',
+        reverse_proxy: '',
+        openai_max_tokens: 256,
+    };
+    const { client } = createClient(async (url, init) => {
+        if (url === '/api/settings/get') return createResponse({ settings });
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    }, { liveSettings });
+
+    const result = await client.generateWithTavern([{ role: 'user', content: 'test' }], { stream: false });
+
+    assert.equal(result.success, true);
+    assert.equal(requests[0].chat_completion_source, 'vertexai');
+    assert.equal(requests[0].model, 'gemini-3.8-flash');
+    assert.equal(requests[0].vertexai_auth_mode, 'full');
+    assert.equal(requests[0].vertexai_region, 'global');
+    assert.equal(requests[0].vertexai_express_project_id, '');
+    assert.equal(requests[0].max_tokens, 256);
+    assert.equal(Object.hasOwn(requests[0], 'proxy_password'), false);
+});
+
+test('follow-SillyTavern agent mode forwards Vertex Express settings', async () => {
+    const requests = [];
+    const settings = {
+        oai_settings: {
+            chat_completion_source: 'vertexai',
+            vertexai_model: 'gemini-2.5-pro',
+            vertexai_auth_mode: 'express',
+            vertexai_region: 'europe-west4',
+            vertexai_express_project_id: 'vertex-project',
+            openai_max_tokens: 128,
+        },
+    };
+    const { client } = createClient(async (url, init) => {
+        if (url === '/api/settings/get') return createResponse({ settings });
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    });
+
+    const result = await client.requestAgentWithTavern([{ role: 'user', content: 'review' }], [], {
+        emptyResponseMaxRetries: 0,
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(requests[0].vertexai_auth_mode, 'express');
+    assert.equal(requests[0].vertexai_region, 'europe-west4');
+    assert.equal(requests[0].vertexai_express_project_id, 'vertex-project');
+    assert.equal(Object.hasOwn(requests[0], 'proxy_password'), false);
+});
+
+test('follow-SillyTavern Vertex proxy uses only the proxy password', async () => {
+    const requests = [];
+    const settings = {
+        oai_settings: {
+            chat_completion_source: 'vertexai',
+            vertexai_model: 'gemini-2.5-pro',
+            vertexai_auth_mode: 'full',
+            vertexai_region: 'global',
+            reverse_proxy: 'https://vertex.example.test',
+            proxy_password: 'vertex-proxy-password',
+            openai_key: 'wrong-openai-key',
+            openai_max_tokens: 128,
+        },
+    };
+    const { client } = createClient(async (url, init) => {
+        if (url === '/api/settings/get') return createResponse({ settings });
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    });
+
+    const result = await client.generateWithTavern([{ role: 'user', content: 'test' }], { stream: false });
+
+    assert.equal(result.success, true);
+    assert.equal(requests[0].reverse_proxy, 'https://vertex.example.test');
+    assert.equal(requests[0].proxy_password, 'vertex-proxy-password');
+    assert.notEqual(requests[0].proxy_password, 'wrong-openai-key');
 });
 
 test('custom headers do not leak OpenCode affinity to unrelated providers', async () => {

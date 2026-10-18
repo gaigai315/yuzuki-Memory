@@ -663,6 +663,38 @@
         return '';
     }
 
+    function getDocumentFieldValue(elementIds = []) {
+        if (typeof document === 'undefined' || typeof document.getElementById !== 'function') return undefined;
+        let found = false;
+        for (const elementId of elementIds) {
+            const element = document.getElementById(elementId);
+            if (!element) continue;
+            found = true;
+            const value = String(element.value ?? '').trim();
+            if (value) return value;
+        }
+        return found ? '' : undefined;
+    }
+
+    function getLiveTavernChatCompletionSettings() {
+        try {
+            const context = typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function'
+                ? SillyTavern.getContext()
+                : window.SillyTavern?.getContext?.();
+            return context?.chatCompletionSettings && typeof context.chatCompletionSettings === 'object'
+                ? context.chatCompletionSettings
+                : null;
+        } catch (_error) {
+            return null;
+        }
+    }
+
+    function resolveTavernSetting(oai, key, elementIds = [key], fallback = '') {
+        const documentValue = getDocumentFieldValue(elementIds);
+        if (documentValue !== undefined) return documentValue;
+        return String(oai?.[key] ?? fallback).trim();
+    }
+
     function resolveTavernModel(oai, source) {
         const binding = TAVERN_MODEL_BINDINGS[source];
         if (!binding) return '';
@@ -672,23 +704,35 @@
     }
 
     function resolveTavernConfig(settings = {}, options = {}) {
-        const oai = settings.oai_settings || settings || {};
-        const source = getDocumentValue(['chat_completion_source']) || oai.chat_completion_source || 'custom';
+        const savedOai = settings.oai_settings || settings || {};
+        const liveOai = getLiveTavernChatCompletionSettings();
+        const oai = liveOai ? { ...savedOai, ...liveOai } : savedOai;
+        const source = resolveTavernSetting(oai, 'chat_completion_source', ['chat_completion_source'], 'custom') || 'custom';
         const model = resolveTavernModel(oai, source);
         let reverseProxy = '';
         let apiKey = '';
         let customIncludeHeaders = '';
 
         if (source === 'custom') {
-            reverseProxy = getDocumentValue(['custom_api_url_text', 'custom_url']) || oai.custom_url || '';
+            reverseProxy = resolveTavernSetting(oai, 'custom_url', ['custom_api_url_text', 'custom_url']);
             apiKey = oai.custom_key || '';
-            customIncludeHeaders = getDocumentValue(['custom_include_headers']) || oai.custom_include_headers || '';
+            customIncludeHeaders = resolveTavernSetting(oai, 'custom_include_headers', ['custom_include_headers']);
         } else if (TAVERN_PROXY_SUPPORTED_SOURCES.has(source)) {
-            reverseProxy = getDocumentValue(['openai_reverse_proxy']) || oai.reverse_proxy || '';
+            reverseProxy = resolveTavernSetting(oai, 'reverse_proxy', ['openai_reverse_proxy']);
             if (reverseProxy) {
-                apiKey = getDocumentValue(['openai_proxy_access_key']) || oai.proxy_password || '';
+                apiKey = resolveTavernSetting(oai, 'proxy_password', ['openai_proxy_access_key']);
             }
         }
+
+        const vertexaiAuthMode = source === 'vertexai'
+            ? (resolveTavernSetting(oai, 'vertexai_auth_mode', ['vertexai_auth_mode'], 'express') || 'express')
+            : '';
+        const vertexaiRegion = source === 'vertexai'
+            ? (resolveTavernSetting(oai, 'vertexai_region', ['vertexai_region'], 'us-central1') || 'us-central1')
+            : '';
+        const vertexaiExpressProjectId = source === 'vertexai'
+            ? resolveTavernSetting(oai, 'vertexai_express_project_id', ['vertexai_express_project_id'])
+            : '';
 
         const maxTokens = intFromCandidates([
             options.maxTokens,
@@ -718,7 +762,30 @@
             oai.top_p_openai,
         ]);
 
-        return { source, model, reverseProxy, apiKey, customIncludeHeaders, maxTokens, temperature, frequencyPenalty, presencePenalty, topP };
+        return {
+            source,
+            model,
+            reverseProxy,
+            apiKey,
+            customIncludeHeaders,
+            maxTokens,
+            temperature,
+            frequencyPenalty,
+            presencePenalty,
+            topP,
+            vertexaiAuthMode,
+            vertexaiRegion,
+            vertexaiExpressProjectId,
+        };
+    }
+
+    function applyTavernSourceConfig(payload, config) {
+        if (config.source === 'vertexai') {
+            payload.vertexai_auth_mode = config.vertexaiAuthMode;
+            payload.vertexai_region = config.vertexaiRegion;
+            payload.vertexai_express_project_id = config.vertexaiExpressProjectId;
+        }
+        return payload;
     }
 
     function normalizeMessages(messages) {
@@ -1245,6 +1312,7 @@
                 payload.custom_url = config.reverseProxy;
             }
             if (config.apiKey) payload.proxy_password = config.apiKey;
+            applyTavernSourceConfig(payload, config);
             if (config.source === 'custom') {
                 const customIncludeHeaders = resolveTavernCustomHeaderText(config);
                 if (customIncludeHeaders) payload.custom_include_headers = customIncludeHeaders;
@@ -1462,6 +1530,7 @@
                 payload.custom_url = config.reverseProxy;
             }
             if (config.apiKey) payload.proxy_password = config.apiKey;
+            applyTavernSourceConfig(payload, config);
             if (config.source === 'custom') {
                 const customIncludeHeaders = resolveTavernCustomHeaderText(config);
                 if (customIncludeHeaders) payload.custom_include_headers = customIncludeHeaders;

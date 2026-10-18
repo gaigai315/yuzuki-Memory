@@ -40,6 +40,34 @@ function getFunctionSource(name) {
     assert.fail(`${name} should have a complete function body`);
 }
 
+test('tavern LLM mode hides independent API settings but keeps its connection test', () => {
+    const customNodes = [{ hidden: false }, { hidden: false }, { hidden: false }];
+    const tavernNodes = [{ hidden: true }];
+    const root = {
+        querySelectorAll: (selector) => selector.includes('custom-only') ? customNodes : tavernNodes,
+    };
+    const sandbox = { root };
+    vm.createContext(sandbox);
+    vm.runInContext(`${getFunctionSource('syncLlmApiModeVisibility')}\nsyncLlmApiModeVisibility(root, 'tavern');`, sandbox);
+
+    assert.deepEqual(customNodes.map((node) => node.hidden), [true, true, true]);
+    assert.equal(tavernNodes[0].hidden, false);
+});
+
+test('custom LLM mode restores independent API settings and hides the tavern-only test', () => {
+    const customNodes = [{ hidden: true }, { hidden: true }, { hidden: true }];
+    const tavernNodes = [{ hidden: false }];
+    const root = {
+        querySelectorAll: (selector) => selector.includes('custom-only') ? customNodes : tavernNodes,
+    };
+    const sandbox = { root };
+    vm.createContext(sandbox);
+    vm.runInContext(`${getFunctionSource('syncLlmApiModeVisibility')}\nsyncLlmApiModeVisibility(root, 'custom');`, sandbox);
+
+    assert.deepEqual(customNodes.map((node) => node.hidden), [false, false, false]);
+    assert.equal(tavernNodes[0].hidden, true);
+});
+
 test('primary search remains applied after a record-list rerender', () => {
     const matchingItem = { textContent: '江晚简藏三角梅花瓣', hidden: false };
     const unrelatedItem = { textContent: '潮汐法式餐厅', hidden: false };
@@ -484,6 +512,7 @@ test('release metadata and update notice describe version 1.1.2', () => {
     assert.match(noticeSource, /自动剧情规划关闭后，仍可手动点击规划。/);
     assert.match(noticeSource, /表格或总结清空后，自动删除对应的向量化书。/);
     assert.match(noticeSource, /修正自动填表与总结的运行提示。/);
+    assert.match(noticeSource, /修复酒馆 API 模式下 Vertex 渠道无法正常调用的问题。/);
     assert.doesNotMatch(noticeSource, /优化任务请求格式/);
     assert.doesNotMatch(noticeSource, /自动填表、总结失败后停止本次任务/);
     assert.doesNotMatch(noticeSource, /删除聊天楼层后待办事项及角色空记录残留/);
