@@ -8331,7 +8331,7 @@
             if (icon?.isConnected) icon.className = originalIconClass;
         }
         if (!result?.success) {
-            showTaskToast(result?.error || '属性成长任务生成失败。', 'error');
+            showTaskToast(result?.error || '属性成长任务生成失败。', result?.toastOnly ? 'warning' : 'error');
             return;
         }
 
@@ -8716,6 +8716,7 @@
                 lastResult = result;
                 if (result?.aborted || taskRunnerStopRequested) return { ...result, success: false, cancelled: true, aborted: true, error: '任务已停止。' };
                 if (result?.success || result?.cancelled) return result;
+                if (result?.retryable === false) return result;
                 lastError = new Error(result?.error || '任务执行失败。');
             } catch (error) {
                 if (taskRunnerAbortController.signal.aborted || taskRunnerStopRequested || error?.name === 'AbortError') {
@@ -8763,6 +8764,13 @@
             window.alert('请至少勾选一条要优化的总结。');
             return;
         }
+        if (action === 'trace' || action === 'summary') {
+            const tagFilterWarning = YuzukiMemory.TaskRunner.validateTaskRangeTagFilter?.(options.start, options.end);
+            if (tagFilterWarning?.toastOnly) {
+                showTaskToast(tagFilterWarning.error || '标签过滤设置与实际正文不匹配。', 'warning');
+                return;
+            }
+        }
         setTaskButtonRunning(button, true);
         taskRunnerBusy = true;
         window.yzmMemoryManualTaskRunning = true;
@@ -8798,7 +8806,7 @@
                         batchTotal: batches.length,
                         llmSnapshot,
                     }, action === 'trace' ? 1 : 0);
-                    if (result?.success || result?.cancelled || batches.length <= 1) break;
+                    if (result?.success || result?.cancelled || result?.toastOnly || result?.retryable === false || batches.length <= 1) break;
                     refreshAfterTask(root);
                     const choice = await openBatchFailureDialog(root, {
                         batchIndex: index + 1,
@@ -8822,6 +8830,11 @@
                 if (taskRunnerStopRequested) break;
                 if (!result?.success) {
                     refreshAfterTask(root);
+                    if (result?.toastOnly) {
+                        taskRunnerStopRequested = true;
+                        showTaskToast(result?.error || '标签过滤设置与实际正文不匹配。', 'warning');
+                        return;
+                    }
                     if (result?.cancelled) {
                         taskRunnerStopRequested = true;
                         showTaskToast(`第 ${index + 1} 批已取消，后续批次已停止。`, 'warning');
@@ -15150,6 +15163,7 @@
             '表格或总结清空后，自动删除对应的向量化书。',
             '修正自动填表与总结的运行提示。',
             '修复酒馆 API 模式下 Vertex 渠道无法正常调用的问题。',
+            '优化填表/总结的任务请求结构，增强破限结构。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -19066,6 +19080,10 @@
                 });
             },
             onAutoTaskFailure(payload = {}) {
+                if (payload.toastOnly) {
+                    showTaskToast(payload.message || '标签过滤设置与实际正文不匹配。', 'warning');
+                    return true;
+                }
                 const root = document.getElementById(ROOT_ID);
                 if (!root) return false;
                 return openTaskResultConfirmDialog(root, {

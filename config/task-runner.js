@@ -24,6 +24,8 @@
     const PLOT_SUMMARY_TABLE_ID = 'plot_summary';
     const CHARACTER_PROFILE_TABLE_ID = 'character_profile';
     const CHARACTER_STATUS_TABLE_ID = 'character_status';
+    const CONTENT_WHITELIST_WARNING_CODE = 'tag_whitelist_content_missing';
+    const CONTENT_WHITELIST_WARNING_MESSAGE = '白名单含 content，但实际正文并无 content 标签，请检查。';
     const TASK_SOURCE_BOUNDARY = [
         '========================================',
         '【以上为待处理的虚拟小说文本片段，剧情对话到此结束】',
@@ -190,11 +192,14 @@
         const range = Number.isFinite(Number(task?.start)) && Number.isFinite(Number(task?.end))
             ? `（楼层 ${formatDisplayFloorRange(task.start, task.end)}）`
             : '';
-        const retryHint = '进度未推进，本次任务已停止，可点击“重试”手动重新执行。';
-        const notification = `${taskTitle}失败${range}。${retryHint}`;
-        const detail = message
-            ? `${taskTitle}失败${range}：${message}\n${retryHint}`
-            : `${taskTitle}失败${range}。\n${retryHint}`;
+        const toastOnly = failure?.toastOnly === true;
+        const retryHint = toastOnly ? '' : '进度未推进，本次任务已停止，可点击“重试”手动重新执行。';
+        const notification = toastOnly ? message : `${taskTitle}失败${range}。${retryHint}`;
+        const detail = toastOnly
+            ? message
+            : (message
+                ? `${taskTitle}失败${range}：${message}\n${retryHint}`
+                : `${taskTitle}失败${range}。\n${retryHint}`);
         let handled = false;
         if (typeof callbacks.onAutoTaskFailure === 'function') {
             try {
@@ -207,6 +212,10 @@
                     notification,
                     detail,
                     sessionId: getCurrentSessionId(),
+                    code: String(failure?.code || ''),
+                    retryable: failure?.retryable !== false,
+                    toastOnly,
+                    diagnostics: failure?.diagnostics || null,
                 });
                 if (callbackResult !== false) {
                     handled = true;
@@ -217,6 +226,17 @@
             } catch (callbackError) {
                 console.warn('[yuzuki-Memory] Failed to show auto task failure dialog:', callbackError);
             }
+        }
+        if (toastOnly) {
+            let warningShown = false;
+            try {
+                if (!handled && typeof toastr !== 'undefined' && typeof toastr.warning === 'function') {
+                    toastr.warning(message, '柚月记忆', { timeOut: 5000, preventDuplicates: true });
+                    warningShown = true;
+                }
+            } catch (_error) {}
+            if (!handled && !warningShown) console.warn(`[yuzuki-Memory] ${message}`);
+            return;
         }
         let notified = false;
         try {
@@ -341,6 +361,14 @@
             opening: `<${safe}(?:\\s+[^>]*)?>`,
             closing: `<\\/\\s*${safe}\\s*>`,
         };
+    }
+
+    function hasTagBoundary(content, tag) {
+        const boundaries = createTagBoundaryPatterns(tag);
+        if (!boundaries) return false;
+        const text = String(content || '');
+        return new RegExp(boundaries.opening, 'i').test(text)
+            || new RegExp(boundaries.closing, 'i').test(text);
     }
 
     function filterContentByTags(content, preset = getActiveTagPreset()) {
@@ -605,23 +633,60 @@
         const from = Math.max(0, Math.min(Number(start) || 0, chat.length));
         const to = Math.max(from, Math.min(Number(end) || chat.length, chat.length));
         const tagPreset = options.tagPreset === false ? null : getActiveTagPreset();
+        const contentWhitelistEnabled = normalizeTagList(tagPreset?.whitelist)
+            .some((tag) => tag.toLowerCase() === 'content');
         const messages = [];
+        const missingContentFloors = [];
 
         chat.slice(from, to).forEach((message, offset) => {
             if (shouldSkipTaskRangeMessage(message, options)) return;
             let content = stripImages(stripMemoryTags(getChatText(message)));
+            const role = String(message?.role || '').toLowerCase();
+            const isUser = message.is_user === true || role === 'user';
+            const isAssistant = !isUser;
+            const floor = from + offset;
+            if (contentWhitelistEnabled && isAssistant && content.trim() && !hasTagBoundary(content, 'content')) {
+                missingContentFloors.push(floor);
+            }
             content = filterContentByTags(content, tagPreset);
             if (!content.trim()) return;
-            const isUser = message.is_user === true || message.role === 'user';
             const name = message.name || (isUser ? userName : charName);
-            const floor = from + offset;
             messages.push({
                 role: isUser ? 'user' : 'assistant',
                 content: `[楼层 ${floor}] ${name}: ${content}`,
             });
         });
 
-        return { ctx, chat, messages, start: from, end: to, userName, charName };
+        const tagFilterWarning = missingContentFloors.length
+            ? {
+                code: CONTENT_WHITELIST_WARNING_CODE,
+                message: CONTENT_WHITELIST_WARNING_MESSAGE,
+                tag: 'content',
+                missingFloors: missingContentFloors,
+            }
+            : null;
+        return { ctx, chat, messages, start: from, end: to, userName, charName, tagFilterWarning };
+    }
+
+    function buildTagFilterWarningResult(range) {
+        const warning = range?.tagFilterWarning;
+        if (!warning) return null;
+        return {
+            success: false,
+            error: warning.message,
+            code: warning.code,
+            retryable: false,
+            toastOnly: true,
+            diagnostics: {
+                tag: warning.tag,
+                missingFloors: [...warning.missingFloors],
+            },
+            range,
+        };
+    }
+
+    function validateTaskRangeTagFilter(start, end, options = {}) {
+        return buildTagFilterWarningResult(chatMessagesFromRange(start, end, options));
     }
 
     function compactLines(lines) {
@@ -3012,6 +3077,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     async function buildTraceMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
+        if (range.tagFilterWarning) return { messages: [], range };
         const settings = getPluginSettings();
         const taskPromptOptions = {
             ...options,
@@ -3044,6 +3110,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     async function buildSummaryMessages(state, options = {}) {
         const scheme = getActivePromptScheme(state);
         const range = chatMessagesFromRange(options.start, options.end);
+        if (range.tagFilterWarning) return { messages: [], range };
         const historianPrompt = resolveTaskPromptVariables(getActiveHistorianPrompt(), state, {
             ...options,
             suppressMemoryTables: true,
@@ -3219,6 +3286,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         const profile = findCharacterProfileRecord(state, characterName);
         const chatEnd = getChatLength();
         const visibleChat = chatMessagesFromRange(0, chatEnd, { excludeHiddenFloors: true });
+        const tagFilterWarning = buildTagFilterWarningResult(visibleChat);
+        if (tagFilterWarning) return tagFilterWarning;
         const summaryText = YuzukiMemory.VariableInjector?.buildSummaryText?.(state) || '';
         const statusText = formatCharacterTaskRecord(table, record);
         const profileText = profile.record ? formatCharacterTaskRecord(profile.table, profile.record) : '';
@@ -3301,6 +3370,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 
     async function runTrace(state, options = {}) {
         const built = await buildTraceMessages(state, options);
+        const tagFilterWarning = buildTagFilterWarningResult(built.range);
+        if (tagFilterWarning) return tagFilterWarning;
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
         const response = await generate(built.messages, { ...options, kind: 'trace' });
         if (!response.success) return response;
@@ -3331,6 +3402,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 
     async function runSummary(state, options = {}) {
         const built = await buildSummaryMessages(state, options);
+        const tagFilterWarning = buildTagFilterWarningResult(built.range);
+        if (tagFilterWarning) return tagFilterWarning;
         if (!built.range.messages.length) return { success: false, error: '范围内无有效聊天内容。' };
         const response = await generate(built.messages, { ...options, kind: 'summary' });
         if (!response.success) return response;
@@ -4014,6 +4087,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             }
         }
 
+        const tagFilterWarning = validateTaskRangeTagFilter(task.start, task.end);
+        if (tagFilterWarning) return tagFilterWarning;
         const shouldRun = settings.directTrigger ? { action: 'confirm', postpone: 0 } : await confirmAutoTask(task, callbacks);
         if (shouldRun?.action !== 'confirm') return { skipped: true };
         if (Number(shouldRun.postpone) > 0) {
@@ -4130,6 +4205,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     async function runAutoTraceTask(state, task, callbacks = {}, executionOptions = {}) {
         const taskSessionId = getCurrentSessionId();
         const pluginSettings = getPluginSettings();
+        const tagFilterWarning = validateTaskRangeTagFilter(task.start, task.end);
+        if (tagFilterWarning) return tagFilterWarning;
 
         const autoSave = pluginSettings.traceRunMode === 'silent';
         if (!autoSave) {
@@ -4480,6 +4557,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
     YuzukiMemory.TaskRunner = Object.assign(YuzukiMemory.TaskRunner || {}, {
         appendTaskInstructions,
         filterContentByTags,
+        validateTaskRangeTagFilter,
         runTrace,
         runSummary,
         runTraceOptimize,

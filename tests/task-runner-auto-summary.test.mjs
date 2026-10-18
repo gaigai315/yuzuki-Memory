@@ -16,6 +16,7 @@ function createHarness(options = {}) {
     const successToasts = [];
     const errorToasts = [];
     const infoToasts = [];
+    const warningToasts = [];
     const promptedTasks = [];
     const resultConfirmations = [];
     const failurePayloads = [];
@@ -128,6 +129,9 @@ function createHarness(options = {}) {
             info(message) {
                 infoToasts.push(message);
             },
+            warning(message) {
+                warningToasts.push(message);
+            },
         },
         SillyTavern: { getContext: () => context },
         window: {
@@ -136,6 +140,8 @@ function createHarness(options = {}) {
                     get(key, fallback) {
                         if (key === 'yzm_memory_global_auto_summary_settings') return autoSummarySettings;
                         if (key === 'yzm_memory_global_plugin_settings') return pluginSettings;
+                        if (key === 'yzm_memory_global_tag_presets' && options.tagPreset) return [options.tagPreset];
+                        if (key === 'yzm_memory_global_tag_active_preset' && options.tagPreset) return options.tagPreset.id;
                         return fallback;
                     },
                 },
@@ -271,6 +277,7 @@ function createHarness(options = {}) {
         successToasts,
         errorToasts,
         infoToasts,
+        warningToasts,
         promptedTasks,
         resultConfirmations,
         failurePayloads,
@@ -511,6 +518,44 @@ test('automatic batch trace asks users to wait before sending more story text', 
     assert.match(harness.infoToasts[0], /自动批量填表已开始/);
     assert.match(harness.infoToasts[0], /正在后台请求填表 API，请等待完成后再继续发送正文/);
     assert.doesNotMatch(harness.infoToasts[0], /可继续发送正文/);
+});
+
+test('content whitelist warning stops automatic trace before request without advancing pointers', async () => {
+    const harness = createHarness({
+        tagPreset: { id: 'content-only', blacklist: [], whitelist: ['content'] },
+        pluginSettings: {
+            enableFilling: true,
+            fillMode: 'batch',
+            traceBatchEnabled: true,
+            traceRunMode: 'silent',
+        },
+        autoSummarySettings: {
+            summaryEnabled: false,
+            historyEnabled: false,
+        },
+    });
+
+    harness.advance();
+    await harness.runNextTimer();
+
+    assert.equal(harness.generatedCount, 0);
+    assert.equal(harness.infoToasts.length, 0, 'preflight warning must run before the API-start toast');
+    assert.equal(harness.warningToasts.length, 1);
+    assert.equal(harness.warningToasts[0], '白名单含 content，但实际正文并无 content 标签，请检查。');
+    assert.equal(harness.errorToasts.length, 0);
+    assert.equal(harness.failurePayloads.length, 1);
+    assert.equal(harness.failurePayloads[0].code, 'tag_whitelist_content_missing');
+    assert.equal(harness.failurePayloads[0].toastOnly, true);
+    assert.equal(harness.failurePayloads[0].retryable, false);
+    assert.equal(harness.failurePayloads[0].retryHint, '');
+    const pointers = harness.stateRef.current.settings.manualPointers;
+    assert.equal(pointers.trace, 0);
+    assert.equal(pointers.summary, 0);
+    assert.equal(pointers.historySummary, 0);
+    assert.equal(harness.saveCalls.length, 0);
+    assert.equal(harness.resultConfirmations.length, 0);
+    assert.equal(harness.pendingTimerCount, 0);
+    assert.equal(harness.taskRunner.isBackgroundWorkPending(), false);
 });
 
 for (const taskType of ['trace', 'summary', 'history']) {

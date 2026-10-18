@@ -224,6 +224,157 @@ test('closing-only blacklist keeps an earlier whitelisted block available for ex
     );
 });
 
+function createTagWhitelistGuardSandbox(chat, preset = { id: 'content-whitelist', blacklist: [], whitelist: ['CoNtEnT'] }) {
+    const requests = [];
+    const prompts = {
+        traceBatch: 'TRACE_TASK',
+        summary: 'SUMMARY_TASK',
+    };
+    const memory = {
+        GlobalSettings: { get(key, fallback) {
+            if (key === 'yzm_memory_global_plugin_settings') return { enableFilling: true, fillMode: 'realtime' };
+            if (key === 'yzm_memory_global_tag_presets') return [preset];
+            if (key === 'yzm_memory_global_tag_active_preset') return preset.id;
+            return fallback;
+        } },
+        PromptLibrary: {
+            getDefaultSchemes: () => [{ id: 'default', prompts }],
+            mergeSchemePrompts: (scheme) => scheme.prompts,
+        },
+        LlmClient: {
+            generateWithTavern: async (messages) => {
+                requests.push(structuredClone(messages));
+                return { success: false, error: 'request captured' };
+            },
+        },
+    };
+    const taskSandbox = {
+        console,
+        localStorage: { getItem: () => null },
+        SillyTavern: { getContext: () => ({ chat, name1: '用户', name2: '角色' }) },
+        window: { YuzukiMemory: memory },
+    };
+    vm.createContext(taskSandbox);
+    vm.runInContext(source, taskSandbox, { filename: 'task-runner-tag-whitelist-guard.js' });
+    return {
+        memory,
+        requests,
+        state: {
+            settings: {},
+            tables: [{ id: 'memory_summary', name: '记忆总结', columns: ['总结标题', '总结内容'] }],
+            records: { memory_summary: [] },
+        },
+    };
+}
+
+test('content whitelist blocks trace and summary before LLM when an Assistant floor has no boundary', async (t) => {
+    const cases = [
+        {
+            name: 'single raw Assistant',
+            chat: [
+                { is_user: true, name: '用户', mes: '用户裸文本不应触发拦截' },
+                { is_user: false, name: '角色', mes: '没有 content 标签的助手正文' },
+            ],
+            missingFloors: [1],
+        },
+        {
+            name: 'mixed valid and invalid Assistant floors',
+            chat: [
+                { is_user: false, name: '角色', mes: '<content>有效正文</content>' },
+                { is_user: true, name: '用户', mes: '用户裸文本仍不触发' },
+                { is_user: false, name: '角色', mes: '混合场景中的无标签正文' },
+            ],
+            missingFloors: [2],
+        },
+        {
+            name: 'image replacement remains non-empty and requires a boundary',
+            chat: [
+                { is_user: false, name: '角色', mes: '<img src="data:image/png;base64,AAAA">' },
+            ],
+            missingFloors: [0],
+        },
+        {
+            name: 'legacy Assistant without explicit role metadata',
+            chat: [
+                { name: '角色', mes: '旧格式无 content 标签的助手正文' },
+            ],
+            missingFloors: [0],
+        },
+    ];
+
+    for (const { name, chat, missingFloors } of cases) {
+        await t.test(name, async () => {
+            for (const method of ['runTrace', 'runSummary']) {
+                const { memory, requests, state } = createTagWhitelistGuardSandbox(chat);
+                const result = await memory.TaskRunner[method](state, {
+                    start: 0,
+                    end: chat.length,
+                    includeWorldbook: false,
+                    previewOnly: true,
+                });
+
+                assert.equal(result.success, false, method);
+                assert.equal(result.code, 'tag_whitelist_content_missing', method);
+                assert.equal(result.error, '白名单含 content，但实际正文并无 content 标签，请检查。', method);
+                assert.equal(result.retryable, false, method);
+                assert.equal(result.toastOnly, true, method);
+                assert.deepEqual(Array.from(result.diagnostics?.missingFloors || []), missingFloors, method);
+                assert.equal(requests.length, 0, `${method} must stop before calling the LLM`);
+            }
+        });
+    }
+});
+
+test('content whitelist accepts case-insensitive opening-only and closing-only Assistant boundaries', async () => {
+    const chat = [
+        { is_user: true, role: 'assistant', name: '用户', mes: '用户裸文本不应触发拦截' },
+        { is_user: false, name: '角色', mes: '<CoNtEnT data-kind="story">仅有起始边界的正文' },
+        { is_user: false, name: '角色', mes: '仅有结束边界的正文</cOnTeNt>后台文本' },
+        { is_user: false, name: '角色', mes: '<Memory>清洗后为空的楼层不应触发</Memory>' },
+    ];
+
+    for (const method of ['runTrace', 'runSummary']) {
+        const { memory, requests, state } = createTagWhitelistGuardSandbox(chat);
+        const result = await memory.TaskRunner[method](state, {
+            start: 0,
+            end: chat.length,
+            includeWorldbook: false,
+            previewOnly: true,
+        });
+
+        assert.equal(result.error, 'request captured', method);
+        assert.equal(requests.length, 1, method);
+        const requestText = requests[0].map((message) => String(message.content || '')).join('\n');
+        assert.match(requestText, /仅有起始边界的正文/, method);
+        assert.match(requestText, /仅有结束边界的正文/, method);
+        assert.doesNotMatch(requestText, /清洗后为空的楼层不应触发|<\/?content/i, method);
+    }
+});
+
+test('blacklist-only presets keep allowing untagged Assistant source through to the LLM', async () => {
+    const chat = [
+        { is_user: true, name: '用户', mes: '用户行动' },
+        { is_user: false, name: '角色', mes: '<thinking>不得发送的推理</thinking>可见助手正文' },
+    ];
+    const preset = { id: 'thinking-blacklist', blacklist: ['thinking'], whitelist: [] };
+
+    for (const method of ['runTrace', 'runSummary']) {
+        const { memory, requests, state } = createTagWhitelistGuardSandbox(chat, preset);
+        const result = await memory.TaskRunner[method](state, {
+            start: 0,
+            end: chat.length,
+            includeWorldbook: false,
+            previewOnly: true,
+        });
+
+        assert.equal(result.error, 'request captured', method);
+        assert.equal(requests.length, 1, method);
+        const requestText = requests[0].map((message) => String(message.content || '')).join('\n');
+        assert.match(requestText, /可见助手正文/, method);
+        assert.doesNotMatch(requestText, /不得发送的推理|<\/?thinking>/i, method);
+    }
+});
+
 test('trace uses the global historian selection and injects populated non-summary tables', async () => {
     const capturedRequests = [];
     const appliedTraceOptions = [];

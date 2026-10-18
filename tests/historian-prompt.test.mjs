@@ -518,6 +518,44 @@ test('retry actions close failure dialogs before restarting background work', ()
     assert.match(mountHandler, /retryPendingAutoTask\?\.\(payload\.sessionId\)/);
 });
 
+test('content whitelist mismatch uses warning-only task UI without retry dialogs', () => {
+    const batchRunner = getFunctionSource(
+        memoryWindowSource,
+        'runTaskBatchWithRetry',
+        'runTaskFromPanel',
+    );
+    const panelRunner = getFunctionSource(
+        memoryWindowSource,
+        'runTaskFromPanel',
+        'openTracePointerDialog',
+    );
+    const mountStart = memoryWindowSource.indexOf('function mount(');
+    const mountEnd = memoryWindowSource.indexOf('YuzukiMemory.MemoryWindow', mountStart + 1);
+    const mountHandler = memoryWindowSource.slice(mountStart, mountEnd);
+
+    assert.ok(
+        batchRunner.indexOf('if (result?.retryable === false) return result;')
+            < batchRunner.indexOf("waitForTaskBuffer('连接不稳定，等待后重试', 5)"),
+        'non-retryable warnings must return before the retry delay',
+    );
+    assert.ok(
+        panelRunner.indexOf('validateTaskRangeTagFilter?.(options.start, options.end)')
+            < panelRunner.indexOf('showTaskToast(`${getTaskActionLabel(action)}已开始'),
+        'manual tag preflight must run before the API-start toast',
+    );
+    assert.match(panelRunner, /if \(result\?\.toastOnly\) \{[\s\S]*?showTaskToast\([^;]+, 'warning'\);[\s\S]*?return;[\s\S]*?window\.alert\(`第/);
+
+    const autoFailureStart = mountHandler.indexOf('onAutoTaskFailure(payload = {})');
+    const autoFailureHandler = mountHandler.slice(autoFailureStart);
+    assert.ok(autoFailureStart >= 0, 'automatic task failure callback should exist');
+    assert.ok(
+        autoFailureHandler.indexOf('if (payload.toastOnly)')
+            < autoFailureHandler.indexOf('openTaskResultConfirmDialog(root'),
+        'warning-only automatic failures must return before opening the retry dialog',
+    );
+    assert.match(autoFailureHandler, /if \(payload\.toastOnly\) \{[\s\S]*?showTaskToast\([^;]+, 'warning'\);[\s\S]*?return true;/);
+});
+
 test('story director progress indicator follows the live runtime lifecycle', () => {
     const ensureIndicator = getFunctionSource(
         memoryWindowSource,
