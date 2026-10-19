@@ -21,6 +21,7 @@
         'itemTrackingVectorSynced',
         'worldSettingVectorSynced',
         'deletedTodoIdentities',
+        'deletedPlotItemIdentities',
     ]);
     let bound = false;
     let guardsBound = false;
@@ -36,6 +37,7 @@
     let generationActive = false;
     let saveRetryCount = 0;
     let pendingReason = '';
+    let pendingReconcileOptions = { pruneRemoved: false, force: false };
 
     function clone(value) {
         try {
@@ -91,25 +93,92 @@
         return `${source.length}:${hash}`;
     }
 
-    function getMessageText(message) {
+    function normalizeSwipe(value) {
+        return Math.max(0, Math.round(Number(value) || 0));
+    }
+
+    function getCurrentSwipe(message) {
+        return normalizeSwipe(message?.swipe_id);
+    }
+
+    function getSwipeInfo(message, swipe) {
+        const info = Array.isArray(message?.swipe_info) ? message.swipe_info[normalizeSwipe(swipe)] : null;
+        return info && typeof info === 'object' ? info : null;
+    }
+
+    function getMessageSwipeCount(message) {
+        return Math.max(
+            1,
+            getCurrentSwipe(message) + 1,
+            Array.isArray(message?.swipes) ? message.swipes.length : 0,
+            Array.isArray(message?.swipe_info) ? message.swipe_info.length : 0,
+        );
+    }
+
+    function getMessageText(message, swipe = getCurrentSwipe(message)) {
         if (!message || typeof message !== 'object') return '';
-        const swipeId = Math.max(0, Math.round(Number(message.swipe_id) || 0));
+        const swipeId = normalizeSwipe(swipe);
         if (Array.isArray(message.swipes) && typeof message.swipes[swipeId] === 'string') {
             return message.swipes[swipeId];
         }
-        return String(message.mes || message.content || message.text || '');
+        return swipeId === getCurrentSwipe(message)
+            ? String(message.mes || message.content || message.text || '')
+            : '';
     }
 
-    function getMessageSignature(message) {
+    function getMessageSignature(message, swipe = getCurrentSwipe(message)) {
         if (!message || typeof message !== 'object') return '';
+        const swipeId = normalizeSwipe(swipe);
+        const currentSwipe = getCurrentSwipe(message);
+        const swipeInfo = getSwipeInfo(message, swipeId);
+        const swipeExtra = swipeInfo?.extra && typeof swipeInfo.extra === 'object' ? swipeInfo.extra : {};
+        const topExtra = message.extra && typeof message.extra === 'object' ? message.extra : {};
+        const topFallback = swipeId === currentSwipe ? topExtra : {};
+        return [
+            message.is_user === true || message.role === 'user' ? 'u' : 'a',
+            swipeId,
+            hashText(getMessageText(message, swipeId)),
+            String(swipeExtra.gen_id
+                ?? swipeExtra.generation_id
+                ?? swipeExtra.swipe_generation_id
+                ?? topFallback.gen_id
+                ?? topFallback.generation_id
+                ?? topFallback.swipe_generation_id
+                ?? ''),
+            String(swipeInfo?.send_date
+                ?? (swipeId === currentSwipe ? message.send_date : undefined)
+                ?? (swipeId === currentSwipe ? message.gen_started : undefined)
+                ?? topFallback.send_date
+                ?? ''),
+        ].join('|');
+    }
+
+    function getLegacyMessageSignature(message, swipe = getCurrentSwipe(message)) {
+        if (!message || typeof message !== 'object') return '';
+        const swipeId = normalizeSwipe(swipe);
         const extra = message.extra && typeof message.extra === 'object' ? message.extra : {};
         return [
             message.is_user === true || message.role === 'user' ? 'u' : 'a',
-            Math.max(0, Math.round(Number(message.swipe_id) || 0)),
-            hashText(getMessageText(message)),
+            swipeId,
+            hashText(getMessageText(message, swipeId)),
             String(extra.gen_id ?? extra.generation_id ?? extra.swipe_generation_id ?? ''),
             String(message.send_date ?? message.gen_started ?? extra.send_date ?? ''),
         ].join('|');
+    }
+
+    function getMessageSignatureCandidates(message, swipe = getCurrentSwipe(message)) {
+        const swipeId = normalizeSwipe(swipe);
+        const candidates = [getMessageSignature(message, swipeId)];
+        // The legacy signature read top-level generation metadata, which only
+        // describes the currently selected Swipe.
+        if (swipeId === getCurrentSwipe(message)) {
+            candidates.push(getLegacyMessageSignature(message, swipeId));
+        }
+        return [...new Set(candidates.filter(Boolean))];
+    }
+
+    function getWeakSignature(signature) {
+        return String(signature || '').split('|').slice(0, 3).join('|');
     }
 
     function getTableShape(state) {
@@ -133,6 +202,13 @@
             tableId,
             clone(Array.isArray(records[tableId]) ? records[tableId] : []),
         ]));
+    }
+
+    function createEmptyManagedRecords(state) {
+        return Object.fromEntries((Array.isArray(state?.tables) ? state.tables : [])
+            .map((table) => table?.id)
+            .filter((tableId) => tableId && tableId !== SUMMARY_TABLE_ID)
+            .map((tableId) => [tableId, []]));
     }
 
     function normalizeActiveEntries(entries = []) {
@@ -226,70 +302,270 @@
         return ledger;
     }
 
-    function getMarker(message) {
+    function getTopMarker(message) {
         const marker = message?.extra?.[MARKER_KEY];
         return marker && typeof marker === 'object' ? marker : null;
     }
 
-    function restoreMarker(message, previousMarker, hadExtra) {
+    function getStoredSwipeMarker(message, swipe) {
+        const marker = getSwipeInfo(message, swipe)?.extra?.[MARKER_KEY];
+        return marker && typeof marker === 'object' ? marker : null;
+    }
+
+    function getMarker(message, swipe = getCurrentSwipe(message)) {
+        const swipeId = normalizeSwipe(swipe);
+        return (swipeId === getCurrentSwipe(message) ? getTopMarker(message) : null)
+            || getStoredSwipeMarker(message, swipeId);
+    }
+
+    function captureMarkerState(message, swipe) {
+        const swipeId = normalizeSwipe(swipe);
+        const swipeInfo = getSwipeInfo(message, swipeId);
+        return {
+            swipe: swipeId,
+            hadTopExtra: !!(message?.extra && typeof message.extra === 'object'),
+            topMarker: getTopMarker(message) ? clone(getTopMarker(message)) : null,
+            hadSwipeInfoArray: Array.isArray(message?.swipe_info),
+            swipeInfoLength: Array.isArray(message?.swipe_info) ? message.swipe_info.length : 0,
+            hadSwipeInfo: !!swipeInfo,
+            hadSwipeExtra: !!(swipeInfo?.extra && typeof swipeInfo.extra === 'object'),
+            swipeMarker: getStoredSwipeMarker(message, swipeId)
+                ? clone(getStoredSwipeMarker(message, swipeId))
+                : null,
+        };
+    }
+
+    function restoreMarker(message, snapshot) {
         if (!message || typeof message !== 'object') return;
+        const markerState = snapshot && typeof snapshot === 'object' ? snapshot : {};
         if (!message.extra || typeof message.extra !== 'object') {
-            if (previousMarker) message.extra = { [MARKER_KEY]: clone(previousMarker) };
+            if (markerState.topMarker) message.extra = { [MARKER_KEY]: clone(markerState.topMarker) };
+        } else {
+            if (markerState.topMarker) message.extra[MARKER_KEY] = clone(markerState.topMarker);
+            else delete message.extra[MARKER_KEY];
+            if (!markerState.hadTopExtra && !Object.keys(message.extra).length) delete message.extra;
+        }
+
+        const swipeId = normalizeSwipe(markerState.swipe);
+        if (markerState.hadSwipeInfo) {
+            message.swipe_info = Array.isArray(message.swipe_info) ? message.swipe_info : [];
+            const swipeInfo = message.swipe_info[swipeId] && typeof message.swipe_info[swipeId] === 'object'
+                ? message.swipe_info[swipeId]
+                : {};
+            message.swipe_info[swipeId] = swipeInfo;
+            swipeInfo.extra = swipeInfo.extra && typeof swipeInfo.extra === 'object' ? swipeInfo.extra : {};
+            if (markerState.swipeMarker) swipeInfo.extra[MARKER_KEY] = clone(markerState.swipeMarker);
+            else delete swipeInfo.extra[MARKER_KEY];
+            if (!markerState.hadSwipeExtra && !Object.keys(swipeInfo.extra).length) delete swipeInfo.extra;
             return;
         }
-        if (previousMarker) message.extra[MARKER_KEY] = clone(previousMarker);
-        else delete message.extra[MARKER_KEY];
-        if (!hadExtra && !Object.keys(message.extra).length) delete message.extra;
+
+        if (!Array.isArray(message.swipe_info)) return;
+        const swipeInfo = message.swipe_info[swipeId];
+        if (swipeInfo && typeof swipeInfo === 'object' && swipeInfo.extra && typeof swipeInfo.extra === 'object') {
+            delete swipeInfo.extra[MARKER_KEY];
+            if (!Object.keys(swipeInfo.extra).length) delete swipeInfo.extra;
+            if (!Object.keys(swipeInfo).length) delete message.swipe_info[swipeId];
+        }
+        if (markerState.hadSwipeInfoArray) {
+            if (message.swipe_info.length > markerState.swipeInfoLength) {
+                message.swipe_info.length = markerState.swipeInfoLength;
+            }
+        } else if (!message.swipe_info.some(Boolean)) {
+            delete message.swipe_info;
+        }
     }
 
-    function setMarker(message, marker) {
+    function markerValuesEqual(left, right) {
+        return !!left && !!right
+            && Number(left.version || 0) === Number(right.version || 0)
+            && String(left.ledgerId || '') === String(right.ledgerId || '')
+            && String(left.entryId || '') === String(right.entryId || '')
+            && Number.isInteger(Number(left.swipe))
+            && Number(left.swipe) === Number(right.swipe);
+    }
+
+    function setMarker(message, marker, swipe = marker?.swipe ?? getCurrentSwipe(message)) {
         if (!message || typeof message !== 'object') return false;
-        message.extra = message.extra && typeof message.extra === 'object' ? message.extra : {};
-        message.extra[MARKER_KEY] = marker;
-        return true;
+        const swipeId = normalizeSwipe(swipe);
+        const normalizedMarker = clone({ ...marker, swipe: swipeId });
+        let changed = false;
+
+        message.swipe_info = Array.isArray(message.swipe_info) ? message.swipe_info : [];
+        const swipeInfo = message.swipe_info[swipeId] && typeof message.swipe_info[swipeId] === 'object'
+            ? message.swipe_info[swipeId]
+            : {};
+        message.swipe_info[swipeId] = swipeInfo;
+        swipeInfo.extra = swipeInfo.extra && typeof swipeInfo.extra === 'object' ? swipeInfo.extra : {};
+        if (!markerValuesEqual(swipeInfo.extra[MARKER_KEY], normalizedMarker)) {
+            swipeInfo.extra[MARKER_KEY] = clone(normalizedMarker);
+            changed = true;
+        }
+
+        if (swipeId === getCurrentSwipe(message)) {
+            message.extra = message.extra && typeof message.extra === 'object' ? message.extra : {};
+            if (!markerValuesEqual(message.extra[MARKER_KEY], normalizedMarker)) {
+                message.extra[MARKER_KEY] = clone(normalizedMarker);
+                changed = true;
+            }
+        }
+        return changed;
     }
 
-    function scanActiveEntries(ledger, chat = getChat()) {
-        if (!ledger) return [];
-        const seen = new Set();
+    function clearMarker(message, swipe) {
+        if (!message || typeof message !== 'object') return false;
+        const swipeId = normalizeSwipe(swipe);
+        let changed = false;
+        const swipeInfo = getSwipeInfo(message, swipeId);
+        if (swipeInfo?.extra && typeof swipeInfo.extra === 'object'
+            && Object.prototype.hasOwnProperty.call(swipeInfo.extra, MARKER_KEY)) {
+            delete swipeInfo.extra[MARKER_KEY];
+            changed = true;
+        }
+        if (swipeId === getCurrentSwipe(message)
+            && message.extra && typeof message.extra === 'object'
+            && Object.prototype.hasOwnProperty.call(message.extra, MARKER_KEY)) {
+            delete message.extra[MARKER_KEY];
+            changed = true;
+        }
+        return changed;
+    }
+
+    function isStructurallyValidMarker(ledger, marker, swipe) {
+        const entryId = String(marker?.entryId || '').trim();
+        const entry = entryId ? ledger?.entries?.[entryId] : null;
+        return !!marker
+            && String(marker.ledgerId || '') === ledger.id
+            && !!entry
+            && Number.isInteger(Number(marker.swipe))
+            && Number(marker.swipe) === swipe
+            && normalizeSwipe(entry.swipe) === swipe;
+    }
+
+    function isValidMarker(ledger, marker, swipe, claimedEntryIds) {
+        const entryId = String(marker?.entryId || '').trim();
+        return isStructurallyValidMarker(ledger, marker, swipe)
+            && !claimedEntryIds.has(entryId);
+    }
+
+    function scanLedgerReferences(ledger, chat = getChat()) {
+        if (!ledger) return { activeEntries: [], reachableEntryIds: new Set(), repairedMarkerCount: 0 };
+        const claimedEntryIds = new Set();
         const active = [];
         const signatureEntries = new Map();
+        const weakSignatureEntries = new Map();
         Object.values(ledger.entries || {}).forEach((entry) => {
             const signature = String(entry?.signature || '');
             if (!signature) return;
             if (!signatureEntries.has(signature)) signatureEntries.set(signature, []);
             signatureEntries.get(signature).push(entry);
+            const weakSignature = getWeakSignature(signature);
+            if (!weakSignatureEntries.has(weakSignature)) weakSignatureEntries.set(weakSignature, []);
+            weakSignatureEntries.get(weakSignature).push(entry);
+        });
+        const weakChatSlotCounts = new Map();
+        (Array.isArray(chat) ? chat : []).forEach((message) => {
+            for (let swipe = 0; swipe < getMessageSwipeCount(message); swipe += 1) {
+                const weakSignature = getWeakSignature(getMessageSignature(message, swipe));
+                weakChatSlotCounts.set(weakSignature, (weakChatSlotCounts.get(weakSignature) || 0) + 1);
+            }
+        });
+        const matchingMarkerSlotKeysByEntryId = new Map();
+        (Array.isArray(chat) ? chat : []).forEach((message, floor) => {
+            const currentSwipe = getCurrentSwipe(message);
+            for (let swipe = 0; swipe < getMessageSwipeCount(message); swipe += 1) {
+                const slotKey = `${floor}:${swipe}`;
+                const signatureSet = new Set(getMessageSignatureCandidates(message, swipe));
+                const markerCandidates = swipe === currentSwipe
+                    ? [getTopMarker(message), getStoredSwipeMarker(message, swipe)]
+                    : [getStoredSwipeMarker(message, swipe)];
+                const seenEntryIds = new Set();
+                markerCandidates.forEach((marker) => {
+                    if (!isStructurallyValidMarker(ledger, marker, swipe)) return;
+                    const entryId = String(marker.entryId || '').trim();
+                    if (!entryId || seenEntryIds.has(entryId)) return;
+                    seenEntryIds.add(entryId);
+                    if (!signatureSet.has(String(ledger.entries[entryId]?.signature || ''))) return;
+                    if (!matchingMarkerSlotKeysByEntryId.has(entryId)) {
+                        matchingMarkerSlotKeysByEntryId.set(entryId, new Set());
+                    }
+                    matchingMarkerSlotKeysByEntryId.get(entryId).add(slotKey);
+                });
+            }
         });
         let repairedMarkerCount = 0;
         (Array.isArray(chat) ? chat : []).forEach((message, floor) => {
-            const currentSwipe = Math.max(0, Math.round(Number(message?.swipe_id) || 0));
-            let marker = getMarker(message);
-            let entryId = String(marker?.entryId || '').trim();
-            const markerSwipe = Math.max(0, Math.round(Number(marker?.swipe) || 0));
-            const markerMatches = marker
-                && String(marker.ledgerId || '') === ledger.id
-                && entryId
-                && !seen.has(entryId)
-                && markerSwipe === currentSwipe
-                && ledger.entries[entryId];
-            if (!markerMatches) {
-                const signature = getMessageSignature(message);
-                const candidates = (signatureEntries.get(signature) || []).filter((entry) => (
-                    !seen.has(entry.id) && entry.swipe === currentSwipe
+            const currentSwipe = getCurrentSwipe(message);
+            for (let swipe = 0; swipe < getMessageSwipeCount(message); swipe += 1) {
+                const slotKey = `${floor}:${swipe}`;
+                const markerCandidates = swipe === currentSwipe
+                    ? [getTopMarker(message), getStoredSwipeMarker(message, swipe)]
+                    : [getStoredSwipeMarker(message, swipe)];
+                const signatureCandidates = getMessageSignatureCandidates(message, swipe);
+                const signatureSet = new Set(signatureCandidates);
+                const validMarkers = markerCandidates.filter((candidate) => (
+                    isValidMarker(ledger, candidate, swipe, claimedEntryIds)
                 ));
-                if (candidates.length !== 1) return;
-                entryId = candidates[0].id;
-                marker = {
+                let marker = validMarkers.find((candidate) => {
+                    const entry = ledger.entries[String(candidate?.entryId || '').trim()];
+                    return signatureSet.has(String(entry?.signature || ''));
+                }) || null;
+                let entryId = String(marker?.entryId || '').trim();
+                if (!marker) {
+                    const candidates = [...new Map(signatureCandidates.flatMap((signature) => (
+                        signatureEntries.get(signature) || []
+                    )).filter((entry) => (
+                        !claimedEntryIds.has(entry.id)
+                        && normalizeSwipe(entry.swipe) === swipe
+                        && (!matchingMarkerSlotKeysByEntryId.get(entry.id)?.size
+                            || matchingMarkerSlotKeysByEntryId.get(entry.id).has(slotKey))
+                    )).map((entry) => [entry.id, entry])).values()];
+                    if (candidates.length === 1) {
+                        entryId = candidates[0].id;
+                        marker = {
+                            version: LEDGER_VERSION,
+                            ledgerId: ledger.id,
+                            entryId,
+                            swipe,
+                        };
+                    }
+                }
+
+                if (!marker && !markerCandidates.some(Boolean)) {
+                    const weakSignature = getWeakSignature(getMessageSignature(message, swipe));
+                    const weakCandidates = weakSignatureEntries.get(weakSignature) || [];
+                    const candidate = weakCandidates.length === 1 ? weakCandidates[0] : null;
+                    if (candidate
+                        && weakChatSlotCounts.get(weakSignature) === 1
+                        && !claimedEntryIds.has(candidate.id)
+                        && (!matchingMarkerSlotKeysByEntryId.get(candidate.id)?.size
+                            || matchingMarkerSlotKeysByEntryId.get(candidate.id).has(slotKey))
+                        && normalizeSwipe(candidate.swipe) === swipe) {
+                        entryId = candidate.id;
+                        marker = {
+                            version: LEDGER_VERSION,
+                            ledgerId: ledger.id,
+                            entryId,
+                            swipe,
+                        };
+                    }
+                }
+
+                if (!marker) {
+                    if (markerCandidates.some(Boolean) && clearMarker(message, swipe)) repairedMarkerCount += 1;
+                    continue;
+                }
+
+                const normalizedMarker = {
                     version: LEDGER_VERSION,
                     ledgerId: ledger.id,
                     entryId,
-                    swipe: currentSwipe,
+                    swipe,
                 };
-                setMarker(message, marker);
-                repairedMarkerCount += 1;
+                if (setMarker(message, normalizedMarker, swipe)) repairedMarkerCount += 1;
+                claimedEntryIds.add(entryId);
+                if (swipe === currentSwipe) active.push({ id: entryId, floor });
             }
-            seen.add(entryId);
-            active.push({ id: entryId, floor });
         });
         if (repairedMarkerCount) {
             scheduleChatSave();
@@ -298,20 +574,29 @@
                 repairedMarkerCount,
             });
         }
-        return active;
+        return {
+            activeEntries: active,
+            reachableEntryIds: claimedEntryIds,
+            repairedMarkerCount,
+        };
+    }
+
+    function scanActiveEntries(ledger, chat = getChat()) {
+        return scanLedgerReferences(ledger, chat).activeEntries;
     }
 
     function getChatFingerprint(chat = getChat()) {
         const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
         const entries = [];
         (Array.isArray(chat) ? chat : []).forEach((message, floor) => {
-            const marker = getMarker(message);
+            const currentSwipe = getCurrentSwipe(message);
+            const marker = getMarker(message, currentSwipe);
             if (!marker) return;
             entries.push([
                 floor,
                 String(marker.ledgerId || ''),
                 String(marker.entryId || ''),
-                Math.max(0, Math.round(Number(message?.swipe_id) || 0)),
+                currentSwipe,
             ]);
         });
         return JSON.stringify([sessionId, Array.isArray(chat) ? chat.length : 0, entries]);
@@ -364,13 +649,27 @@
         generationActive = false;
 
         const ledger = ensureLedger(state, options.beforeRecords || cloneManagedRecords(state));
-        const swipe = Math.max(0, Math.round(Number(message.swipe_id) || 0));
-        const previousMarker = getMarker(message) ? clone(getMarker(message)) : null;
-        const hadExtra = !!(message.extra && typeof message.extra === 'object');
+        const previousActiveEntries = clone(ledger.activeEntries);
+        const previousUpdatedAt = ledger.updatedAt;
+        const previousChatFingerprint = lastChatFingerprint;
+        const swipe = getCurrentSwipe(message);
+        const markerState = captureMarkerState(message, swipe);
+        const previousMarker = getMarker(message, swipe) ? clone(getMarker(message, swipe)) : null;
+        const reusableEntryId = String(previousMarker?.entryId || '').trim();
+        const reusableEntry = ledger.entries[reusableEntryId];
+        const signatureMatches = reusableEntry
+            && getMessageSignatureCandidates(message, swipe).includes(String(reusableEntry.signature || ''));
+        const floorMatches = reusableEntry
+            && normalizeActiveEntries(ledger.activeEntries).some((reference) => (
+                reference.id === reusableEntryId && reference.floor === floor
+            ));
         const reusableId = previousMarker
             && String(previousMarker.ledgerId || '') === ledger.id
-            && Math.max(0, Math.round(Number(previousMarker.swipe) || 0)) === swipe
-            ? String(previousMarker.entryId || '').trim()
+            && normalizeSwipe(previousMarker.swipe) === swipe
+            && reusableEntry
+            && normalizeSwipe(reusableEntry.swipe) === swipe
+            && (signatureMatches || floorMatches)
+            ? reusableEntryId
             : '';
         const entryId = reusableId || makeId('entry');
         const previousEntry = ledger.entries[entryId] ? clone(ledger.entries[entryId]) : null;
@@ -378,7 +677,7 @@
         ledger.entries[entryId] = {
             id: entryId,
             swipe,
-            signature: getMessageSignature(message),
+            signature: getMessageSignature(message, swipe),
             rows: clone(rows),
             growthCompletionUpdates: clone(growthCompletionUpdates),
             storyTime: options.storyTime ? clone(options.storyTime) : null,
@@ -391,8 +690,8 @@
             ledgerId: ledger.id,
             entryId,
             swipe,
-        });
-        ledger.activeEntries = scanActiveEntries(ledger, chat);
+        }, swipe);
+        ledger.activeEntries = scanLedgerReferences(ledger, chat).activeEntries;
         lastChatFingerprint = getChatFingerprint(chat);
         ledger.updatedAt = now;
         state.floorLedger = ledger;
@@ -410,13 +709,16 @@
                 finished = true;
                 if (previousEntry) ledger.entries[entryId] = previousEntry;
                 else delete ledger.entries[entryId];
-                restoreMarker(message, previousMarker, hadExtra);
+                ledger.activeEntries = previousActiveEntries;
+                ledger.updatedAt = previousUpdatedAt;
+                lastChatFingerprint = previousChatFingerprint;
+                restoreMarker(message, markerState);
             },
         };
     }
 
-    function replayEntries(state, ledger, references) {
-        const records = cloneManagedRecords(ledger.baselineRecords);
+    function replayEntries(state, ledger, references, baselineRecords = ledger.baselineRecords) {
+        const records = cloneManagedRecords(baselineRecords);
         const replayState = {
             ...state,
             // Replay previously accepted deltas regardless of current navigation visibility.
@@ -638,13 +940,15 @@
     }
 
     function hasPersistentRecordTombstone(record) {
-        return Array.isArray(record?.deletedTodoIdentities) && record.deletedTodoIdentities.length > 0;
+        return (Array.isArray(record?.deletedTodoIdentities) && record.deletedTodoIdentities.length > 0)
+            || (Array.isArray(record?.deletedPlotItemIdentities) && record.deletedPlotItemIdentities.length > 0);
     }
 
     function isEmptyReplayRecord(record, table) {
         const values = record?.values && typeof record.values === 'object' ? record.values : {};
         if (table?.id === PLOT_TABLE_ID) {
-            return !Object.values(values).some(hasStoredCellValue);
+            return !hasPersistentRecordTombstone(record)
+                && !Object.values(values).some(hasStoredCellValue);
         }
 
         const primaryName = getPrimaryColumnName(table);
@@ -659,7 +963,7 @@
         ));
     }
 
-    function alignPlotMetadata(currentRecord, rebuiltRecord) {
+    function alignPlotMetadata(currentRecord, rebuiltRecord, canonicalRecord = null) {
         if (!currentRecord || !rebuiltRecord) return;
         rebuiltRecord.plotItemMeta = rebuiltRecord.plotItemMeta && typeof rebuiltRecord.plotItemMeta === 'object'
             ? rebuiltRecord.plotItemMeta
@@ -675,19 +979,68 @@
             const rebuiltLines = String(rebuiltRecord.values?.[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
             const currentMeta = Array.isArray(currentRecord.plotItemMeta?.[kind]) ? currentRecord.plotItemMeta[kind] : [];
             const currentHidden = Array.isArray(currentRecord.hiddenPlotItems?.[kind]) ? currentRecord.hiddenPlotItems[kind] : [];
-            const existingMeta = Array.isArray(rebuiltRecord.plotItemMeta?.[kind]) ? rebuiltRecord.plotItemMeta[kind] : [];
-            const existingHidden = Array.isArray(rebuiltRecord.hiddenPlotItems?.[kind]) ? rebuiltRecord.hiddenPlotItems[kind] : [];
-            const sourceByLine = new Map();
-            currentLines.forEach((line, index) => {
-                const key = line.trim();
-                if (!sourceByLine.has(key)) sourceByLine.set(key, []);
-                sourceByLine.get(key).push({ meta: currentMeta[index] || null, hidden: !!currentHidden[index] });
+            const canonicalSource = canonicalRecord || rebuiltRecord;
+            const canonicalLines = String(canonicalSource.values?.[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+            const canonicalMeta = Array.isArray(canonicalSource.plotItemMeta?.[kind]) ? canonicalSource.plotItemMeta[kind] : [];
+            const canonicalHidden = Array.isArray(canonicalSource.hiddenPlotItems?.[kind]) ? canonicalSource.hiddenPlotItems[kind] : [];
+            const canonicalByLine = new Map();
+            canonicalLines.forEach((line, index) => {
+                const key = normalizePlotProvenanceText(line);
+                if (!canonicalByLine.has(key)) canonicalByLine.set(key, []);
+                canonicalByLine.get(key).push(index);
             });
-            const aligned = rebuiltLines.map((line, index) => {
-                const match = sourceByLine.get(line.trim())?.shift();
+            const usedCurrent = new Set();
+            const findCurrentIndex = (line, canonical) => {
+                const canonicalId = String(canonical?.id || '').trim();
+                if (canonicalId) {
+                    const idIndex = currentMeta.findIndex((meta, index) => (
+                        !usedCurrent.has(index) && String(meta?.id || '').trim() === canonicalId
+                    ));
+                    if (idIndex >= 0) return idIndex;
+                }
+                const canonicalIdentity = getPlotProvenance(kind, line, canonical);
+                if (canonicalIdentity.exactKey) {
+                    const identityIndex = currentLines.findIndex((currentLine, index) => (
+                        !usedCurrent.has(index)
+                        && getPlotProvenance(kind, currentLine, currentMeta[index]).exactKey === canonicalIdentity.exactKey
+                    ));
+                    if (identityIndex >= 0) return identityIndex;
+                }
+                return -1;
+            };
+            const findCurrentFallback = (line) => {
+                const key = normalizePlotProvenanceText(line);
+                const preferredIndex = currentLines.findIndex((currentLine, index) => (
+                    !usedCurrent.has(index)
+                    && normalizePlotProvenanceText(currentLine) === key
+                    && (currentMeta[index]?.source === 'manual' || currentMeta[index]?.editedAt)
+                ));
+                if (preferredIndex >= 0) return preferredIndex;
+                return currentLines.findIndex((currentLine, index) => (
+                    !usedCurrent.has(index) && normalizePlotProvenanceText(currentLine) === key
+                ));
+            };
+            const aligned = rebuiltLines.map((line) => {
+                const key = normalizePlotProvenanceText(line);
+                const canonicalIndex = canonicalByLine.get(key)?.shift();
+                if (canonicalIndex !== undefined) {
+                    const meta = canonicalMeta[canonicalIndex] || null;
+                    const currentIndex = findCurrentIndex(line, meta);
+                    if (currentIndex >= 0) {
+                        usedCurrent.add(currentIndex);
+                        return {
+                            meta: currentMeta[currentIndex]?.editedAt ? currentMeta[currentIndex] : meta,
+                            hidden: !!currentHidden[currentIndex],
+                        };
+                    }
+                    return { meta, hidden: !!canonicalHidden[canonicalIndex] };
+                }
+                const currentIndex = findCurrentFallback(line);
+                if (currentIndex < 0) return { meta: null, hidden: false };
+                usedCurrent.add(currentIndex);
                 return {
-                    meta: match?.meta || existingMeta[index] || null,
-                    hidden: match ? !!match.hidden : !!existingHidden[index],
+                    meta: currentMeta[currentIndex] || null,
+                    hidden: !!currentHidden[currentIndex],
                 };
             });
             rebuiltRecord.plotItemMeta[kind] = aligned.map((item) => item.meta);
@@ -725,18 +1078,24 @@
                 if (!rebuiltMatch.record) {
                     if (hasValueOverride || hasPolicyOverride) {
                         const overlayRecord = createExternalOverlayRecord(currentMatch.record, expectedRecord, table);
+                        const canonicalPlotRecord = table.id === PLOT_TABLE_ID ? clone(overlayRecord) : null;
                         applyRecordValueOverlay(currentMatch.record, expectedRecord, overlayRecord, table);
                         applyRecordPolicyOverlay(currentMatch.record, expectedRecord, overlayRecord);
-                        if (table.id === PLOT_TABLE_ID) alignPlotMetadata(currentMatch.record, overlayRecord);
+                        if (table.id === PLOT_TABLE_ID) {
+                            alignPlotMetadata(currentMatch.record, overlayRecord, canonicalPlotRecord);
+                        }
                         rebuiltList.push(overlayRecord);
                         replayOverrideCandidates.add(overlayRecord);
                     }
                     return;
                 }
 
+                const canonicalPlotRecord = table.id === PLOT_TABLE_ID ? clone(rebuiltMatch.record) : null;
                 applyRecordValueOverlay(currentMatch.record, expectedRecord, rebuiltMatch.record, table);
                 applyRecordPolicyOverlay(currentMatch.record, expectedRecord, rebuiltMatch.record);
-                if (table.id === PLOT_TABLE_ID) alignPlotMetadata(currentMatch.record, rebuiltMatch.record);
+                if (table.id === PLOT_TABLE_ID) {
+                    alignPlotMetadata(currentMatch.record, rebuiltMatch.record, canonicalPlotRecord);
+                }
                 if (hasValueOverride || hasPolicyOverride) replayOverrideCandidates.add(rebuiltMatch.record);
             });
 
@@ -753,6 +1112,9 @@
             }
             if (table.id === 'character_profile') {
                 rebuiltList.forEach((record) => YuzukiMemory.TodoManager?.applyDeletedTodoPolicy?.(record));
+            }
+            if (table.id === PLOT_TABLE_ID) {
+                rebuiltList.forEach((record) => YuzukiMemory.BranchSnapshot?.applyDeletedPlotPolicy?.(record));
             }
         });
         return rebuiltRecords;
@@ -845,6 +1207,498 @@
         return removed;
     }
 
+    function normalizePlotProvenanceText(value) {
+        return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function stablePlotSource(value) {
+        if (Array.isArray(value)) return `[${value.map(stablePlotSource).join(',')}]`;
+        if (!value || typeof value !== 'object') return JSON.stringify(value ?? null);
+        return `{${Object.keys(value).sort().filter((key) => value[key] !== undefined).map((key) => (
+            `${JSON.stringify(key)}:${stablePlotSource(value[key])}`
+        )).join(',')}}`;
+    }
+
+    function getPlotRangeKey(meta) {
+        const range = meta?.sourceRange;
+        if (!range || typeof range !== 'object') return '';
+        const start = Number(range.start);
+        const end = Number(range.end);
+        if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return '';
+        return `${Math.max(0, Math.round(start))}:${Math.max(0, Math.round(end))}`;
+    }
+
+    function getPlotScopeKey(meta) {
+        const scope = meta?.floorScope || meta?.sourceRange?.floorScope;
+        if (!scope) return '';
+        const id = typeof scope === 'object' ? String(scope.id || '').trim() : String(scope).trim();
+        return id ? `id:${id}` : stablePlotSource(scope);
+    }
+
+    function getPlotProvenance(kind, line, meta) {
+        const normalizedKind = kind === 'branch' ? 'branch' : 'main';
+        const text = normalizePlotProvenanceText(line);
+        const weakKey = JSON.stringify([normalizedKind, text]);
+        const rangeKey = getPlotRangeKey(meta);
+        const scopeKey = getPlotScopeKey(meta);
+        return {
+            weakKey,
+            exactKey: rangeKey || scopeKey
+                ? JSON.stringify([normalizedKind, text, rangeKey, scopeKey])
+                : '',
+        };
+    }
+
+    function getPlotItems(records, table) {
+        const record = Array.isArray(records?.[PLOT_TABLE_ID]) ? records[PLOT_TABLE_ID][0] : null;
+        if (!record) return [];
+        return [
+            { kind: 'main', field: '主线' },
+            { kind: 'branch', field: '支线' },
+        ].flatMap(({ kind, field }) => {
+            const lines = splitAppendValue(record.values?.[field], table);
+            const metadata = Array.isArray(record.plotItemMeta?.[kind]) ? record.plotItemMeta[kind] : [];
+            const hiddenStates = Array.isArray(record.hiddenPlotItems?.[kind]) ? record.hiddenPlotItems[kind] : [];
+            return lines.map((line, index) => ({
+                kind,
+                field,
+                line,
+                meta: metadata[index] || null,
+                hidden: !!hiddenStates[index],
+            }));
+        });
+    }
+
+    function createPlotAllowance() {
+        return {
+            exact: new Map(),
+            weak: new Map(),
+            exactWeakKeys: new Map(),
+            exactRangeKeys: new Map(),
+            exactMetadata: new Map(),
+            weakMetadata: new Map(),
+            activeRangeScopes: new Map(),
+        };
+    }
+
+    function getPlotRangeIdentity(kind, meta) {
+        const rangeKey = getPlotRangeKey(meta);
+        return rangeKey ? JSON.stringify([kind === 'branch' ? 'branch' : 'main', rangeKey]) : '';
+    }
+
+    function addActivePlotRangeScope(allowance, item) {
+        const rangeIdentity = getPlotRangeIdentity(item.kind, item.meta);
+        const scopeKey = getPlotScopeKey(item.meta);
+        if (!rangeIdentity || !scopeKey) return;
+        if (!allowance.activeRangeScopes.has(rangeIdentity)) {
+            allowance.activeRangeScopes.set(rangeIdentity, new Set());
+        }
+        allowance.activeRangeScopes.get(rangeIdentity).add(scopeKey);
+    }
+
+    function attachActivePlotRangeScopes(allowance, items) {
+        (Array.isArray(items) ? items : []).forEach((item) => addActivePlotRangeScope(allowance, item));
+        return allowance;
+    }
+
+    function addPlotAllowanceItem(allowance, item) {
+        const identity = getPlotProvenance(item.kind, item.line, item.meta);
+        if (!identity.weakKey) return;
+        if (identity.exactKey) {
+            allowance.exact.set(identity.exactKey, (allowance.exact.get(identity.exactKey) || 0) + 1);
+            allowance.exactWeakKeys.set(identity.exactKey, identity.weakKey);
+            allowance.exactRangeKeys.set(identity.exactKey, getPlotRangeIdentity(item.kind, item.meta));
+            if (!allowance.exactMetadata.has(identity.exactKey)) allowance.exactMetadata.set(identity.exactKey, []);
+            allowance.exactMetadata.get(identity.exactKey).push(clone(item.meta || null));
+            return;
+        }
+        allowance.weak.set(identity.weakKey, (allowance.weak.get(identity.weakKey) || 0) + 1);
+        if (!allowance.weakMetadata.has(identity.weakKey)) allowance.weakMetadata.set(identity.weakKey, []);
+        allowance.weakMetadata.get(identity.weakKey).push(clone(item.meta || null));
+    }
+
+    function collectRealtimePlotAllowance(records, table) {
+        const allowance = createPlotAllowance();
+        getPlotItems(records, table).forEach((item) => {
+            if (item.meta?.source !== 'realtime' || item.meta?.editedAt) return;
+            addPlotAllowanceItem(allowance, item);
+        });
+        return allowance;
+    }
+
+    function mergePlotAllowancesMax(...allowances) {
+        const merged = createPlotAllowance();
+        allowances.filter(Boolean).forEach((allowance) => {
+            allowance.exact?.forEach((count, key) => {
+                if (count > (merged.exact.get(key) || 0)) {
+                    merged.exact.set(key, count);
+                    merged.exactMetadata.set(key, clone(allowance.exactMetadata?.get(key) || []));
+                }
+                const weakKey = allowance.exactWeakKeys?.get(key);
+                if (weakKey) merged.exactWeakKeys.set(key, weakKey);
+                const rangeKey = allowance.exactRangeKeys?.get(key);
+                if (rangeKey) merged.exactRangeKeys.set(key, rangeKey);
+            });
+            allowance.weak?.forEach((count, key) => {
+                if (count > (merged.weak.get(key) || 0)) {
+                    merged.weak.set(key, count);
+                    merged.weakMetadata.set(key, clone(allowance.weakMetadata?.get(key) || []));
+                }
+            });
+            allowance.activeRangeScopes?.forEach((scopeKeys, rangeIdentity) => {
+                if (!merged.activeRangeScopes.has(rangeIdentity)) {
+                    merged.activeRangeScopes.set(rangeIdentity, new Set());
+                }
+                scopeKeys.forEach((scopeKey) => merged.activeRangeScopes.get(rangeIdentity).add(scopeKey));
+            });
+        });
+        return merged;
+    }
+
+    function clonePlotAllowance(allowance) {
+        return {
+            exact: new Map(allowance?.exact || []),
+            weak: new Map(allowance?.weak || []),
+            exactWeakKeys: new Map(allowance?.exactWeakKeys || []),
+            exactRangeKeys: new Map(allowance?.exactRangeKeys || []),
+            exactMetadata: new Map(Array.from(allowance?.exactMetadata || [], ([key, items]) => [key, clone(items)])),
+            weakMetadata: new Map(Array.from(allowance?.weakMetadata || [], ([key, items]) => [key, clone(items)])),
+            activeRangeScopes: new Map(Array.from(
+                allowance?.activeRangeScopes || [],
+                ([key, scopeKeys]) => [key, new Set(scopeKeys)],
+            )),
+        };
+    }
+
+    function consumePlotAllowance(allowance, identity) {
+        if (identity.exactKey) {
+            const exactCount = allowance.exact.get(identity.exactKey) || 0;
+            if (exactCount <= 0) return { accepted: false, metadata: null };
+            allowance.exact.set(identity.exactKey, exactCount - 1);
+            return {
+                accepted: true,
+                metadata: allowance.exactMetadata.get(identity.exactKey)?.shift() || null,
+            };
+        }
+
+        return consumeWeakPlotAllowance(allowance, identity.weakKey);
+    }
+
+    function consumeWeakPlotAllowance(allowance, weakKey) {
+        const matches = [];
+        const weakCount = allowance.weak.get(weakKey) || 0;
+        if (weakCount > 0) matches.push({ type: 'weak', key: weakKey, count: weakCount });
+        for (const [exactKey, exactCount] of allowance.exact) {
+            if (exactCount <= 0 || allowance.exactWeakKeys.get(exactKey) !== weakKey) continue;
+            matches.push({ type: 'exact', key: exactKey, count: exactCount });
+        }
+        if (matches.reduce((total, match) => total + match.count, 0) !== 1) {
+            return { accepted: false, metadata: null };
+        }
+        const match = matches[0];
+        if (match.type === 'weak') {
+            allowance.weak.set(match.key, 0);
+            return {
+                accepted: true,
+                metadata: allowance.weakMetadata.get(match.key)?.shift() || null,
+            };
+        }
+        allowance.exact.set(match.key, 0);
+        return {
+            accepted: true,
+            metadata: allowance.exactMetadata.get(match.key)?.shift() || null,
+        };
+    }
+
+    function consumeRangePlotAllowance(allowance, rangeIdentity) {
+        if (!rangeIdentity) return { accepted: false, metadata: null };
+        for (const [exactKey, exactCount] of allowance.exact) {
+            if (exactCount <= 0 || allowance.exactRangeKeys.get(exactKey) !== rangeIdentity) continue;
+            allowance.exact.set(exactKey, exactCount - 1);
+            return {
+                accepted: true,
+                metadata: allowance.exactMetadata.get(exactKey)?.shift() || null,
+            };
+        }
+        return { accepted: false, metadata: null };
+    }
+
+    function consumeWeakRangePlotAllowance(allowance, weakKey, rangeIdentity) {
+        const matches = [];
+        for (const [exactKey, exactCount] of allowance.exact) {
+            if (exactCount <= 0
+                || allowance.exactWeakKeys.get(exactKey) !== weakKey
+                || allowance.exactRangeKeys.get(exactKey) !== rangeIdentity) {
+                continue;
+            }
+            matches.push({ exactKey, exactCount });
+        }
+        if (matches.reduce((total, match) => total + match.exactCount, 0) !== 1) {
+            return { accepted: false, metadata: null };
+        }
+        const [{ exactKey }] = matches;
+        allowance.exact.set(exactKey, 0);
+        return {
+            accepted: true,
+            metadata: allowance.exactMetadata.get(exactKey)?.shift() || null,
+        };
+    }
+
+    function migratePlotProvenance(meta, canonicalMeta) {
+        if (!canonicalMeta || typeof canonicalMeta !== 'object') return meta;
+        const migrated = meta && typeof meta === 'object' ? clone(meta) : {};
+        if (canonicalMeta.sourceRange) migrated.sourceRange = clone(canonicalMeta.sourceRange);
+        if (canonicalMeta.floorScope) migrated.floorScope = clone(canonicalMeta.floorScope);
+        return migrated;
+    }
+
+    function collectActivePlotAllowance(state, ledger, references, table) {
+        const emptyBaseline = createEmptyManagedRecords(state);
+        const canonicalRecords = replayEntries(state, ledger, references, emptyBaseline);
+        const canonicalItems = getPlotItems(canonicalRecords, table);
+        const canonicalAllowance = createPlotAllowance();
+        const hasCompleteCanonicalProvenance = canonicalItems.every((item) => {
+            const identity = getPlotProvenance(item.kind, item.line, item.meta);
+            if (item.meta?.source !== 'realtime' || !identity.exactKey) return false;
+            addPlotAllowanceItem(canonicalAllowance, item);
+            return true;
+        });
+        if (hasCompleteCanonicalProvenance) {
+            return attachActivePlotRangeScopes(canonicalAllowance, canonicalItems);
+        }
+
+        const candidatesByWeakKey = new Map();
+        normalizeActiveEntries(references).forEach((reference) => {
+            const entry = ledger.entries[reference.id];
+            if (!entry) return;
+            const isolatedRecords = replayEntries(state, ledger, [reference], emptyBaseline);
+            getPlotItems(isolatedRecords, table).forEach((item) => {
+                const fallbackMeta = {
+                    ...(item.meta && typeof item.meta === 'object' ? clone(item.meta) : {}),
+                    source: 'realtime',
+                };
+                if (!getPlotRangeKey(fallbackMeta)) {
+                    fallbackMeta.sourceRange = { start: reference.floor, end: reference.floor + 1 };
+                }
+                if (!getPlotScopeKey(fallbackMeta) && entry.floorScope) {
+                    fallbackMeta.floorScope = clone(entry.floorScope);
+                }
+                const candidate = { ...item, meta: fallbackMeta };
+                const { weakKey } = getPlotProvenance(candidate.kind, candidate.line, candidate.meta);
+                if (!candidatesByWeakKey.has(weakKey)) candidatesByWeakKey.set(weakKey, []);
+                candidatesByWeakKey.get(weakKey).push(candidate);
+            });
+        });
+
+        const allowance = createPlotAllowance();
+        canonicalItems.forEach((item) => {
+            const identity = getPlotProvenance(item.kind, item.line, item.meta);
+            const fallback = candidatesByWeakKey.get(identity.weakKey)?.shift();
+            if (item.meta?.source === 'realtime' && (identity.exactKey || !fallback)) {
+                addPlotAllowanceItem(allowance, item);
+            } else if (fallback) {
+                addPlotAllowanceItem(allowance, fallback);
+            }
+        });
+        return attachActivePlotRangeScopes(allowance, canonicalItems);
+    }
+
+    function isCurrentScopeRangeFromMigratedLedger(allowance, item) {
+        const rangeIdentity = getPlotRangeIdentity(item.kind, item.meta);
+        const currentScope = YuzukiMemory.Storage?.getCurrentFloorScope?.() || null;
+        const currentScopeKey = getPlotScopeKey({ floorScope: currentScope });
+        const itemScopeKey = getPlotScopeKey(item.meta);
+        const activeScopeKeys = allowance?.activeRangeScopes?.get(rangeIdentity);
+        const hasForeignActiveScopes = [...(allowance?.activeRangeScopes?.values?.() || [])]
+            .some((scopeKeys) => [...scopeKeys].some((scopeKey) => scopeKey !== currentScopeKey));
+        return !!rangeIdentity
+            && !!currentScopeKey
+            && itemScopeKey === currentScopeKey
+            && activeScopeKeys instanceof Set
+            && activeScopeKeys.size > 0
+            && hasForeignActiveScopes;
+    }
+
+    function hasBroadMigratedPlotHistory(allowance, candidates, kind, lines, metadata) {
+        const migratedRanges = new Set();
+        candidates.forEach((candidate) => {
+            if (!candidate.identity.exactKey) return;
+            const item = {
+                kind,
+                line: lines[candidate.index],
+                meta: metadata[candidate.index] || null,
+            };
+            if (!isCurrentScopeRangeFromMigratedLedger(allowance, item)) return;
+            migratedRanges.add(getPlotRangeIdentity(kind, item.meta));
+        });
+        // A single mismatched range can be cleaned with the bounded fallback below.
+        // Several ranges prove this is an older partially migrated history whose
+        // metadata was already re-scoped or re-aligned independently of the ledger.
+        return migratedRanges.size >= 3;
+    }
+
+    function migratePlotRangeKeepingCurrentScope(meta, canonicalMeta) {
+        if (!canonicalMeta || typeof canonicalMeta !== 'object') return meta;
+        const migrated = meta && typeof meta === 'object' ? clone(meta) : {};
+        const currentScope = clone(meta?.floorScope || meta?.sourceRange?.floorScope || null);
+        if (canonicalMeta.sourceRange) {
+            migrated.sourceRange = clone(canonicalMeta.sourceRange);
+            if (currentScope
+                && migrated.sourceRange
+                && typeof migrated.sourceRange === 'object'
+                && Object.prototype.hasOwnProperty.call(migrated.sourceRange, 'floorScope')) {
+                migrated.sourceRange.floorScope = clone(currentScope);
+            }
+        }
+        if (currentScope) migrated.floorScope = currentScope;
+        return migrated;
+    }
+
+    function pruneOrphanedRealtimePlotItems(records, validAllowance, table) {
+        const record = Array.isArray(records?.[PLOT_TABLE_ID]) ? records[PLOT_TABLE_ID][0] : null;
+        if (!record) return { removed: 0, migrated: 0 };
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object'
+            ? record.plotItemMeta
+            : {};
+        record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object'
+            ? record.hiddenPlotItems
+            : {};
+        let removed = 0;
+        let migrated = 0;
+        [
+            { kind: 'main', field: '主线' },
+            { kind: 'branch', field: '支线' },
+        ].forEach(({ kind, field }) => {
+            const lines = splitAppendValue(record.values[field], table);
+            const metadata = Array.isArray(record.plotItemMeta[kind]) ? record.plotItemMeta[kind] : [];
+            const hiddenStates = Array.isArray(record.hiddenPlotItems[kind]) ? record.hiddenPlotItems[kind] : [];
+            const remainingValid = clonePlotAllowance(validAllowance);
+            const keep = lines.map(() => true);
+            const realtimeCandidates = [];
+            lines.forEach((line, index) => {
+                const meta = metadata[index] || null;
+                if (meta?.source !== 'realtime' || meta?.editedAt) return;
+                realtimeCandidates.push({
+                    index,
+                    identity: getPlotProvenance(kind, line, meta),
+                });
+            });
+            const broadMigratedHistory = hasBroadMigratedPlotHistory(
+                remainingValid,
+                realtimeCandidates,
+                kind,
+                lines,
+                metadata,
+            );
+            realtimeCandidates.filter((candidate) => candidate.identity.exactKey).forEach((candidate) => {
+                keep[candidate.index] = consumePlotAllowance(remainingValid, candidate.identity).accepted;
+            });
+            realtimeCandidates.filter((candidate) => (
+                candidate.identity.exactKey && !keep[candidate.index]
+            )).forEach((candidate) => {
+                const item = {
+                    kind,
+                    line: lines[candidate.index],
+                    meta: metadata[candidate.index] || null,
+                };
+                if (!isCurrentScopeRangeFromMigratedLedger(remainingValid, item)) return;
+                if (broadMigratedHistory) {
+                    keep[candidate.index] = true;
+                    return;
+                }
+                const consumed = consumeWeakRangePlotAllowance(
+                    remainingValid,
+                    candidate.identity.weakKey,
+                    getPlotRangeIdentity(kind, metadata[candidate.index]),
+                );
+                if (!consumed.accepted) return;
+                keep[candidate.index] = true;
+                metadata[candidate.index] = migratePlotRangeKeepingCurrentScope(
+                    metadata[candidate.index],
+                    consumed.metadata,
+                );
+            });
+            realtimeCandidates.filter((candidate) => (
+                candidate.identity.exactKey && !keep[candidate.index]
+            )).forEach((candidate) => {
+                const item = {
+                    kind,
+                    line: lines[candidate.index],
+                    meta: metadata[candidate.index] || null,
+                };
+                if (!isCurrentScopeRangeFromMigratedLedger(remainingValid, item)) return;
+                const consumed = consumeRangePlotAllowance(
+                    remainingValid,
+                    getPlotRangeIdentity(kind, metadata[candidate.index]),
+                );
+                if (!consumed.accepted) return;
+                keep[candidate.index] = true;
+                metadata[candidate.index] = migratePlotRangeKeepingCurrentScope(
+                    metadata[candidate.index],
+                    consumed.metadata,
+                );
+            });
+            const unanchoredByWeakKey = new Map();
+            realtimeCandidates.filter((candidate) => !candidate.identity.exactKey).forEach((candidate) => {
+                if (!unanchoredByWeakKey.has(candidate.identity.weakKey)) {
+                    unanchoredByWeakKey.set(candidate.identity.weakKey, []);
+                }
+                unanchoredByWeakKey.get(candidate.identity.weakKey).push(candidate);
+            });
+            unanchoredByWeakKey.forEach((candidates) => {
+                if (candidates.length !== 1) {
+                    candidates.forEach((candidate) => { keep[candidate.index] = false; });
+                    return;
+                }
+                const candidate = candidates[0];
+                const consumed = consumePlotAllowance(remainingValid, candidate.identity);
+                keep[candidate.index] = consumed.accepted;
+                if (consumed.accepted) {
+                    const migratedMeta = migratePlotProvenance(
+                        metadata[candidate.index],
+                        consumed.metadata,
+                    );
+                    if (!policyValuesEqual(metadata[candidate.index], migratedMeta)) migrated += 1;
+                    metadata[candidate.index] = migratedMeta;
+                }
+            });
+            const keptLines = [];
+            const keptMetadata = [];
+            const keptHiddenStates = [];
+            lines.forEach((line, index) => {
+                if (!keep[index]) {
+                    removed += 1;
+                    return;
+                }
+                keptLines.push(line);
+                keptMetadata.push(metadata[index] || null);
+                keptHiddenStates.push(!!hiddenStates[index]);
+            });
+            record.values[field] = keptLines.join('\n');
+            record.plotItemMeta[kind] = keptMetadata;
+            record.hiddenPlotItems[kind] = keptHiddenStates;
+        });
+        if (isEmptyReplayRecord(record, table)) records[PLOT_TABLE_ID] = [];
+        return { removed, migrated };
+    }
+
+    function applyPlotDeletionPolicies(records) {
+        const plotRecords = Array.isArray(records?.[PLOT_TABLE_ID]) ? records[PLOT_TABLE_ID] : [];
+        let removed = 0;
+        plotRecords.forEach((record) => {
+            const before = ['主线', '支线'].reduce((count, field) => (
+                count + String(record?.values?.[field] || '').split(/\n+/).filter((line) => line.trim()).length
+            ), 0);
+            YuzukiMemory.BranchSnapshot?.applyDeletedPlotPolicy?.(record);
+            const after = ['主线', '支线'].reduce((count, field) => (
+                count + String(record?.values?.[field] || '').split(/\n+/).filter((line) => line.trim()).length
+            ), 0);
+            removed += Math.max(0, before - after);
+        });
+        return removed;
+    }
+
     function repairFlattenedTableShapePlotState(state, ledger) {
         if (ledger?.reason !== 'table-shape-changed'
             || Object.keys(ledger.entries || {}).length
@@ -884,11 +1738,15 @@
         return generationActive || YuzukiMemory.BranchSnapshot?.isGenerationBusy?.() === true;
     }
 
-    function pruneRemovedActiveEntries(ledger, previousEntries, nextEntries) {
-        const nextIds = new Set(normalizeActiveEntries(nextEntries).map((entry) => entry.id));
-        normalizeActiveEntries(previousEntries).forEach((entry) => {
-            if (!nextIds.has(entry.id)) delete ledger.entries[entry.id];
+    function pruneUnreachableEntries(ledger, reachableEntryIds) {
+        const reachable = reachableEntryIds instanceof Set ? reachableEntryIds : new Set(reachableEntryIds || []);
+        let removed = 0;
+        Object.keys(ledger?.entries || {}).forEach((entryId) => {
+            if (reachable.has(entryId)) return;
+            delete ledger.entries[entryId];
+            removed += 1;
         });
+        return removed;
     }
 
     function reconcileNow(options = {}) {
@@ -905,36 +1763,63 @@
         const repairedPlotItemCount = repairFlattenedTableShapePlotState(state, ledger);
 
         const previousEntries = normalizeActiveEntries(ledger.activeEntries);
-        const nextEntries = scanActiveEntries(ledger);
-        if (activeEntriesEqual(previousEntries, nextEntries)) {
-            if (!tableShapeMigrated && !repairedPlotItemCount) return { changed: false, reason: 'already_aligned' };
-            if (!saveState(state)) return { changed: false, reason: 'save_failed' };
-            if (repairedPlotItemCount) {
-                window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
-                    detail: {
-                        source: 'floor-ledger',
-                        reason: 'table_shape_repair',
-                        repairedPlotItemCount,
-                    },
-                }));
-            }
-            return {
-                changed: true,
-                reason: repairedPlotItemCount ? 'table_shape_repaired' : 'table_shape_migrated',
-                repairedPlotItemCount,
-            };
-        }
+        const scanned = scanLedgerReferences(ledger);
+        const nextEntries = scanned.activeEntries;
+        const activeEntriesChanged = !activeEntriesEqual(previousEntries, nextEntries);
+        const plotTable = (Array.isArray(state.tables) ? state.tables : [])
+            .find((table) => table?.id === PLOT_TABLE_ID);
+        const activePlotAllowance = plotTable
+            ? collectActivePlotAllowance(state, ledger, nextEntries, plotTable)
+            : createPlotAllowance();
+        const baselinePlotReconcile = plotTable && Object.keys(ledger.entries || {}).length
+            ? pruneOrphanedRealtimePlotItems(
+                ledger.baselineRecords,
+                activePlotAllowance,
+                plotTable,
+            )
+            : { removed: 0, migrated: 0 };
 
         reconcileRunning = true;
         try {
-            const currentRecords = cloneManagedRecords(state);
-            const expectedRecords = replayEntries(state, ledger, previousEntries);
-            const rebuiltRecords = replayEntries(state, ledger, nextEntries);
-            applyExternalOverlay(currentRecords, expectedRecords, rebuiltRecords, state.tables);
-            replaceManagedRecords(state, rebuiltRecords);
+            let validRecords;
+            if (activeEntriesChanged) {
+                const currentRecords = cloneManagedRecords(state);
+                const expectedRecords = replayEntries(state, ledger, previousEntries);
+                const rebuiltRecords = replayEntries(state, ledger, nextEntries);
+                validRecords = cloneManagedRecords(rebuiltRecords);
+                applyExternalOverlay(currentRecords, expectedRecords, rebuiltRecords, state.tables);
+                replaceManagedRecords(state, rebuiltRecords);
+            } else {
+                validRecords = replayEntries(state, ledger, nextEntries);
+            }
+
+            const deletedPlotItemCount = applyPlotDeletionPolicies(state.records);
+            const currentPlotReconcile = plotTable
+                ? pruneOrphanedRealtimePlotItems(
+                    state.records,
+                    mergePlotAllowancesMax(
+                        collectRealtimePlotAllowance(validRecords, plotTable),
+                        activePlotAllowance,
+                    ),
+                    plotTable,
+                )
+                : { removed: 0, migrated: 0 };
+            const orphanedPlotItemCount = baselinePlotReconcile.removed + currentPlotReconcile.removed;
+            const migratedPlotItemCount = baselinePlotReconcile.migrated + currentPlotReconcile.migrated;
             ledger.activeEntries = nextEntries;
+            const prunedEntryCount = options.pruneRemoved === true
+                ? pruneUnreachableEntries(ledger, scanned.reachableEntryIds)
+                : 0;
+            const changed = activeEntriesChanged
+                || tableShapeMigrated
+                || repairedPlotItemCount > 0
+                || deletedPlotItemCount > 0
+                || orphanedPlotItemCount > 0
+                || migratedPlotItemCount > 0
+                || prunedEntryCount > 0;
+            if (!changed) return { changed: false, reason: 'already_aligned' };
+
             ledger.updatedAt = Date.now();
-            if (options.pruneRemoved === true) pruneRemovedActiveEntries(ledger, previousEntries, nextEntries);
             state.floorLedger = ledger;
             if (!saveState(state)) return { changed: false, reason: 'save_failed' };
 
@@ -947,14 +1832,38 @@
                     reason: String(options.reason || 'reconcile'),
                     previousEntryCount: previousEntries.length,
                     activeEntryCount: nextEntries.length,
+                    orphanedPlotItemCount,
+                    migratedPlotItemCount,
+                    deletedPlotItemCount,
+                    prunedEntryCount,
                 },
             }));
-            console.info('[yuzuki-Memory FloorLedger] table state replayed', {
+            console.info('[yuzuki-Memory FloorLedger] state reconciled', {
                 reason: String(options.reason || 'reconcile'),
                 previousEntries,
                 nextEntries,
+                orphanedPlotItemCount,
+                migratedPlotItemCount,
+                deletedPlotItemCount,
+                prunedEntryCount,
             });
-            return { changed: true, reason: 'replayed', previousEntries, nextEntries };
+            const resultReason = activeEntriesChanged
+                ? 'replayed'
+                : (repairedPlotItemCount
+                    ? 'table_shape_repaired'
+                    : (tableShapeMigrated
+                        ? 'table_shape_migrated'
+                        : (orphanedPlotItemCount || deletedPlotItemCount ? 'plot_orphans_pruned' : 'entries_pruned')));
+            return {
+                changed: true,
+                reason: resultReason,
+                previousEntries,
+                nextEntries,
+                repairedPlotItemCount,
+                orphanedPlotItemCount,
+                deletedPlotItemCount,
+                prunedEntryCount,
+            };
         } finally {
             reconcileRunning = false;
         }
@@ -962,32 +1871,34 @@
 
     function scheduleReconcile(reason = 'event', delay = 250, options = {}) {
         pendingReason = String(reason || pendingReason || 'event');
+        pendingReconcileOptions.pruneRemoved = pendingReconcileOptions.pruneRemoved
+            || options.pruneRemoved === true;
+        pendingReconcileOptions.force = pendingReconcileOptions.force
+            || options.force === true;
         window.clearTimeout(reconcileTimer);
         reconcileTimer = window.setTimeout(() => {
             reconcileTimer = null;
-            if (isBranchBusy() && options.force !== true) {
-                scheduleReconcile(pendingReason, RECONCILE_RETRY_MS, options);
+            const activeReason = pendingReason || reason;
+            const activeOptions = { ...pendingReconcileOptions };
+            pendingReason = '';
+            pendingReconcileOptions = { pruneRemoved: false, force: false };
+            if (isBranchBusy() && activeOptions.force !== true) {
+                scheduleReconcile(activeReason, RECONCILE_RETRY_MS, activeOptions);
                 return;
             }
-            const activeReason = pendingReason || reason;
-            pendingReason = '';
-            const shouldPruneRemoved = options.pruneRemoved === true
-                && ['message_deleted', 'session_ready'].includes(activeReason);
             const result = reconcileNow({
                 reason: activeReason,
-                pruneRemoved: shouldPruneRemoved,
-                force: options.force === true,
+                pruneRemoved: activeOptions.pruneRemoved === true,
+                force: activeOptions.force === true,
             });
             if (result?.reason === 'busy' || result?.reason === 'branch_busy') {
-                pendingReason = activeReason;
-                scheduleReconcile(activeReason, RECONCILE_RETRY_MS, options);
+                scheduleReconcile(activeReason, RECONCILE_RETRY_MS, activeOptions);
                 return;
             }
             if (result?.reason === 'save_failed') {
                 saveRetryCount += 1;
                 if (saveRetryCount <= MAX_SAVE_RETRIES) {
-                    pendingReason = activeReason;
-                    scheduleReconcile(activeReason, RECONCILE_RETRY_MS, options);
+                    scheduleReconcile(activeReason, RECONCILE_RETRY_MS, activeOptions);
                     return;
                 }
                 console.warn('[yuzuki-Memory FloorLedger] reconciliation save failed', {
@@ -1119,7 +2030,7 @@
         });
         bindEvents([eventTypes.MESSAGE_SWIPED, 'message_swiped'], () => scheduleReconcile('message_swiped', 650));
         bindEvents([eventTypes.CHAT_CHANGED, 'chat_changed'], () => {
-            scheduleReconcile('chat_changed', 550);
+            scheduleReconcile('chat_changed', 550, { pruneRemoved: true });
             window.setTimeout(bindChatMutationObserver, 0);
         });
         bindEvents(

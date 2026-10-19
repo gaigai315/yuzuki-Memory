@@ -497,6 +497,7 @@ test('progress rendering survives paging and does not write another book name af
             getVectorJob: () => selected === bookA ? job : null,
         }),
         formatVectorDate: () => 'date',
+        getVectorDisplayBookName: (book) => book.name,
     };
     vm.createContext(sandbox);
     vm.runInContext(source, sandbox);

@@ -34,6 +34,75 @@
             });
     }
 
+    function stablePlotSource(value) {
+        if (Array.isArray(value)) return `[${value.map(stablePlotSource).join(',')}]`;
+        if (!value || typeof value !== 'object') return JSON.stringify(value ?? null);
+        return `{${Object.keys(value).sort().filter((key) => (
+            value[key] !== undefined && value[key] !== null && value[key] !== ''
+        )).map((key) => `${JSON.stringify(key)}:${stablePlotSource(value[key])}`).join(',')}}`;
+    }
+
+    function getDeletedPlotItemProvenanceKey(sourceRange, floorScope) {
+        if (!sourceRange || typeof sourceRange !== 'object') return '';
+        if (!Number.isFinite(Number(sourceRange.start)) || !Number.isFinite(Number(sourceRange.end))) return '';
+        const scope = floorScope || sourceRange.floorScope || null;
+        const scopeId = scope && typeof scope === 'object'
+            ? String(scope.id || scope.scopeId || scope.sessionId || '').trim()
+            : String(scope || '').trim();
+        const scopeKey = scopeId ? `id:${scopeId}` : stablePlotSource(scope);
+        return JSON.stringify([Number(sourceRange.start), Number(sourceRange.end), scopeKey]);
+    }
+
+    function normalizeDeletedPlotItemIdentities(rawValue) {
+        const byKey = new Map();
+        (Array.isArray(rawValue) ? rawValue : []).forEach((rawIdentity) => {
+            if (!rawIdentity || typeof rawIdentity !== 'object') return;
+            const id = String(rawIdentity.id || rawIdentity.lineId || '').trim();
+            const kind = String(rawIdentity.kind || '').trim() === 'branch' ? 'branch' : 'main';
+            const text = String(rawIdentity.text || rawIdentity.raw || '').replace(/\s+/g, ' ').trim();
+            const source = String(rawIdentity.source || '').trim();
+            const sourceRange = rawIdentity.sourceRange && typeof rawIdentity.sourceRange === 'object'
+                ? clone(rawIdentity.sourceRange)
+                : null;
+            const floorScope = rawIdentity.floorScope && typeof rawIdentity.floorScope === 'object'
+                ? normalizeFloorScope(rawIdentity.floorScope)
+                : null;
+            const legacyIndexValue = rawIdentity.legacyIndex;
+            const legacyIndex = legacyIndexValue !== undefined
+                && legacyIndexValue !== null
+                && legacyIndexValue !== ''
+                && Number.isInteger(Number(legacyIndexValue))
+                && Number(legacyIndexValue) >= 0
+                ? Number(legacyIndexValue)
+                : null;
+            if (!id && !text) return;
+            const provenance = getDeletedPlotItemProvenanceKey(sourceRange, floorScope);
+            const isLegacyUnanchored = rawIdentity.legacyUnanchored === true
+                && legacyIndex !== null
+                && source !== 'manual';
+            const key = id
+                ? `id:${id}`
+                : (provenance
+                    ? `source:${kind}|${text}|${provenance}`
+                    : (isLegacyUnanchored ? `legacy:${kind}|${legacyIndex}|${text}` : ''));
+            if (!key) return;
+            byKey.set(key, {
+                id,
+                kind,
+                text,
+                ...(sourceRange ? { sourceRange } : {}),
+                ...(floorScope ? { floorScope } : {}),
+                ...(source ? { source } : {}),
+                ...(rawIdentity.legacyUnanchored === true ? {
+                    legacyUnanchored: true,
+                    ...(legacyIndex !== null ? { legacyIndex } : {}),
+                } : {}),
+                deletedAt: Math.max(0, Math.round(Number(rawIdentity.deletedAt) || 0)),
+            });
+        });
+        return [...byKey.values()];
+    }
+
     function getChatMetadataSources(context = getContext()) {
         const sources = [];
         const append = (metadata) => {
@@ -641,7 +710,29 @@
                 });
             });
         }
+        rebaseExplicitFloorScopes(
+            record.deletedPlotItemIdentities,
+            sourceFloorScope,
+            targetFloorScope,
+        );
         return record;
+    }
+
+    function rebaseExplicitFloorScopes(value, sourceFloorScope, targetFloorScope) {
+        if (!value || typeof value !== 'object') return value;
+        if (Array.isArray(value)) {
+            value.forEach((item) => rebaseExplicitFloorScopes(item, sourceFloorScope, targetFloorScope));
+            return value;
+        }
+        Object.entries(value).forEach(([key, child]) => {
+            if (key === 'floorScope') {
+                const normalized = normalizeFloorScope(child);
+                if (isSameFloorScope(normalized, sourceFloorScope)) value[key] = clone(targetFloorScope);
+                return;
+            }
+            rebaseExplicitFloorScopes(child, sourceFloorScope, targetFloorScope);
+        });
+        return value;
     }
 
     function rebaseBranchInheritedFloorScopes(state, sessionId) {
@@ -659,6 +750,12 @@
                 rebaseInheritedFloorBoundRecord(record, sourceFloorScope, targetFloorScope)
             ));
         });
+        (inherited.floorLedger?.baselineRecords?.plot_summary || []).forEach((record) => (
+            rebaseInheritedFloorBoundRecord(record, sourceFloorScope, targetFloorScope)
+        ));
+        Object.values(inherited.floorLedger?.entries || {}).forEach((entry) => (
+            rebaseExplicitFloorScopes(entry, sourceFloorScope, targetFloorScope)
+        ));
         inherited.currentFloorScope = clone(targetFloorScope);
         return inherited;
     }
@@ -1125,9 +1222,14 @@
                         }
                         return [name, String(record?.values?.[name] ?? record?.values?.[column] ?? '')];
                     }));
-                    return table.id === 'memory_summary'
-                        ? normalizeStoredSummaryRecord(record, values)
-                        : { ...record, values };
+                    if (table.id === 'memory_summary') return normalizeStoredSummaryRecord(record, values);
+                    const normalizedRecord = { ...record, values };
+                    if (table.id === 'plot_summary') {
+                        normalizedRecord.deletedPlotItemIdentities = normalizeDeletedPlotItemIdentities(
+                            record?.deletedPlotItemIdentities,
+                        );
+                    }
+                    return normalizedRecord;
                 })
                 : [];
         });

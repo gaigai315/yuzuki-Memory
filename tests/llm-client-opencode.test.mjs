@@ -76,6 +76,25 @@ const openCodeConfig = {
     stream: false,
 };
 
+test('ordinary custom requests preserve the configured stream mode', async () => {
+    const requests = [];
+    const { client } = createClient(async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    });
+
+    assert.equal((await client.generateWithCustom(
+        { ...openCodeConfig, stream: true },
+        [{ role: 'user', content: 'stream' }],
+    )).success, true);
+    assert.equal((await client.generateWithCustom(
+        { ...openCodeConfig, stream: false },
+        [{ role: 'user', content: 'non-stream' }],
+    )).success, true);
+
+    assert.deepEqual(requests.map((payload) => payload.stream), [true, false]);
+});
+
 test('OpenCode Go proxy requests carry a stable opaque session header per chat', async () => {
     const requests = [];
     const { client, setSessionId } = createClient(async (url, init) => {
@@ -469,7 +488,7 @@ test('agent request preserves tool transcript and returns structured tool calls'
         type: 'function',
         function: { name: 'read_state', description: 'read', parameters: { type: 'object', properties: {} } },
     }];
-    const result = await client.requestAgentWithCustom(openCodeConfig, [
+    const result = await client.requestAgentWithCustom({ ...openCodeConfig, stream: true }, [
         { role: 'system', content: 'director' },
         { role: 'assistant', content: '', tool_calls: [{ id: 'old', type: 'function', function: { name: 'read_state', arguments: '{}' } }] },
         { role: 'tool', tool_call_id: 'old', content: '{"ok":true}' },

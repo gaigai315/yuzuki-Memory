@@ -87,6 +87,53 @@ test('primary search remains applied after a record-list rerender', () => {
     assert.equal(divider.hidden, true);
 });
 
+test('managed vector books hide chat timestamps only in rendered names', () => {
+    const sandbox = {};
+    vm.createContext(sandbox);
+    vm.runInContext(`${getFunctionSource('getVectorDisplayBookName')}\nresult = getVectorDisplayBookName;`, sandbox);
+
+    const firstName = 'Orion - 2026-10-09@23h35m54s493ms · 角色档案';
+    const secondName = 'Orion - 2026-10-20@02h12m00s001ms · 角色档案';
+    assert.notEqual(firstName, secondName);
+    assert.equal(sandbox.result({ name: firstName, kind: 'character_profile' }), 'Orion · 角色档案');
+    assert.equal(sandbox.result({ name: secondName, kind: 'character_profile' }), 'Orion · 角色档案');
+    assert.equal(
+        sandbox.result({ name: 'Orion - 2026-10-09@23h35m54s493ms · 世界设定', kind: 'world_setting' }),
+        'Orion · 世界设定'
+    );
+    assert.equal(
+        sandbox.result({ name: 'Orion - 2026-10-09@23h35m54s493ms · 角色档案', kind: '' }),
+        'Orion - 2026-10-09@23h35m54s493ms · 角色档案'
+    );
+    assert.match(getFunctionSource('createVectorBookRow'), /getVectorDisplayBookName\(book\)/);
+    assert.match(getFunctionSource('createVectorDetailHero'), /getVectorDisplayBookName\(book\)/);
+    assert.match(getFunctionSource('updateVectorProgressView'), /getVectorDisplayBookName\(book\)/);
+});
+
+test('select controls use a filled dropdown caret instead of a check-like chevron', () => {
+    assert.match(getFunctionSource('createApiSelect'), /fa-solid fa-caret-down/);
+    assert.match(getFunctionSource('createPresetSelect'), /fa-solid fa-caret-down/);
+    assert.match(getFunctionSource('createLlmApiPresetSelect'), /classList\.add\('yzm-llm-preset-select-wrap'\)/);
+    assert.doesNotMatch(getFunctionSource('createApiSelect'), /fa-chevron-down/);
+    assert.doesNotMatch(getFunctionSource('createPresetSelect'), /fa-chevron-down/);
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-api-select-wrap i \{[^}]*line-height:\s*1;[^}]*transform:\s*translateY\(calc\(-50% - 1px\)\);/
+    );
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-preset-select-wrap i \{[^}]*line-height:\s*1;[^}]*transform:\s*translateY\(calc\(-50% - 1px\)\);/
+    );
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-llm-preset-select-wrap \{[^}]*align-self:\s*center;[^}]*height:\s*34px;[^}]*min-height:\s*34px\s*!important;[^}]*line-height:\s*0;/
+    );
+    assert.match(
+        memoryCssSource,
+        /#yzm-memory-root \.yzm-llm-preset-select-wrap > \.yzm-api-select \{[^}]*display:\s*block;[^}]*height:\s*34px;[^}]*min-height:\s*34px\s*!important;/
+    );
+});
+
 function runFocusHelper(isMobile, options = {}) {
     const calls = [];
     const sandbox = {
@@ -504,15 +551,16 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.1.2', () => {
-    assert.equal(manifest.version, '1.1.2');
-    assert.match(indexSource, /const VERSION = '1\.1\.2';/);
+test('release metadata and update notice describe version 1.1.3', () => {
+    assert.equal(manifest.version, '1.1.3');
+    assert.match(indexSource, /const VERSION = '1\.1\.3';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /自动剧情规划关闭后，仍可手动点击规划。/);
-    assert.match(noticeSource, /表格或总结清空后，自动删除对应的向量化书。/);
-    assert.match(noticeSource, /修正自动填表与总结的运行提示。/);
-    assert.match(noticeSource, /修复酒馆 API 模式下 Vertex 渠道无法正常调用的问题。/);
+    assert.match(noticeSource, /修复手动删除的剧情摘要可能重新出现的问题。/);
+    assert.match(noticeSource, /修复删除聊天消息后，对应记忆内容没有同步清理的问题。/);
+    assert.match(noticeSource, /修复分支聊天中记忆数据可能错位的问题。/);
+    assert.match(noticeSource, /剧情摘要不再记录 OOC 和引用内容。/);
+    assert.match(noticeSource, /优化向量化页面的书名显示，隐藏过长的会话时间标识。/);
     assert.doesNotMatch(noticeSource, /优化任务请求格式/);
     assert.doesNotMatch(noticeSource, /自动填表、总结失败后停止本次任务/);
     assert.doesNotMatch(noticeSource, /删除聊天楼层后待办事项及角色空记录残留/);

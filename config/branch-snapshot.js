@@ -17,6 +17,7 @@
         'itemTrackingVectorSynced',
         'worldSettingVectorSynced',
         'deletedTodoIdentities',
+        'deletedPlotItemIdentities',
     ]);
     const snapshotsBySession = {};
     let snapshots = {};
@@ -241,6 +242,292 @@
         return String(value || '').replace(/｜/g, '|').trim().toLowerCase();
     }
 
+    function normalizePlotItemText(value) {
+        return String(value || '').replace(/\s+/g, ' ').trim();
+    }
+
+    function normalizePlotItemIdentity(rawIdentity = {}, fallback = {}) {
+        const source = rawIdentity && typeof rawIdentity === 'object' ? rawIdentity : {};
+        const meta = source.meta && typeof source.meta === 'object' ? source.meta : source;
+        const kind = String(source.kind || fallback.kind || '').trim() === 'branch' ? 'branch' : 'main';
+        const id = String(source.lineId || meta.id || source.id || '').trim();
+        const text = normalizePlotItemText(source.raw || source.text || meta.text || fallback.text || '');
+        const sourceRange = clone(source.sourceRange || meta.sourceRange || fallback.sourceRange || null);
+        const floorScope = clone(source.floorScope || meta.floorScope || fallback.floorScope || null);
+        const legacyIndexValue = source.legacyIndex ?? meta.legacyIndex ?? fallback.legacyIndex;
+        const legacyIndex = Number.isInteger(Number(legacyIndexValue)) && Number(legacyIndexValue) >= 0
+            ? Number(legacyIndexValue)
+            : null;
+        const legacyUnanchored = source.legacyUnanchored === true
+            || meta.legacyUnanchored === true
+            || fallback.legacyUnanchored === true;
+        const itemSource = String(source.source || meta.source || fallback.source || '').trim();
+        const editedAt = Math.max(0, Number(source.editedAt || meta.editedAt || fallback.editedAt) || 0);
+        if (!id && !text) return null;
+        return {
+            id,
+            kind,
+            text,
+            ...(sourceRange ? { sourceRange } : {}),
+            ...(floorScope ? { floorScope } : {}),
+            ...(itemSource ? { source: itemSource } : {}),
+            ...(editedAt ? { editedAt } : {}),
+            ...(legacyUnanchored && legacyIndex !== null ? { legacyUnanchored: true, legacyIndex } : {}),
+            deletedAt: Math.max(0, Math.round(Number(source.deletedAt || fallback.deletedAt) || Date.now())),
+        };
+    }
+
+    function stablePlotSource(value) {
+        if (Array.isArray(value)) return `[${value.map(stablePlotSource).join(',')}]`;
+        if (!value || typeof value !== 'object') return JSON.stringify(value ?? null);
+        return `{${Object.keys(value).sort().filter((key) => (
+            value[key] !== undefined && value[key] !== null && value[key] !== ''
+        )).map((key) => `${JSON.stringify(key)}:${stablePlotSource(value[key])}`).join(',')}}`;
+    }
+
+    function hasMeaningfulPlotSourceRange(value) {
+        if (!value || typeof value !== 'object') return false;
+        return Number.isFinite(Number(value.start)) && Number.isFinite(Number(value.end));
+    }
+
+    function getPlotProvenanceKey(identity) {
+        if (!identity || !hasMeaningfulPlotSourceRange(identity.sourceRange)) return '';
+        const start = Number(identity.sourceRange.start);
+        const end = Number(identity.sourceRange.end);
+        const scope = identity.floorScope || identity.sourceRange.floorScope || null;
+        const scopeId = scope && typeof scope === 'object'
+            ? String(scope.id || scope.scopeId || scope.sessionId || '').trim()
+            : String(scope || '').trim();
+        const scopeKey = scopeId ? `id:${scopeId}` : stablePlotSource(scope);
+        return JSON.stringify([start, end, scopeKey]);
+    }
+
+    function isLegacyUnanchoredPlotItem(identity) {
+        return identity?.legacyUnanchored === true
+            && Number.isInteger(identity.legacyIndex)
+            && identity.legacyIndex >= 0
+            && identity.source !== 'manual';
+    }
+
+    function getPlotItemIdentityKey(identity) {
+        if (!identity) return '';
+        if (identity.id) return `id:${identity.id}`;
+        const provenance = getPlotProvenanceKey(identity);
+        if (provenance) return `source:${identity.kind}|${identity.text}|${provenance}`;
+        return isLegacyUnanchoredPlotItem(identity)
+            ? `legacy:${identity.kind}|${identity.legacyIndex}|${identity.text}`
+            : '';
+    }
+
+    function mergeDeletedPlotItemIdentities(...identityLists) {
+        const byKey = new Map();
+        identityLists.flatMap((value) => Array.isArray(value) ? value : []).forEach((rawIdentity) => {
+            const identity = normalizePlotItemIdentity(rawIdentity);
+            const key = getPlotItemIdentityKey(identity);
+            if (key) byKey.set(key, identity);
+        });
+        return [...byKey.values()];
+    }
+
+    function markDeletedPlotItems(record, items = []) {
+        if (!record || typeof record !== 'object') return [];
+        const identities = (Array.isArray(items) ? items : [items])
+            .map((item) => {
+                const source = item && typeof item === 'object' ? item : {};
+                const meta = source.meta && typeof source.meta === 'object' ? source.meta : {};
+                const kind = String(source.kind || '').trim() === 'branch' ? 'branch' : 'main';
+                const metadata = Array.isArray(record?.plotItemMeta?.[kind]) ? record.plotItemMeta[kind] : [];
+                let legacyIndex = Number.isInteger(Number(meta.legacyIndex)) ? Number(meta.legacyIndex) : -1;
+                if (legacyIndex < 0) legacyIndex = metadata.findIndex((candidate) => candidate === meta);
+                const fallback = !hasMeaningfulPlotSourceRange(meta.sourceRange)
+                    && meta.source !== 'manual'
+                    && legacyIndex >= 0
+                    ? { legacyUnanchored: true, legacyIndex }
+                    : {};
+                return normalizePlotItemIdentity(source, fallback);
+            })
+            .filter(Boolean);
+        record.deletedPlotItemIdentities = mergeDeletedPlotItemIdentities(
+            record.deletedPlotItemIdentities,
+            identities,
+        );
+        return clone(record.deletedPlotItemIdentities);
+    }
+
+    function isDeletedPlotItem(identity, deletedIdentities = [], options = {}) {
+        if (!identity) return false;
+        return deletedIdentities.some((deleted) => {
+            if (deleted.id && identity.id) {
+                if (deleted.id === identity.id) return true;
+            }
+            if (!deleted.text || deleted.text !== identity.text || deleted.kind !== identity.kind) return false;
+            const deletedProvenance = getPlotProvenanceKey(deleted);
+            const identityProvenance = getPlotProvenanceKey(identity);
+            if (deletedProvenance && identityProvenance) {
+                const allowRealtimeFallback = options.allowRealtimeProvenanceFallback === true
+                    && deleted.source !== 'manual'
+                    && identity.source === 'realtime'
+                    && !identity.editedAt;
+                if (!allowRealtimeFallback) return false;
+                return deletedProvenance === identityProvenance;
+            }
+            return isLegacyUnanchoredPlotItem(deleted)
+                && isLegacyUnanchoredPlotItem(identity)
+                && !identity.editedAt
+                && deleted.legacyIndex === identity.legacyIndex;
+        });
+    }
+
+    function applyDeletedPlotPolicy(record) {
+        if (!record || typeof record !== 'object') return record;
+        const deleted = mergeDeletedPlotItemIdentities(record.deletedPlotItemIdentities);
+        record.deletedPlotItemIdentities = deleted;
+        if (!deleted.length) return record;
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
+        record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+        [{ kind: 'main', field: '主线' }, { kind: 'branch', field: '支线' }].forEach(({ kind, field }) => {
+            const lines = String(record.values[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+            const metadata = Array.isArray(record.plotItemMeta[kind]) ? record.plotItemMeta[kind] : [];
+            const hiddenStates = Array.isArray(record.hiddenPlotItems[kind]) ? record.hiddenPlotItems[kind] : [];
+            const kept = lines.map((line, index) => ({
+                line,
+                meta: metadata[index] || null,
+                hidden: !!hiddenStates[index],
+                identity: normalizePlotItemIdentity({ kind, raw: line, meta: metadata[index] || {} }, {
+                    legacyUnanchored: !hasMeaningfulPlotSourceRange(metadata[index]?.sourceRange)
+                        && metadata[index]?.source !== 'manual',
+                    legacyIndex: index,
+                }),
+            })).filter((item) => !isDeletedPlotItem(item.identity, deleted, {
+                allowRealtimeProvenanceFallback: true,
+            }));
+            record.values[field] = kept.map((item) => item.line).join('\n');
+            record.plotItemMeta[kind] = kept.map((item) => item.meta);
+            record.hiddenPlotItems[kind] = kept.map((item) => item.hidden);
+        });
+        return record;
+    }
+
+    function getPlotEntries(record, kind, field) {
+        const lines = String(record?.values?.[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+        const metadata = Array.isArray(record?.plotItemMeta?.[kind]) ? record.plotItemMeta[kind] : [];
+        const hiddenStates = Array.isArray(record?.hiddenPlotItems?.[kind]) ? record.hiddenPlotItems[kind] : [];
+        return lines.map((line, index) => {
+            const rawMeta = metadata[index] && typeof metadata[index] === 'object' ? metadata[index] : {};
+            const isLegacyUnanchored = rawMeta.source !== 'manual'
+                && !hasMeaningfulPlotSourceRange(rawMeta.sourceRange);
+            const meta = isLegacyUnanchored
+                ? {
+                    ...rawMeta,
+                    legacyUnanchored: true,
+                    legacyIndex: Number.isInteger(Number(rawMeta.legacyIndex))
+                        ? Number(rawMeta.legacyIndex)
+                        : index,
+                }
+                : rawMeta;
+            return {
+                line,
+                meta,
+                hidden: !!hiddenStates[index],
+            };
+        });
+    }
+
+    function overlayCurrentPlotItems(currentRecord, restoredRecord) {
+        restoredRecord.values = restoredRecord.values && typeof restoredRecord.values === 'object' ? restoredRecord.values : {};
+        restoredRecord.plotItemMeta = restoredRecord.plotItemMeta && typeof restoredRecord.plotItemMeta === 'object' ? restoredRecord.plotItemMeta : {};
+        restoredRecord.hiddenPlotItems = restoredRecord.hiddenPlotItems && typeof restoredRecord.hiddenPlotItems === 'object' ? restoredRecord.hiddenPlotItems : {};
+
+        [{ kind: 'main', field: '主线' }, { kind: 'branch', field: '支线' }].forEach(({ kind, field }) => {
+            const restoredEntries = getPlotEntries(restoredRecord, kind, field);
+            const restoredIndexById = new Map();
+            restoredEntries.forEach((entry, index) => {
+                const id = String(entry.meta?.id || '').trim();
+                if (id && !restoredIndexById.has(id)) restoredIndexById.set(id, index);
+            });
+
+            getPlotEntries(currentRecord, kind, field).forEach((entry) => {
+                const id = String(entry.meta?.id || '').trim();
+                const isManualAddition = entry.meta?.source === 'manual';
+                const isManualEdit = Number(entry.meta?.editedAt) > 0;
+                if (!isManualAddition && !isManualEdit) return;
+
+                const restoredIndex = id ? restoredIndexById.get(id) : undefined;
+                if (restoredIndex !== undefined) {
+                    restoredEntries[restoredIndex] = clone(entry);
+                    return;
+                }
+                const identity = normalizePlotItemIdentity({ kind, raw: entry.line, meta: entry.meta || {} });
+                const provenance = getPlotProvenanceKey(identity);
+                if (provenance) {
+                    const provenanceMatches = restoredEntries
+                        .map((candidate, index) => ({
+                            index,
+                            provenance: getPlotProvenanceKey(normalizePlotItemIdentity({
+                                kind,
+                                raw: candidate.line,
+                                meta: candidate.meta || {},
+                            })),
+                        }))
+                        .filter((candidate) => candidate.provenance === provenance);
+                    if (provenanceMatches.length === 1) {
+                        restoredEntries[provenanceMatches[0].index] = clone(entry);
+                        return;
+                    }
+                }
+                if (isLegacyUnanchoredPlotItem(identity)) {
+                    const legacyMatches = restoredEntries
+                        .map((candidate, index) => ({
+                            index,
+                            identity: normalizePlotItemIdentity({
+                                kind,
+                                raw: candidate.line,
+                                meta: candidate.meta || {},
+                            }),
+                        }))
+                        .filter((candidate) => (
+                            isLegacyUnanchoredPlotItem(candidate.identity)
+                            && candidate.identity.legacyIndex === identity.legacyIndex
+                        ));
+                    if (legacyMatches.length === 1) {
+                        restoredEntries[legacyMatches[0].index] = clone(entry);
+                        return;
+                    }
+                }
+                if (!isManualAddition) return;
+                if (id) restoredIndexById.set(id, restoredEntries.length);
+                restoredEntries.push(clone(entry));
+            });
+
+            restoredRecord.values[field] = restoredEntries.map((entry) => entry.line).join('\n');
+            restoredRecord.plotItemMeta[kind] = restoredEntries.map((entry) => entry.meta);
+            restoredRecord.hiddenPlotItems[kind] = restoredEntries.map((entry) => entry.hidden);
+        });
+        return restoredRecord;
+    }
+
+    function createUnmatchedCurrentPlotRecord(currentRecord) {
+        if (!currentRecord || typeof currentRecord !== 'object') return null;
+        const result = clone(currentRecord);
+        result.values = result.values && typeof result.values === 'object' ? result.values : {};
+        result.plotItemMeta = result.plotItemMeta && typeof result.plotItemMeta === 'object' ? result.plotItemMeta : {};
+        result.hiddenPlotItems = result.hiddenPlotItems && typeof result.hiddenPlotItems === 'object' ? result.hiddenPlotItems : {};
+        let manualCount = 0;
+        [{ kind: 'main', field: '主线' }, { kind: 'branch', field: '支线' }].forEach(({ kind, field }) => {
+            const entries = getPlotEntries(currentRecord, kind, field)
+                .filter((entry) => entry.meta?.source === 'manual');
+            manualCount += entries.length;
+            result.values[field] = entries.map((entry) => entry.line).join('\n');
+            result.plotItemMeta[kind] = entries.map((entry) => clone(entry.meta));
+            result.hiddenPlotItems[kind] = entries.map((entry) => entry.hidden);
+        });
+        const hasTombstones = mergeDeletedPlotItemIdentities(result.deletedPlotItemIdentities).length > 0;
+        if (!manualCount && !hasTombstones) return null;
+        applyDeletedPlotPolicy(result);
+        return result;
+    }
+
     function findCurrentRecord(records, table, sourceRecord, usedIndexes = new Set()) {
         const list = Array.isArray(records) ? records : [];
         const sourceId = String(sourceRecord?.id || '');
@@ -274,18 +561,30 @@
         if (table?.id === 'character_profile') {
             YuzukiMemory.TodoManager?.applyDeletedTodoPolicy?.(restoredRecord);
         }
+        if (table?.id === 'plot_summary') {
+            overlayCurrentPlotItems(currentRecord, restoredRecord);
+            applyDeletedPlotPolicy(restoredRecord);
+        }
         return restoredRecord;
     }
 
     function restoreTableRecordsWithCurrentPolicy(table, currentRecords, snapshotRecords) {
         const restoredRecords = clone(Array.isArray(snapshotRecords) ? snapshotRecords : []);
+        const currentList = Array.isArray(currentRecords) ? currentRecords : [];
         const usedCurrent = new Set();
         restoredRecords.forEach((restoredRecord) => {
-            const currentMatch = findCurrentRecord(currentRecords, table, restoredRecord, usedCurrent);
+            const currentMatch = findCurrentRecord(currentList, table, restoredRecord, usedCurrent);
             if (!currentMatch.record) return;
             usedCurrent.add(currentMatch.index);
             applyCurrentRecordPolicy(currentMatch.record, restoredRecord, table);
         });
+        if (table?.id === 'plot_summary') {
+            currentList.forEach((currentRecord, index) => {
+                if (usedCurrent.has(index)) return;
+                const retainedRecord = createUnmatchedCurrentPlotRecord(currentRecord);
+                if (retainedRecord) restoredRecords.push(retainedRecord);
+            });
+        }
         return restoredRecords;
     }
 
@@ -995,6 +1294,11 @@
         captureCurrentStateSnapshot,
         resetSnapshotHistory,
         markManualEdit,
+        normalizePlotItemIdentity,
+        mergeDeletedPlotItemIdentities,
+        markDeletedPlotItems,
+        isDeletedPlotItem,
+        applyDeletedPlotPolicy,
         markRequestRollbackFloor,
         markApplyRollbackFloor,
         consumeApplyRollbackFloor,

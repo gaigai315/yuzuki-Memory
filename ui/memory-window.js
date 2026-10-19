@@ -5430,8 +5430,14 @@
 
     function renderPlotPrimaryList(list) {
         const record = getPlotSummaryRecord({ save: false });
-        const mainCount = getPlotSummaryItems(getRecordValue(record, '主线')).length;
-        const branchCount = getPlotSummaryItems(getRecordValue(record, '支线')).length;
+        const mainCount = getPlotSummaryItems(getRecordValue(record, '主线'), {
+            metadata: record?.plotItemMeta?.main,
+            preserveDistinctMetadata: true,
+        }).length;
+        const branchCount = getPlotSummaryItems(getRecordValue(record, '支线'), {
+            metadata: record?.plotItemMeta?.branch,
+            preserveDistinctMetadata: true,
+        }).length;
         const entries = [
             { kind: 'main', title: '主线摘要', icon: 'fa-solid fa-timeline', count: mainCount, hidden: isPlotSummaryKindHidden(record, 'main') },
             { kind: 'branch', title: '支线摘要', icon: 'fa-solid fa-code-branch', count: branchCount, hidden: isPlotSummaryKindHidden(record, 'branch') },
@@ -5626,6 +5632,16 @@
         return list;
     }
 
+    function getVectorDisplayBookName(book) {
+        const name = String(book?.name || '').trim() || '未命名书籍';
+        const managedKinds = ['character_profile', 'item_tracking', 'world_setting'];
+        if (!managedKinds.includes(String(book?.kind || '').trim())) return name;
+        return name.replace(
+            /\s*-\s*\d{4}-\d{2}-\d{2}@\d{1,2}h\d{1,2}m\d{1,2}s(?:\d+ms)?(?=\s*[·-]\s*(?:角色档案|物品追踪|世界设定)\s*$)/i,
+            ''
+        ).trim();
+    }
+
     function createVectorPrimaryView() {
         const view = document.createElement('div');
         view.className = 'yzm-vector-primary-view';
@@ -5687,6 +5703,7 @@
     }
 
     function createVectorBookRow(book) {
+        const displayName = getVectorDisplayBookName(book);
         const row = document.createElement('button');
         row.type = 'button';
         row.className = [
@@ -5695,8 +5712,8 @@
             book.active ? 'yzm-vector-book-row-bound' : '',
         ].filter(Boolean).join(' ');
         row.dataset.yzmVectorBookId = book.id;
-        row.title = book.name;
-        row.setAttribute('aria-label', book.name);
+        row.title = displayName;
+        row.setAttribute('aria-label', displayName);
 
         const icon = document.createElement('span');
         icon.className = 'yzm-vector-book-icon';
@@ -5704,8 +5721,8 @@
 
         const name = document.createElement('span');
         name.className = 'yzm-vector-book-name';
-        name.textContent = book.name;
-        name.title = book.name;
+        name.textContent = displayName;
+        name.title = displayName;
 
         row.append(icon, name, createVectorStatus(book));
         return row;
@@ -5773,12 +5790,13 @@
         if (!book) return;
         const stats = store.getBookStats(book);
         const job = store.getVectorJob?.();
+        const displayName = getVectorDisplayBookName(book);
         const setText = (selector, value) => {
             const node = root.querySelector(selector);
             if (node && node.textContent !== String(value)) node.textContent = String(value);
         };
         setText('.yzm-vector-detail-title-text', job?.running
-            ? `${book.name}（${stats.done}/${stats.total}）` : book.name);
+            ? `${displayName}（${stats.done}/${stats.total}）` : displayName);
         setText('[data-yzm-vector-metric="维度"] strong', stats.dimension || '未生成');
         setText('[data-yzm-vector-metric="进度"] strong', `${stats.progress}%`);
         const fill = root.querySelector('.yzm-vector-metric-bar > span');
@@ -5857,7 +5875,7 @@
         title.className = 'yzm-vector-detail-title';
         const titleText = document.createElement('span');
         titleText.className = 'yzm-vector-detail-title-text';
-        titleText.textContent = book.name;
+        titleText.textContent = getVectorDisplayBookName(book);
         const renameButton = createIconButton('改名', 'fa-solid fa-pen', 'yzm-vector-rename-button');
         renameButton.dataset.yzmVectorAction = 'rename';
         title.append(titleText, renameButton);
@@ -6852,10 +6870,24 @@
         let metaList = Array.isArray(record.plotItemMeta[key]) ? record.plotItemMeta[key] : [];
         metaList = Array.from({ length: count }, (_item, index) => {
             const current = metaList[index] && typeof metaList[index] === 'object' ? metaList[index] : {};
+            const hasSourceRange = current.sourceRange && typeof current.sourceRange === 'object'
+                && (Number.isFinite(Number(current.sourceRange.start)) || Number.isFinite(Number(current.sourceRange.end)));
+            const legacyUnanchored = current.legacyUnanchored === true || (!current.id && !hasSourceRange);
+            const hasLegacyIndex = current.legacyIndex !== undefined
+                && current.legacyIndex !== null
+                && current.legacyIndex !== ''
+                && Number.isInteger(Number(current.legacyIndex))
+                && Number(current.legacyIndex) >= 0;
             return {
                 ...current,
                 id: String(current.id || createPlotLineId()),
                 text: String(current.text || lines[index] || '').trim(),
+                ...(legacyUnanchored ? {
+                    legacyUnanchored: true,
+                    legacyIndex: hasLegacyIndex
+                        ? Number(current.legacyIndex)
+                        : index,
+                } : {}),
             };
         });
         record.plotItemMeta[key] = metaList;
@@ -6891,18 +6923,27 @@
     function getPlotSummaryItemEntries(record, kind = activePlotSummaryKind) {
         const normalizedKind = getPlotSummaryKindKey(kind);
         const lines = getPlotSummaryLines(record, normalizedKind);
-        const items = getPlotSummaryItems(lines.join('\n'));
-        const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, items.length);
-        const metaList = normalizePlotItemMeta(record, normalizedKind, items.length);
-        const entries = items.map((item, index) => ({
-            ...item,
-            id: `plot:${normalizedKind}:${index}`,
-            lineId: metaList[index]?.id || '',
-            meta: metaList[index] || null,
-            kind: normalizedKind,
-            raw: lines[index] || item.raw,
-            hidden: !!hiddenStates[index],
-        }));
+        const sourceMeta = Array.isArray(record?.plotItemMeta?.[normalizedKind])
+            ? record.plotItemMeta[normalizedKind]
+            : [];
+        const items = getPlotSummaryItems(lines.join('\n'), {
+            metadata: sourceMeta,
+            preserveDistinctMetadata: true,
+        });
+        const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, lines.length);
+        const metaList = normalizePlotItemMeta(record, normalizedKind, lines.length);
+        const entries = items.map((item) => {
+            const sourceIndex = Number.isInteger(item.metaIndex) ? item.metaIndex : item.index;
+            return {
+                ...item,
+                id: `plot:${normalizedKind}:${sourceIndex}`,
+                lineId: metaList[sourceIndex]?.id || '',
+                meta: metaList[sourceIndex] || null,
+                kind: normalizedKind,
+                raw: lines[sourceIndex] || item.raw,
+                hidden: !!hiddenStates[sourceIndex],
+            };
+        });
         if (typeof YuzukiMemory.PlotSummary?.applyDisplayStatuses === 'function') {
             return YuzukiMemory.PlotSummary.applyDisplayStatuses(entries);
         }
@@ -10520,7 +10561,7 @@
                     customHeadersField,
                 ]),
                 openCodeWarning,
-                createApiConnectionFooter(createApiField('流式响应', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
+                createApiConnectionFooter(createApiField('总结/追溯流式响应', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
                     ['测试连接', 'fa-solid fa-plug-circle-check', '', 'testLlmConnection'],
                 ])),
             ]);
@@ -10778,6 +10819,7 @@
     function createLlmApiPresetSelect() {
         const presets = getLlmApiPresets();
         const wrap = createApiSelect('', [{ label: presets.length ? '选择预设' : '暂无预设', value: '' }, ...presets.map((preset) => ({ label: preset.name, value: preset.id }))]);
+        wrap.classList.add('yzm-llm-preset-select-wrap');
         wrap.querySelector('.yzm-api-select')?.setAttribute('data-yzm-llm-preset-select', 'true');
         return wrap;
     }
@@ -10817,7 +10859,7 @@
             select.appendChild(option);
         });
         select.value = value;
-        wrap.append(select, createIconNode('fa-solid fa-chevron-down', ''));
+        wrap.append(select, createIconNode('fa-solid fa-caret-down', ''));
         return wrap;
     }
 
@@ -13110,7 +13152,7 @@
         select.setAttribute('aria-label', '选择预设');
         renderPresetOptions(select, getActiveTagPresetId());
 
-        wrapper.append(select, createIconNode('fa-solid fa-chevron-down', ''));
+        wrapper.append(select, createIconNode('fa-solid fa-caret-down', ''));
         return wrapper;
     }
 
@@ -14672,9 +14714,9 @@
         return row;
     }
 
-    function getPlotSummaryItems(text = '') {
+    function getPlotSummaryItems(text = '', options = {}) {
         if (typeof YuzukiMemory.PlotSummary?.normalizeStoredItems === 'function') {
-            return YuzukiMemory.PlotSummary.normalizeStoredItems(text).map((item) => ({
+            return YuzukiMemory.PlotSummary.normalizeStoredItems(text, options).map((item) => ({
                 ...item,
                 date: item.date || '未记录日期',
                 startTime: item.startTime || '—',
@@ -14962,11 +15004,17 @@
         return view;
     }
 
-    function normalizePlotSummaryRecordValues(record) {
+    function normalizePlotSummaryRecordValues(record, options = {}) {
         if (!record) return false;
         record.values = record.values && typeof record.values === 'object' ? record.values : {};
         record.plotItemMeta = record.plotItemMeta && typeof record.plotItemMeta === 'object' ? record.plotItemMeta : {};
         record.hiddenPlotItems = record.hiddenPlotItems && typeof record.hiddenPlotItems === 'object' ? record.hiddenPlotItems : {};
+        const stableMetadataValue = (value) => {
+            if (Array.isArray(value)) return value.map((item) => stableMetadataValue(item));
+            if (!value || typeof value !== 'object') return value;
+            return Object.fromEntries(Object.keys(value).sort().map((key) => [key, stableMetadataValue(value[key])]));
+        };
+        const getMetadataSignature = (value) => JSON.stringify(stableMetadataValue(value));
         let changed = false;
         [{ field: '主线', kind: 'main' }, { field: '支线', kind: 'branch' }].forEach(({ field, kind }) => {
             const current = String(record.values[field] || '').trim();
@@ -14978,6 +15026,7 @@
                 ? YuzukiMemory.PlotSummary.normalizeStoredItems(currentLines, {
                     metadata: previousMeta,
                     orderByProvenance: true,
+                    preserveDistinctMetadata: true,
                 })
                 : null;
             const normalized = normalizedItems
@@ -14995,15 +15044,29 @@
                         : {};
                     const reused = usedMetaIndexes.has(item.metaIndex);
                     usedMetaIndexes.add(item.metaIndex);
+                    const hasSourceRange = source.sourceRange && typeof source.sourceRange === 'object'
+                        && (Number.isFinite(Number(source.sourceRange.start)) || Number.isFinite(Number(source.sourceRange.end)));
+                    const legacyUnanchored = source.legacyUnanchored === true || (!source.id && !hasSourceRange);
+                    const hasLegacyIndex = source.legacyIndex !== undefined
+                        && source.legacyIndex !== null
+                        && source.legacyIndex !== ''
+                        && Number.isInteger(Number(source.legacyIndex))
+                        && Number(source.legacyIndex) >= 0;
                     return {
                         ...source,
                         id: reused ? createPlotLineId() : String(source.id || createPlotLineId()),
                         text: item.raw,
+                        ...(legacyUnanchored ? {
+                            legacyUnanchored: true,
+                            legacyIndex: hasLegacyIndex
+                                ? Number(source.legacyIndex)
+                                : item.metaIndex,
+                        } : {}),
                     };
                 });
                 const nextHidden = normalizedItems.map((item) => !!previousHidden[item.metaIndex]);
-                const previousMetaSignature = previousMeta.map((item) => `${item?.id || ''}|${item?.text || ''}`).join('\n');
-                const nextMetaSignature = nextMeta.map((item) => `${item.id}|${item.text}`).join('\n');
+                const previousMetaSignature = getMetadataSignature(previousMeta);
+                const nextMetaSignature = getMetadataSignature(nextMeta);
                 if (previousMetaSignature !== nextMetaSignature || previousHidden.join('|') !== nextHidden.join('|')) {
                     record.plotItemMeta[kind] = nextMeta;
                     record.hiddenPlotItems[kind] = nextHidden;
@@ -15011,7 +15074,7 @@
                 }
             }
         });
-        if (changed) saveState();
+        if (changed && options.save !== false) saveState();
         return changed;
     }
 
@@ -15363,11 +15426,11 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '自动剧情规划关闭后，仍可手动点击规划。',
-            '表格或总结清空后，自动删除对应的向量化书。',
-            '修正自动填表与总结的运行提示。',
-            '修复酒馆 API 模式下 Vertex 渠道无法正常调用的问题。',
-            '优化填表/总结的任务请求结构，增强破限结构。',
+            '修复手动删除的剧情摘要可能重新出现的问题。',
+            '修复删除聊天消息后，对应记忆内容没有同步清理的问题。',
+            '修复分支聊天中记忆数据可能错位的问题。',
+            '剧情摘要不再记录 OOC 和引用内容。',
+            '优化向量化页面的书名显示，隐藏过长的会话时间标识。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -16066,6 +16129,12 @@
             if (!window.confirm(`确定删除选中的 ${selectedIndexes.length} 个${getPlotSummaryLabel(kind)}条目吗？`)) return;
             record.values = record.values && typeof record.values === 'object' ? record.values : {};
             const selectedSet = new Set(selectedIndexes);
+            YuzukiMemory.BranchSnapshot?.markDeletedPlotItems?.(record, selectedIndexes.map((index) => ({
+                kind,
+                index,
+                raw: lines[index],
+                meta: metaList[index] || null,
+            })));
             record.values[field] = lines.filter((_, index) => !selectedSet.has(index)).join('\n');
             setPlotItemHiddenStates(record, kind, hiddenStates.filter((_, index) => !selectedSet.has(index)));
             setPlotItemMeta(record, kind, metaList.filter((_, index) => !selectedSet.has(index)));
@@ -17082,8 +17151,7 @@
         dialog.addEventListener('click', (event) => event.stopPropagation());
 
         const persistEditorChanges = (failureMessage) => {
-            record.values[field] = normalizePlotSummaryStoredText(record.values[field]);
-            normalizePlotItemMeta(record, normalizedKind, getPlotSummaryLines(record, normalizedKind).length);
+            normalizePlotSummaryRecordValues(record, { save: false });
             setActiveRecordId(table.id, record.id);
             activePlotSummaryKind = normalizedKind;
             if (!persistStateOrReload(root, failureMessage, {
@@ -17102,6 +17170,12 @@
             if (!window.confirm(`确定删除当前${label}吗？`)) return;
             const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, currentLines.length);
             const metaList = normalizePlotItemMeta(record, normalizedKind, currentLines.length);
+            YuzukiMemory.BranchSnapshot?.markDeletedPlotItems?.(record, [{
+                kind: normalizedKind,
+                index: editIndex,
+                raw: currentLines[editIndex],
+                meta: metaList[editIndex] || null,
+            }]);
             const nextLines = currentLines.slice();
             nextLines.splice(editIndex, 1);
             hiddenStates.splice(editIndex, 1);
@@ -17131,9 +17205,18 @@
                 nextLines[editIndex] = nextValue;
                 const nextHiddenStates = hiddenStates.slice();
                 const nextMetaList = metaList.slice();
-                if (!nextValue) nextHiddenStates.splice(editIndex, 1);
-                if (!nextValue) nextMetaList.splice(editIndex, 1);
-                else nextMetaList[editIndex] = { ...(nextMetaList[editIndex] || {}), text: nextValue, editedAt: Date.now() };
+                if (!nextValue) {
+                    YuzukiMemory.BranchSnapshot?.markDeletedPlotItems?.(record, [{
+                        kind: normalizedKind,
+                        index: editIndex,
+                        raw: currentLines[editIndex],
+                        meta: metaList[editIndex] || null,
+                    }]);
+                    nextHiddenStates.splice(editIndex, 1);
+                    nextMetaList.splice(editIndex, 1);
+                } else {
+                    nextMetaList[editIndex] = { ...(nextMetaList[editIndex] || {}), text: nextValue, editedAt: Date.now() };
+                }
                 record.values[field] = nextLines.filter(Boolean).join('\n');
                 setPlotItemHiddenStates(record, normalizedKind, nextHiddenStates);
                 setPlotItemMeta(record, normalizedKind, nextMetaList);

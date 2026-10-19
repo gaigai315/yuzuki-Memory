@@ -275,6 +275,10 @@
         const entries = splitPlotSummaryEntries(source);
         if (!entries.length) return [createPlotRow(normalizedKind, source, fallbackTitle)];
         const rows = [];
+        let batchDate = entries.map((entry) => {
+            const match = entry.match(/^\[([^\]]+)\]\s*\|\s*(?:内容|摘要内容|总结内容)\s*[:：]\s*([\s\S]*)$/);
+            return match ? getPlotDateFromTimeText(match[1].trim()) : '';
+        }).find(Boolean) || '';
         entries.forEach((entry) => {
             const bracketMatch = entry.match(/^\[([^\]]+)\]\s*\|\s*(?:内容|摘要内容|总结内容)\s*[:：]\s*([\s\S]*)$/);
             if (!bracketMatch) {
@@ -283,7 +287,10 @@
             }
             const rawTime = bracketMatch[1].trim();
             const content = bracketMatch[2].trim();
-            rows.push(createPlotRow(normalizedKind, `日期:${rawTime}|内容:${content}`, fallbackTitle));
+            const explicitDate = getPlotDateFromTimeText(rawTime);
+            if (explicitDate) batchDate = explicitDate;
+            const resolvedTime = explicitDate || !batchDate ? rawTime : `${batchDate},${rawTime}`;
+            rows.push(createPlotRow(normalizedKind, `日期:${resolvedTime}|内容:${content}`, fallbackTitle));
         });
         return rows;
     }
@@ -299,6 +306,23 @@
             primaryValue: normalizedKind === 'branch' ? '支线摘要' : '主线摘要',
             values,
         };
+    }
+
+    function isExplicitNonNarrativePlotText(value = '') {
+        const source = String(value || '').trim();
+        if (!source) return false;
+        if (/^>\s*/.test(source) || /^<blockquote(?:\s|>)/i.test(source)) return true;
+
+        const unwrapped = source.replace(/^(?:\*\*|__)\s*/, '').trim();
+        return /^(?:[【\[(（]\s*OOC(?:助手解答|说明|回复|答复)?\s*[】\])）]|OOC(?:助手解答|说明|回复|答复)?\s*[:：])/i.test(unwrapped)
+            || /^(?:[【\[(（]\s*(?:原文)?引用(?:块|内容)?\s*[】\])）]|(?:原文)?引用(?:块|内容)?\s*[:：])/i.test(unwrapped)
+            || /^(?:[【\[(（]\s*(?:quoted?|citation)\s*[】\])）]|(?:quoted?|citation)\s*[:：])/i.test(unwrapped);
+    }
+
+    function isExcludedPlotSummaryRow(row) {
+        const values = row?.values || {};
+        return isExplicitNonNarrativePlotText(values['摘要名称'] || values['标题'])
+            || isExplicitNonNarrativePlotText(values['摘要内容'] || values['内容'] || values['总结内容']);
     }
 
     function splitPlotTimeAndContent(text = '') {
@@ -402,7 +426,7 @@
                 values,
             });
         });
-        return rows;
+        return rows.filter((row) => !isExcludedPlotSummaryRow(row));
     }
 
     function extractMemoryRows(text) {
@@ -740,6 +764,7 @@
         if (!table || table.hidden || table.id === FIXED_SUMMARY_TABLE_ID) return false;
 
         if (table.id === PLOT_SUMMARY_TABLE_ID) {
+            if (isExcludedPlotSummaryRow(row)) return false;
             const field = getPlotKind(row.primaryValue) === 'branch' ? '支线' : '主线';
             const kind = field === '支线' ? 'branch' : 'main';
             const text = plotRowToText(row);
@@ -760,6 +785,7 @@
             record.values[field] = nextText;
             const nextLines = nextText.split(/\n+/).map((line) => line.trim()).filter(Boolean);
             syncPlotItemMetadata(record, kind, previousLines, nextLines, options);
+            YuzukiMemory.BranchSnapshot?.applyDeletedPlotPolicy?.(record);
             return true;
         }
 

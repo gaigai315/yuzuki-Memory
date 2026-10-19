@@ -261,7 +261,61 @@ test('branch inheritance rebinds parent floor-bound memory to the new branch sco
             }],
             branch: [],
         },
+        deletedPlotItemIdentities: [{
+            id: 'deleted-parent-plot',
+            kind: 'main',
+            text: '父分支已删剧情',
+            floorScope: parentScope,
+            sourceRange: { start: 100, end: 101, floorScope: parentScope },
+            source: 'realtime',
+            legacyUnanchored: true,
+            legacyIndex: 7,
+        }],
     }];
+    parentState.floorLedger = {
+        version: 1,
+        id: 'parent-ledger',
+        tableShape: 'parent-shape',
+        baselineRecords: {
+            plot_summary: [{
+                id: 'baseline-plot',
+                floorScope: parentScope,
+                values: { 摘要名称: '主线摘要', 主线: '账本基线剧情', 支线: '' },
+                plotItemMeta: {
+                    main: [{
+                        text: '账本基线剧情',
+                        floorScope: parentScope,
+                        sourceRange: { start: 0, end: 100, floorScope: parentScope },
+                    }],
+                    branch: [{
+                        text: '更早剧情',
+                        floorScope: previousScope,
+                        sourceRange: { start: 0, end: 50, floorScope: previousScope },
+                    }],
+                },
+            }],
+        },
+        entries: {
+            entry_parent: {
+                id: 'entry_parent',
+                floorScope: parentScope,
+                rows: [{
+                    table: 'plot_summary',
+                    metadata: {
+                        floorScope: parentScope,
+                        sourceRange: { start: 100, end: 101, floorScope: parentScope },
+                    },
+                }],
+                operations: [{ sourceRange: { start: 100, end: 101, floorScope: parentScope } }],
+            },
+            entry_older: {
+                id: 'entry_older',
+                floorScope: previousScope,
+                rows: [],
+            },
+        },
+        activeEntries: [],
+    };
     localStorage.setItem(storage.getStorageKey(parentSessionId), JSON.stringify(parentState));
 
     const loaded = storage.loadState(fallback, branchSessionId);
@@ -278,7 +332,23 @@ test('branch inheritance rebinds parent floor-bound memory to the new branch sco
     assert.equal(plot.floorScope.id, branchSessionId);
     assert.equal(plot.plotItemMeta.main[0].floorScope.id, branchSessionId);
     assert.equal(plot.plotItemMeta.main[0].sourceRange.floorScope.id, branchSessionId);
+    assert.equal(plot.deletedPlotItemIdentities[0].floorScope.id, branchSessionId);
+    assert.equal(plot.deletedPlotItemIdentities[0].sourceRange.floorScope.id, branchSessionId);
+    assert.equal(plot.deletedPlotItemIdentities[0].source, 'realtime');
+    assert.equal(plot.deletedPlotItemIdentities[0].legacyUnanchored, true);
+    assert.equal(plot.deletedPlotItemIdentities[0].legacyIndex, 7);
     assert.equal(olderSummary.floorScope.id, previousScope.id);
+    const baselinePlot = loaded.floorLedger.baselineRecords.plot_summary[0];
+    assert.equal(baselinePlot.floorScope.id, branchSessionId);
+    assert.equal(baselinePlot.plotItemMeta.main[0].floorScope.id, branchSessionId);
+    assert.equal(baselinePlot.plotItemMeta.main[0].sourceRange.floorScope.id, branchSessionId);
+    assert.equal(baselinePlot.plotItemMeta.branch[0].floorScope.id, previousScope.id);
+    assert.equal(baselinePlot.plotItemMeta.branch[0].sourceRange.floorScope.id, previousScope.id);
+    assert.equal(loaded.floorLedger.entries.entry_parent.floorScope.id, branchSessionId);
+    assert.equal(loaded.floorLedger.entries.entry_parent.rows[0].metadata.floorScope.id, branchSessionId);
+    assert.equal(loaded.floorLedger.entries.entry_parent.rows[0].metadata.sourceRange.floorScope.id, branchSessionId);
+    assert.equal(loaded.floorLedger.entries.entry_parent.operations[0].sourceRange.floorScope.id, branchSessionId);
+    assert.equal(loaded.floorLedger.entries.entry_older.floorScope.id, previousScope.id);
 });
 
 test('copied branch chat metadata also rebinds parent summaries to the new branch scope', () => {
@@ -384,6 +454,47 @@ test('legacy story director records are cleared and persisted as ledger version 
     assert.deepEqual(persisted.storyDirector.messageCards, []);
     assert.equal(persisted.storyDirector.status, 'idle');
     assert.equal(persisted.storyDirector.lastError, '');
+});
+
+test('storage preserves same-text legacy plot tombstones with different indexes across save and reload', () => {
+    const { storage, localStorage } = createStorageSandbox();
+    const fallback = createFallbackState();
+    fallback.tables.push({
+        id: 'plot_summary',
+        name: '剧情摘要',
+        icon: 'timeline',
+        columns: ['摘要名称', '主线', '支线'],
+        hidden: false,
+    });
+    fallback.records.plot_summary = [];
+    const sessionId = 'chat:legacy-plot-tombstones';
+    const legacyState = structuredClone(fallback);
+    legacyState.sessionId = sessionId;
+    legacyState.records.plot_summary = [{
+        id: 'plot_record',
+        values: { 摘要名称: '主线摘要', 主线: '', 支线: '' },
+        deletedPlotItemIdentities: [0, 1].map((legacyIndex) => ({
+            kind: 'main',
+            text: '同文旧剧情',
+            source: 'realtime',
+            legacyUnanchored: true,
+            legacyIndex,
+        })),
+    }];
+    localStorage.setItem(storage.getStorageKey(sessionId), JSON.stringify(legacyState));
+
+    const loaded = storage.loadState(fallback, sessionId);
+    assert.deepEqual(
+        Array.from(loaded.records.plot_summary[0].deletedPlotItemIdentities, (identity) => identity.legacyIndex),
+        [0, 1],
+    );
+
+    assert.equal(storage.saveState(loaded, fallback, sessionId, { force: true }), true);
+    const reloaded = storage.loadState(fallback, sessionId);
+    assert.deepEqual(
+        Array.from(reloaded.records.plot_summary[0].deletedPlotItemIdentities, (identity) => identity.legacyIndex),
+        [0, 1],
+    );
 });
 
 test('cloud chat metadata outranks browser cache for all tables and receives current-state saves', () => {

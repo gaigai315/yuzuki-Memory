@@ -5207,8 +5207,22 @@
     top: 50%;
     color: var(--yzm-muted);
     font-size: 11px;
+    line-height: 1;
     pointer-events: none;
-    transform: translateY(-50%);
+    transform: translateY(calc(-50% - 1px));
+}
+
+#yzm-memory-root .yzm-llm-preset-select-wrap {
+    align-self: center;
+    height: 34px;
+    min-height: 34px !important;
+    line-height: 0;
+}
+
+#yzm-memory-root .yzm-llm-preset-select-wrap > .yzm-api-select {
+    display: block;
+    height: 34px;
+    min-height: 34px !important;
 }
 
 #yzm-memory-root .yzm-api-secret-wrap .yzm-api-input {
@@ -6668,8 +6682,9 @@
     top: 50%;
     color: var(--yzm-muted);
     font-size: 11px;
+    line-height: 1;
     pointer-events: none;
-    transform: translateY(-50%);
+    transform: translateY(calc(-50% - 1px));
 }
 
 #yzm-memory-root .yzm-preset-select,

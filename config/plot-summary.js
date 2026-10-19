@@ -431,7 +431,10 @@
         const seen = new Set();
         return resolved
             .filter((item) => {
-                const key = `${item.date}|${item.startTime}|${item.endTime}|${item.text}|${item.explicitStatus}`;
+                const metadataKey = options.preserveDistinctMetadata === true
+                    ? `|meta:${item.metaIndex}`
+                    : '';
+                const key = `${item.date}|${item.startTime}|${item.endTime}|${item.text}|${item.explicitStatus}${metadataKey}`;
                 if (seen.has(key)) return false;
                 seen.add(key);
                 return true;
