@@ -6902,6 +6902,107 @@
     border-color: var(--yzm-border);
 }
 
+#yzm-memory-root .yzm-tag-filter-help-dialog {
+    width: min(600px, 100%);
+    max-height: min(82vh, 720px);
+    min-height: 0;
+    overflow: hidden;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-content {
+    display: grid;
+    flex: 1 1 auto;
+    gap: 14px;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    touch-action: pan-y;
+    -webkit-overflow-scrolling: touch;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-intro,
+#yzm-memory-root .yzm-tag-filter-help-warning {
+    margin: 0;
+    padding: 10px 12px;
+    color: var(--yzm-text);
+    background: var(--yzm-surface-strong);
+    border: 1px solid var(--yzm-border-soft);
+    border-radius: 8px;
+    box-sizing: border-box;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-section {
+    display: grid;
+    gap: 7px;
+    min-width: 0;
+    padding-bottom: 13px;
+    border-bottom: 1px solid var(--yzm-border-soft);
+}
+
+#yzm-memory-root .yzm-tag-filter-help-section h3,
+#yzm-memory-root .yzm-tag-filter-help-section p {
+    margin: 0;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-section h3,
+#yzm-memory-root .yzm-tag-filter-help-warning > strong {
+    color: var(--yzm-title);
+    font-size: 13px;
+    line-height: 1.4;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-section p {
+    color: var(--yzm-muted);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-example {
+    display: grid;
+    gap: 5px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-example-row {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    gap: 8px;
+    align-items: start;
+    min-width: 0;
+    font-size: 12px;
+    line-height: 1.55;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-example-row strong {
+    color: var(--yzm-title);
+}
+
+#yzm-memory-root .yzm-tag-filter-help-example-row code {
+    min-width: 0;
+    padding: 1px 5px;
+    overflow-wrap: anywhere;
+    color: var(--yzm-text);
+    background: var(--yzm-input-bg);
+    border-radius: 4px;
+    font: inherit;
+    white-space: pre-wrap;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-warning ul {
+    margin: 7px 0 0;
+    padding-left: 18px;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-warning li + li {
+    margin-top: 4px;
+}
+
+#yzm-memory-root .yzm-tag-filter-help-actions {
+    flex: 0 0 auto;
+}
+
 #yzm-memory-root .yzm-tag-diagnostic-dialog {
     max-width: min(520px, calc(100vw - 32px));
 }

@@ -13343,6 +13343,196 @@
         return nextPreset;
     }
 
+    function closeTagFilterHelpDialog(root) {
+        removeModal(root, '.yzm-tag-filter-help-modal');
+    }
+
+    function openTagFilterHelpDialog(root) {
+        const modalHost = getModalHost(root);
+        closeTagFilterHelpDialog(root);
+        const previouslyFocused = document.activeElement;
+
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-tag-filter-help-modal';
+
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-tag-filter-help-dialog';
+        dialog.setAttribute('role', 'dialog');
+        dialog.setAttribute('aria-modal', 'true');
+        dialog.setAttribute('aria-label', '黑白名单填写说明');
+        dialog.tabIndex = -1;
+
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = '黑白名单填写说明';
+        const close = document.createElement('button');
+        close.type = 'button';
+        close.className = 'yzm-structure-close';
+        close.setAttribute('aria-label', '关闭黑白名单填写说明');
+        close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+        header.append(title, close);
+
+        const content = document.createElement('div');
+        content.className = 'yzm-tag-filter-help-content';
+
+        const intro = document.createElement('p');
+        intro.className = 'yzm-tag-filter-help-intro';
+        intro.textContent = '过滤时会先执行黑名单删除，再执行白名单提取。黑白名单都留空时，不进行标签过滤。';
+        content.appendChild(intro);
+
+        const createExample = (rows) => {
+            const example = document.createElement('div');
+            example.className = 'yzm-tag-filter-help-example';
+            rows.forEach(([label, value]) => {
+                const row = document.createElement('div');
+                row.className = 'yzm-tag-filter-help-example-row';
+                const name = document.createElement('strong');
+                name.textContent = label;
+                const code = document.createElement('code');
+                code.textContent = value;
+                row.append(name, code);
+                example.appendChild(row);
+            });
+            return example;
+        };
+
+        const createSection = (headingText, description, rows) => {
+            const section = document.createElement('section');
+            section.className = 'yzm-tag-filter-help-section';
+            const heading = document.createElement('h3');
+            heading.textContent = headingText;
+            const detail = document.createElement('p');
+            detail.textContent = description;
+            section.append(heading, detail);
+            if (rows?.length) section.appendChild(createExample(rows));
+            return section;
+        };
+
+        content.append(
+            createSection(
+                '填写格式',
+                '只填写开始标签对应的形式，不要填写结束标签。多个标签可用半角逗号、中文逗号或换行分隔；匹配不区分大小写。',
+                [
+                    ['XML 标签', '<content>正文</content> → 填 content'],
+                    ['方括号标签', '[时间]夜晚[/时间] → 填 [时间]'],
+                    ['HTML 注释', '<!--隐藏内容--> → 填 !--'],
+                ],
+            ),
+            createSection(
+                '黑名单（删除）',
+                '黑名单会删除所列标签及标签内内容，保留标签外的裸文本。正文没有统一外层标签时，优先使用黑名单。',
+                [
+                    ['原回复', '<thinking>内部推理</thinking>剧情正文<Memory>填表内容</Memory>'],
+                    ['黑名单', 'thinking, Memory'],
+                    ['白名单', '留空'],
+                    ['过滤结果', '剧情正文'],
+                ],
+            ),
+            createSection(
+                '白名单（仅保留）',
+                '白名单只保留所列标签包裹的整段内容，标签外的裸文本会删除。其他标签若位于白名单标签外也会删除；若嵌套在保留内容里面，则仍会保留。仅当每条 Assistant 正文都稳定包在同一标签中时使用。',
+                [
+                    ['原回复', '<content>剧情正文</content><thinking>内部推理</thinking>'],
+                    ['黑名单', '留空'],
+                    ['白名单', 'content'],
+                    ['过滤结果', '剧情正文'],
+                ],
+            ),
+            createSection(
+                '黑白名单一起使用',
+                '仅当白名单要保留的标签内部还嵌套着需要删除的标签时，才需要同时填写。处理顺序固定为先按黑名单删除，再按白名单提取。若待删除标签位于白名单标签外，白名单本身就会丢弃它，通常无需重复加入黑名单。',
+                [
+                    ['原回复', '<content>剧情正文<thinking>内部推理</thinking></content><statusbar>状态</statusbar>'],
+                    ['黑名单', 'thinking'],
+                    ['白名单', 'content'],
+                    ['处理顺序', '先删除 thinking，再提取 content'],
+                    ['过滤结果', '剧情正文'],
+                ],
+            ),
+        );
+
+        const warning = document.createElement('section');
+        warning.className = 'yzm-tag-filter-help-warning';
+        const warningTitle = document.createElement('strong');
+        warningTitle.textContent = '使用前检查';
+        const warningList = document.createElement('ul');
+        [
+            '一般用于总结时，只需保留剧情时间、状态栏和剧情正文；思维链、行动选项、小剧场、摘要等不需要进入总结的文字，应优先加入黑名单剔除。',
+            '正文是裸文本时，白名单必须留空；不确定时优先只用黑名单或点击“自动诊断”。',
+            '只有正文确实被 <content>...</content> 包裹时，才把 content 填入白名单；任一 Assistant 楼层缺少该标签时，填表或总结会停止并提示。',
+            '白名单不会清理保留内容里的嵌套标签；例如 <thinking> 位于 <content> 内时，还需把 thinking 加入黑名单。',
+            '同一标签不要同时填入黑名单和白名单，否则它会先被黑名单删除。',
+            '不要填写 <content>、</content>、[时间][/时间]、<!-- --> 或 |--。',
+        ].forEach((text) => {
+            const item = document.createElement('li');
+            item.textContent = text;
+            warningList.appendChild(item);
+        });
+        warning.append(warningTitle, warningList);
+        content.appendChild(warning);
+
+        const actions = document.createElement('div');
+        actions.className = 'yzm-structure-actions yzm-tag-filter-help-actions';
+        const confirm = createIconButton('知道了', 'fa-solid fa-check', 'yzm-add-table-confirm');
+        actions.appendChild(confirm);
+
+        dialog.append(header, content, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+
+        let closed = false;
+        const closeDialog = () => {
+            if (closed) return;
+            closed = true;
+            document.removeEventListener('keydown', handleKeydown, true);
+            removePluginElement(overlay);
+            if (previouslyFocused instanceof HTMLElement && previouslyFocused.isConnected) {
+                previouslyFocused.focus({ preventScroll: true });
+            }
+        };
+        const isTopmostModal = () => {
+            if (modalHost.hidden) return false;
+            const globalHost = document.getElementById(GLOBAL_MODAL_ROOT_ID);
+            if (globalHost?.querySelector('.yzm-structure-modal')) return false;
+            const localModals = modalHost.querySelectorAll('.yzm-structure-modal');
+            return overlay.isConnected && localModals[localModals.length - 1] === overlay;
+        };
+        const handleKeydown = (event) => {
+            if (!isTopmostModal()) return;
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                event.stopImmediatePropagation?.();
+                closeDialog();
+                return;
+            }
+            if (event.key !== 'Tab') return;
+            const first = close;
+            const last = confirm;
+            const active = document.activeElement;
+            if (event.shiftKey && (active === first || !dialog.contains(active))) {
+                event.preventDefault();
+                event.stopImmediatePropagation?.();
+                last.focus();
+            } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+                event.preventDefault();
+                event.stopImmediatePropagation?.();
+                first.focus();
+            }
+        };
+        overlay._yzmClose = closeDialog;
+        close.onclick = closeDialog;
+        confirm.onclick = closeDialog;
+        overlay.addEventListener('click', (event) => {
+            if (event.target === overlay) closeDialog();
+        });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        document.addEventListener('keydown', handleKeydown, true);
+        close.focus({ preventScroll: true });
+    }
+
     function openTagDiagnosticDialog(root, result) {
         return new Promise((resolve) => {
             const modalHost = getModalHost(root);
@@ -13550,15 +13740,24 @@
 
         const titleNode = document.createElement('div');
         titleNode.className = 'yzm-config-card-title';
+        const helpButton = createIconButton(
+            '填写说明',
+            'fa-regular fa-circle-question',
+            'yzm-ai-fill-button yzm-tag-filter-help-button',
+        );
+        helpButton.title = '查看黑白名单填写说明';
+        helpButton.setAttribute('aria-label', '查看黑白名单填写说明');
         titleNode.append(
             createIconNode('fa-solid fa-filter', ''),
             document.createTextNode('标签过滤'),
+            createConfigTitleSpacer(),
+            helpButton,
             createIconButton('自动诊断', 'fa-solid fa-robot', 'yzm-ai-fill-button yzm-tag-diagnostic-button')
         );
 
         card.append(
             titleNode,
-            createTagFilterBlock('黑名单标签（去除）', 'fa-regular fa-circle-xmark', '例如：Music, Memory, |--', 'blacklist'),
+            createTagFilterBlock('黑名单标签（去除）', 'fa-regular fa-circle-xmark', '例如：Music, Memory, !--', 'blacklist'),
             createTagFilterBlock('白名单标签（仅留）', 'fa-regular fa-circle-check', '例：content, message', 'whitelist')
         );
         return card;
@@ -15115,12 +15314,17 @@
         return host;
     }
 
+    function closeModalElement(modal) {
+        if (typeof modal?._yzmClose === 'function') modal._yzmClose();
+        else removePluginElement(modal);
+    }
+
     function removeModal(root, selector = '.yzm-structure-modal') {
-        removePluginElement(getModalHost(root).querySelector(selector));
+        closeModalElement(getModalHost(root).querySelector(selector));
     }
 
     function removeGlobalModal(root, selector = '.yzm-structure-modal') {
-        removePluginElement(getGlobalModalHost(root).querySelector(selector));
+        closeModalElement(getGlobalModalHost(root).querySelector(selector));
     }
 
     function getCurrentPluginVersion() {
@@ -17324,7 +17528,8 @@
 
                 event.preventDefault();
                 event.stopPropagation();
-                removePluginElement(closeButton.closest('.yzm-structure-modal'));
+                const modal = closeButton.closest('.yzm-structure-modal');
+                closeModalElement(modal);
             }, true);
         }
 
@@ -18344,6 +18549,7 @@
                 const saveButton = target?.closest?.('.yzm-preset-save');
                 const deleteButton = target?.closest?.('.yzm-preset-delete');
                 const quickTag = target?.closest?.('[data-yzm-quick-tag]');
+                const tagFilterHelpButton = target?.closest?.('.yzm-tag-filter-help-button');
                 const tagDiagnosticButton = target?.closest?.('.yzm-tag-diagnostic-button');
                 const fillModeButton = target?.closest?.('[data-yzm-fill-mode]');
                 const configSwitch = target?.closest?.('.yzm-config-switch');
@@ -18414,6 +18620,11 @@
                     appendTagToInput(root, quickTag.closest('[data-yzm-tag-row]')?.dataset.yzmTagRow, quickTag.dataset.yzmQuickTag);
                     quickTag.classList.add('yzm-tag-chip-flash');
                     window.setTimeout(() => quickTag.classList.remove('yzm-tag-chip-flash'), 200);
+                    return;
+                }
+
+                if (tagFilterHelpButton) {
+                    openTagFilterHelpDialog(root);
                     return;
                 }
 
@@ -18840,6 +19051,7 @@
         }, { passive: true });
 
         close.addEventListener('click', () => {
+            closeTagFilterHelpDialog(root);
             blurPluginFocus(shell);
             setMemoryShellOpen(root, shell, false);
             updateFloatingIconVisibility();
@@ -19026,6 +19238,10 @@
         const shell = root.querySelector('.yzm-shell');
         if (!shell) return;
         const opening = forceOpen || !isMemoryShellElementOpen(shell);
+        if (!opening) {
+            closeTagFilterHelpDialog(root);
+            blurPluginFocus(shell);
+        }
         if (opening) {
             const result = YuzukiMemory.FloorLedger?.reconcileNow?.({
                 reason: 'memory_window_open',

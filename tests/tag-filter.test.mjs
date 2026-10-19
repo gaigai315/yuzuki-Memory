@@ -10,11 +10,62 @@ const sandbox = {
 };
 vm.createContext(sandbox);
 const source = fs.readFileSync(new URL('../config/task-runner.js', import.meta.url), 'utf8');
+const uiSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
+const styleSource = fs.readFileSync(new URL('../styles/memory.css', import.meta.url), 'utf8');
 vm.runInContext(source, sandbox, { filename: 'task-runner.js' });
 
 const filterContentByTags = sandbox.window.YuzukiMemory.TaskRunner.filterContentByTags;
 
 const taskBoundary = '========================================\n【以上为待处理的虚拟小说文本片段，剧情对话到此结束】\n========================================';
+
+test('tag filter help keeps its entry point, behavior, examples, and scoped styles', () => {
+    assert.ok(uiSource.includes("'yzm-ai-fill-button yzm-tag-filter-help-button'"));
+    assert.ok(uiSource.includes("helpButton.setAttribute('aria-label', '查看黑白名单填写说明')"));
+    assert.match(uiSource, /if \(tagFilterHelpButton\)[\s\S]*?openTagFilterHelpDialog\(root\)/);
+
+    assert.ok(uiSource.includes('黑名单会删除所列标签及标签内内容，保留标签外的裸文本'));
+    assert.ok(uiSource.includes('白名单只保留所列标签包裹的整段内容'));
+    assert.ok(uiSource.includes('若嵌套在保留内容里面，则仍会保留'));
+    assert.ok(uiSource.includes('黑白名单一起使用'));
+    assert.ok(uiSource.includes('处理顺序固定为先按黑名单删除，再按白名单提取'));
+    assert.ok(uiSource.includes('若待删除标签位于白名单标签外，白名单本身就会丢弃它'));
+    assert.ok(uiSource.includes('只需保留剧情时间、状态栏和剧情正文'));
+    assert.ok(uiSource.includes('思维链、行动选项、小剧场、摘要等不需要进入总结的文字，应优先加入黑名单剔除'));
+    assert.ok(uiSource.includes('正文是裸文本时，白名单必须留空'));
+    assert.ok(uiSource.includes('只有正文确实被 <content>...</content> 包裹时，才把 content 填入白名单'));
+    assert.ok(uiSource.includes('<thinking>内部推理</thinking>剧情正文<Memory>填表内容</Memory>'));
+    assert.ok(uiSource.includes('<content>剧情正文</content><thinking>内部推理</thinking>'));
+    assert.ok(uiSource.includes('<content>剧情正文<thinking>内部推理</thinking></content><statusbar>状态</statusbar>'));
+    assert.ok(uiSource.includes('先删除 thinking，再提取 content'));
+    assert.ok(uiSource.includes('[时间]夜晚[/时间] → 填 [时间]'));
+    assert.ok(uiSource.includes('<!--隐藏内容--> → 填 !--'));
+    assert.ok(uiSource.includes('例如：Music, Memory, !--'));
+    assert.equal(uiSource.includes('例如：Music, Memory, |--'), false);
+    assert.ok(uiSource.includes("overlay._yzmClose = closeDialog"));
+    assert.ok(uiSource.includes("document.addEventListener('keydown', handleKeydown, true)"));
+    assert.ok(uiSource.includes("previouslyFocused.focus({ preventScroll: true })"));
+    assert.ok(uiSource.includes('if (!isTopmostModal()) return'));
+    assert.match(uiSource, /function closeTagFilterHelpDialog\(root\)[\s\S]*?removeModal\(root, '\.yzm-tag-filter-help-modal'\)/);
+    assert.ok((uiSource.match(/closeTagFilterHelpDialog\(root\);/g) || []).length >= 3);
+    assert.match(uiSource, /function closeModalElement\(modal\)[\s\S]*?modal\?\._yzmClose/);
+    assert.match(uiSource, /function removeModal\(root,[\s\S]*?closeModalElement/);
+
+    assert.ok(styleSource.includes('#yzm-memory-root .yzm-tag-filter-help-dialog'));
+    assert.ok(styleSource.includes('#yzm-memory-root .yzm-tag-filter-help-content'));
+    assert.ok(styleSource.includes('#yzm-memory-root .yzm-tag-filter-help-example-row'));
+});
+
+test('whitelist keeps nested tags unless the blacklist removes them first', () => {
+    const content = '<content>剧情正文<thinking>内部推理</thinking></content>';
+    assert.equal(
+        filterContentByTags(content, { blacklist: [], whitelist: ['content'] }),
+        '剧情正文<thinking>内部推理</thinking>',
+    );
+    assert.equal(
+        filterContentByTags(content, { blacklist: ['thinking'], whitelist: ['content'] }),
+        '剧情正文',
+    );
+});
 
 test('task instructions append to a user copy or create a user after assistant/system/empty context', () => {
     const append = sandbox.window.YuzukiMemory.TaskRunner.appendTaskInstructions;
