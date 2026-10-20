@@ -10561,7 +10561,7 @@
                     customHeadersField,
                 ]),
                 openCodeWarning,
-                createApiConnectionFooter(createApiField('总结/追溯流式响应', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
+                createApiConnectionFooter(createApiField('任务流式响应（填表/总结/剧情导演）', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
                     ['测试连接', 'fa-solid fa-plug-circle-check', '', 'testLlmConnection'],
                 ])),
             ]);

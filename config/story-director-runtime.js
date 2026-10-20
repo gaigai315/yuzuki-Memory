@@ -1962,15 +1962,20 @@
     }
 
     async function requestAgentTurn(snapshot, messages, tools, signal) {
+        const useStreamingCustomApi = snapshot?.mode === 'custom' && snapshot?.preset?.stream === true;
         const options = {
             signal,
-            stream: false,
+            stream: useStreamingCustomApi,
             yzmMemoryInternalApi: true,
+            yzmMemoryTask: true,
             emptyResponseMaxRetries: 0,
             transportErrorMaxRetries: TRANSPORT_ERROR_MAX_RETRIES,
         };
         if (snapshot?.mode === 'custom') {
             if (!snapshot.preset) return { success: false, error: '剧情导演未找到可用的独立 API 预设。' };
+            if (useStreamingCustomApi) {
+                return YuzukiMemory.LlmClient?.generateWithCustom?.(snapshot.preset, messages, options);
+            }
             return YuzukiMemory.LlmClient?.requestAgentWithCustom?.(snapshot.preset, messages, tools, options);
         }
         return YuzukiMemory.LlmClient?.requestAgentWithTavern?.(messages, tools, options);

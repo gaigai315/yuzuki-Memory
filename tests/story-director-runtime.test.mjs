@@ -1637,9 +1637,9 @@ test('both passes reuse one context snapshot while live table edits survive the 
     assert.equal(getState().records.memory_summary[0].values.总结内容, '用户在运行中编辑了总结');
 });
 
-test('a custom API route receives the ledger pass followed by the card pass', async () => {
+test('a non-stream custom API route receives the ledger pass followed by the card pass', async () => {
     const { memory, requests, getState } = createSandbox();
-    const preset = { id: 'director-api', model: 'director-model' };
+    const preset = { id: 'director-api', model: 'director-model', stream: false };
     memory.TaskRunner.createLlmRequestSnapshot = () => ({ mode: 'custom', preset });
     memory.LlmClient.requestAgentWithTavern = () => { throw new Error('wrong API route'); };
     memory.LlmClient.requestAgentWithCustom = async (config, messages, tools, options) => {
@@ -1647,11 +1647,33 @@ test('a custom API route receives the ledger pass followed by the card pass', as
         assert.equal(tools.length, 0);
         assert.equal(Object.hasOwn(options, 'toolChoice'), false);
         assert.equal(options.stream, false);
+        assert.equal(options.yzmMemoryTask, true);
         assert.equal(options.emptyResponseMaxRetries, 0);
         assert.equal(options.transportErrorMaxRetries, 2);
         requests.push(structuredClone(messages));
         return isReview(messages) ? createCardResponse() : createRoleLedgerResponse();
     };
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    assert.equal(requests.length, 2);
+    assert.match(requests[0].at(-1).content, /Role: 剧情角色账本维护专家/);
+    assert.ok(requests[1].at(-1).content.includes(`${taskBoundary}\n\nDEFAULT_STORY_DIRECTOR_PROMPT`));
+    assert.equal(getState().storyDirector.status, 'ready');
+});
+
+test('a stream custom API route uses the streaming generator for both director passes', async () => {
+    const { memory, requests, getState } = createSandbox();
+    const preset = { id: 'director-stream-api', model: 'director-model', stream: true };
+    memory.TaskRunner.createLlmRequestSnapshot = () => ({ mode: 'custom', preset });
+    memory.LlmClient.requestAgentWithTavern = () => { throw new Error('wrong API route'); };
+    memory.LlmClient.requestAgentWithCustom = () => { throw new Error('wrong non-stream transport'); };
+    memory.LlmClient.generateWithCustom = async (config, messages, options) => {
+        assert.equal(config, preset);
+        assert.equal(options.stream, true);
+        assert.equal(options.yzmMemoryTask, true);
+        requests.push(structuredClone(messages));
+        return isReview(messages) ? createCardResponse() : createRoleLedgerResponse();
+    };
+
     assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
     assert.equal(requests.length, 2);
     assert.match(requests[0].at(-1).content, /Role: 剧情角色账本维护专家/);
