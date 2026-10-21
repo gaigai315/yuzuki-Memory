@@ -222,8 +222,10 @@ test('every plugin task sends instructions after source material for all model r
             const whitelistMessages = requests.at(-1).messages;
             const whitelistSources = whitelistMessages.filter((message) => message.role === 'user');
             assert.equal(whitelistSources.length, 1);
-            assert.match(whitelistSources[0].content, /^\[楼层 1\] 角色: 待处理正文/);
-            assert.doesNotMatch(whitelistSources[0].content, /最初行动|最后行动|<content>|FILTERED_/);
+            assert.match(whitelistSources[0].content, /^\[楼层 0\] 用户: 最初行动/);
+            assert.match(whitelistSources[0].content, /\[楼层 1\] 角色: 待处理正文/);
+            if (lastRole === 'user') assert.match(whitelistSources[0].content, /\[楼层 2\] 用户: 最后行动/);
+            assert.doesNotMatch(whitelistSources[0].content, /<\/?content>/i);
             assert.deepEqual(chat, originalChat);
         });
     }
@@ -318,7 +320,7 @@ function createTagWhitelistGuardSandbox(chat, preset = { id: 'content-whitelist'
     };
 }
 
-test('content whitelist blocks trace and summary before LLM when an Assistant floor has no boundary', async (t) => {
+test('content whitelist blocks trace and summary only when every non-empty floor has no boundary', async (t) => {
     const cases = [
         {
             name: 'single raw Assistant',
@@ -326,16 +328,7 @@ test('content whitelist blocks trace and summary before LLM when an Assistant fl
                 { is_user: true, name: '用户', mes: '用户裸文本不应触发拦截' },
                 { is_user: false, name: '角色', mes: '没有 content 标签的助手正文' },
             ],
-            missingFloors: [1],
-        },
-        {
-            name: 'mixed valid and invalid Assistant floors',
-            chat: [
-                { is_user: false, name: '角色', mes: '<content>有效正文</content>' },
-                { is_user: true, name: '用户', mes: '用户裸文本仍不触发' },
-                { is_user: false, name: '角色', mes: '混合场景中的无标签正文' },
-            ],
-            missingFloors: [2],
+            missingFloors: [0, 1],
         },
         {
             name: 'image replacement remains non-empty and requires a boundary',
@@ -373,6 +366,34 @@ test('content whitelist blocks trace and summary before LLM when an Assistant fl
                 assert.equal(requests.length, 0, `${method} must stop before calling the LLM`);
             }
         });
+    }
+});
+
+test('content whitelist sends whole cleaned floors without content when another floor has the boundary', async () => {
+    const chat = [
+        { is_user: false, name: '角色', mes: '0楼无标签正文<thinking>隐藏推理</thinking>' },
+        { is_user: true, name: '用户', mes: '用户无标签行动' },
+        { is_user: false, name: '角色', mes: '<content>有效标签正文</content>' },
+        { is_user: false, name: '角色', mes: '<Memory>仅填表内容</Memory>' },
+    ];
+    const preset = { id: 'content-with-blacklist', blacklist: ['thinking'], whitelist: ['content'] };
+
+    for (const method of ['runTrace', 'runSummary']) {
+        const { memory, requests, state } = createTagWhitelistGuardSandbox(chat, preset);
+        const result = await memory.TaskRunner[method](state, {
+            start: 0,
+            end: chat.length,
+            includeWorldbook: false,
+            previewOnly: true,
+        });
+
+        assert.equal(result.error, 'request captured', method);
+        assert.equal(requests.length, 1, method);
+        const requestText = requests[0].map((message) => String(message.content || '')).join('\n');
+        assert.match(requestText, /\[楼层 0\] 角色: 0楼无标签正文/, method);
+        assert.match(requestText, /\[楼层 1\] 用户: 用户无标签行动/, method);
+        assert.match(requestText, /\[楼层 2\] 角色: 有效标签正文/, method);
+        assert.doesNotMatch(requestText, /隐藏推理|仅填表内容|<\/?content/i, method);
     }
 });
 

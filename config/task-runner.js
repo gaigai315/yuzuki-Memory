@@ -635,20 +635,31 @@
         const tagPreset = options.tagPreset === false ? null : getActiveTagPreset();
         const contentWhitelistEnabled = normalizeTagList(tagPreset?.whitelist)
             .some((tag) => tag.toLowerCase() === 'content');
-        const messages = [];
-        const missingContentFloors = [];
+        const sourceFloors = [];
 
         chat.slice(from, to).forEach((message, offset) => {
             if (shouldSkipTaskRangeMessage(message, options)) return;
-            let content = stripImages(stripMemoryTags(getChatText(message)));
+            const content = stripImages(stripMemoryTags(getChatText(message)));
+            if (!content.trim()) return;
             const role = String(message?.role || '').toLowerCase();
             const isUser = message.is_user === true || role === 'user';
-            const isAssistant = !isUser;
             const floor = from + offset;
-            if (contentWhitelistEnabled && isAssistant && content.trim() && !hasTagBoundary(content, 'content')) {
-                missingContentFloors.push(floor);
-            }
-            content = filterContentByTags(content, tagPreset);
+            sourceFloors.push({ message, content, isUser, floor, hasContentBoundary: hasTagBoundary(content, 'content') });
+        });
+
+        const contentBoundaryFound = !contentWhitelistEnabled
+            || sourceFloors.some((source) => source.hasContentBoundary);
+        const missingContentFloors = contentWhitelistEnabled
+            ? sourceFloors.filter((source) => !source.hasContentBoundary).map((source) => source.floor)
+            : [];
+        const fallbackPreset = contentWhitelistEnabled && contentBoundaryFound
+            ? { ...tagPreset, whitelist: [] }
+            : tagPreset;
+        const messages = [];
+
+        sourceFloors.forEach(({ message, content: sourceContent, isUser, floor, hasContentBoundary }) => {
+            const preset = contentWhitelistEnabled && !hasContentBoundary ? fallbackPreset : tagPreset;
+            const content = filterContentByTags(sourceContent, preset);
             if (!content.trim()) return;
             const name = message.name || (isUser ? userName : charName);
             messages.push({
@@ -657,7 +668,7 @@
             });
         });
 
-        const tagFilterWarning = missingContentFloors.length
+        const tagFilterWarning = contentWhitelistEnabled && sourceFloors.length && !contentBoundaryFound
             ? {
                 code: CONTENT_WHITELIST_WARNING_CODE,
                 message: CONTENT_WHITELIST_WARNING_MESSAGE,
