@@ -12666,6 +12666,31 @@
         selectAllText.textContent = '全选';
         selectAllLabel.append(selectAll, selectAllText);
 
+        const searchSection = document.createElement('div');
+        searchSection.className = 'yzm-worldbook-entry-search-section';
+        const search = document.createElement('div');
+        search.className = 'yzm-worldbook-entry-search';
+        search.setAttribute('role', 'search');
+        search.appendChild(createIconNode('fa-solid fa-magnifying-glass', 'yzm-worldbook-entry-search-icon'));
+        const searchInput = document.createElement('input');
+        searchInput.className = 'yzm-worldbook-entry-search-input';
+        searchInput.type = 'search';
+        searchInput.placeholder = '搜索条目名称或内容';
+        searchInput.setAttribute('aria-label', '搜索条目名称或内容');
+        searchInput.autocomplete = 'off';
+        searchInput.spellcheck = false;
+        const searchClear = createButton('', 'yzm-worldbook-entry-search-clear');
+        searchClear.title = '清除搜索';
+        searchClear.setAttribute('aria-label', '清除条目搜索');
+        searchClear.hidden = true;
+        searchClear.appendChild(createIconNode('fa-solid fa-xmark', ''));
+        const searchResult = document.createElement('div');
+        searchResult.className = 'yzm-worldbook-entry-search-result';
+        searchResult.setAttribute('aria-live', 'polite');
+        searchResult.hidden = true;
+        search.append(searchInput, searchClear);
+        searchSection.append(search, searchResult);
+
         const list = document.createElement('div');
         list.className = 'yzm-worldbook-entry-list';
         const choices = entries.map((entry, index) => {
@@ -12693,8 +12718,17 @@
             copy.append(entryTitle, origin, preview);
             row.append(input, copy);
             list.appendChild(row);
-            return input;
+            return {
+                input,
+                row,
+                searchText: `${entry.comment || `条目 ${index + 1}`} ${entry.content || ''}`.normalize('NFKC').toLocaleLowerCase(),
+            };
         });
+        const searchEmpty = document.createElement('div');
+        searchEmpty.className = 'yzm-worldbook-entry-empty yzm-worldbook-entry-search-empty';
+        searchEmpty.textContent = '没有找到匹配的条目。';
+        searchEmpty.hidden = true;
+        list.appendChild(searchEmpty);
         if (!entries.length) {
             const empty = document.createElement('div');
             empty.className = 'yzm-worldbook-entry-empty';
@@ -12709,18 +12743,37 @@
         confirmButton.disabled = entries.length === 0;
         actions.append(cancelButton, confirmButton);
 
-        dialog.append(header, selectAllLabel, list, actions);
+        dialog.append(header, searchSection, selectAllLabel, list, actions);
         overlay.appendChild(dialog);
         modalHost.appendChild(overlay);
 
         return new Promise((resolve) => {
             let settled = false;
+            const getVisibleChoices = () => choices.filter(({ row }) => !row.hidden);
             const updateSelectionMeta = () => {
-                const selectedCount = choices.filter((input) => input.checked).length;
+                const selectedCount = choices.filter(({ input }) => input.checked).length;
+                const visibleChoices = getVisibleChoices();
+                const visibleSelectedCount = visibleChoices.filter(({ input }) => input.checked).length;
                 count.textContent = `${selectedCount}/${choices.length} 条已选`;
-                selectAll.checked = choices.length > 0 && selectedCount === choices.length;
-                selectAll.indeterminate = selectedCount > 0 && selectedCount < choices.length;
-                selectAll.disabled = choices.length === 0;
+                selectAll.checked = visibleChoices.length > 0 && visibleSelectedCount === visibleChoices.length;
+                selectAll.indeterminate = visibleSelectedCount > 0 && visibleSelectedCount < visibleChoices.length;
+                selectAll.disabled = visibleChoices.length === 0;
+                selectAllText.textContent = searchInput.value.trim() ? '全选筛选结果' : '全选';
+            };
+            const applyEntrySearch = () => {
+                const query = searchInput.value.normalize('NFKC').toLocaleLowerCase().trim();
+                const terms = query.split(/\s+/).filter(Boolean);
+                let visibleCount = 0;
+                choices.forEach((choice) => {
+                    const matches = terms.every((term) => choice.searchText.includes(term));
+                    choice.row.hidden = !matches;
+                    if (matches) visibleCount += 1;
+                });
+                searchClear.hidden = terms.length === 0;
+                searchResult.hidden = terms.length === 0;
+                searchResult.textContent = visibleCount > 0 ? `找到 ${visibleCount} 条` : '没有找到匹配的条目';
+                searchEmpty.hidden = terms.length === 0 || visibleCount > 0;
+                updateSelectionMeta();
             };
             const closeModal = (result) => {
                 if (settled) return;
@@ -12732,10 +12785,22 @@
                 resolve(result);
             };
             overlay._yzmWorldbookClose = closeModal;
-            choices.forEach((input) => input.addEventListener('change', updateSelectionMeta));
+            choices.forEach(({ input }) => input.addEventListener('change', updateSelectionMeta));
             selectAll.addEventListener('change', () => {
-                choices.forEach((input) => { input.checked = selectAll.checked; });
+                getVisibleChoices().forEach(({ input }) => { input.checked = selectAll.checked; });
                 updateSelectionMeta();
+            });
+            searchInput.addEventListener('input', applyEntrySearch);
+            searchInput.addEventListener('keydown', (event) => {
+                if (event.key !== 'Escape' || !searchInput.value) return;
+                event.stopPropagation();
+                searchInput.value = '';
+                applyEntrySearch();
+            });
+            searchClear.addEventListener('click', () => {
+                searchInput.value = '';
+                applyEntrySearch();
+                searchInput.focus();
             });
             overlay.addEventListener('keydown', (event) => {
                 if (event.key === 'Escape') closeModal({ saved: false, entryIds: [] });
@@ -12746,7 +12811,7 @@
             closeButton.addEventListener('click', () => closeModal({ saved: false, entryIds: [] }));
             cancelButton.addEventListener('click', () => closeModal({ saved: false, entryIds: [] }));
             confirmButton.addEventListener('click', () => {
-                const entryIds = choices.filter((input) => input.checked).map((input) => input.value);
+                const entryIds = choices.filter(({ input }) => input.checked).map(({ input }) => input.value);
                 const saved = saveTaskWorldbookEntrySelection(source, entryIds);
                 if (!saved) {
                     showTaskToast('当前聊天尚未就绪，任务世界书选择未保存。', 'error');
