@@ -113,6 +113,10 @@ function createHarness(options = {}) {
     };
     const summaryResponse = options.summaryResponse
         || '<Memory>\n【主线总结】\n某日,10:00-10:05 [测试地点] 测试事件完成。\n</Memory>';
+    const requestState = {
+        activeCount: Math.max(0, Number(options.activeRequestCount) || 0),
+        foregroundGenerationActive: options.requestForegroundGenerationActive === true,
+    };
 
     const sandbox = {
         AbortController,
@@ -156,6 +160,9 @@ function createHarness(options = {}) {
                     getRecordFloorScope: (record, fallback) => record?.floorScope || record?.meta?.yzmMemoryTask?.floorScope || fallback || floorScope,
                     isSameFloorScope: (left, right) => (left?.id || '') === (right?.id || ''),
                     isSessionSwitching: () => false,
+                },
+                RequestProbe: {
+                    getChatRequestState: () => requestState,
                 },
                 LlmClient: {
                     getTavernStatus: async () => ({}),
@@ -286,6 +293,7 @@ function createHarness(options = {}) {
         worldbookSyncCalls,
         floorScope,
         taskRunner: sandbox.window.YuzukiMemory.TaskRunner,
+        requestState,
         get generatedCount() {
             return generatedCount;
         },
@@ -351,6 +359,20 @@ test('stopping foreground generation overrides stale Tavern busy state and unmat
         harness.taskRunner.isForegroundGenerationBusy(),
         false,
         'the stop event is authoritative even before SillyTavern clears compatibility flags',
+    );
+});
+
+test('foreground completion overrides a stale request-probe count', () => {
+    const harness = createHarness({ activateAfterBind: false, activeRequestCount: 1 });
+
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
+    harness.emit('generation_started', 'normal', {}, false);
+    harness.emit('generation_ended');
+
+    assert.equal(
+        harness.taskRunner.isForegroundGenerationBusy(),
+        false,
+        'the generation-ended event is authoritative after the foreground reply completes',
     );
 });
 

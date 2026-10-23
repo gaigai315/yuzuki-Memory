@@ -73,6 +73,7 @@
     const RUN_DELAY_MS = 1800;
     const MESSAGE_MUTATION_SETTLE_MS = 250;
     const RUN_STATE_EVENT = 'yzm-story-director-run-state';
+    const EMPTY_RESPONSE_MAX_RETRIES = 2;
     const TRANSPORT_ERROR_MAX_RETRIES = 2;
     const VECTOR_RECALL_TIMEOUT_MS = 20000;
     const VECTOR_LOG_PREFIX = '[yuzuki-Memory Story Director Vector]';
@@ -1968,7 +1969,7 @@
             stream: useStreamingCustomApi,
             yzmMemoryInternalApi: true,
             yzmMemoryTask: true,
-            emptyResponseMaxRetries: 0,
+            emptyResponseMaxRetries: EMPTY_RESPONSE_MAX_RETRIES,
             transportErrorMaxRetries: TRANSPORT_ERROR_MAX_RETRIES,
         };
         if (snapshot?.mode === 'custom') {

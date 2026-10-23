@@ -113,9 +113,9 @@
             Number(window.yzmMemoryChatRequestActiveCount || 0),
             Number(requestState?.activeCount || 0),
         );
-        if (activeRequestCount > 0) return true;
         if (foregroundGenerationState === 'active') return true;
         if (foregroundGenerationState === 'inactive') return false;
+        if (activeRequestCount > 0) return true;
         return requestState?.foregroundGenerationActive === true
             || window.is_send_press === true
             || window.isStreaming === true

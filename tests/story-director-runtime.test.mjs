@@ -530,7 +530,7 @@ test('director inventories roles first and saves the merged ledger with the seco
         assert.deepEqual(options.tools, []);
         assert.equal(Object.hasOwn(options, 'toolChoice'), false);
         assert.equal(options.stream, false);
-        assert.equal(options.emptyResponseMaxRetries, 0);
+        assert.equal(options.emptyResponseMaxRetries, 2);
         assert.equal(options.transportErrorMaxRetries, 2);
         assert.ok(options.signal);
     }
@@ -1648,7 +1648,7 @@ test('a non-stream custom API route receives the ledger pass followed by the car
         assert.equal(Object.hasOwn(options, 'toolChoice'), false);
         assert.equal(options.stream, false);
         assert.equal(options.yzmMemoryTask, true);
-        assert.equal(options.emptyResponseMaxRetries, 0);
+        assert.equal(options.emptyResponseMaxRetries, 2);
         assert.equal(options.transportErrorMaxRetries, 2);
         requests.push(structuredClone(messages));
         return isReview(messages) ? createCardResponse() : createRoleLedgerResponse();
