@@ -1579,7 +1579,10 @@
                 return { success: true, bookId: id, count: 0, removed: true };
             }
 
-            const normalizedName = String(bookName || '').trim() || '当前会话总结';
+            const normalizedName = this.getManagedBookName(
+                BOOK_KIND_SUMMARY,
+                String(bookName || '').trim() || '当前会话'
+            ) || '当前会话 - 记忆总结';
             const oldName = String(oldBook?.name || '').trim();
             const autoName = oldBook ? oldBook.autoName !== false : true;
             const nextName = autoName ? normalizedName : (oldName || normalizedName);
@@ -1652,7 +1655,11 @@
         getManagedBookName(kind, bookName) {
             const baseName = String(bookName || '').trim();
             if (!baseName) return '';
-            if (kind === BOOK_KIND_SUMMARY) return baseName;
+            if (kind === BOOK_KIND_SUMMARY) {
+                return /\s*[-·]\s*记忆总结\s*$/.test(baseName)
+                    ? baseName
+                    : `${baseName} - 记忆总结`;
+            }
             const suffix = {
                 [BOOK_KIND_CHARACTER_PROFILE]: '角色档案',
                 [BOOK_KIND_ITEM_TRACKING]: '物品追踪',

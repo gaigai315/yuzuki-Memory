@@ -5634,10 +5634,14 @@
 
     function getVectorDisplayBookName(book) {
         const name = String(book?.name || '').trim() || '未命名书籍';
-        const managedKinds = ['character_profile', 'item_tracking', 'world_setting'];
-        if (!managedKinds.includes(String(book?.kind || '').trim())) return name;
-        return name.replace(
-            /\s*-\s*\d{4}-\d{2}-\d{2}@\d{1,2}h\d{1,2}m\d{1,2}s(?:\d+ms)?(?=\s*[·-]\s*(?:角色档案|物品追踪|世界设定)\s*$)/i,
+        const kind = String(book?.kind || '').trim();
+        const managedKinds = ['summary', 'character_profile', 'item_tracking', 'world_setting'];
+        if (!managedKinds.includes(kind)) return name;
+        const managedName = kind === 'summary' && book?.autoName !== false && !/\s*[-·]\s*记忆总结\s*$/.test(name)
+            ? `${name} - 记忆总结`
+            : name;
+        return managedName.replace(
+            /\s*-\s*\d{4}-\d{2}-\d{2}@\d{1,2}h\d{1,2}m\d{1,2}s(?:\d+ms)?(?=\s*[·-]\s*(?:记忆总结|角色档案|物品追踪|世界设定)\s*$)/i,
             ''
         ).trim();
     }
@@ -6416,6 +6420,7 @@
         const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
         return String(
             context.chatMetadata?.file_name
+            || window.chat_metadata?.file_name
             || context.chatId
             || context.chat?.file_name
             || context.group?.name
@@ -13130,10 +13135,9 @@
         if (button) button.disabled = true;
         if (label) label.textContent = '同步中...';
         try {
-            const settings = getAutoSummarySettings();
             const result = await syncSummaryToVectorBook({
-                vectorize: settings.autoVectorizeAfterHistory === true,
-                hideAfterSync: settings.autoVectorizeAfterHistory === true,
+                vectorize: true,
+                hideAfterSync: true,
             });
             if (!result.success) {
                 window.alert(result.error || '同步失败');

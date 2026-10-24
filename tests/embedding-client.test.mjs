@@ -545,6 +545,21 @@ test('empty summary synchronization removes its vector book and indexes', async 
     assert.equal(purgedLocalBook, created.bookId);
 });
 
+test('summary synchronization keeps the full chat timestamp and adds its managed suffix', async () => {
+    const sandbox = await createVectorStoreSandbox();
+    const store = sandbox.window.YuzukiMemory.VectorStore;
+    const sessionId = 'chat:summary-name';
+    const firstChatName = 'yuzuki小姐的性福人生 - 2026-08-27@00h07m37s945ms';
+    const secondChatName = 'yuzuki小姐的性福人生 - 2026-08-28@01h02m03s004ms';
+
+    const created = await store.syncSummaryToBook(['总结内容'], sessionId, firstChatName);
+    assert.equal(store.getBook(created.bookId)?.name, `${firstChatName} - 记忆总结`);
+
+    const renamed = await store.syncManagedBookNames(sessionId, secondChatName);
+    assert.equal(renamed.changed, 1);
+    assert.equal(store.getBook(created.bookId)?.name, `${secondChatName} - 记忆总结`);
+});
+
 for (const managedBook of [
     { label: 'character profile', sync: 'syncCharacterProfilesToBook' },
     { label: 'item tracking', sync: 'syncItemTrackingToBook' },

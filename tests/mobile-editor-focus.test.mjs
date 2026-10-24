@@ -105,9 +105,44 @@ test('managed vector books hide chat timestamps only in rendered names', () => {
         sandbox.result({ name: 'Orion - 2026-10-09@23h35m54s493ms · 角色档案', kind: '' }),
         'Orion - 2026-10-09@23h35m54s493ms · 角色档案'
     );
+    assert.equal(
+        sandbox.result({ name: 'yuzuki小姐的性福人生 - 2026-08-27@00h07m37s945ms - 记忆总结', kind: 'summary', autoName: true }),
+        'yuzuki小姐的性福人生 - 记忆总结'
+    );
+    assert.equal(
+        sandbox.result({ name: '用户自定义总结名', kind: 'summary', autoName: false }),
+        '用户自定义总结名'
+    );
     assert.match(getFunctionSource('createVectorBookRow'), /getVectorDisplayBookName\(book\)/);
     assert.match(getFunctionSource('createVectorDetailHero'), /getVectorDisplayBookName\(book\)/);
     assert.match(getFunctionSource('updateVectorProgressView'), /getVectorDisplayBookName\(book\)/);
+});
+
+test('summary vector sync prefers the readable chat filename over the internal chat id', () => {
+    const sandbox = {
+        window: {
+            chat_metadata: {
+                file_name: 'yuzuki小姐的性福人生 - 2026-08-27@12h34m56s789ms.jsonl',
+            },
+        },
+        getContext: () => ({
+            chatId: 'chat_____107e58ce_2_internal',
+            chatMetadata: {},
+            characters: [],
+        }),
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(`${getFunctionSource('getCurrentChatVectorBookName')}\nresult = getCurrentChatVectorBookName();`, sandbox);
+
+    assert.equal(sandbox.result, 'yuzuki小姐的性福人生 - 2026-08-27@12h34m56s789ms');
+    assert.match(getFunctionSource('syncSummaryToVectorBook'), /getCurrentChatVectorBookName\(\)/);
+});
+
+test('manual summary vector sync always rebuilds and vectorizes the complete summary book', () => {
+    const source = getFunctionSource('syncAutoSummaryVectorBook');
+    assert.match(source, /vectorize:\s*true/);
+    assert.match(source, /hideAfterSync:\s*true/);
+    assert.doesNotMatch(source, /getAutoSummarySettings\(\)/);
 });
 
 test('select controls use a filled dropdown caret instead of a check-like chevron', () => {
