@@ -145,6 +145,13 @@ test('manual summary vector sync always rebuilds and vectorizes the complete sum
     assert.doesNotMatch(source, /getAutoSummarySettings\(\)/);
 });
 
+test('passive summary sync waits for the exact loaded branch session', () => {
+    const source = getFunctionSource('syncExistingSummaryVectorBook');
+    assert.match(source, /isSessionStateReady\(\)/);
+    assert.match(source, /loadedSessionId !== sessionId/);
+    assert.match(source, /findExactSessionBookId/);
+});
+
 test('select controls use a filled dropdown caret instead of a check-like chevron', () => {
     assert.match(getFunctionSource('createApiSelect'), /fa-solid fa-caret-down/);
     assert.match(getFunctionSource('createPresetSelect'), /fa-solid fa-caret-down/);

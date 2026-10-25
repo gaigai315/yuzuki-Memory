@@ -69,12 +69,16 @@
             this.ready = this.loadLibrary()
                 .then(async (library) => {
                     const migration = await this.migrateEmbeddedVectorsToExternalStore();
-                    if ((this.storageMigrationPending || migration.changed) && !migration.failed) {
+                    const reconciliation = await this.reconcileExternalVectorStates();
+                    if ((this.storageMigrationPending || migration.changed || reconciliation.changed) && !migration.failed) {
                         const migrated = await this.saveLibrary();
                         if (migrated) {
                             this.storageMigrationPending = false;
                             if (migration.changed) {
                                 console.info('[yuzuki-Memory] Embedded vector data moved out of the hidden worldbook.', migration);
+                            }
+                            if (reconciliation.changed) {
+                                console.info('[yuzuki-Memory] Vector completion state reconciled from the real index.', reconciliation);
                             }
                         }
                     }
@@ -203,16 +207,22 @@
         findSessionBookId(kind, sessionId = this.getCurrentSessionId()) {
             const expectedKind = String(kind || '').trim();
             const normalizedSessionId = String(sessionId || '').trim();
-            const exact = Object.entries(this.library).find(([bookId, book]) => (
-                this.isSessionOwnedBook(bookId, book)
-                && this.getBookKind(bookId, book) === expectedKind
-                && String(book.sessionId || '') === normalizedSessionId
-            ));
-            if (exact) return exact[0];
+            const exactId = this.findExactSessionBookId(expectedKind, normalizedSessionId);
+            if (exactId) return exactId;
             return Object.entries(this.library).find(([bookId, book]) => (
                 this.isSessionOwnedBook(bookId, book)
                 && this.getBookKind(bookId, book) === expectedKind
                 && this.isBookVisibleInSession(bookId, normalizedSessionId)
+            ))?.[0] || '';
+        }
+
+        findExactSessionBookId(kind, sessionId = this.getCurrentSessionId()) {
+            const expectedKind = String(kind || '').trim();
+            const normalizedSessionId = String(sessionId || '').trim();
+            return Object.entries(this.library).find(([bookId, book]) => (
+                this.isSessionOwnedBook(bookId, book)
+                && this.getBookKind(bookId, book) === expectedKind
+                && String(book.sessionId || '') === normalizedSessionId
             ))?.[0] || '';
         }
 
@@ -961,6 +971,61 @@
             book.updateTime = Date.now();
         }
 
+        async listStoredVectorHashes(bookId, scope) {
+            if (this.vectorBackendState === 'unavailable') {
+                return this.listLocalVectorHashes(bookId, scope);
+            }
+            try {
+                return await this.listBackendHashes(bookId, scope);
+            } catch (error) {
+                if (!this.markVectorBackendUnavailable(error)) throw error;
+                return this.listLocalVectorHashes(bookId, scope);
+            }
+        }
+
+        async reconcileExternalVectorStates(bookIds = null) {
+            const targetIds = Array.isArray(bookIds) ? bookIds : Object.keys(this.library);
+            let changed = false;
+            let recoveredChunks = 0;
+            let missingChunks = 0;
+            const failedBooks = [];
+
+            for (const bookId of targetIds) {
+                const book = this.library[bookId];
+                const scope = String(book?.vectorScope || '').trim();
+                const dimension = Math.max(0, Number.parseInt(book?.vectorDimension, 10) || 0);
+                if (!book || !scope || !dimension || !Array.isArray(book.chunks) || !book.chunks.length) continue;
+                try {
+                    const vectorHashes = this.computeBookVectorHashes(book.chunks);
+                    const savedHashes = new Set((await this.listStoredVectorHashes(bookId, scope)).map(Number));
+                    const vectorized = vectorHashes.map((hash) => savedHashes.has(hash));
+                    const previousHashes = Array.isArray(book.vectorHashes) ? book.vectorHashes : [];
+                    const previousVectorized = Array.isArray(book.vectorized) ? book.vectorized : [];
+                    const bookChanged = vectorHashes.some((hash, index) => Number(previousHashes[index]) !== hash)
+                        || vectorized.some((done, index) => Boolean(previousVectorized[index]) !== done)
+                        || previousHashes.length !== vectorHashes.length
+                        || previousVectorized.length !== vectorized.length;
+                    if (!bookChanged) continue;
+
+                    vectorized.forEach((done, index) => {
+                        const wasDone = previousVectorized[index] === true;
+                        if (done && !wasDone) recoveredChunks += 1;
+                        if (!done && wasDone) missingChunks += 1;
+                    });
+                    book.vectorHashes = vectorHashes;
+                    book.vectorized = vectorized;
+                    book.vectors = book.chunks.map(() => null);
+                    book.updateTime = Date.now();
+                    changed = true;
+                } catch (error) {
+                    failedBooks.push(bookId);
+                    console.warn(`[yuzuki-Memory] Failed to reconcile vector state for ${book?.name || bookId}.`, error);
+                }
+            }
+
+            return { changed, recoveredChunks, missingChunks, failedBooks };
+        }
+
         listBackendHashes(bookId, scope) {
             return this.fetchVectorApi('/api/vector/list', {
                 collectionId: this.getVectorCollectionId(bookId),
@@ -1255,6 +1320,13 @@
             });
             this.scheduleSaveLoop();
             return result;
+        }
+
+        async saveLibraryOrThrow(message = '向量目录保存失败') {
+            if (await this.saveLibrary()) return true;
+            const error = new Error(message);
+            error.code = 'vector_catalog_save_failed';
+            throw error;
         }
 
         isStorageBookName(value) {
@@ -1611,7 +1683,7 @@
                 updateTime: Date.now(),
             }, nextName);
             this.selectedBookId = id;
-            await this.saveLibrary();
+            if (!await this.saveLibrary()) return { success: false, bookId: id, error: '总结向量书未能保存到向量目录' };
             this.toggleActiveBook(id, true);
             return { success: true, bookId: id, count: normalizedChunks.length };
         }
@@ -2059,8 +2131,7 @@
 
             const storedDimension = Math.max(0, Number.parseInt(book.vectorDimension, 10) || 0);
             const storedScopeForCurrentSettings = this.getVectorScope(storedDimension, settings);
-            const hasIndexedChunks = Array.isArray(book.vectorized) && book.vectorized.some(Boolean);
-            const canReuseStoredDimension = hasIndexedChunks
+            const canReuseStoredDimension = storedDimension > 0
                 && previousScope
                 && previousScope === storedScopeForCurrentSettings;
             let dimension = canReuseStoredDimension ? storedDimension : 0;
@@ -2135,7 +2206,7 @@
             const pending = [...pendingByHash.values()];
             if (!pending.length) {
                 book.updateTime = Date.now();
-                await this.saveLibrary();
+                await this.saveLibraryOrThrow('已有向量的完成状态未能保存到向量目录');
                 return { success: true, count: 0, errors: 0, storage: storageMode };
             }
 
@@ -2190,7 +2261,9 @@
                     this.reportVectorProgress(bookId, progressCallback, { phase: 'requesting', retries: 0 });
                     if (success >= nextCheckpoint) {
                         book.updateTime = Date.now();
-                        await this.saveLibrary();
+                        if (!await this.saveLibrary()) {
+                            console.warn('[yuzuki-Memory] Vector progress checkpoint was not persisted; final save will retry.');
+                        }
                         nextCheckpoint += 50;
                     }
                     await this.yieldToMainThread();
@@ -2214,7 +2287,7 @@
                 }
             }
             book.updateTime = Date.now();
-            await this.saveLibrary();
+            await this.saveLibraryOrThrow('向量化已写入索引，但完成状态未能保存到向量目录');
 
             if (storageMode === 'backend' && success > 0 && previousScope && previousScope !== scope) {
                 try {

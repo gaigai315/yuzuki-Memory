@@ -6296,7 +6296,10 @@
     async function syncExistingSummaryVectorBook() {
         const store = await ensureVectorStoreReady();
         const sessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId || 'default';
-        if (!store?.findSessionBookId?.('summary', sessionId)) return { success: true, unchanged: true };
+        if (!isSessionStateReady() || loadedSessionId !== sessionId) {
+            return { success: true, unchanged: true, deferred: true };
+        }
+        if (!store?.findExactSessionBookId?.('summary', sessionId)) return { success: true, unchanged: true };
         return syncSummaryToVectorBook({ vectorize: false });
     }
 
@@ -6656,7 +6659,10 @@
                 updateVectorProgressView(root);
                 const actionText = force ? '重新向量化完成' : '向量化完成';
                 const errorDetail = result.error ? `\n原因：${result.error}` : '';
-                window.alert(result.errors ? `向量化已停止：本次成功 ${result.count} 条，仍有 ${result.errors} 条未完成。${errorDetail}` : `${actionText}：完成 ${result.count} 条。`);
+                const finalStats = store.getBookStats(store.getBook(bookId));
+                window.alert(result.errors
+                    ? `向量化已停止：当前完成 ${finalStats.done}/${finalStats.total} 段，本次写入 ${result.count} 条，仍有 ${result.errors} 条未完成。${errorDetail}`
+                    : `${actionText}：当前完成 ${finalStats.done}/${finalStats.total} 段，本次写入 ${result.count} 条。`);
             } catch (error) {
                 window.alert(String(error?.message || error || '向量化失败'));
                 updateVectorProgressView(root);

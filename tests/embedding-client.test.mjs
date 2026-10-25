@@ -560,6 +560,87 @@ test('summary synchronization keeps the full chat timestamp and adds its managed
     assert.equal(store.getBook(created.bookId)?.name, `${secondChatName} - 记忆总结`);
 });
 
+test('restart reconciliation restores completion flags from the real vector index', async () => {
+    const sandbox = await createVectorStoreSandbox();
+    const store = sandbox.window.YuzukiMemory.VectorStore;
+    const chunks = ['分支总结一', '分支总结二'];
+    const hashes = store.computeBookVectorHashes(chunks);
+    const book = store.library.branch = store.normalizeBook({
+        name: '分支总结书',
+        chunks,
+        vectorized: [false, false],
+        vectorHashes: hashes,
+        vectorDimension: 1024,
+        vectorScope: store.getVectorScope(1024),
+    });
+    store.vectorBackendState = 'unavailable';
+    store.listLocalVectorHashes = async () => hashes;
+
+    const result = await store.reconcileExternalVectorStates(['branch']);
+
+    assert.equal(result.changed, true);
+    assert.equal(result.recoveredChunks, 2);
+    assert.deepEqual(Array.from(book.vectorized), [true, true]);
+    assert.equal(store.getBookStats(book).status, 'done');
+});
+
+test('restart reconciliation also restores flags through the SillyTavern vector endpoint', async () => {
+    const sandbox = await createVectorStoreSandbox();
+    const store = sandbox.window.YuzukiMemory.VectorStore;
+    const chunks = ['标准端点总结'];
+    const hashes = store.computeBookVectorHashes(chunks);
+    const book = store.library.backend = store.normalizeBook({
+        name: '标准端点总结书',
+        chunks,
+        vectorized: [false],
+        vectorHashes: hashes,
+        vectorDimension: 1024,
+        vectorScope: store.getVectorScope(1024),
+    });
+    store.vectorBackendState = 'available';
+    store.listBackendHashes = async () => hashes;
+
+    const result = await store.reconcileExternalVectorStates(['backend']);
+
+    assert.equal(result.recoveredChunks, 1);
+    assert.deepEqual(Array.from(book.vectorized), [true]);
+});
+
+test('known vector scope checks existing hashes before making another embedding request', async () => {
+    const sandbox = await createVectorStoreSandbox();
+    const store = sandbox.window.YuzukiMemory.VectorStore;
+    const chunks = ['已有总结一', '已有总结二'];
+    const hashes = store.computeBookVectorHashes(chunks);
+    const book = store.library.existing = store.normalizeBook({
+        name: '已有总结书',
+        chunks,
+        vectorized: [false, false],
+        vectorHashes: hashes,
+        vectorDimension: 3,
+        vectorScope: store.getVectorScope(3),
+    });
+    store.vectorBackendState = 'unavailable';
+    store.listLocalVectorHashes = async () => hashes;
+    store.saveLibrary = async () => true;
+    store.yieldToMainThread = async () => {};
+    sandbox.window.YuzukiMemory.EmbeddingClient.embed = async () => {
+        throw new Error('不应重复请求 Embedding API');
+    };
+
+    const result = await store.vectorizeBook('existing');
+
+    assert.equal(result.count, 0);
+    assert.deepEqual(Array.from(book.vectorized), [true, true]);
+});
+
+test('vectorization reports catalog persistence failure instead of false completion', async () => {
+    const { store } = await createNetworkVectorFixture(async (input) => embeddingResponse(input));
+    store.saveLibrary = async () => false;
+
+    await assert.rejects(store.vectorizeBook('network'), /完成状态未能保存到向量目录/);
+    assert.equal(store.getBookStats(store.getBook('network')).done, 3);
+});
+
 for (const managedBook of [
     { label: 'character profile', sync: 'syncCharacterProfilesToBook' },
     { label: 'item tracking', sync: 'syncItemTrackingToBook' },
