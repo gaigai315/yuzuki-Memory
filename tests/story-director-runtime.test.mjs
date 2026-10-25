@@ -246,6 +246,7 @@ function createSandbox(options = {}) {
             MESSAGE_UPDATED: 'message_updated',
             MESSAGE_DELETED: 'message_deleted',
             GENERATION_STARTED: 'generation_started',
+            GENERATION_AFTER_COMMANDS: 'generation_after_commands',
             CHAT_CHANGED: 'chat_id_changed',
         },
     };
@@ -811,6 +812,7 @@ test('current director card prefers the latest pending card and never falls back
     assert.equal(boundWhileWaiting.content, '推进支线。');
     assert.equal(boundWhileWaiting.origin, 'bound');
     assert.equal(boundWhileWaiting.userIndex, 4);
+    assert.equal(runtime.getDirectorCardPage('used').content, '推进支线。');
 
     chat.push({ is_user: false, mes: '这一轮生成的助手正文' });
     assert.equal(runtime.getCurrentDirectorCard(), null);
@@ -826,6 +828,55 @@ test('current director card prefers the latest pending card and never falls back
     const nextGenerationClone = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(nextGenerationClone, { generationType: 'normal' }), true);
     assert.equal(runtime.getCurrentDirectorCard().origin, 'bound');
+});
+
+test('director card pages expose the card used by the current response and the next pending card separately', async () => {
+    const { memory, chat } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+
+    chat.push({ is_user: true, mes: '本轮用户行动' });
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+    chat.push({ is_user: false, mes: '本轮助手正文' });
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+
+    const pages = runtime.getDirectorCardPages();
+    assert.equal(pages.used.content, '推进支线。');
+    assert.equal(pages.used.userIndex, 4);
+    assert.equal(pages.next.content, '推进支线。');
+    assert.equal(pages.next.assistantIndex, 5);
+});
+
+test('replanning the used card excludes the current response and replaces regenerate injection', async () => {
+    const { memory, chat, getState, requests } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+    chat.push({ is_user: true, mes: '需要重新规划的用户行动' });
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+    chat.push({ is_user: false, mes: '不应进入重规划上下文的错误正文' });
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+
+    requests.length = 0;
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        requests.push(structuredClone(messages));
+        return isReview(messages)
+            ? createCardResponse('<下轮导演卡>修正后的本轮规划。</下轮导演卡>')
+            : createRoleLedgerResponse();
+    };
+
+    const result = await runtime.replanUsedCard();
+    assert.equal(result.success, true);
+    assert.doesNotMatch(JSON.stringify(requests), /不应进入重规划上下文的错误正文/);
+    assert.match(JSON.stringify(requests), /需要重新规划的用户行动/);
+    assert.equal(runtime.getDirectorCardPage('used').content, '修正后的本轮规划。');
+    assert.equal(runtime.getDirectorCardPage('next'), null);
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.equal(getState().storyDirector.source, null);
+
+    const regenerateClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(regenerateClone, { generationType: 'regenerate' }), true);
+    assert.match(regenerateClone.at(-2).mes, /修正后的本轮规划/);
+    assert.doesNotMatch(regenerateClone.at(-2).mes, /推进支线/);
 });
 
 test('editing a pending director card changes the stored card and the next normal injection', async () => {
@@ -1836,7 +1887,7 @@ test('runtime event bindings are deduplicated', () => {
     assert.equal(counts.message_swiped, 1);
     assert.equal(counts.message_edited, 1);
     assert.equal(counts.message_updated, 1);
-    assert.equal(counts.generation_started, 1);
+    assert.equal(counts.generation_after_commands, 1);
     assert.equal(counts.chat_id_changed, 1);
 });
 
@@ -2441,16 +2492,21 @@ test('blank saving a bound card after deleting the AI reply prevents reinjection
 test('director card modal exposes deletion for pending and bound cards', () => {
     assert.match(memoryWindowSource, /className = 'yzm-story-director-card-clear'/);
     assert.match(memoryWindowSource, /\['pending', 'bound'\]\.includes\(latest\?\.origin\)/);
-    assert.match(memoryWindowSource, /updateCurrentDirectorCard\?\.\(''\)/);
+    assert.match(memoryWindowSource, /updateCurrentDirectorCard\?\.\('', activePage\)/);
     assert.match(memoryWindowSource, /后续生成不再注入此卡/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-actions/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-clear/);
     assert.match(memoryWindowSource, /className = 'yzm-story-director-card-edit'/);
     assert.match(memoryWindowSource, /className = 'yzm-story-director-card-editor'/);
-    assert.match(memoryWindowSource, /updateCurrentDirectorCard\?\.\(editor\.value\)/);
+    assert.match(memoryWindowSource, /updateCurrentDirectorCard\?\.\(editor\.value, activePage\)/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-edit-save/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-editor \{[\s\S]*?right: auto;[\s\S]*?bottom: auto;[\s\S]*?width: 79%;[\s\S]*?height: 61%;/);
     assert.match(memoryCssSource, /@media \(max-width: 760px\)[\s\S]*?\.yzm-story-director-card-editor \{[\s\S]*?width: 81%;[\s\S]*?height: 59%;/);
+    assert.match(memoryWindowSource, /本轮已使用/);
+    assert.match(memoryWindowSource, /下一轮待用/);
+    assert.match(memoryWindowSource, /getDirectorCardPages/);
+    assert.match(memoryWindowSource, /runManualStoryDirector\(replanButton, activePage\)/);
+    assert.match(memoryCssSource, /\.yzm-story-director-card-tabs/);
 });
 
 test('turning off the switch stops an already scheduled plan', async () => {

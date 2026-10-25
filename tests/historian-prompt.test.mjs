@@ -461,13 +461,13 @@ test('director card can replan through the shared runner and refresh in place', 
     );
 
     assert.match(openHandler, /yzm-story-director-card-replan/);
-    assert.match(openHandler, /runManualStoryDirector\(replanButton\)/);
-    assert.match(openHandler, /getCurrentDirectorCard/);
+    assert.match(openHandler, /runManualStoryDirector\(replanButton, activePage\)/);
+    assert.match(openHandler, /getDirectorCardPages/);
     assert.match(openHandler, /body\.classList\.toggle\('yzm-story-director-card-empty'/);
     assert.match(openHandler, /body\.scrollTop = 0/);
     assert.match(openHandler, /yzm-story-director-card-edit/);
     assert.match(openHandler, /yzm-story-director-card-editor/);
-    assert.match(openHandler, /updateCurrentDirectorCard\?\.\(editor\.value\)/);
+    assert.match(openHandler, /updateCurrentDirectorCard\?\.\(editor\.value, activePage\)/);
     assert.match(openHandler, /导演卡已更新/);
 });
 

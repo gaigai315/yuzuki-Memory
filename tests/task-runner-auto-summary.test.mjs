@@ -85,6 +85,7 @@ function createHarness(options = {}) {
             MESSAGE_RECEIVED: 'message_received',
             MESSAGE_SENT: 'message_sent',
             GENERATION_STARTED: 'generation_started',
+            GENERATION_AFTER_COMMANDS: 'generation_after_commands',
             GENERATION_ENDED: 'generation_ended',
             GENERATION_STOPPED: 'generation_stopped',
             MESSAGE_DELETED: 'message_deleted',
@@ -270,7 +271,7 @@ function createHarness(options = {}) {
     if (activateAfterBind) {
         chat.push({ is_user: true, name: '测试用户', mes: `第 ${chat.length} 层用户内容` });
         (eventHandlers.get('message_sent') || []).forEach((handler) => handler());
-        (eventHandlers.get('generation_started') || []).forEach((handler) => handler('normal', {}, false));
+        (eventHandlers.get('generation_after_commands') || []).forEach((handler) => handler('normal', {}, false));
         chat.push({ is_user: false, name: '测试角色', mes: `第 ${chat.length} 层角色内容` });
         (eventHandlers.get('character_message_rendered') || []).forEach((handler) => handler());
         (eventHandlers.get('generation_ended') || []).forEach((handler) => handler());
@@ -337,7 +338,24 @@ test('foreground generation check ignores stale streaming processors without exp
     harness.context.streamingProcessor = { isFinished: true, isStopped: false };
     assert.equal(harness.taskRunner.isForegroundGenerationBusy(), false);
 
+    harness.emit('generation_after_commands', 'normal', {}, false);
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
+    harness.emit('generation_ended');
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), false);
+});
+
+test('slash commands that stop before generation-after-commands do not leave the foreground lock active', () => {
+    const harness = createHarness({ activateAfterBind: false });
+
     harness.emit('generation_started', 'normal', {}, false);
+
+    assert.equal(
+        harness.taskRunner.isForegroundGenerationBusy(),
+        false,
+        'GENERATION_STARTED alone may be consumed by /hide or another slash command',
+    );
+
+    harness.emit('generation_after_commands', 'normal', {}, false);
     assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
     harness.emit('generation_ended');
     assert.equal(harness.taskRunner.isForegroundGenerationBusy(), false);
@@ -346,8 +364,8 @@ test('foreground generation check ignores stale streaming processors without exp
 test('stopping foreground generation overrides stale Tavern busy state and unmatched dry runs', () => {
     const harness = createHarness({ activateAfterBind: false });
 
-    harness.emit('generation_started', 'normal', { dry_run: true }, true);
-    harness.emit('generation_started', 'normal', {}, false);
+    harness.emit('generation_after_commands', 'normal', { dry_run: true }, true);
+    harness.emit('generation_after_commands', 'normal', {}, false);
     harness.context.streamingProcessor = { isFinished: false, isStopped: false };
     harness.context.is_send_press = true;
     harness.context.generationStarted = true;
@@ -366,7 +384,7 @@ test('foreground completion overrides a stale request-probe count', () => {
     const harness = createHarness({ activateAfterBind: false, activeRequestCount: 1 });
 
     assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
-    harness.emit('generation_started', 'normal', {}, false);
+    harness.emit('generation_after_commands', 'normal', {}, false);
     harness.emit('generation_ended');
 
     assert.equal(
@@ -388,7 +406,7 @@ test('loading a chat with pending summary ranges waits for the user to resume ch
 
     harness.chat.push({ is_user: true, name: '测试用户', mes: '继续当前剧情' });
     harness.emit('message_sent');
-    harness.emit('generation_started', 'normal', {}, false);
+    harness.emit('generation_after_commands', 'normal', {}, false);
     harness.chat.push({ is_user: false, name: '测试角色', mes: '新的剧情回复' });
     harness.emit('character_message_rendered');
     harness.emit('generation_ended');
@@ -405,11 +423,11 @@ test('background generation end events never release an active foreground summar
 
     harness.chat.push({ is_user: true, name: '测试用户', mes: '继续当前剧情' });
     harness.emit('message_sent');
-    harness.emit('generation_started', 'normal', {}, false);
+    harness.emit('generation_after_commands', 'normal', {}, false);
     harness.chat.push({ is_user: false, name: '测试角色', mes: '仍在流式生成中的正文' });
     harness.emit('character_message_rendered');
 
-    harness.emit('generation_started', 'quiet', {}, false);
+    harness.emit('generation_after_commands', 'quiet', {}, false);
     harness.emit('generation_ended');
     assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 0);
     assert.equal(harness.pendingTimerCount, 1);
@@ -419,7 +437,7 @@ test('background generation end events never release an active foreground summar
     assert.equal(harness.generatedCount, 0, 'quiet generation completion must not start the queued summary');
     assert.equal(harness.pendingTimerCount, 1, 'summary must remain queued behind the foreground response');
 
-    harness.emit('generation_started', 'normal', { dry_run: true }, true);
+    harness.emit('generation_after_commands', 'normal', { dry_run: true }, true);
     harness.emit('generation_ended');
     harness.advance();
     await harness.runNextTimer();
@@ -440,10 +458,10 @@ test('final message receipt releases a stale foreground lock when a background e
 
     harness.chat.push({ is_user: true, name: '测试用户', mes: '继续当前剧情' });
     harness.emit('message_sent');
-    harness.emit('generation_started', 'normal', {}, false);
+    harness.emit('generation_after_commands', 'normal', {}, false);
     harness.chat.push({ is_user: false, name: '测试角色', mes: '已经完成的正文' });
     harness.emit('character_message_rendered');
-    harness.emit('generation_started', 'quiet', {}, false);
+    harness.emit('generation_after_commands', 'quiet', {}, false);
     harness.emit('message_received');
 
     harness.advance();
@@ -631,7 +649,7 @@ test('foreground interruption still resumes automatically without a failure dial
     const harness = createHarness({
         generateWithTavern: (attempt, summaryResponse) => {
             if (attempt === 1) {
-                harness.emit('generation_started', 'normal', {}, false);
+                harness.emit('generation_after_commands', 'normal', {}, false);
                 return { success: false, aborted: true, error: '已中断发送' };
             }
             return { success: true, text: summaryResponse };

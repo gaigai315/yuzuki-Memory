@@ -2871,7 +2871,9 @@
         YuzukiMemory.CharacterGraphWindow?.close?.();
         const root = ensureRoot();
         const host = getGlobalModalHost(root);
-        const current = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
+        const initialPages = YuzukiMemory.StoryDirectorRuntime?.getDirectorCardPages?.() || {};
+        let activePage = initialPages.next ? 'next' : 'used';
+        const current = initialPages[activePage] || null;
         const content = String(current?.content || '').trim();
         const abortController = new AbortController();
 
@@ -2890,6 +2892,23 @@
         closeButton.title = '关闭导演卡';
         closeButton.setAttribute('aria-label', closeButton.title);
         closeButton.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+
+        const pageTabs = document.createElement('div');
+        pageTabs.className = 'yzm-story-director-card-tabs';
+        pageTabs.setAttribute('role', 'tablist');
+        const usedTab = document.createElement('button');
+        usedTab.type = 'button';
+        usedTab.className = 'yzm-story-director-card-tab';
+        usedTab.dataset.yzmDirectorPage = 'used';
+        usedTab.textContent = '本轮已使用';
+        usedTab.setAttribute('role', 'tab');
+        const nextTab = document.createElement('button');
+        nextTab.type = 'button';
+        nextTab.className = 'yzm-story-director-card-tab';
+        nextTab.dataset.yzmDirectorPage = 'next';
+        nextTab.textContent = '下一轮待用';
+        nextTab.setAttribute('role', 'tab');
+        pageTabs.append(usedTab, nextTab);
 
         const body = document.createElement('div');
         body.className = content
@@ -2984,30 +3003,42 @@
         };
 
         const refreshCardContent = () => {
-            const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
+            const pages = YuzukiMemory.StoryDirectorRuntime?.getDirectorCardPages?.() || {};
+            const latest = pages[activePage] || null;
             const latestContent = String(latest?.content || '').trim();
             setEditing(false);
+            [usedTab, nextTab].forEach((tab) => {
+                const page = tab.dataset.yzmDirectorPage;
+                const selected = page === activePage;
+                tab.classList.toggle('yzm-story-director-card-tab-active', selected);
+                tab.setAttribute('aria-selected', selected ? 'true' : 'false');
+                tab.classList.toggle('yzm-story-director-card-tab-empty', !pages[page]);
+            });
             body.classList.toggle('yzm-story-director-card-empty', !latestContent);
-            body.textContent = latestContent || '当前导演卡尚未生成';
+            body.textContent = latestContent || (activePage === 'used' ? '本轮没有已使用的导演卡' : '下一轮导演卡尚未生成');
             syncClearButton(latest, latestContent);
             syncEditButton(latest, latestContent);
             body.scrollTop = 0;
         };
 
-        syncClearButton(current, content);
-        syncEditButton(current, content);
-        sheet.append(closeButton, body, editor, actionBar);
+        sheet.append(closeButton, pageTabs, body, editor, actionBar);
         overlay.appendChild(sheet);
         host.appendChild(overlay);
         host.classList.add('yzm-story-director-card-host-open');
         activeStoryDirectorCardWindow = { host, overlay, abortController, syncClearButton, syncEditButton };
+        refreshCardContent();
         updateStoryDirectorActionButton(replanButton, YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true);
 
         closeButton.addEventListener('click', closeStoryDirectorCard, { signal: abortController.signal });
+        [usedTab, nextTab].forEach((tab) => tab.addEventListener('click', () => {
+            if (sheet.classList.contains('yzm-story-director-card-editing')) return;
+            activePage = tab.dataset.yzmDirectorPage;
+            refreshCardContent();
+        }, { signal: abortController.signal }));
         clearButton.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
-            const result = YuzukiMemory.StoryDirectorRuntime?.updateCurrentDirectorCard?.('');
+            const result = YuzukiMemory.StoryDirectorRuntime?.updateCurrentDirectorCard?.('', activePage);
             refreshCardContent();
             showTaskToast(
                 result?.success ? '导演卡已删除，后续生成不再注入此卡' : String(result?.error || '导演卡删除失败。'),
@@ -3017,7 +3048,7 @@
         editButton.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
-            const latest = YuzukiMemory.StoryDirectorRuntime?.getCurrentDirectorCard?.();
+            const latest = YuzukiMemory.StoryDirectorRuntime?.getDirectorCardPage?.(activePage);
             const latestContent = String(latest?.content || '').trim();
             if (!latestContent || !['pending', 'bound'].includes(latest?.origin)) {
                 refreshCardContent();
@@ -3035,7 +3066,7 @@
         saveEditButton.addEventListener('click', (event) => {
             event.preventDefault();
             event.stopPropagation();
-            const result = YuzukiMemory.StoryDirectorRuntime?.updateCurrentDirectorCard?.(editor.value);
+            const result = YuzukiMemory.StoryDirectorRuntime?.updateCurrentDirectorCard?.(editor.value, activePage);
             if (!result?.success) {
                 showTaskToast(String(result?.error || '导演卡保存失败。'), 'warning');
                 return;
@@ -3047,7 +3078,7 @@
             event.preventDefault();
             event.stopPropagation();
             clearButton.disabled = true;
-            await runManualStoryDirector(replanButton);
+            await runManualStoryDirector(replanButton, activePage);
             if (body.isConnected) refreshCardContent();
         }, { signal: abortController.signal });
         overlay.addEventListener('pointerdown', (event) => {
@@ -4059,7 +4090,7 @@
         activeStoryDirectorCardWindow?.syncEditButton?.(latest, content);
     }
 
-    async function runManualStoryDirector(button) {
+    async function runManualStoryDirector(button, page = 'next') {
         if (!(button instanceof HTMLButtonElement)) return null;
         const runtime = YuzukiMemory.StoryDirectorRuntime;
         if (typeof runtime?.replanLatest !== 'function') {
@@ -4078,7 +4109,9 @@
 
         let result;
         try {
-            result = await runtime.replanLatest();
+            result = page === 'used'
+                ? await runtime.replanUsedCard?.()
+                : await runtime.replanLatest();
         } catch (error) {
             result = { success: false, error: String(error?.message || error || '剧情规划失败。') };
         } finally {

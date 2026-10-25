@@ -1529,14 +1529,16 @@
         return String(filtered || '').trim();
     }
 
-    function collectVisibleChatMessages(planningSource = null) {
+    function collectVisibleChatMessages(planningSource = null, options = {}) {
         const context = getContext() || {};
         const chat = Array.isArray(context.chat) ? context.chat : [];
         const userName = String(context.name1 || context.userName || context.playerName || 'User');
         const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
         const charName = String(character?.name || context.name2 || context.characterName || context.name || 'Character');
         const messages = [];
+        const maxFloor = Number.isInteger(Number(options.maxFloor)) ? Number(options.maxFloor) : Infinity;
         chat.forEach((message, index) => {
+            if (index > maxFloor) return;
             if (!isDialogueMessage(message) || isPluginMessage(message)) return;
             // A manual plan must see the current user action even after rolling back
             // into hidden history. Older hidden messages remain excluded.
@@ -1988,7 +1990,10 @@
         if (isRunning()) return { skipped: true, reason: 'director-busy' };
         const promptEntry = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
         if (!promptEntry || !String(promptEntry.prompt || '').trim()) return { skipped: true, reason: 'disabled' };
-        if (!sourceIsLatestDialogue(source)) return { skipped: true, reason: 'stale-source' };
+        const sourceIsValid = typeof options.sourceValidator === 'function'
+            ? options.sourceValidator
+            : sourceIsLatestDialogue;
+        if (!sourceIsValid(source)) return { skipped: true, reason: 'stale-source' };
         const sessionId = source.sessionId;
         const state = loadState(sessionId);
         if (!state) return { skipped: true, reason: 'state-unavailable' };
@@ -2020,14 +2025,19 @@
         dispatchRunState(true, sessionId);
         const assertActive = () => {
             if (controller.signal.aborted || (!manualRun && !isStoryDirectorEnabled(sessionId))) throw new DOMException('Aborted', 'AbortError');
-            if (!sourceIsLatestDialogue(source)) throw new Error('导演完成前正文分支或会话已经变化。');
+            if (!sourceIsValid(source)) throw new Error('导演完成前正文分支或会话已经变化。');
         };
         try {
             await waitForDirectorWork(() => YuzukiMemory.readyPromise, controller.signal);
             assertActive();
-            const visibleChat = collectVisibleChatMessages(source);
+            const visibleChat = collectVisibleChatMessages(source, { maxFloor: options.maxFloor });
             const latestAssistantSource = findLatestVisibleAssistantAnchor(visibleChat, sessionId);
             let ledger = reconcileDirectorLedger(previousDirector.ledger);
+            if (options.invalidateAssistantSource) {
+                ledger = removeRoleAppearanceHistorySource(ledger, options.invalidateAssistantSource);
+                ledger = writeTrackBCallHistory(ledger, getRuntimeTrackBHistory(ledger)
+                    .filter((entry) => !entry.source || !assistantSourcesMatch(entry.source, options.invalidateAssistantSource)));
+            }
             const replaceLatestAssistantRecord = options.replaceLatestAssistantRecord === true
                 && source?.role !== 'user'
                 && latestAssistantSource
@@ -2115,11 +2125,12 @@
             const messageCards = source.role === 'user'
                 ? upsertMessageCard(previousDirector.messageCards, source, card)
                 : normalizeMessageCards(previousDirector.messageCards);
+            const boundOnly = options.outputMode === 'bound';
             const saved = saveDirectorState(sessionId, {
                 ledgerVersion: 2,
                 ledger: finalLedger,
-                pendingCard: card,
-                source,
+                pendingCard: boundOnly ? '' : card,
+                source: boundOnly ? null : source,
                 messageCards,
                 status: 'ready',
                 lastError: '',
@@ -2131,6 +2142,7 @@
             return { success: true, card };
         } catch (error) {
             const aborted = controller.signal.aborted || error?.name === 'AbortError';
+            const boundOnly = options.outputMode === 'bound';
             let errorNotified = false;
             if (aborted) {
                 const currentSessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
@@ -2139,16 +2151,16 @@
                     : String(previousDirector.ledger || '');
                 saveDirectorState(sessionId, {
                     ledger: restoredLedger,
-                    pendingCard: '',
-                    source: null,
+                    pendingCard: boundOnly ? String(previousDirector.pendingCard || '') : '',
+                    source: boundOnly ? previousDirector.source : null,
                     status: isStoryDirectorEnabled(sessionId) ? 'idle' : 'disabled',
                     lastError: '',
                 }, 'story-director-abort');
-            } else if (sourceMatchesCurrentMessage(source)) {
+            } else if (sourceIsValid(source)) {
                 saveDirectorState(sessionId, {
                     ledger: String(previousDirector.ledger || ''),
-                    pendingCard: '',
-                    source: null,
+                    pendingCard: boundOnly ? String(previousDirector.pendingCard || '') : '',
+                    source: boundOnly ? previousDirector.source : null,
                     status: 'error',
                     lastError: String(error?.message || error || '剧情导演运行失败'),
                 });
@@ -2221,6 +2233,52 @@
         runTimer = null;
         console.info('[yuzuki-Memory] 手动剧情规划开始运行。', { messageIndex: getSourceIndex(source) });
         return runDirector(source, { manual: true, replaceLatestAssistantRecord: true });
+    }
+
+    function getCurrentResponsePair() {
+        const assistant = getLatestAssistantAnchor();
+        if (!assistant || !sourceIsLatestDialogue(assistant)) return null;
+        const user = findRespondedUserAnchor(assistant);
+        return user ? { user, assistant } : null;
+    }
+
+    function currentResponsePairMatches(user, assistant) {
+        const current = getCurrentResponsePair();
+        return !!current
+            && userAnchorsMatch(current.user, user)
+            && assistantSourcesMatch(current.assistant, assistant);
+    }
+
+    async function replanUsedCard() {
+        const promptEntry = YuzukiMemory.StoryDirectorSettings?.getActivePrompt?.();
+        if (!promptEntry || !String(promptEntry.prompt || '').trim()) {
+            return { success: false, skipped: true, reason: 'disabled', error: '请先选择并保存剧情导演提示词。' };
+        }
+        if (activeRunSignature) {
+            return { success: false, skipped: true, reason: 'director-busy', error: '剧情导演正在运行，请等待当前规划完成。' };
+        }
+        if (YuzukiMemory.TaskRunner?.isForegroundGenerationBusy?.() === true) {
+            return { success: false, skipped: true, reason: 'generation-busy', error: '正文仍在生成，请等待正文完成后再规划。' };
+        }
+        if (YuzukiMemory.TaskRunner?.isBackgroundWorkPending?.() === true) {
+            return { success: false, skipped: true, reason: 'memory-task-busy', error: '填表或总结仍在执行，请等待完成后再规划。' };
+        }
+        const pair = getCurrentResponsePair();
+        const state = pair ? loadState(pair.user.sessionId) : null;
+        if (!pair || !findMessageCard(state?.storyDirector?.messageCards, pair.user)) {
+            return { success: false, skipped: true, reason: 'no-used-card', error: '当前正文没有可重新规划的已使用导演卡。' };
+        }
+        rememberDialogueMutationSnapshot();
+        window.clearTimeout(runTimer);
+        runTimer = null;
+        console.info('[yuzuki-Memory] 本轮已使用导演卡开始重新规划。', { messageIndex: pair.user.messageIndex });
+        return runDirector(pair.user, {
+            manual: true,
+            outputMode: 'bound',
+            maxFloor: pair.user.messageIndex,
+            invalidateAssistantSource: pair.assistant,
+            sourceValidator: (source) => currentResponsePairMatches(source, pair.assistant),
+        });
     }
 
     function refreshDirectorCardAnchorsAfterEdit(messageIndex) {
@@ -2480,6 +2538,30 @@
         };
     }
 
+    function getDirectorCardPage(page = 'next') {
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        const director = sessionId ? loadState(sessionId)?.storyDirector : null;
+        if (!director) return null;
+        if (page === 'used') {
+            const pair = getCurrentResponsePair();
+            const latest = getLatestManualAnchor();
+            const user = pair?.user || (latest?.role === 'user' ? latest : null);
+            const card = user ? findMessageCard(director.messageCards, user) : '';
+            return card ? buildDirectorCardView(card, user, 'bound') : null;
+        }
+        const pendingCard = String(director.pendingCard || '').trim();
+        return pendingCard && sourceIsLatestDialogue(director.source)
+            ? buildDirectorCardView(pendingCard, director.source, 'pending')
+            : null;
+    }
+
+    function getDirectorCardPages() {
+        return {
+            used: getDirectorCardPage('used'),
+            next: getDirectorCardPage('next'),
+        };
+    }
+
     function getCurrentDirectorCard() {
         const context = getContext() || {};
         const chat = Array.isArray(context.chat) ? context.chat : [];
@@ -2487,10 +2569,8 @@
         if (!chat.length || !sessionId) return null;
 
         const director = loadState(sessionId)?.storyDirector;
-        const pendingCard = String(director?.pendingCard || '').trim();
-        if (pendingCard && sourceIsLatestDialogue(director?.source)) {
-            return buildDirectorCardView(pendingCard, director.source, 'pending');
-        }
+        const nextCard = getDirectorCardPage('next');
+        if (nextCard) return nextCard;
 
         const latest = getLatestManualAnchor();
         if (latest?.role === 'user') {
@@ -2500,12 +2580,12 @@
         return null;
     }
 
-    function updateCurrentDirectorCard(content = '') {
+    function updateCurrentDirectorCard(content = '', page = '') {
         if (isRunning()) {
             return { success: false, error: '剧情导演正在运行，请等待规划完成后再编辑。' };
         }
         const normalizedContent = unwrapDirectorCard(content);
-        const current = getCurrentDirectorCard();
+        const current = page ? getDirectorCardPage(page) : getCurrentDirectorCard();
         if (!current || !['pending', 'bound'].includes(current.origin)) {
             return { success: false, error: '当前没有可编辑的导演卡。' };
         }
@@ -2673,7 +2753,10 @@
         bindEvents([eventTypes.MESSAGE_DELETED, 'message_deleted'], () => onBranchChanged('message-deleted', 180));
         bindEvents([eventTypes.MESSAGE_SWIPED, 'message_swiped'], (messageIndex) => onBranchChanged('message-swiped', 650, messageIndex));
         bindEvents([eventTypes.MESSAGE_EDITED, eventTypes.MESSAGE_UPDATED, 'message_edited', 'message_updated'], onMessageUpdated);
-        bindEvents([eventTypes.GENERATION_STARTED, 'generation_started'], onGenerationStarted);
+        bindEvents([
+            eventTypes.GENERATION_AFTER_COMMANDS,
+            'generation_after_commands',
+        ], onGenerationStarted);
         bindEvents([eventTypes.CHAT_CHANGED, eventTypes.CHAT_LOADED, 'chat_id_changed'], onChatChanged);
         window.addEventListener('yzm-memory-state-updated', (event) => {
             const source = String(event?.detail?.source || '');
@@ -2691,6 +2774,8 @@
         sourceMatchesCurrentMessage,
         getInjectableCard,
         unwrapDirectorCard,
+        getDirectorCardPage,
+        getDirectorCardPages,
         getCurrentDirectorCard,
         getCurrentTurnDirectorCard: getCurrentDirectorCard,
         updateCurrentDirectorCard,
@@ -2704,6 +2789,7 @@
         isRunning,
         runDirector,
         replanLatest,
+        replanUsedCard,
         bind,
     });
 

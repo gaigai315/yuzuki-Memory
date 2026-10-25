@@ -13037,6 +13037,52 @@
     word-break: break-word;
 }
 
+#yzm-memory-global-modal-root .yzm-story-director-card-tabs {
+    position: absolute;
+    top: 22.8%;
+    left: 50%;
+    z-index: 3;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 66%;
+    height: 34px;
+    overflow: hidden;
+    border: 1px solid rgba(96, 70, 49, 0.28);
+    border-radius: 6px;
+    background: rgba(255, 252, 245, 0.62);
+    transform: translateX(-50%);
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-tab {
+    min-width: 0;
+    padding: 0 8px;
+    overflow: hidden;
+    color: rgba(62, 46, 33, 0.72);
+    background: transparent;
+    border: 0;
+    border-right: 1px solid rgba(96, 70, 49, 0.22);
+    border-radius: 0;
+    font-size: 13px;
+    font-weight: 650;
+    letter-spacing: 0;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-tab:last-child {
+    border-right: 0;
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-tab-active {
+    color: #2e2118;
+    background: rgba(255, 252, 245, 0.96);
+    box-shadow: inset 0 -2px 0 rgba(110, 71, 42, 0.66);
+}
+
+#yzm-memory-global-modal-root .yzm-story-director-card-tab-empty:not(.yzm-story-director-card-tab-active) {
+    opacity: 0.58;
+}
+
 #yzm-memory-global-modal-root .yzm-story-director-card-editor {
     right: auto;
     bottom: auto;

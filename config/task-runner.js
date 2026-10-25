@@ -4545,7 +4545,14 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             ], onCharacterRendered);
             bindEvents([eventTypes.MESSAGE_RECEIVED, 'message_received'], onMessageReceived);
             bindEvents([eventTypes.MESSAGE_SENT, 'message_sent'], activateCurrentSession);
-            bindEvents([eventTypes.GENERATION_STARTED, 'generation_started'], onGenerationStarted);
+            // SillyTavern emits GENERATION_STARTED before slash commands are
+            // processed. A command such as /hide can consume the input and
+            // return without any generation-ended event, so only acquire the
+            // foreground lock once command processing has actually completed.
+            bindEvents([
+                eventTypes.GENERATION_AFTER_COMMANDS,
+                'generation_after_commands',
+            ], onGenerationStarted);
             bindEvents([eventTypes.GENERATION_ENDED, 'generation_ended'], onGenerationFinished);
             bindEvents([eventTypes.GENERATION_STOPPED, 'generation_stopped'], onGenerationStopped);
             if (eventTypes.MESSAGE_DELETED) eventSource.on?.(eventTypes.MESSAGE_DELETED, onMessageDeleted);
