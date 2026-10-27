@@ -10,7 +10,7 @@
     const STORY_DIRECTOR_RUN_STATE_EVENT = 'yzm-story-director-run-state';
     const VECTOR_LIBRARY_CHANGED_EVENT = 'yzm-vector-library-changed';
     const FLOATING_LONG_PRESS_MS = 650;
-    const FLOATING_DOUBLE_TAP_MS = 360;
+    const FLOATING_DOUBLE_TAP_MS = 260;
     const TEXT_CONTROL_SELECTOR = [
         'textarea',
         'input:not([type="button"]):not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not([type="submit"]):not([type="reset"])',
