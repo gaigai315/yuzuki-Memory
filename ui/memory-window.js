@@ -6642,7 +6642,8 @@
         }
 
         if (action === 'export-current-book') {
-            if (store.selectedBookId) store.downloadBackup([store.selectedBookId]);
+            const book = store.getBook();
+            if (store.selectedBookId && book) store.downloadBackup([store.selectedBookId], book.name);
             return;
         }
 

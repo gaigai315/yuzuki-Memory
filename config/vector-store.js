@@ -2861,13 +2861,18 @@
             return { success: true, bookCount: Object.keys(nextLibrary).length, legacy: true };
         }
 
-        downloadBackup(bookIds = null) {
+        downloadBackup(bookIds = null, filenameBase = '') {
             const content = this.exportLibrary(bookIds);
             const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const anchor = document.createElement('a');
             anchor.href = url;
-            anchor.download = `yuzuki_vector_library_${Date.now()}.txt`;
+            const safeBase = String(filenameBase || '')
+                .trim()
+                .replace(/[\\/:*?"<>|]/g, '_')
+                .replace(/\s+/g, ' ')
+                .slice(0, 120);
+            anchor.download = `${safeBase || 'yuzuki_vector_library'}_${Date.now()}.txt`;
             anchor.click();
             URL.revokeObjectURL(url);
         }
