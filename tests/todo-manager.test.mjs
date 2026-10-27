@@ -81,6 +81,17 @@ test('ancient todos parse and expire after the 10-minute delay', () => {
     assert.equal(todoManager.pruneTodoText(text, atExpiry).changed, true);
 });
 
+test('ancient todos accept a plain space between time and content', () => {
+    const text = '〔1〕永泰十七年九月十六日 08:30 沈酌月抵达皇宫查阅教案诗题（高）';
+    const item = todoManager.parseTodoItems(text)[0];
+
+    assert.equal(item.calendar, 'ancient');
+    assert.equal(item.era, '永泰');
+    assert.equal(item.dateTime, '永泰十七年九月十六日 08:30');
+    assert.equal(item.text, '沈酌月抵达皇宫查阅教案诗题');
+    assert.equal(item.priority, '高');
+});
+
 test('ancient todo expiry handles day rollover and rejects a different era', () => {
     const text = '〔1〕大楚宣武十二年十二月十八日 23:55·巡视西市北仓（高）';
     const nextDay = todoManager.parseStoryTimeText([
@@ -110,6 +121,15 @@ test('ancient cleanup supports legacy numeric regnal dates and deletion identiti
 
     assert.equal(todoManager.pruneTodoText(legacyNumeric, storyTime).changed, true);
     assert.equal(todoManager.filterDeletedTodoText(ancientText, [legacyDeletedIdentity]), '');
+});
+
+test('ancient cleanup matches a todo that omits the dynasty prefix', () => {
+    const todo = '〔1〕永泰十七年九月十六日 08:30·查阅教案诗题（高）';
+    const current = todoManager.parseStoryTimeText(
+        '<globalTime>大梁永泰十七年十月初八日·🍂·未时(14:15)·晴</globalTime>',
+    );
+
+    assert.equal(todoManager.pruneTodoText(todo, current).changed, true);
 });
 
 test('timed todos are removed after the 10-minute expiry delay', () => {

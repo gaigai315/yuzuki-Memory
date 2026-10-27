@@ -95,6 +95,13 @@
         return String(value || '').normalize('NFKC').replace(/\s+/g, '').trim();
     }
 
+    function erasMatch(left = '', right = '') {
+        const first = normalizeEra(left);
+        const second = normalizeEra(right);
+        if (!first || !second) return false;
+        return first === second || first.endsWith(second) || second.endsWith(first);
+    }
+
     function isValidAncientDateTimeParts(year, month, day, hour, minute) {
         return Number.isInteger(year)
             && year >= 1
@@ -229,7 +236,9 @@
                 const rawContent = entry.replace(new RegExp(`^${TODO_MARKER_SOURCE}\\s*`), '').trim();
                 const dateMatch = getTodoDateMatchAtStart(content);
                 const afterDate = dateMatch ? content.slice(dateMatch.length).trimStart() : '';
-                const detailMatch = afterDate.match(/^(\d{1,2})\s*[:：]\s*(\d{2})\s*[·・•:：]\s*(.+)$/);
+                // AI 输出的待办有时使用“日期 时间 事项”，时间与事项之间没有圆点/冒号。
+                // 与约定字段保持一致，同时继续支持原有的标点分隔格式。
+                const detailMatch = afterDate.match(/^(\d{1,2})\s*[:：]\s*(\d{2})\s*(?:[·・•:：]\s*|\s+)(.+)$/);
 
                 if (dateMatch && detailMatch) {
                     const hour = Number(detailMatch[1]);
@@ -932,7 +941,7 @@
         }
 
         if (item?.calendar === 'ancient') {
-            if (!currentTime.era || normalizeEra(item.era) !== currentTime.era) return null;
+            if (!erasMatch(item.era, currentTime.era)) return null;
             return readOrdinal(ordinalKey);
         }
 

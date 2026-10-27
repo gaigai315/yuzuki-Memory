@@ -15535,11 +15535,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复手动删除的剧情摘要可能重新出现的问题。',
-            '修复删除聊天消息后，对应记忆内容没有同步清理的问题。',
-            '修复分支聊天中记忆数据可能错位的问题。',
-            '剧情摘要不再记录 OOC 和引用内容。',
-            '优化向量化页面的书名显示，隐藏过长的会话时间标识。',
+            '优化古代纪年待办事项的格式与朝代年号兼容。',
+            '优化待办事项自动清理的时间匹配。',
+            '优化全局设置缓存的兼容处理，减少本地存储空间不足提示。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

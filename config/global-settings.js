@@ -179,7 +179,13 @@
                 try {
                     localStorage.setItem(key, JSON.stringify(storedValue));
                 } catch (error) {
-                    console.warn('[yuzuki-Memory] Failed to cache global setting locally.', key, error);
+                    if (error?.name === 'QuotaExceededError' || error?.code === 22) {
+                        // extension_settings is the source of truth; discard only the
+                        // oversized mirror so quota pressure does not spam every read.
+                        removeLocalStorage(key);
+                    } else {
+                        console.warn('[yuzuki-Memory] Failed to cache global setting locally.', key, error);
+                    }
                 }
             }
             return storedValue;

@@ -608,16 +608,14 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.1.3', () => {
-    assert.equal(manifest.version, '1.1.3');
-    assert.match(indexSource, /const VERSION = '1\.1\.3';/);
+test('release metadata and update notice describe version 1.1.4', () => {
+    assert.equal(manifest.version, '1.1.4');
+    assert.match(indexSource, /const VERSION = '1\.1\.4';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /修复手动删除的剧情摘要可能重新出现的问题。/);
-    assert.match(noticeSource, /修复删除聊天消息后，对应记忆内容没有同步清理的问题。/);
-    assert.match(noticeSource, /修复分支聊天中记忆数据可能错位的问题。/);
-    assert.match(noticeSource, /剧情摘要不再记录 OOC 和引用内容。/);
-    assert.match(noticeSource, /优化向量化页面的书名显示，隐藏过长的会话时间标识。/);
+    assert.match(noticeSource, /优化古代纪年待办事项的格式与朝代年号兼容。/);
+    assert.match(noticeSource, /优化待办事项自动清理的时间匹配。/);
+    assert.match(noticeSource, /优化全局设置缓存的兼容处理，减少本地存储空间不足提示。/);
     assert.doesNotMatch(noticeSource, /优化任务请求格式/);
     assert.doesNotMatch(noticeSource, /自动填表、总结失败后停止本次任务/);
     assert.doesNotMatch(noticeSource, /删除聊天楼层后待办事项及角色空记录残留/);
