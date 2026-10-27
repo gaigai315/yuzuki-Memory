@@ -283,6 +283,7 @@
     let floatingResizeTimer = null;
     let floatingVisibilityTimer = null;
     let shellOpenInteractionGuardUntil = 0;
+    let shellOpenRefreshRevision = 0;
     let chatContextRefreshBound = false;
     let vectorLibraryRefreshBound = false;
     let vectorBookNameSyncTimer = null;
@@ -19433,21 +19434,32 @@
             closeTagFilterHelpDialog(root);
             blurPluginFocus(shell);
         }
-        if (opening) {
-            const result = YuzukiMemory.FloorLedger?.reconcileNow?.({
-                reason: 'memory_window_open',
-                force: true,
-            });
-            if (result?.reason === 'busy' || result?.reason === 'branch_busy' || result?.reason === 'save_failed') {
-                YuzukiMemory.FloorLedger?.scheduleReconcile?.('memory_window_open', 300, { force: true });
-            }
-            reloadStateFromStorage();
-        }
+        const refreshRevision = ++shellOpenRefreshRevision;
         setMemoryShellOpen(root, shell, opening);
         updateFloatingIconVisibility();
         if (isMemoryShellElementOpen(shell)) {
             applySavedDesktopShellGeometry(shell);
             maybeShowUpdateNotice(root);
+            // Let the opened shell reach the screen before ledger replay and the
+            // full workspace refresh occupy the mobile main thread.
+            window.requestAnimationFrame(() => {
+                const runRefresh = () => {
+                    if (refreshRevision !== shellOpenRefreshRevision || !isMemoryShellElementOpen(shell)) return;
+                    const result = YuzukiMemory.FloorLedger?.reconcileNow?.({
+                        reason: 'memory_window_open',
+                        force: true,
+                    });
+                    if (result?.reason === 'busy' || result?.reason === 'branch_busy' || result?.reason === 'save_failed') {
+                        YuzukiMemory.FloorLedger?.scheduleReconcile?.('memory_window_open', 300, { force: true });
+                    }
+                    reloadStateFromStorage();
+                };
+                if (typeof window.requestIdleCallback === 'function') {
+                    window.requestIdleCallback(runRefresh, { timeout: 500 });
+                } else {
+                    window.setTimeout(runRefresh, 0);
+                }
+            });
         }
     }
 

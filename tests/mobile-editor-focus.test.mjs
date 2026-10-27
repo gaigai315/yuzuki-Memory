@@ -509,6 +509,21 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa \.yzm-shell > #toast-container\s*\{[^}]*position:\s*absolute\s*!important;[^}]*z-index:\s*2147483647\s*!important;/);
 });
 
+test('floating icon reveals the memory shell before deferred ledger reconciliation', () => {
+    const toggleSource = getFunctionSource('toggleShell');
+    const revealIndex = toggleSource.indexOf('setMemoryShellOpen(root, shell, opening)');
+    const frameIndex = toggleSource.indexOf('window.requestAnimationFrame');
+    const reconcileIndex = toggleSource.indexOf('FloorLedger?.reconcileNow');
+
+    assert.notEqual(revealIndex, -1);
+    assert.notEqual(frameIndex, -1);
+    assert.notEqual(reconcileIndex, -1);
+    assert.ok(revealIndex < frameIndex, 'the shell should be revealed before deferred work is scheduled');
+    assert.ok(frameIndex < reconcileIndex, 'ledger reconciliation should run after the first render opportunity');
+    assert.match(toggleSource, /requestIdleCallback\(runRefresh, \{ timeout: 500 \}\)/);
+    assert.match(toggleSource, /refreshRevision !== shellOpenRefreshRevision/);
+});
+
 test('text editor entry points use desktop-only initial focus', () => {
     const editorFunctions = [
         'openVectorBookEditor',
