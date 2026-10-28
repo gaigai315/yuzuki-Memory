@@ -77,6 +77,7 @@
     let autoTaskMessageStableSince = 0;
     let autoTaskRetryPending = false;
     let foregroundGenerationState = 'unknown';
+    let foregroundGenerationProcessorTerminalAtStart = null;
     let autoTaskAbortController = null;
     let autoTaskRequestPromise = null;
     let autoTaskInterruptedByForeground = false;
@@ -113,7 +114,17 @@
             Number(window.yzmMemoryChatRequestActiveCount || 0),
             Number(requestState?.activeCount || 0),
         );
-        if (foregroundGenerationState === 'active') return true;
+        // A failed/aborted stream can leave the event lock active briefly.  The
+        // streaming processor's terminal flags are the authoritative signal in
+        // that case; otherwise manual summaries remain blocked until refresh.
+        if (foregroundGenerationState === 'active') {
+            const processorTerminal = streamingProcessor?.isFinished === true || streamingProcessor?.isStopped === true;
+            if (processorTerminal && foregroundGenerationProcessorTerminalAtStart !== true) {
+                foregroundGenerationState = 'inactive';
+                return false;
+            }
+            return true;
+        }
         if (foregroundGenerationState === 'inactive') return false;
         if (activeRequestCount > 0) return true;
         return requestState?.foregroundGenerationActive === true
@@ -652,7 +663,10 @@
         const missingContentFloors = contentWhitelistEnabled
             ? sourceFloors.filter((source) => !source.hasContentBoundary).map((source) => source.floor)
             : [];
-        const fallbackPreset = contentWhitelistEnabled && contentBoundaryFound
+        // A preset may be changed between messages. If the configured content
+        // wrapper is absent, keep the original floor text and still apply the
+        // blacklist instead of dropping the floor or aborting the task.
+        const fallbackPreset = contentWhitelistEnabled
             ? { ...tagPreset, whitelist: [] }
             : tagPreset;
         const messages = [];
@@ -668,14 +682,7 @@
             });
         });
 
-        const tagFilterWarning = contentWhitelistEnabled && sourceFloors.length && !contentBoundaryFound
-            ? {
-                code: CONTENT_WHITELIST_WARNING_CODE,
-                message: CONTENT_WHITELIST_WARNING_MESSAGE,
-                tag: 'content',
-                missingFloors: missingContentFloors,
-            }
-            : null;
+        const tagFilterWarning = null;
         return { ctx, chat, messages, start: from, end: to, userName, charName, tagFilterWarning };
     }
 
@@ -4505,6 +4512,10 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 }
                 activateCurrentSession();
                 foregroundGenerationState = 'active';
+                const processor = getContext()?.streamingProcessor;
+                foregroundGenerationProcessorTerminalAtStart = processor
+                    ? (processor.isFinished === true || processor.isStopped === true)
+                    : null;
                 window.clearTimeout(autoSummaryTimer);
                 autoSummaryTimer = null;
                 const activeRequest = autoTaskRequestPromise;
@@ -4518,6 +4529,7 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             };
             const finishForegroundGeneration = () => {
                 foregroundGenerationState = 'inactive';
+                foregroundGenerationProcessorTerminalAtStart = null;
                 markLatestAssistantMessageActivity();
                 armAutoTaskAfterGeneration(callbacks);
                 if (!autoSummaryRunning && (autoTaskArmed || autoTaskRetryPending)) {

@@ -15536,9 +15536,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化古代纪年待办事项的格式与朝代年号兼容。',
-            '优化待办事项自动清理的时间匹配。',
-            '优化全局设置缓存的兼容处理，减少本地存储空间不足提示。',
+            '修复生成报错后一直显示“正文正在生成”，导致总结无法继续的问题。',
+            '优化白名单：缺少 content 标签时回退使用原始正文，同时继续清理黑名单内容。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
