@@ -2848,6 +2848,105 @@
         };
     }
 
+    function parseExactFloorRange(value) {
+        const match = String(value ?? '').trim().match(/^(\d+)\s*(?:[-~～－—–至到]\s*(\d+))?$/);
+        if (!match) return null;
+        const start = Number(match[1]);
+        const end = Number(match[2] ?? match[1]);
+        return Number.isSafeInteger(start) && Number.isSafeInteger(end) && end >= start
+            ? { start, end } : null;
+    }
+
+    function deleteContentByExactFloorRange(state, tableId, input, options = {}) {
+        const failure = (error) => ({ success: false, count: 0, error });
+        if (![FIXED_SUMMARY_TABLE_ID, PLOT_SUMMARY_TABLE_ID].includes(tableId)) {
+            return failure('按楼层范围删除仅支持记忆总结和剧情摘要。');
+        }
+        if (!stateTables(state).some((table) => table.id === tableId)) return failure('未找到对应的总结或摘要表。');
+        const range = parseExactFloorRange(input);
+        if (!range) return failure('请输入有效楼层范围，例如 40-60；起始楼层不能大于结束楼层。');
+        const floorScope = normalizeFloorScope(options.floorScope, getCurrentFloorScope(state));
+        const matches = (text, storedRange, scope) => {
+            // Stored ranges are exclusive at the end; user input follows displayed floor numbers.
+            const bounds = String(text || '').trim()
+                ? parseExactFloorRange(text)
+                : (storedRange ? parseExactFloorRange(getRangeFloorValue(storedRange)) : null);
+            return bounds?.start === range.start && bounds?.end === range.end
+                && isSameFloorScope(normalizeFloorScope(scope, floorScope), floorScope);
+        };
+        if (tableId === PLOT_SUMMARY_TABLE_ID
+            && typeof YuzukiMemory.BranchSnapshot?.markDeletedPlotItems !== 'function') {
+            return failure('摘要删除保护模块尚未加载，请刷新后重试。');
+        }
+        let count = 0;
+        const removedRecordIds = [];
+        const records = stateRecords(state, tableId);
+        const nextRecords = records.flatMap((original) => {
+            const recordScope = getRecordFloorScope(original, floorScope);
+            if (tableId === FIXED_SUMMARY_TABLE_ID) {
+                if (Array.isArray(original.summarySegments) && original.summarySegments.length) {
+                    const segments = original.summarySegments.filter((segment) => {
+                        const matched = matches(segment.floor, segment.range,
+                            segment.floorScope || segment.range?.floorScope || recordScope);
+                        if (matched) count += 1;
+                        return !matched;
+                    });
+                    if (segments.length === original.summarySegments.length) return [original];
+                    if (!segments.length) {
+                        removedRecordIds.push(original.id);
+                        return [];
+                    }
+                    const record = cloneAutoTaskState(original);
+                    record.summarySegments = cloneAutoTaskState(segments);
+                    syncSummarySegmentsToValues(record);
+                    syncSummaryTaskMetaFromSegments(record);
+                    return [record];
+                }
+                const values = original.values || {};
+                const task = getSummaryRecordTaskMeta(original);
+                if (!matches(values.楼层数 || values.range || values.楼层范围 || values.楼层,
+                    task?.range, recordScope)) return [original];
+                count += 1;
+                removedRecordIds.push(original.id);
+                return [];
+            }
+            const record = cloneAutoTaskState(original);
+            const deletedItems = [];
+            const keptByKind = {};
+            [{ kind: 'main', field: '主线' }, { kind: 'branch', field: '支线' }].forEach(({ kind, field }) => {
+                const lines = String(original.values?.[field] || '').split(/\n+/).map((line) => line.trim()).filter(Boolean);
+                const metadata = original.plotItemMeta?.[kind] || [];
+                const hidden = original.hiddenPlotItems?.[kind] || [];
+                keptByKind[kind] = lines.map((raw, index) => ({ raw, meta: metadata[index] || null, hidden: !!hidden[index] }))
+                    .filter((item) => {
+                        if (!matches('', item.meta?.sourceRange,
+                            item.meta?.floorScope || item.meta?.sourceRange?.floorScope || recordScope)) return true;
+                        deletedItems.push({ kind, raw: item.raw, meta: item.meta });
+                        count += 1;
+                        return false;
+                    });
+            });
+            if (!deletedItems.length) return [original];
+            YuzukiMemory.BranchSnapshot.markDeletedPlotItems(record, deletedItems);
+            record.values = record.values || {};
+            record.plotItemMeta = record.plotItemMeta || {};
+            record.hiddenPlotItems = record.hiddenPlotItems || {};
+            [{ kind: 'main', field: '主线' }, { kind: 'branch', field: '支线' }].forEach(({ kind, field }) => {
+                record.values[field] = keptByKind[kind].map((item) => item.raw).join('\n');
+                record.plotItemMeta[kind] = keptByKind[kind].map((item) => item.meta);
+                record.hiddenPlotItems[kind] = keptByKind[kind].map((item) => item.hidden);
+            });
+            return [record];
+        });
+        if (!count) return failure('没有对应楼层范围，请确认起始和结束楼层与已保存内容完全一致。');
+        state.records[tableId] = nextRecords;
+        if (state.activeRecordIds && removedRecordIds.includes(state.activeRecordIds[tableId])) {
+            state.activeRecordIds[tableId] = nextRecords.find((record) => !record.hidden)?.id || '';
+        }
+        if (tableId === FIXED_SUMMARY_TABLE_ID) hidePlotSummaryItemsCoveredByExistingSummaries(state);
+        return { success: true, count, tableId, range, floorScope, removedRecordIds };
+    }
+
     function commitSummaryResult(state, result) {
         const payloads = Array.isArray(result?.payloads) ? result.payloads : [result?.payload].filter(Boolean);
         const validPayloads = payloads.filter((payload) => String(payload?.summary || '').trim());
@@ -4602,6 +4701,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         runTagDiagnostic,
         commitTraceResult,
         commitSummaryResult,
+        deleteContentByExactFloorRange,
+        scheduleSummaryDeletionSync,
         commitSummaryOptimizeResult,
         rebuildTaskResultFromText,
         createLlmRequestSnapshot,

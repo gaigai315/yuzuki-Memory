@@ -40,6 +40,65 @@ function getFunctionSource(name) {
     assert.fail(`${name} should have a complete function body`);
 }
 
+test('range deletion dialog saves immediately and reports success only after saving', () => {
+    for (const mode of ['saved', 'save-failed', 'no-match', 'chat-switched']) {
+        const nodes = [];
+        const node = (tag) => {
+            const element = {
+                tag, children: [], handlers: {}, hidden: false, classList: { add() {} },
+                append(...children) { this.children.push(...children); },
+                appendChild(child) { this.children.push(child); },
+                setAttribute() {}, focus() {},
+                addEventListener(name, handler) { this.handlers[name] = handler; },
+                querySelector() { return this.children.find((child) => child.tag === 'input'); },
+            };
+            nodes.push(element);
+            return element;
+        };
+        let state = { records: { memory_summary: [{ id: 'keep-on-failure' }] } };
+        const stored = structuredClone(state);
+        const saves = [], messages = [], updates = [];
+        let ready = true;
+        const sandbox = {
+            document: { createElement: node }, loadedSessionId: 'chat:one', taskRunnerBusy: false,
+            getActiveTable: () => ({ id: 'memory_summary', name: '记忆总结' }),
+            getCurrentFloorScope: () => ({ id: 'scope:one' }), getModalHost: () => node('host'),
+            removeModal() {}, removePluginElement() {},
+            createButton(text, className) { const button = node('button'); button.textContent = text; button.className = className; return button; },
+            createRecordInput() { const field = node('label'); const input = node('input'); input.value = '40-60'; field.append(input); return field; },
+            isSessionStateReady: () => ready,
+            getState: () => state, createDefaultState: () => ({}),
+            getStorage: () => ({ loadState: () => structuredClone(stored) }),
+            prepareLoadedState: (value) => value,
+            set memoryState(value) { state = value; },
+            saveState(options) { saves.push(options); return mode === 'saved'; },
+            dispatchManualStateUpdated: (detail) => updates.push(detail),
+            closeRecordActionMenu() {}, refreshActiveWorkspace() {},
+            showMemoryIoMessage: (message) => messages.push(message),
+            YuzukiMemory: { TaskRunner: {
+                deleteContentByExactFloorRange(target) {
+                    if (mode === 'no-match') return { success: false, error: '没有对应楼层范围' };
+                    target.records.memory_summary = [];
+                    return { success: true, count: 1, range: { start: 40, end: 60 } };
+                },
+                scheduleSummaryDeletionSync() {},
+            } },
+        };
+        vm.runInNewContext(`${getFunctionSource('openDeleteFloorRangeDialog')}\nopenDeleteFloorRangeDialog({});`, sandbox);
+        if (mode === 'chat-switched') ready = false;
+        nodes.find((item) => item.textContent === '删除对应内容').handlers.click();
+        assert.equal(messages.length, mode === 'saved' ? 1 : 0, mode);
+        assert.equal(updates.length, mode === 'saved' ? 1 : 0, mode);
+        assert.equal(state.records.memory_summary.length, mode === 'saved' ? 0 : 1, mode);
+        if (mode === 'saved' || mode === 'save-failed') {
+            assert.equal(saves.length, 1, mode);
+            assert.equal(saves[0].immediate, true, mode);
+            assert.equal(saves[0].force, true, mode);
+            assert.equal(saves[0].saveOrigin, 'manual', mode);
+        } else assert.equal(saves.length, 0, mode);
+    }
+});
+
 test('tavern LLM mode hides independent API settings but keeps its connection test', () => {
     const customNodes = [{ hidden: false }, { hidden: false }, { hidden: false }];
     const tavernNodes = [{ hidden: true }];
@@ -608,14 +667,14 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.1.4', () => {
-    assert.equal(manifest.version, '1.1.4');
-    assert.match(indexSource, /const VERSION = '1\.1\.4';/);
+test('release metadata and update notice describe version 1.1.6', () => {
+    assert.equal(manifest.version, '1.1.6');
+    assert.match(indexSource, /const VERSION = '1\.1\.6';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /优化古代纪年待办事项的格式与朝代年号兼容。/);
-    assert.match(noticeSource, /优化待办事项自动清理的时间匹配。/);
-    assert.match(noticeSource, /优化全局设置缓存的兼容处理，减少本地存储空间不足提示。/);
+    assert.match(noticeSource, /修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。/);
+    assert.match(noticeSource, /修复实时填表模式下，仅修改 AI 回复正文、未改动 Memory 内容时，本轮表格更新消失的问题。/);
+    assert.match(noticeSource, /新增按楼层范围删除功能：在“更多”中精确删除对应总结或摘要，删除后重 Roll、Swipe 不再恢复旧内容。/);
     assert.doesNotMatch(noticeSource, /优化任务请求格式/);
     assert.doesNotMatch(noticeSource, /自动填表、总结失败后停止本次任务/);
     assert.doesNotMatch(noticeSource, /删除聊天楼层后待办事项及角色空记录残留/);

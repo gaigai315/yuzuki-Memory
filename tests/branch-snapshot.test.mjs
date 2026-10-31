@@ -55,6 +55,48 @@ vm.runInThisContext(snapshotSource, { filename: 'branch-snapshot.js' });
 const todoSource = fs.readFileSync(new URL('../config/todo-manager.js', import.meta.url), 'utf8');
 vm.runInThisContext(todoSource, { filename: 'todo-manager.js' });
 const branchSnapshot = window.YuzukiMemory.BranchSnapshot;
+const taskRunnerSource = fs.readFileSync(new URL('../config/task-runner.js', import.meta.url), 'utf8');
+vm.runInThisContext(taskRunnerSource, { filename: 'task-runner.js' });
+
+test('exact range deletion persists through repeated forced branch restores without touching other ranges', () => {
+    storedState = createState();
+    const scope = { id: 'scope:range-delete' };
+    storedState.currentFloorScope = scope;
+    const record = storedState.records.plot_summary[0];
+    const deleted = '2035-07-19,10:00-10:05｜删除范围内容';
+    const kept = '2035-07-19,10:06-10:10｜相交范围保留';
+    record.floorScope = scope;
+    record.values.主线 = `${deleted}\n${kept}`;
+    record.values.支线 = '2035-07-19,11:00｜删除支线';
+    record.plotItemMeta = {
+        main: [
+            { id: 'range-main', source: 'realtime', sourceRange: { start: 40, end: 61 }, floorScope: scope },
+            { id: 'range-kept', source: 'realtime', sourceRange: { start: 41, end: 61 }, floorScope: scope },
+        ],
+        branch: [{ id: 'range-branch', source: 'trace', sourceRange: { start: 40, end: 61 }, floorScope: scope }],
+    };
+    record.hiddenPlotItems = { main: [true, false], branch: [true] };
+    storedState.records.memory_summary = [{ id: 'range-summary', floorScope: scope,
+        values: { 楼层数: '40-60', 总结内容: '总结独立保留' } }];
+    branchSnapshot.saveSnapshot(40, { state: storedState });
+    const result = window.YuzukiMemory.TaskRunner.deleteContentByExactFloorRange(storedState, 'plot_summary', '40-60');
+    assert.equal(result.success, true);
+    assert.equal(result.count, 2);
+    assert.equal(storedState.records.memory_summary.length, 1);
+    assert.equal(storedState.records.plot_summary[0].deletedPlotItemIdentities.length, 2);
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+        assert.equal(branchSnapshot.restoreSnapshot(40, { force: true }), true);
+        const restored = storedState.records.plot_summary[0];
+        assert.equal(restored.values.主线, kept);
+        assert.equal(restored.values.支线, '');
+        assert.deepEqual(restored.hiddenPlotItems.main, [false]);
+        assert.deepEqual(restored.plotItemMeta.main.map((meta) => meta.id), ['range-kept']);
+        assert.equal(restored.deletedPlotItemIdentities.length, 2);
+    }
+    assert.equal(window.YuzukiMemory.TaskRunner.deleteContentByExactFloorRange(storedState, 'memory_summary', '40-60').success, true);
+    assert.equal(branchSnapshot.restoreSnapshot(40, { force: true }), true);
+    assert.equal(storedState.records.memory_summary.length, 0);
+});
 
 function createState() {
     return {

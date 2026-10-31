@@ -114,6 +114,8 @@ const ledgerSource = fs.readFileSync(new URL('../config/floor-ledger.js', import
 vm.runInThisContext(ledgerSource, { filename: 'floor-ledger.js' });
 const todoSource = fs.readFileSync(new URL('../config/todo-manager.js', import.meta.url), 'utf8');
 vm.runInThisContext(todoSource, { filename: 'todo-manager.js' });
+const taskRunnerSource = fs.readFileSync(new URL('../config/task-runner.js', import.meta.url), 'utf8');
+vm.runInThisContext(taskRunnerSource, { filename: 'task-runner.js' });
 timers.clear();
 
 function flushTimers() {
@@ -932,6 +934,47 @@ test('user-deleted todos do not return in later assistant floors or ledger repla
         ['返回营地'],
     );
     assert.equal(rebuiltRecord.deletedTodoIdentities.length, 2);
+});
+
+test('range-deleted plot nodes stay deleted after realtime reapply and floor-ledger replay', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    const snapshot = window.YuzukiMemory.BranchSnapshot;
+    const policyWindow = { YuzukiMemory: {}, setTimeout: () => 1, clearTimeout() {} };
+    vm.runInNewContext(fs.readFileSync(new URL('../config/branch-snapshot.js', import.meta.url), 'utf8'), {
+        window: policyWindow, console,
+    });
+    const policy = policyWindow.YuzukiMemory.BranchSnapshot;
+    snapshot.markDeletedPlotItems = policy.markDeletedPlotItems;
+    snapshot.applyDeletedPlotPolicy = policy.applyDeletedPlotPolicy;
+    try {
+        storedState = parser.createDefaultState();
+        chat = [
+            assistantMemoryMessage('#主线摘要\n[2026年7月14日,18:00-19:30] | 内容: 待删除剧情'),
+            assistantMemoryMessage('#角色档案\n[爱丽丝] | 身份: 法师'),
+        ];
+        assert.equal(parser.applyMemoryText(chat[0].mes, { floor: 0 }).success, true);
+        assert.equal(parser.applyMemoryText(chat[1].mes, { floor: 1 }).success, true);
+        const result = window.YuzukiMemory.TaskRunner.deleteContentByExactFloorRange(storedState, 'plot_summary', '0-0');
+        assert.equal(result.success, true);
+        assert.equal(result.count, 1);
+        assert.equal(storedState.records.plot_summary[0].values.主线, '');
+        assert.equal(storedState.records.plot_summary[0].deletedPlotItemIdentities.length, 1);
+        window.YuzukiMemory.Storage.saveState(storedState);
+
+        // Reapplying the same branch creates a fresh line id; provenance must still suppress it.
+        parser.applyMemoryText(chat[0].mes, { floor: 0, force: true });
+        assert.equal(storedState.records.plot_summary[0].values.主线, '');
+        chat.splice(1, 1);
+        ledger.reconcileNow({ force: true, pruneRemoved: true });
+        assert.equal(storedState.records.plot_summary[0].values.主线, '');
+        assert.equal(storedState.records.plot_summary[0].deletedPlotItemIdentities.length, 1);
+        assert.equal(storedState.records.character_profile.length, 0);
+    } finally {
+        delete snapshot.markDeletedPlotItems;
+        delete snapshot.applyDeletedPlotPolicy;
+        timers.clear();
+    }
 });
 
 test('plot replay removes deleted realtime lines and keeps a manually added line with metadata aligned', () => {

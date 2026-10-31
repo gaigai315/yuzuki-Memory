@@ -3923,6 +3923,86 @@
         });
     }
 
+    function openDeleteFloorRangeDialog(root) {
+        const table = getActiveTable();
+        if (!['memory_summary', 'plot_summary'].includes(table?.id)) return;
+        const sessionId = loadedSessionId;
+        const floorScope = getCurrentFloorScope();
+        const modalHost = getModalHost(root);
+        removeModal(root, '.yzm-delete-floor-range-modal');
+        const overlay = document.createElement('div');
+        overlay.className = 'yzm-structure-modal yzm-delete-floor-range-modal';
+        const dialog = document.createElement('section');
+        dialog.className = 'yzm-structure-dialog yzm-clear-table-dialog';
+        dialog.setAttribute('aria-label', '按楼层范围删除');
+        const header = document.createElement('div');
+        header.className = 'yzm-structure-header';
+        const title = document.createElement('strong');
+        title.className = 'yzm-structure-title';
+        title.textContent = `按楼层范围删除 · ${table.name}`;
+        const close = createButton('×', 'yzm-structure-close');
+        close.setAttribute('aria-label', '关闭按楼层范围删除');
+        header.append(title, close);
+        const field = createRecordInput('楼层范围', '', false, { placeholder: '例如 40-60' });
+        field.classList.add('yzm-record-field-wide');
+        const fields = document.createElement('div');
+        fields.className = 'yzm-record-fields';
+        fields.appendChild(field);
+        const input = field.querySelector('input');
+        const hint = document.createElement('p');
+        hint.className = 'yzm-structure-hint';
+        hint.textContent = '仅删除当前表、本篇中起止楼层完全一致的主线和支线内容。例如 40-60 不会删除 40-59 或 41-60。删除后重 Roll、Swipe 不会恢复旧内容。';
+        const feedback = document.createElement('p');
+        feedback.className = 'yzm-structure-hint';
+        feedback.setAttribute('role', 'status');
+        feedback.setAttribute('aria-live', 'polite');
+        feedback.hidden = true;
+        const actions = document.createElement('div');
+        actions.className = 'yzm-record-actions';
+        const cancel = createButton('取消', 'yzm-api-button');
+        const remove = createButton('删除对应内容', 'yzm-api-button yzm-api-button-danger');
+        actions.append(cancel, remove);
+        dialog.append(header, fields, hint, feedback, actions);
+        overlay.appendChild(dialog);
+        modalHost.appendChild(overlay);
+        const closeModal = () => removePluginElement(overlay);
+        close.onclick = closeModal;
+        cancel.onclick = closeModal;
+        overlay.addEventListener('click', (event) => { if (event.target === overlay) closeModal(); });
+        dialog.addEventListener('click', (event) => event.stopPropagation());
+        remove.addEventListener('click', () => {
+            const fail = (message) => { feedback.textContent = message; feedback.hidden = false; };
+            if (!isSessionStateReady() || sessionId !== loadedSessionId) {
+                fail('聊天会话已切换或尚未就绪，请关闭后重新打开。');
+                return;
+            }
+            if (taskRunnerBusy || YuzukiMemory.TaskRunner?.isForegroundGenerationBusy?.()
+                || YuzukiMemory.TaskRunner?.isBackgroundWorkPending?.()) {
+                fail('当前正在生成或处理记忆任务，请等待完成后删除。');
+                return;
+            }
+            const result = YuzukiMemory.TaskRunner?.deleteContentByExactFloorRange?.(
+                getState(), table.id, input.value, { floorScope }
+            );
+            if (!result?.success) {
+                fail(result?.error || '删除模块尚未加载，请刷新后重试。');
+                return;
+            }
+            if (!saveState({ force: true, immediate: true, saveOrigin: 'manual' })) {
+                memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), sessionId));
+                fail('删除结果保存失败，请重试。');
+                return;
+            }
+            dispatchManualStateUpdated({ source: 'delete-floor-range', tableId: table.id, count: result.count });
+            if (table.id === 'memory_summary') YuzukiMemory.TaskRunner?.scheduleSummaryDeletionSync?.();
+            closeModal();
+            closeRecordActionMenu(root);
+            refreshActiveWorkspace(root);
+            showMemoryIoMessage(`已删除 ${result.count} 条${table.name}内容（楼层 ${result.range.start}-${result.range.end}）。`);
+        });
+        input.focus();
+    }
+
     function clearSidebarActionActive(root) {
         root.querySelectorAll('.yzm-sidebar-action-active').forEach((node) => {
             node.classList.remove('yzm-sidebar-action-active');
@@ -4051,7 +4131,8 @@
             createIconButton('导入', 'fa-solid fa-file-import', 'yzm-top-more-item yzm-top-import-memory'),
             createThemeButton(shell, 'yzm-top-more-item yzm-theme-button'),
             createIconButton('清理缓存', 'fa-solid fa-broom', 'yzm-top-more-item yzm-top-clean-cache'),
-            createIconButton('重置结构', 'fa-solid fa-rotate-right', 'yzm-top-more-item yzm-top-reset-structure')
+            createIconButton('重置结构', 'fa-solid fa-rotate-right', 'yzm-top-more-item yzm-top-reset-structure'),
+            createIconButton('按楼层范围删除', 'fa-solid fa-trash-can', 'yzm-top-more-item yzm-top-delete-floor-range')
         );
 
         moreMenu.append(moreButton, moreList);
@@ -15540,6 +15621,7 @@
         [
             '修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。',
             '修复实时填表模式下，仅修改 AI 回复正文、未改动 Memory 内容时，本轮表格更新消失的问题。',
+            '新增按楼层范围删除功能：在“更多”中精确删除对应总结或摘要，删除后重 Roll、Swipe 不再恢复旧内容。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -17756,6 +17838,9 @@
                 event.stopPropagation();
 
                 const shouldOpen = moreMenu.hidden;
+                const rangeDeleteButton = moreMenu.querySelector('.yzm-top-delete-floor-range');
+                if (rangeDeleteButton) rangeDeleteButton.hidden = activeWorkspaceView !== 'table'
+                    || !['memory_summary', 'plot_summary'].includes(getActiveTable()?.id);
                 moreMenu.hidden = !shouldOpen;
                 moreButton.setAttribute('aria-expanded', String(shouldOpen));
             });
@@ -17844,6 +17929,17 @@
                 event.stopPropagation();
                 closeMoreMenu(root);
                 openMemoryImportPicker(root);
+            });
+        }
+
+        const deleteFloorRangeButton = root.querySelector('.yzm-top-delete-floor-range');
+        if (deleteFloorRangeButton && deleteFloorRangeButton.dataset.yzmBound !== 'true') {
+            deleteFloorRangeButton.dataset.yzmBound = 'true';
+            deleteFloorRangeButton.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                closeMoreMenu(root);
+                openDeleteFloorRangeDialog(root);
             });
         }
 
