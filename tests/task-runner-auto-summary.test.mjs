@@ -6,6 +6,32 @@ import vm from 'node:vm';
 const taskRunnerSource = fs.readFileSync(new URL('../config/task-runner.js', import.meta.url), 'utf8');
 const clone = (value) => structuredClone(value);
 
+test('manual summary recreates content after all summaries were deleted, including customized columns', () => {
+    const harness = createHarness({ activateAfterBind: false });
+    const state = harness.stateRef.current;
+    state.tables[0].columns = ['总结标题', '自定义正文'];
+    state.records.memory_summary = [];
+    const result = harness.taskRunner.commitSummaryResult(state, {
+        payloads: [{ kind: 'main', summary: '景和七年三月十五日，角色完成事件。' }],
+        meta: { range: { start: 0, end: 200 }, floorScope: harness.floorScope },
+    });
+    assert.equal(result.success, true);
+    assert.equal(result.count, 1);
+    assert.equal(state.records.memory_summary[0].values.总结内容, '景和七年三月十五日，角色完成事件。');
+});
+
+test('summary commit rejects a missing summary table and whitespace output', () => {
+    const harness = createHarness({ activateAfterBind: false });
+    const state = harness.stateRef.current;
+    state.tables = [];
+    const missing = harness.taskRunner.commitSummaryResult(state, { payloads: [{ kind: 'main', summary: '正文' }] });
+    assert.equal(missing.success, false);
+    assert.equal(missing.count, 0);
+    const empty = harness.taskRunner.commitSummaryResult(state, { payloads: [{ kind: 'main', summary: '  \n ' }] });
+    assert.equal(empty.success, false);
+    assert.equal(state.records.memory_summary.length, 0);
+});
+
 function createHarness(options = {}) {
     let now = 1000;
     let nextTimerId = 1;

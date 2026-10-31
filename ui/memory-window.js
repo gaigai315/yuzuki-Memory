@@ -8637,7 +8637,9 @@
 
     function markTaskStateUpdated(action = '', result = {}) {
         const manualEditedAt = YuzukiMemory.BranchSnapshot?.markManualEdit?.() || Date.now();
-        saveState({ force: true, saveOrigin: 'manual' });
+        if (!saveState({ force: true, saveOrigin: 'manual' })) {
+            throw new Error('任务结果保存失败，不能确认已写入。请保持当前聊天并备份结果后重试。');
+        }
         YuzukiMemory.BranchSnapshot?.captureCurrentStateSnapshot?.(getState(), {
             sessionId: loadedSessionId,
             timestamp: manualEditedAt,

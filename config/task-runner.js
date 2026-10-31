@@ -2468,6 +2468,8 @@
             }
         } else {
             record = createRecord(table, values);
+            // Summary readers use these canonical fields even when columns were customized.
+            Object.assign(record.values, values);
             record.floorScope = floorScope;
             if (shouldGroupBranch) {
                 record.values.楼层数 = '';
@@ -2848,8 +2850,11 @@
 
     function commitSummaryResult(state, result) {
         const payloads = Array.isArray(result?.payloads) ? result.payloads : [result?.payload].filter(Boolean);
-        const validPayloads = payloads.filter((payload) => payload?.summary);
+        const validPayloads = payloads.filter((payload) => String(payload?.summary || '').trim());
         if (!validPayloads.length) return { ...result, success: false, error: '总结结果缺少 summary/总结内容。' };
+        if (!stateTables(state).some((table) => table.id === FIXED_SUMMARY_TABLE_ID)) {
+            return { ...result, success: false, count: 0, error: '未找到记忆总结表，总结未写入。' };
+        }
         const records = validPayloads.map((payload) => upsertSummaryRecord(state, payload, result?.meta)).filter(Boolean);
         const hiddenPlotSummaryCount = hidePlotSummaryItemsCoveredByExistingSummaries(state);
         return { ...result, success: true, count: records.length, record: records[0] || null, records, hiddenPlotSummaryCount };
