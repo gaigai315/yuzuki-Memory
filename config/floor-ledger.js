@@ -181,6 +181,37 @@
         return String(signature || '').split('|').slice(0, 3).join('|');
     }
 
+    function matchesUnchangedMemoryDelta(entry, message, swipe = getCurrentSwipe(message)) {
+        if (!entry || message?.is_system || message?.is_user === true || message?.role === 'user') return false;
+        const stored = String(entry.signature || '').split('|');
+        const sameSource = getMessageSignatureCandidates(message, swipe).some((signature) => {
+            const current = signature.split('|');
+            return stored.length === current.length && stored.length === 5
+                && stored.every((part, index) => index === 2 || part === current[index]);
+        });
+        if (!sameSource) return false;
+        const parser = YuzukiMemory.MemoryTagParser;
+        if (typeof parser?.extractMemoryRows !== 'function') return false;
+        const text = getMessageText(message, swipe);
+        const rows = parser.extractMemoryRows(text);
+        const completions = YuzukiMemory.CharacterStatus?.parseGrowthTaskCompletionTags?.(text) || [];
+        return (rows.length > 0 || completions.length > 0)
+            && JSON.stringify(rows) === JSON.stringify(entry.rows || [])
+            && JSON.stringify(completions) === JSON.stringify(entry.growthCompletionUpdates || []);
+    }
+
+    function hasUnchangedMessageDelta(floor, message = getChat()[floor]) {
+        const ledger = normalizeLedger(loadState()?.floorLedger);
+        if (!ledger || !message) return false;
+        const swipe = getCurrentSwipe(message);
+        const marker = getMarker(message, swipe);
+        if (!isStructurallyValidMarker(ledger, marker, swipe)) return false;
+        const entryId = String(marker.entryId || '');
+        if (!ledger.activeEntries.some((reference) => reference.id === entryId && reference.floor === floor)) return false;
+        const entry = ledger.entries[entryId];
+        return matchesUnchangedMemoryDelta(entry, message, swipe);
+    }
+
     function getTableShape(state) {
         return JSON.stringify((Array.isArray(state?.tables) ? state.tables : [])
             .filter((table) => table?.id && table.id !== SUMMARY_TABLE_ID)
@@ -511,6 +542,17 @@
                     return signatureSet.has(String(entry?.signature || ''));
                 }) || null;
                 let entryId = String(marker?.entryId || '').trim();
+                // Editing prose does not invalidate an already applied Memory delta.
+                // Prefer exact owners so copied markers cannot steal another floor's entry.
+                if (!marker) {
+                    marker = validMarkers.find((candidate) => {
+                        const id = String(candidate.entryId || '');
+                        return (!matchingMarkerSlotKeysByEntryId.get(id)?.size
+                            || matchingMarkerSlotKeysByEntryId.get(id).has(slotKey))
+                            && matchesUnchangedMemoryDelta(ledger.entries[id], message, swipe);
+                    }) || null;
+                    entryId = String(marker?.entryId || '').trim();
+                }
                 if (!marker) {
                     const candidates = [...new Map(signatureCandidates.flatMap((signature) => (
                         signatureEntries.get(signature) || []
@@ -2058,6 +2100,7 @@
         reconcileNow,
         scheduleReconcile,
         scanActiveEntries,
+        hasUnchangedMessageDelta,
         checkChatFingerprint,
     });
 

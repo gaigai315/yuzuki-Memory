@@ -1116,9 +1116,14 @@
             });
             return;
         }
-        const processedDifferentBranch = !consumedSwipeMode && options.force !== true && hasProcessedDifferentBranch(target, message);
-        if (!consumedSwipeMode && !processedDifferentBranch && shouldSkipMessage(target, message, options)) return;
         const consumedApplyRollback = YuzukiMemory.BranchSnapshot?.consumeApplyRollbackFloor?.(target) === true;
+        if (!consumedSwipeMode && !consumedApplyRollback && options.force !== true && options.rollbackBeforeApply !== true
+            && YuzukiMemory.FloorLedger?.hasUnchangedMessageDelta?.(target, message)) {
+            YuzukiMemory.BranchSnapshot?.setProcessedMessageSignature?.(target, getMessageProcessSignature(message));
+            return;
+        }
+        const processedDifferentBranch = !consumedSwipeMode && options.force !== true && hasProcessedDifferentBranch(target, message);
+        if (!consumedSwipeMode && !consumedApplyRollback && !processedDifferentBranch && shouldSkipMessage(target, message, options)) return;
         const consumedSwipeRollback = consumedSwipeMode || consumedApplyRollback;
         const shouldRollbackBeforeApply = options.rollbackBeforeApply === true || consumedSwipeRollback || processedDifferentBranch;
         if (shouldRollbackBeforeApply && YuzukiMemory.BranchSnapshot?.isRealtimeEnabled?.()) {

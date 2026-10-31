@@ -15538,8 +15538,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复生成报错后一直显示“正文正在生成”，导致总结无法继续的问题。',
-            '优化白名单：缺少 content 标签时回退使用原始正文，同时继续清理黑名单内容。',
+            '修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。',
+            '修复实时填表模式下，仅修改 AI 回复正文、未改动 Memory 内容时，本轮表格更新消失的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

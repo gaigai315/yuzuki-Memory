@@ -440,6 +440,79 @@ test('camelCase SillyTavern delete event replays state after its message disappe
     assert.deepEqual(storedState.floorLedger.activeEntries, []);
 });
 
+for (const order of ['parser-first', 'ledger-first']) {
+    test(`editing only prose preserves the applied floor and later updates (${order})`, () => {
+        const parser = window.YuzukiMemory.MemoryTagParser;
+        const ledger = window.YuzukiMemory.FloorLedger;
+        const snapshot = window.YuzukiMemory.BranchSnapshot;
+        const originalSnapshot = { ...snapshot };
+        let rollbackCount = 0;
+        let signature = 'previous-full-body-signature';
+        Object.assign(snapshot, {
+            isRealtimeEnabled: () => true,
+            getProcessedMessageSignature: () => signature,
+            setProcessedMessageSignature: (_floor, value) => { signature = value; },
+            rollbackBeforeMessage: () => { rollbackCount += 1; },
+        });
+        try {
+            storedState = parser.createDefaultState();
+            chat = [
+                assistantMemoryMessage('#角色档案\n[爱丽丝] | 身份: 法师 | 性格: 冷静'),
+                assistantMemoryMessage('#角色档案\n[爱丽丝] | 身份: 旅人'),
+            ];
+            chat.forEach((message, floor) => {
+                message.mes = `原始正文\n${message.mes}`;
+                message.swipes = [message.mes];
+                assert.equal(parser.applyMemoryText(message.mes, { floor }).success, true);
+            });
+            const originalRecords = clone(storedState.records);
+            const originalEntries = clone(storedState.floorLedger.activeEntries);
+            chat[0].mes = chat[0].mes.replace('原始正文', '仅修改正文的措辞');
+            chat[0].swipes[0] = chat[0].mes;
+            assert.equal(ledger.hasUnchangedMessageDelta(0, chat[0]), true);
+            if (order === 'ledger-first') ledger.reconcileNow({ force: true });
+            parser.processMessage(0);
+            ledger.reconcileNow({ force: true });
+            assert.equal(rollbackCount, 0, 'prose edits must not restore an earlier whole-table snapshot');
+            assert.deepEqual(storedState.records, originalRecords);
+            assert.deepEqual(storedState.floorLedger.activeEntries, originalEntries);
+
+            chat.splice(0, 1);
+            ledger.reconcileNow({ force: true, pruneRemoved: true });
+            assert.equal(storedState.records.character_profile[0].values.身份, '旅人');
+            assert.equal(storedState.records.character_profile[0].values.性格, '');
+            assert.equal(storedState.floorLedger.activeEntries.length, 1);
+        } finally {
+            Object.keys(snapshot).forEach((key) => { delete snapshot[key]; });
+            Object.assign(snapshot, originalSnapshot);
+            timers.clear();
+        }
+    });
+}
+
+test('changing Memory or generation identity cannot reuse an unchanged floor delta', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = [assistantMemoryMessage('#角色档案\n[爱丽丝] | 身份: 法师')];
+    assert.equal(parser.applyMemoryText(chat[0].mes, { floor: 0 }).success, true);
+    const original = chat[0].mes;
+    chat[0].mes = original.replace('法师', '旅人');
+    assert.equal(ledger.hasUnchangedMessageDelta(0, chat[0]), false);
+    ledger.reconcileNow({ force: true });
+    assert.equal(storedState.records.character_profile.length, 0);
+
+    storedState = parser.createDefaultState();
+    chat = [assistantMemoryMessage('#角色档案\n[爱丽丝] | 身份: 法师')];
+    assert.equal(parser.applyMemoryText(chat[0].mes, { floor: 0 }).success, true);
+    chat[0].mes = `新生成正文\n${chat[0].mes}`;
+    chat[0].extra.gen_id = 'new-generation';
+    assert.equal(ledger.hasUnchangedMessageDelta(0, chat[0]), false);
+    ledger.reconcileNow({ force: true });
+    assert.equal(storedState.records.character_profile.length, 0);
+    timers.clear();
+});
+
 test('cloud chat fallback persists floor markers through saveChatConditional', () => {
     const parser = window.YuzukiMemory.MemoryTagParser;
     storedState = parser.createDefaultState();
