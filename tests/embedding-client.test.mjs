@@ -635,10 +635,87 @@ test('known vector scope checks existing hashes before making another embedding 
 
 test('vectorization reports catalog persistence failure instead of false completion', async () => {
     const { store } = await createNetworkVectorFixture(async (input) => embeddingResponse(input));
-    store.saveLibrary = async () => false;
+    let saves = 0;
+    store.saveLibrary = async () => ++saves === 1;
 
     await assert.rejects(store.vectorizeBook('network'), /完成状态未能保存到向量目录/);
     assert.equal(store.getBookStats(store.getBook('network')).done, 3);
+});
+
+test('first index write requires a durable catalog identity', async () => {
+    const { store, saved } = await createNetworkVectorFixture(async (input) => embeddingResponse(input));
+    store.saveLibrary = async () => false;
+
+    await assert.rejects(store.vectorizeBook('network'), /索引定位信息未能保存/);
+    assert.equal(saved.size, 0);
+    assert.equal(store.getBookStats(store.getBook('network')).done, 0);
+});
+
+test('summary synchronization during vectorization preserves the completed catalog after reload', async () => {
+    let releaseEmbedding;
+    const blocked = new Promise((resolve) => { releaseEmbedding = resolve; });
+    let markStarted;
+    const started = new Promise((resolve) => { markStarted = resolve; });
+    const { store } = await createNetworkVectorFixture(async (input) => {
+        markStarted();
+        await blocked;
+        return embeddingResponse(input);
+    });
+    const chunks = ['同一份总结'];
+    const created = await store.syncSummaryToBook(chunks, 'chat:race', '旧书名');
+    const vectorizing = store.vectorizeBook(created.bookId);
+    await started;
+    const syncing = store.syncSummaryToBook(chunks, 'chat:race', '新书名');
+    // Let normalization finish while the embedding request is still in flight.
+    await new Promise((resolve) => setImmediate(resolve));
+    releaseEmbedding();
+    await Promise.all([vectorizing, syncing]);
+
+    const restarted = (await createVectorStoreSandbox()).window.YuzukiMemory.VectorStore;
+    await restarted.loadLibrary(JSON.parse(JSON.stringify(store.encodeLibraryForStorage())));
+    const book = restarted.getBook(created.bookId);
+    assert.equal(book.name, '新书名 - 记忆总结');
+    assert.equal(book.vectorDimension, 3);
+    assert.ok(book.vectorScope);
+    assert.equal(restarted.getBookStats(book).status, 'done');
+});
+
+test('resyncing reverted summary text recovers its real index rather than resetting completion', async () => {
+    const { store, saved } = await createNetworkVectorFixture(async (input) => embeddingResponse(input));
+    const created = await store.syncSummaryToBook(['总结版本甲'], 'chat:revert', '测试');
+    await store.vectorizeBook(created.bookId);
+    assert.equal(saved.size, 1);
+    await store.syncSummaryToBook(['总结版本乙'], 'chat:revert', '测试');
+    assert.equal(store.getBookStats(store.getBook(created.bookId)).done, 0);
+    await store.syncSummaryToBook(['总结版本甲'], 'chat:revert', '测试');
+    assert.equal(store.getBookStats(store.getBook(created.bookId)).status, 'done');
+});
+
+test('reload before the first progress checkpoint recovers written vectors without another embedding', async () => {
+    const { store, saved } = await createNetworkVectorFixture(async (input) => embeddingResponse(input));
+    let durableCatalog;
+    let saves = 0;
+    store.saveLibrary = async () => {
+        if (++saves > 1) return false; // Simulate losing the final catalog write.
+        durableCatalog = JSON.parse(JSON.stringify(store.encodeLibraryForStorage()));
+        return true;
+    };
+
+    await assert.rejects(store.vectorizeBook('network'), /完成状态未能保存/);
+    assert.equal(saved.size, 3);
+    assert.ok(durableCatalog.network.vectorScope);
+    assert.equal(durableCatalog.network.vectorDimension, 3);
+    assert.ok(durableCatalog.network.vectorized.every((done) => !done));
+
+    const restarted = (await createVectorStoreSandbox()).window.YuzukiMemory.VectorStore;
+    await restarted.loadLibrary(durableCatalog);
+    restarted.vectorBackendState = 'unavailable';
+    restarted.listLocalVectorHashes = async () => [...saved];
+    restarted.saveLibrary = async () => true;
+    const result = await restarted.reconcileExternalVectorStates();
+    assert.equal(result.recoveredChunks, 3);
+    assert.equal(restarted.getBookStats(restarted.getBook('network')).status, 'done');
+    assert.equal((await restarted.vectorizeBook('network')).count, 0);
 });
 
 for (const managedBook of [

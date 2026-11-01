@@ -1640,10 +1640,19 @@
         }
 
         async syncSummaryToBook(chunks, sessionId = 'default', bookName = '') {
+            await this.whenReady();
             const normalizedChunks = await this.normalizeChunks(chunks);
             const normalizedSessionId = String(sessionId || 'default');
             const id = this.findSessionBookId(BOOK_KIND_SUMMARY, normalizedSessionId)
                 || `yzm_summary_book_${normalizedSessionId.replace(/[^\w-]/g, '_')}`;
+            // Synchronization can replace the book object. Serialize it with index
+            // writes so an in-flight embedding cannot finish on a detached book.
+            return this.enqueueVectorTask(id, () => this.runSyncSummaryToBook(
+                id, normalizedChunks, normalizedSessionId, bookName
+            ));
+        }
+
+        async runSyncSummaryToBook(id, normalizedChunks, normalizedSessionId, bookName) {
             const oldBook = this.library[id];
             if (!normalizedChunks.length) {
                 if (!oldBook) return { success: true, bookId: id, count: 0, unchanged: true, removed: false };
@@ -1683,6 +1692,9 @@
                 updateTime: Date.now(),
             }, nextName);
             this.selectedBookId = id;
+            // A reload may resync older chat metadata. Completion belongs to the
+            // stored text hashes, not only the flags in the previous catalog.
+            await this.reconcileExternalVectorStates([id]);
             if (!await this.saveLibrary()) return { success: false, bookId: id, error: '总结向量书未能保存到向量目录' };
             this.toggleActiveBook(id, true);
             return { success: true, bookId: id, count: normalizedChunks.length };
@@ -2216,6 +2228,7 @@
             let batchSize = VECTOR_BACKEND_BATCH_SIZE;
             let retryAttempt = 0;
             let nextCheckpoint = 50;
+            let indexIdentitySaved = false;
             for (let cursor = 0; cursor < pending.length;) {
                 const batchStart = cursor;
                 const batch = [];
@@ -2246,6 +2259,12 @@
                         if (!savedHashes.has(item.hash)) newItems.push({ ...item, vector });
                     });
                     if (newItems.length) {
+                        // Persist the lookup identity before writing the first batch. A reload
+                        // can then recover completed hashes even before the next checkpoint.
+                        if (!indexIdentitySaved) {
+                            await this.saveLibraryOrThrow('向量索引定位信息未能保存到向量目录，已停止写入索引');
+                            indexIdentitySaved = true;
+                        }
                         if (storageMode === 'backend') {
                             await this.insertBackendVectors(bookId, scope, newItems);
                             newItems.forEach((item) => savedHashes.add(item.hash));
@@ -2268,6 +2287,7 @@
                     }
                     await this.yieldToMainThread();
                 } catch (error) {
+                    if (error?.code === 'vector_catalog_save_failed') throw error;
                     const message = String(error?.message || error || '');
                     const transient = error?.code === 'embedding_network_error'
                         || error?.status === 429 || [500, 502, 503, 504].includes(error?.status);
