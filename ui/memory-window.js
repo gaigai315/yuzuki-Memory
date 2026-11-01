@@ -10665,14 +10665,20 @@
                     { label: '使用独立 API', description: '为记忆插件单独配置模型与密钥', value: 'custom', active: mode === 'custom' },
                 ], 'llmMode'),
             ], '', createApiTitleNote('配置记忆生成、总结与结构化填表所使用的大语言模型。'));
-        const presetCard = createApiCard('预设管理', 'fa-regular fa-bookmark', [
-                createApiField('选择预设', createLlmApiPresetSelect()),
+        const renamePresetButton = createButton('', 'yzm-api-preset-rename');
+        renamePresetButton.appendChild(createIconNode('fa-solid fa-pencil', ''));
+        renamePresetButton.dataset.yzmApiAction = 'renameLlmPreset';
+        renamePresetButton.title = '修改当前 API 配置名称';
+        renamePresetButton.setAttribute('aria-label', '修改当前 API 配置名称');
+        renamePresetButton.disabled = true;
+        const presetCard = createApiCard('选择配置', 'fa-regular fa-bookmark', [
+                createLlmApiPresetSelect(),
                 createApiActions([
                     ['新增', 'fa-solid fa-plus', '', 'newLlmPreset'],
                     ['保存', 'fa-regular fa-floppy-disk', 'yzm-api-button-primary', 'saveLlmPreset'],
                     ['删除', 'fa-regular fa-trash-can', 'yzm-api-button-danger', 'deleteLlmPreset'],
                 ]),
-            ]);
+            ], '', renamePresetButton);
         const taskRouteCard = createApiCard('任务 API 绑定', 'fa-solid fa-link', [
                 createApiGrid([
                     createApiField('填表', createLlmApiTaskRouteSelect('trace')),
@@ -10947,9 +10953,10 @@
 
     function createLlmApiPresetSelect() {
         const presets = getLlmApiPresets();
-        const wrap = createApiSelect('', [{ label: presets.length ? '选择预设' : '暂无预设', value: '' }, ...presets.map((preset) => ({ label: preset.name, value: preset.id }))]);
+        const wrap = createApiSelect('', [{ label: presets.length ? '请选择配置' : '暂无配置', value: '' }, ...presets.map((preset) => ({ label: preset.name, value: preset.id }))]);
         wrap.classList.add('yzm-llm-preset-select-wrap');
         wrap.querySelector('.yzm-api-select')?.setAttribute('data-yzm-llm-preset-select', 'true');
+        wrap.querySelector('.yzm-api-select')?.setAttribute('aria-label', '选择 API 配置');
         return wrap;
     }
 
@@ -11316,6 +11323,8 @@
 
     function applyLlmApiPreset(root, preset) {
         const nextPreset = preset || createEmptyLlmApiPreset();
+        const renameButton = root.querySelector('[data-yzm-api-action="renameLlmPreset"]');
+        if (renameButton) renameButton.disabled = !nextPreset.id;
         setApiFieldValue(root, 'llmMode', getGlobalLlmApiMode());
         setApiFieldValue(root, 'provider', nextPreset.provider);
         setApiFieldValue(root, 'baseUrl', nextPreset.baseUrl);
@@ -11344,7 +11353,7 @@
         if (!select) return;
         const presets = getLlmApiPresets();
         const placeholder = document.createElement('option');
-        placeholder.textContent = presets.length ? '选择预设' : '暂无预设';
+        placeholder.textContent = presets.length ? '请选择配置' : '暂无配置';
         placeholder.value = '';
         select.replaceChildren(placeholder);
         presets.forEach((preset) => {
@@ -11389,7 +11398,13 @@
         };
     }
 
-    function openLlmPresetNameDialog(root) {
+    function renameCurrentLlmApiPreset(root) {
+        const presetId = getLlmApiPresetSelect(root)?.value || '';
+        const preset = getLlmApiPresets().find((entry) => entry.id === presetId);
+        if (preset) openLlmPresetNameDialog(root, preset);
+    }
+
+    function openLlmPresetNameDialog(root, renamedPreset = null) {
         const select = getLlmApiPresetSelect(root);
         const modalHost = getModalHost(root);
         removeModal(root, '.yzm-api-preset-name-modal');
@@ -11399,17 +11414,17 @@
 
         const dialog = document.createElement('section');
         dialog.className = 'yzm-structure-dialog yzm-api-preset-name-dialog';
-        dialog.setAttribute('aria-label', '新增 API 预设');
+        dialog.setAttribute('aria-label', renamedPreset ? '修改 API 配置名称' : '新增 API 预设');
 
         const header = document.createElement('div');
         header.className = 'yzm-structure-header';
         const title = document.createElement('strong');
         title.className = 'yzm-structure-title';
-        title.textContent = '新增预设';
+        title.textContent = renamedPreset ? '修改配置名称' : '新增预设';
         const close = document.createElement('button');
         close.type = 'button';
         close.className = 'yzm-structure-close';
-        close.setAttribute('aria-label', '关闭新增预设');
+        close.setAttribute('aria-label', renamedPreset ? '关闭修改配置名称' : '关闭新增预设');
         close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
         header.append(title, close);
 
@@ -11418,6 +11433,7 @@
         input.type = 'text';
         input.placeholder = '输入预设名称';
         input.maxLength = 80;
+        input.value = renamedPreset?.name || '';
 
         const actions = document.createElement('div');
         actions.className = 'yzm-record-actions';
@@ -11436,6 +11452,18 @@
                 return;
             }
             const presets = getLlmApiPresets();
+            if (renamedPreset) {
+                const index = presets.findIndex((entry) => entry.id === renamedPreset.id);
+                if (index < 0) {
+                    closeModal();
+                    return;
+                }
+                presets[index] = { ...presets[index], name };
+                saveLlmApiPresets(presets);
+                refreshLlmApiPresetSelect(root, select?.value || '');
+                closeModal();
+                return;
+            }
             const nextPreset = createBlankLlmApiPreset(name);
             saveLlmApiPresets([...presets, nextPreset]);
             refreshLlmApiPresetSelect(root, nextPreset.id);
@@ -18317,6 +18345,7 @@
 
                 const action = apiActionButton.dataset.yzmApiAction;
                 if (action === 'newLlmPreset') startNewLlmApiPreset(root);
+                if (action === 'renameLlmPreset') renameCurrentLlmApiPreset(root);
                 if (action === 'saveLlmPreset') saveCurrentLlmApiPreset(root);
                 if (action === 'deleteLlmPreset') deleteCurrentLlmApiPreset(root);
                 if (action === 'testLlmConnection') void testLlmConnection(root, apiActionButton);
