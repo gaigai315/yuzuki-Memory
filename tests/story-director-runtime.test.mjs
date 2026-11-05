@@ -1526,10 +1526,13 @@ test('a malformed first-pass ledger stops before the card request and commits no
     const result = await memory.StoryDirectorRuntime.replanLatest();
     assert.equal(result.success, false);
     assert.match(result.error, /第一轮账本校验失败/);
+    assert.match(result.details, /AI 原始返回：/);
+    assert.match(result.details, /<角色账本更新>格式错误<\/角色账本更新>/);
     assert.equal(requests.length, 1);
     assert.equal(vectorCalls.length, 1);
     assert.equal(getState().storyDirector.ledger, '旧账本');
     assert.equal(getState().storyDirector.pendingCard, '');
+    assert.doesNotMatch(getState().storyDirector.lastError, /AI 原始返回/);
 });
 
 test('legacy director state stays cleared even when the first new-format request fails', async () => {
@@ -1873,6 +1876,9 @@ test('failed review never commits the draft and stops after two requests with on
     const errorEvents = dispatchedEvents.filter((event) => event.type === 'yzm-story-director-error');
     assert.equal(errorEvents.length, 1);
     assert.match(errorEvents[0].detail.error, /第二轮定稿校验失败/);
+    assert.match(errorEvents[0].detail.details, /AI 原始返回：\n格式错误/);
+    assert.match(result.details, /AI 原始返回：\n格式错误/);
+    assert.doesNotMatch(getState().storyDirector.lastError, /AI 原始返回/);
 });
 
 test('runtime event bindings are deduplicated', () => {

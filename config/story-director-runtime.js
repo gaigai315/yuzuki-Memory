@@ -1689,6 +1689,19 @@
         return source;
     }
 
+    function createDirectorValidationError(stage, error, result) {
+        const reason = String(error?.message || error || '未知校验错误');
+        const responseText = String(result?.text || result?.message?.content || '').trim();
+        const wrapped = new Error(`${stage}：${reason}`);
+        wrapped.yzmStoryDirectorDetails = [
+            wrapped.message,
+            '',
+            'AI 原始返回：',
+            responseText || '（空响应）',
+        ].join('\n');
+        return wrapped;
+    }
+
     function parseRoleLedgerUpdate(result, latestAssistantReview) {
         const source = readAgentResultText(result);
         const roster = readSingleDirectorPlanTag(source, '角色账本更新');
@@ -2082,7 +2095,7 @@
             try {
                 roleLedgerUpdate = parseRoleLedgerUpdate(roleLedgerResult, latestAssistantReview);
             } catch (error) {
-                throw new Error('剧情导演第一轮账本校验失败：' + String(error?.message || error));
+                throw createDirectorValidationError('剧情导演第一轮账本校验失败', error, roleLedgerResult);
             }
 
             let finalLedger = mergeCharacterRoster(ledger, roleLedgerUpdate.rosterUpdates);
@@ -2119,7 +2132,7 @@
             try {
                 card = resolveDirectorVariables(parseFinalDirectorCard(planningResult));
             } catch (error) {
-                throw new Error('剧情导演第二轮定稿校验失败：' + String(error?.message || error));
+                throw createDirectorValidationError('剧情导演第二轮定稿校验失败', error, planningResult);
             }
             assertActive();
             const messageCards = source.role === 'user'
@@ -2143,6 +2156,8 @@
         } catch (error) {
             const aborted = controller.signal.aborted || error?.name === 'AbortError';
             const boundOnly = options.outputMode === 'bound';
+            const errorText = String(error?.message || error || '剧情导演运行失败');
+            const errorDetails = String(error?.yzmStoryDirectorDetails || errorText);
             let errorNotified = false;
             if (aborted) {
                 const currentSessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
@@ -2162,19 +2177,26 @@
                     pendingCard: boundOnly ? String(previousDirector.pendingCard || '') : '',
                     source: boundOnly ? previousDirector.source : null,
                     status: 'error',
-                    lastError: String(error?.message || error || '剧情导演运行失败'),
+                    lastError: errorText,
                 });
                 console.warn('[yuzuki-Memory] 剧情导演运行失败。', error);
                 window.dispatchEvent(new CustomEvent('yzm-story-director-error', {
                     detail: {
-                        error: String(error?.message || error || '剧情导演运行失败'),
+                        error: errorText,
+                        details: errorDetails,
                         sessionId,
                         source: { ...source },
                     },
                 }));
                 errorNotified = true;
             }
-            return { success: false, aborted, errorNotified, error: String(error?.message || error || '') };
+            return {
+                success: false,
+                aborted,
+                errorNotified,
+                error: errorText,
+                details: errorDetails,
+            };
         } finally {
             if (activeAbortController === controller) activeAbortController = null;
             if (activeRunSignature === source.signature) {

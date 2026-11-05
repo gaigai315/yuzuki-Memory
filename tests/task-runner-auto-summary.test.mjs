@@ -199,6 +199,7 @@ function createHarness(options = {}) {
     const requestState = {
         activeCount: Math.max(0, Number(options.activeRequestCount) || 0),
         foregroundGenerationActive: options.requestForegroundGenerationActive === true,
+        lastFinishedAt: Math.max(0, Number(options.lastRequestFinishedAt) || 0),
     };
 
     const sandbox = {
@@ -487,6 +488,47 @@ test('terminal streaming processor state releases a stale foreground lock after 
         false,
         'a terminal stream must unblock manual/automatic summary tasks even if no ended event arrived',
     );
+});
+
+test('a completed auxiliary generation releases a foreground lock when MVU emits no terminal event', () => {
+    const harness = createHarness({ activateAfterBind: false });
+
+    harness.emit('generation_after_commands', 'normal', {}, false);
+    harness.requestState.activeCount = 1;
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
+
+    harness.advance(200);
+    harness.requestState.activeCount = 0;
+    harness.requestState.lastFinishedAt = 1200;
+    harness.requestState.foregroundGenerationActive = true;
+    assert.equal(
+        harness.taskRunner.isForegroundGenerationBusy(),
+        true,
+        'the lock must remain active during the message-stability grace period',
+    );
+
+    harness.advance(1200);
+    assert.equal(
+        harness.taskRunner.isForegroundGenerationBusy(),
+        false,
+        'a tracked request that settled without a message or ended event must not leave the lock active forever',
+    );
+});
+
+test('the missing-terminal fallback does not release before a request completes or while Tavern is still busy', () => {
+    const harness = createHarness({ activateAfterBind: false });
+
+    harness.emit('generation_after_commands', 'normal', {}, false);
+    harness.advance(5000);
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
+
+    harness.requestState.lastFinishedAt = 6000;
+    harness.context.is_send_press = true;
+    harness.advance(1200);
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), true);
+
+    harness.context.is_send_press = false;
+    assert.equal(harness.taskRunner.isForegroundGenerationBusy(), false);
 });
 
 test('loading a chat with pending summary ranges waits for the user to resume chatting', async () => {

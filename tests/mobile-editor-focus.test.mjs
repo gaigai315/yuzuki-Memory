@@ -667,20 +667,21 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.1.6', () => {
-    assert.equal(manifest.version, '1.1.6');
-    assert.match(indexSource, /const VERSION = '1\.1\.6';/);
+test('release metadata and update notice describe version 1.1.7', () => {
+    assert.equal(manifest.version, '1.1.7');
+    assert.match(indexSource, /const VERSION = '1\.1\.7';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。/);
-    assert.match(noticeSource, /修复实时填表模式下，仅修改 AI 回复正文、未改动 Memory 内容时，本轮表格更新消失的问题。/);
-    assert.match(noticeSource, /新增按楼层范围删除功能：在“更多”中精确删除对应总结或摘要，删除后重 Roll、Swipe 不再恢复旧内容。/);
+    assert.match(noticeSource, /剧情规划失败时显示具体原因和 AI 原始返回，方便排查问题。/);
+    assert.match(noticeSource, /修复 MVU 额外模型解析后生成状态未释放，导致自动总结和自动批量填表无法触发的问题。/);
+    assert.doesNotMatch(noticeSource, /修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。/);
+    assert.doesNotMatch(noticeSource, /修复实时填表模式下，仅修改 AI 回复正文、未改动 Memory 内容时，本轮表格更新消失的问题。/);
+    assert.doesNotMatch(noticeSource, /新增按楼层范围删除功能/);
     assert.doesNotMatch(noticeSource, /优化任务请求格式/);
     assert.doesNotMatch(noticeSource, /自动填表、总结失败后停止本次任务/);
     assert.doesNotMatch(noticeSource, /删除聊天楼层后待办事项及角色空记录残留/);
     assert.doesNotMatch(noticeSource, /优化向量化召回条数|优化向量化自动分段功能|优化部分 CSS 渲染/);
     assert.doesNotMatch(noticeSource, /剧情规划界面支持编辑|剧情导演与柚月の手机互通/);
-    assert.doesNotMatch(noticeSource, /兼容 MUV 额外模型解析/);
     assert.doesNotMatch(noticeSource, /修复快速取消正文生成后的剧情规划锁定/);
     assert.doesNotMatch(noticeSource, /修复会话向量书归属/);
     assert.doesNotMatch(noticeSource, /新增移动端世界书折叠兼容/);

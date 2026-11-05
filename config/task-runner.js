@@ -78,6 +78,8 @@
     let autoTaskRetryPending = false;
     let foregroundGenerationState = 'unknown';
     let foregroundGenerationProcessorTerminalAtStart = null;
+    let foregroundGenerationStartedAt = 0;
+    let foregroundGenerationRequestFinishedAtStart = 0;
     let autoTaskAbortController = null;
     let autoTaskRequestPromise = null;
     let autoTaskInterruptedByForeground = false;
@@ -114,21 +116,7 @@
             Number(window.yzmMemoryChatRequestActiveCount || 0),
             Number(requestState?.activeCount || 0),
         );
-        // A failed/aborted stream can leave the event lock active briefly.  The
-        // streaming processor's terminal flags are the authoritative signal in
-        // that case; otherwise manual summaries remain blocked until refresh.
-        if (foregroundGenerationState === 'active') {
-            const processorTerminal = streamingProcessor?.isFinished === true || streamingProcessor?.isStopped === true;
-            if (processorTerminal && foregroundGenerationProcessorTerminalAtStart !== true) {
-                foregroundGenerationState = 'inactive';
-                return false;
-            }
-            return true;
-        }
-        if (foregroundGenerationState === 'inactive') return false;
-        if (activeRequestCount > 0) return true;
-        return requestState?.foregroundGenerationActive === true
-            || window.is_send_press === true
+        const nativeGenerationActive = window.is_send_press === true
             || window.isStreaming === true
             || windowGenerating
             || ctx?.is_send_press === true
@@ -137,6 +125,40 @@
             || ctx?.generationStarted === true
             || streamingProcessorActive
             || (typeof document !== 'undefined' && document.body?.dataset?.generating === 'true');
+        // Prefer Tavern's terminal signals. Some auxiliary generators can emit
+        // a foreground start without a message or end event, so a later tracked
+        // request completion may release the stale lock after the stability wait.
+        if (foregroundGenerationState === 'active') {
+            const processorTerminal = streamingProcessor?.isFinished === true || streamingProcessor?.isStopped === true;
+            if (processorTerminal && foregroundGenerationProcessorTerminalAtStart !== true) {
+                foregroundGenerationState = 'inactive';
+                foregroundGenerationStartedAt = 0;
+                foregroundGenerationRequestFinishedAtStart = 0;
+                return false;
+            }
+            const requestFinishedAt = Math.max(
+                Number(window.yzmMemoryLastChatRequestFinishedAt || 0),
+                Number(requestState?.lastFinishedAt || 0),
+            );
+            const requestCompletedAfterLock = requestFinishedAt > foregroundGenerationRequestFinishedAtStart
+                && requestFinishedAt >= foregroundGenerationStartedAt;
+            const missingTerminalEventSettled = requestCompletedAfterLock
+                && activeRequestCount === 0
+                && !nativeGenerationActive
+                && Date.now() - requestFinishedAt >= AUTO_TASK_MESSAGE_STABLE_MS;
+            if (missingTerminalEventSettled) {
+                foregroundGenerationState = 'inactive';
+                foregroundGenerationProcessorTerminalAtStart = null;
+                foregroundGenerationStartedAt = 0;
+                foregroundGenerationRequestFinishedAtStart = 0;
+                return false;
+            }
+            return true;
+        }
+        if (foregroundGenerationState === 'inactive') return false;
+        if (activeRequestCount > 0) return true;
+        return requestState?.foregroundGenerationActive === true
+            || nativeGenerationActive;
     }
 
     function isForegroundGenerationEvent(type, options, dryRun) {
@@ -4600,6 +4622,9 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             };
             const onMessageReceived = () => {
                 foregroundGenerationState = 'inactive';
+                foregroundGenerationProcessorTerminalAtStart = null;
+                foregroundGenerationStartedAt = 0;
+                foregroundGenerationRequestFinishedAtStart = 0;
                 onCharacterRendered();
             };
             const activateCurrentSession = () => {
@@ -4616,6 +4641,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                 }
                 activateCurrentSession();
                 foregroundGenerationState = 'active';
+                foregroundGenerationStartedAt = Date.now();
+                const requestState = YuzukiMemory.RequestProbe?.getChatRequestState?.();
+                foregroundGenerationRequestFinishedAtStart = Math.max(
+                    Number(window.yzmMemoryLastChatRequestFinishedAt || 0),
+                    Number(requestState?.lastFinishedAt || 0),
+                );
                 const processor = getContext()?.streamingProcessor;
                 foregroundGenerationProcessorTerminalAtStart = processor
                     ? (processor.isFinished === true || processor.isStopped === true)
@@ -4634,6 +4665,8 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             const finishForegroundGeneration = () => {
                 foregroundGenerationState = 'inactive';
                 foregroundGenerationProcessorTerminalAtStart = null;
+                foregroundGenerationStartedAt = 0;
+                foregroundGenerationRequestFinishedAtStart = 0;
                 markLatestAssistantMessageActivity();
                 armAutoTaskAfterGeneration(callbacks);
                 if (!autoSummaryRunning && (autoTaskArmed || autoTaskRetryPending)) {

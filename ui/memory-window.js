@@ -4205,7 +4205,7 @@
             return result;
         }
         if (result?.aborted) return result;
-        const errorText = String(result?.error || '剧情规划失败，请稍后重试。');
+        const errorText = String(result?.details || result?.error || '剧情规划失败，请稍后重试。');
         if (result?.skipped) {
             showTaskToast(errorText, 'warning');
             return result;
@@ -15647,9 +15647,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。',
-            '修复实时填表模式下，仅修改 AI 回复正文、未改动 Memory 内容时，本轮表格更新消失的问题。',
-            '新增按楼层范围删除功能：在“更多”中精确删除对应总结或摘要，删除后重 Roll、Swipe 不再恢复旧内容。',
+            '剧情规划失败时显示具体原因和 AI 原始返回，方便排查问题。',
+            '修复 MVU 额外模型解析后生成状态未释放，导致自动总结和自动批量填表无法触发的问题。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -19476,7 +19475,7 @@
             window.removeEventListener('yzm-story-director-error', previousHandler);
         }
         window.yzmStoryDirectorErrorHandler = (event) => {
-            const errorText = String(event?.detail?.error || '').trim();
+            const errorText = String(event?.detail?.details || event?.detail?.error || '').trim();
             openStoryDirectorErrorDialog(ensureRoot(), errorText || '未知错误');
         };
         window.addEventListener('yzm-story-director-error', window.yzmStoryDirectorErrorHandler);
