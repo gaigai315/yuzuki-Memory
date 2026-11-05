@@ -4267,6 +4267,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         let resultConfirmed = false;
         if (needsClosureConfirmation) {
             const confirmation = await confirmTaskResult(result, task, callbacks, { reason: 'missing-memory-close' });
+            if (confirmation?.action === 'retry') {
+                if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
+                    return { success: false, aborted: true, sessionChanged: true, error: `${task.title}重试时聊天已切换，任务已停止。` };
+                }
+                return { ...result, success: false, retryRequested: true };
+            }
             if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
             pendingResult = confirmation && typeof confirmation === 'object' && 'text' in confirmation
                 ? rebuildTaskResultFromText('summary', result, confirmation.text, { forceMemoryEnvelopeRepair: true })
@@ -4391,6 +4397,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
         let resultConfirmed = false;
         if (needsClosureConfirmation) {
             const confirmation = await confirmTaskResult(result, task, callbacks, { reason: 'missing-memory-close' });
+            if (confirmation?.action === 'retry') {
+                if (!isAutoTaskSessionCurrent(taskSessionId, callbacks)) {
+                    return { success: false, aborted: true, sessionChanged: true, error: `${task.title}重试时聊天已切换，任务已停止。` };
+                }
+                return { ...result, success: false, retryRequested: true };
+            }
             if (isTaskResultConfirmationCancelled(confirmation)) return { success: true, skipped: true, result };
             pendingResult = confirmation && typeof confirmation === 'object' && 'text' in confirmation
                 ? rebuildTaskResultFromText('trace', result, confirmation.text, { forceMemoryEnvelopeRepair: true })
@@ -4512,6 +4524,11 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
                         nextScheduleDelay = AUTO_TASK_MESSAGE_STABLE_MS;
                         console.info(`[yuzuki-Memory] ${activeTask.title} 已为正文生成让路，正文结束后重新执行。`);
                         break;
+                    }
+                    if (result?.retryRequested) {
+                        activeState = callbacks.getState?.() || activeState;
+                        console.info(`[yuzuki-Memory] ${activeTask.title} 已按用户选择重新请求。`);
+                        continue;
                     }
                     if (result?.success === false) {
                         console.warn('[yuzuki-Memory] Auto task skipped:', result.error);

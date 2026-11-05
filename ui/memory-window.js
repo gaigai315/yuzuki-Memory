@@ -8820,7 +8820,7 @@
                     ? 'AI 返回缺少 </Memory> 闭合标签'
                     : `${getTaskActionLabel(action)}结果需要修正`,
                 description: needsClosureConfirmation
-                    ? '检测到 AI 已返回内容，但结尾缺少 </Memory> 闭合标签。请自行检查内容是被截断，还是仅遗漏闭合标签；可直接编辑下方内容。确认完整后点击“强制写入”，否则点击“取消写入”。'
+                    ? '检测到 AI 已返回内容，但结尾缺少 </Memory> 闭合标签。请自行检查内容是被截断，还是仅遗漏闭合标签；可直接编辑后“强制写入”，也可点击“重试”重新请求。'
                     : (options.batchIndex
                         ? `第 ${options.batchIndex}/${options.batchTotal} 批，楼层 ${formatTaskDisplayRange(options.start, options.end)} 没有解析到有效写入。可直接修改模型返回内容后再次确认写入。`
                         : '模型返回内容没有解析到有效写入。可直接修改返回内容后再次确认写入。'),
@@ -8829,7 +8829,16 @@
                 warning: needsClosureConfirmation,
                 confirmLabel: needsClosureConfirmation ? '强制写入' : '确认写入',
                 cancelLabel: needsClosureConfirmation ? '取消写入' : '',
+                retryLabel: needsClosureConfirmation ? '重试' : '',
             });
+            if (confirmation?.action === 'retry') {
+                return {
+                    ...result,
+                    success: false,
+                    retryRequested: true,
+                    error: '用户选择重新请求当前任务。',
+                };
+            }
             if (!confirmation || confirmation.cancelled || confirmation.action === 'cancel') {
                 taskRunnerStopRequested = true;
                 taskRunnerAbortController?.abort?.();
@@ -8885,6 +8894,11 @@
                 });
                 lastResult = result;
                 if (result?.aborted || taskRunnerStopRequested) return { ...result, success: false, cancelled: true, aborted: true, error: '任务已停止。' };
+                if (result?.retryRequested) {
+                    attempt -= 1;
+                    showTaskToast('正在重新请求当前批次。', 'info');
+                    continue;
+                }
                 if (result?.success || result?.cancelled) return result;
                 if (result?.retryable === false) return result;
                 lastError = new Error(result?.error || '任务执行失败。');
@@ -19614,12 +19628,13 @@
                         ? 'AI 返回缺少 </Memory> 闭合标签'
                         : `${task?.title || '自动任务'}结果确认`,
                     description: needsClosureConfirmation
-                        ? '检测到 AI 已返回内容，但结尾缺少 </Memory> 闭合标签。请自行检查内容是被截断，还是仅遗漏闭合标签；可直接编辑下方内容。确认完整后点击“强制写入”，否则点击“取消写入”。'
+                        ? '检测到 AI 已返回内容，但结尾缺少 </Memory> 闭合标签。请自行检查内容是被截断，还是仅遗漏闭合标签；可直接编辑后“强制写入”，也可点击“重试”重新请求。'
                         : '完成后未启用静默保存，确认后才会写入插件记忆。可先编辑结果再写入。',
                     result,
                     warning: needsClosureConfirmation,
                     confirmLabel: needsClosureConfirmation ? '强制写入' : '确认写入',
                     cancelLabel: needsClosureConfirmation ? '取消写入' : '',
+                    retryLabel: needsClosureConfirmation ? '重试' : '',
                 });
             },
             onAutoTaskFailure(payload = {}) {

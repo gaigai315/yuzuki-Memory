@@ -888,6 +888,34 @@ test('silent automatic summary force-write repairs the edited Memory envelope an
     assert.equal(harness.errorToasts.length, 0);
 });
 
+test('missing Memory close can retry the same automatic summary before anything is saved', async () => {
+    const validResponse = '<Memory>\n【主线总结】\n某日,10:00-10:05 [测试地点] 重试后内容完整。\n</Memory>';
+    const harness = createHarness({
+        generateWithTavern: (attempt) => ({
+            success: true,
+            text: attempt === 1
+                ? '<Memory>\n【主线总结】\n某日,10:00-10:05 [测试地点] 第一次缺少闭合标签。'
+                : validResponse,
+        }),
+        confirmTaskResult: (_result, _task, confirmationOptions) => (
+            confirmationOptions?.reason === 'missing-memory-close'
+                ? { action: 'retry', retry: true }
+                : { action: 'confirm' }
+        ),
+    });
+
+    harness.advance();
+    await harness.runNextTimer();
+
+    assert.equal(harness.generatedCount, 2);
+    assert.equal(harness.resultConfirmations.length, 1);
+    assert.equal(harness.resultConfirmations[0].options.reason, 'missing-memory-close');
+    assert.equal(harness.saveCalls.length, 1);
+    assert.equal(harness.stateRef.current.settings.manualPointers.historySummary, 200);
+    assert.match(harness.stateRef.current.records.memory_summary[0].values.总结内容, /重试后内容完整/);
+    assert.equal(harness.failurePayloads.length, 0);
+});
+
 test('loading a shortened branch removes inherited summaries beyond the branch point', () => {
     const harness = createHarness({ chatLength: 52, activateAfterBind: false });
     const state = harness.stateRef.current;

@@ -510,12 +510,26 @@ test('retry actions close failure dialogs before restarting background work', ()
     assert.notEqual(mountStart, -1, 'mount should exist');
     assert.notEqual(mountEnd, -1, 'MemoryWindow export should follow mount');
     const mountHandler = memoryWindowSource.slice(mountStart, mountEnd);
+    const manualTaskRunner = getFunctionSource(
+        memoryWindowSource,
+        'runSingleTaskBatch',
+        'runTaskBatchWithRetry',
+    );
+    const manualRetryRunner = getFunctionSource(
+        memoryWindowSource,
+        'runTaskBatchWithRetry',
+        'runTaskFromPanel',
+    );
 
     assert.match(directorDialog, /retry\.onclick = \(\) => \{\s*closeDialog\(\);\s*void runManualStoryDirector\(retry\);/);
     assert.match(taskResultDialog, /options\.retryLabel/);
     assert.match(taskResultDialog, /closeWith\(\{ action: 'retry', retry: true \}\)/);
     assert.match(mountHandler, /retryLabel: '重试'/);
     assert.match(mountHandler, /retryPendingAutoTask\?\.\(payload\.sessionId\)/);
+    assert.match(mountHandler, /retryLabel: needsClosureConfirmation \? '重试' : ''/);
+    assert.match(manualTaskRunner, /retryLabel: needsClosureConfirmation \? '重试' : ''/);
+    assert.match(manualTaskRunner, /retryRequested: true/);
+    assert.match(manualRetryRunner, /if \(result\?\.retryRequested\) \{[\s\S]*?attempt -= 1;[\s\S]*?continue;/);
 });
 
 test('content whitelist mismatch uses warning-only task UI without retry dialogs', () => {
