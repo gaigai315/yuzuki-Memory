@@ -153,15 +153,17 @@ test('built-in story director remains independent from prompt schemes', () => {
     assert.match(director.prompt, /登场角色：角色A、角色B/);
     assert.match(director.prompt, /Module5\(己方阵营\/日常事务\/主动谋划\)/);
     assert.match(director.prompt, /所属模块：Module 1/);
-    assert.match(director.prompt, /备选1\(直球升温\)/);
-    assert.match(director.prompt, /情感拉扯\/争宠吃醋\/暧昧私心/);
+    assert.match(director.prompt, /备选1\(越界升温\)/);
+    assert.match(director.prompt, /情感拉扯\/私密情欲\/多角修罗场/);
+    assert.match(director.prompt, /NSFW授权规则（双轨独立判定）/);
+    assert.match(director.prompt, /轨道A或轨道B - 涉事角色/);
     assert.match(director.prompt, /敌对\/设局\/利益博弈/);
     assert.match(director.prompt, /严禁因为当前主线[^\n]*压制情感、社交、日常或第三方支线/);
     assert.match(director.prompt, /用户独处：否/);
     assert.match(director.prompt, /若\{\{user\}\}处于真性独处[^\n]*轨道A[^\n]*跳过[^\n]*独处静默[^\n]*必须跳过描写\{\{user\}\}所在场景/);
     assert.match(director.prompt, /【打破静默】：[^\n]*通过通讯\/上门\/路上偶遇打破用户独处/);
-    assert.match(director.prompt, /角色行动必须在关系网络中形成实质性的“因果扰动与事实落点”/);
-    assert.match(director.prompt, /严禁停留在对现实毫无影响的孤立内心活动/);
+    assert.match(director.prompt, /行动必须在关系网中形成实质性的“因果扰动与事实落点”/);
+    assert.match(director.prompt, /严禁停留在无现实影响的孤立心理活动/);
     assert.doesNotMatch(director.prompt, /跳过执行轨道B/);
 });
 
