@@ -732,6 +732,20 @@ test('newer local story-director toggle survives delayed chat-metadata persisten
     assert.equal(windowChatMetadata.yuzukiMemory.storyDirector.enabled, true);
 });
 
+test('chat normalization drops old planning intervals while preserving per-chat switches', () => {
+    const { storage, localStorage } = createStorageSandbox();
+    const fallback = createFallbackState();
+    for (const [sessionId, enabled, interval] of [['chat:first', true, 3], ['chat:second', false, 5]]) {
+        const state = structuredClone(fallback);
+        state.storyDirector.enabled = enabled;
+        state.storyDirector.autoPlanInterval = interval;
+        localStorage.setItem(storage.getStorageKey(sessionId), JSON.stringify(state));
+        const loaded = storage.loadState(fallback, sessionId);
+        assert.equal(loaded.storyDirector.enabled, enabled);
+        assert.equal(Object.hasOwn(loaded.storyDirector, 'autoPlanInterval'), false);
+    }
+});
+
 test('older local story-director toggle never overrides newer chat metadata', () => {
     const fallback = createFallbackState();
     const sessionId = 'char:0:story-director-order';

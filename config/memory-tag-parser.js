@@ -402,7 +402,8 @@
                 const bracketValue = keyMatch ? keyMatch[1].trim() : '';
                 const bracketIsPlotTime = isPlotTimeBracket(bracketValue);
                 const linePlotKind = !bracketIsPlotTime ? getPlotKind(bracketValue) : '';
-                const targetKind = linePlotKind || currentPlotKind;
+                // Unclassified plot summaries belong to the main storyline.
+                const targetKind = linePlotKind || currentPlotKind || 'main';
                 if (targetKind) {
                     const source = keyMatch && !bracketIsPlotTime ? keyMatch[2] : line;
                     const fallbackTitle = keyMatch && !linePlotKind && !bracketIsPlotTime ? bracketValue : '';

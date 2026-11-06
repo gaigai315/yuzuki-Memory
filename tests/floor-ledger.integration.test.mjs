@@ -562,6 +562,46 @@ test('markerless cloud chat recovers active floors by signature before deletion 
     assert.equal(storedState.floorLedger.activeEntries.length, 1);
 });
 
+test('generic plot summaries write every item to main in realtime and batch trace', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const runner = window.YuzukiMemory.TaskRunner;
+    const message = assistantMemoryMessage([
+        '#剧情摘要',
+        '[2026年1月4日,08:00-09:15]|内容:A和B商量去找C;[09:25-12:15]|内容:A购买礼物',
+        '[2026年1月4日,08:00-09:10]|内容:C和D商讨工作;[09:30-10:20]|内容:C确认账册异常',
+        '#角色档案',
+        '[A]|身份:顾客',
+        '#世界设定',
+        '[商场]|类型:地点|详细说明:城内商场',
+    ].join('\n'));
+    for (const mode of ['realtime', 'trace']) {
+        timers.clear();
+        storedState = parser.createDefaultState();
+        seedRecord(storedState, 'plot_summary', { 主线: '', 支线: '2026年1月3日,10:00-10:10\t原有支线' });
+        chat = [message];
+        let result;
+        if (mode === 'realtime') {
+            result = parser.applyMemoryText(message.mes, { floor: 0, dispatch: false });
+        } else {
+            const parsedResult = runner.rebuildTaskResultFromText('trace', { range: { start: 0, end: 0 } }, message.mes);
+            assert.equal(parsedResult.parsed.memoryRows.length, 6);
+            result = runner.commitTraceResult(storedState, parsedResult);
+        }
+        assert.equal(result.success, true, mode);
+        const plot = storedState.records.plot_summary[0];
+        assert.deepEqual(plot.values.主线.split('\n'), [
+            '2026年1月4日,08:00-09:15\tA和B商量去找C',
+            '2026年1月4日,08:00-09:10\tC和D商讨工作',
+            '2026年1月4日,09:25-12:15\tA购买礼物',
+            '2026年1月4日,09:30-10:20\tC确认账册异常',
+        ], mode);
+        assert.equal(plot.values.支线, '2026年1月3日,10:00-10:10\t原有支线', mode);
+        assert.equal(storedState.records.character_profile[0].values.身份, '顾客', mode);
+        assert.equal(storedState.records.world_setting[0].values.详细说明, '城内商场', mode);
+    }
+    timers.clear();
+});
+
 test('explicit delete event replays plot and character state despite a stale generation flag', () => {
     const parser = window.YuzukiMemory.MemoryTagParser;
     storedState = parser.createDefaultState();

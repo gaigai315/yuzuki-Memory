@@ -5715,6 +5715,47 @@
     gap: 12px;
 }
 
+#yzm-memory-root .yzm-story-director-config-title,
+#yzm-memory-root .yzm-story-director-interval-control {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+#yzm-memory-root .yzm-story-director-config-controls {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+}
+
+#yzm-memory-root .yzm-story-director-config-title {
+    flex-wrap: wrap;
+}
+
+#yzm-memory-root .yzm-story-director-interval-control {
+    min-width: 0;
+    max-width: 100%;
+    margin: 0;
+    color: var(--yzm-muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+#yzm-memory-root .yzm-story-director-interval-control .yzm-config-number-input {
+    min-width: 0;
+    max-width: 100%;
+}
+
+#yzm-memory-root .yzm-story-director-config-help {
+    grid-column: 1 / -1;
+    padding: 8px 10px;
+    color: var(--yzm-muted);
+    background: var(--yzm-input-bg);
+    border-radius: 6px;
+    font-size: 12px;
+    line-height: 1.6;
+}
+
 #yzm-memory-root .yzm-config-switch {
     position: relative;
     --yzm-switch-knob-size: 20px;

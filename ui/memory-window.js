@@ -12454,12 +12454,44 @@
         const settings = getPluginSettings();
         const card = document.createElement('section');
         card.className = 'yzm-config-card yzm-plugin-config-card';
+        const directorIntervalControl = document.createElement('label');
+        directorIntervalControl.className = 'yzm-story-director-interval-control';
+        directorIntervalControl.dataset.yzmStoryDirectorIntervalControl = 'true';
+        directorIntervalControl.hidden = !getStoryDirectorEnabled();
+        directorIntervalControl.append(createStoryDirectorIntervalInput(), document.createTextNode('轮'));
+        const directorControls = createPluginConfigInlineControls(
+            directorIntervalControl,
+            createConfigSwitch(getStoryDirectorEnabled(), 'storyDirectorEnabled')
+        );
+        directorControls.classList.add('yzm-story-director-config-controls');
+        const directorRow = createPluginConfigRow('自动剧情规划', '', 'fa-solid fa-clapperboard', directorControls);
+        directorRow.querySelector('.yzm-plugin-config-title > span')?.remove();
+        const directorHeading = directorRow.querySelector('.yzm-plugin-config-title > div');
+        directorHeading.classList.add('yzm-story-director-config-title');
+        const directorHelp = document.createElement('div');
+        directorHelp.className = 'yzm-story-director-config-help';
+        directorHelp.hidden = true;
+        directorHelp.textContent = '每完成 N 轮对话自动规划一次，最少 1 轮。用户发言与 AI 回复算一轮，AI 开场白不计入。每次规划调用 2 次 API。间隔全局共享，开关按会话保存。关闭后可手动规划。';
+        const directorInfo = document.createElement('button');
+        directorInfo.type = 'button';
+        directorInfo.className = 'yzm-plugin-config-update-notice';
+        directorInfo.title = '剧情规划说明';
+        directorInfo.setAttribute('aria-label', '查看剧情规划说明');
+        directorInfo.setAttribute('aria-expanded', 'false');
+        directorInfo.appendChild(createIconNode('fa-solid fa-circle-info', ''));
+        directorInfo.addEventListener('click', (event) => {
+            event.stopPropagation();
+            directorHelp.hidden = !directorHelp.hidden;
+            directorInfo.setAttribute('aria-expanded', String(!directorHelp.hidden));
+        });
+        directorHeading.appendChild(directorInfo);
+        directorRow.appendChild(directorHelp);
 
         card.append(
             createPluginConfigHeader(),
             createPluginConfigRow('注入记忆', '将表格内容及总结内容注入正文请求中。', 'fa-solid fa-table-cells-large', createConfigSwitch(settings.injectMemoryTable, 'injectMemoryTable')),
             createPluginConfigRow('注入向量化记忆', '启用向量化功能，并将召回的记忆注入请求中。', 'fa-solid fa-diagram-project', createConfigSwitch(settings.injectVectorMemory, 'injectVectorMemory')),
-            createPluginConfigRow('自动剧情规划', '开启后，AI 正文回复后自动规划；不开启则为手动规划。', 'fa-solid fa-clapperboard', createConfigSwitch(getStoryDirectorEnabled(), 'storyDirectorEnabled')),
+            directorRow,
             createPluginConfigRow('智能计算联动', '勾选后，当手动填写隐藏楼层/小总结构层处时，自动帮助填写其他楼层数值合理化', 'fa-solid fa-bolt', createConfigSwitch(settings.smartCalculationLinkage, 'smartCalculationLinkage')),
             createPluginConfigRow('悬浮入口', '开启后显示全局悬浮图标；单击打开记忆，双击打开角色图谱，长按查看当前最新导演卡。图标样式和拖动位置都会记住。', 'fa-solid fa-compass', createConfigSwitch(settings.enableFloatingIcon, 'enableFloatingIcon'), createFloatingIconStylePicker(settings.floatingIconStyle)),
             createPluginConfigRow('隐藏楼层', '保留楼层数量', 'fa-solid fa-eye-slash', createPluginConfigInlineControls(createConfigNumberInput(settings.hiddenFloorCount, 'hiddenFloorCount'), createConfigSwitch(settings.hideFloorsEnabled, 'hideFloorsEnabled'))),
@@ -13073,6 +13105,22 @@
         if (!button) return;
         button.classList.toggle('yzm-config-switch-on', !!isOn);
         button.setAttribute('aria-pressed', String(!!isOn));
+    }
+
+    function createStoryDirectorIntervalInput() {
+        const input = createConfigNumberInput(YuzukiMemory.StoryDirectorRuntime?.getAutoPlanInterval?.() || 1);
+        input.min = '1';
+        input.dataset.yzmStoryDirectorInterval = 'true';
+        input.setAttribute('aria-label', '每多少轮自动剧情规划一次');
+        return input;
+    }
+
+    function saveStoryDirectorIntervalInput(input) {
+        const runtime = YuzukiMemory.StoryDirectorRuntime;
+        if (!runtime?.setAutoPlanInterval?.(input.value)) {
+            showTaskToast('自动规划间隔未保存，请重试。', 'error');
+        }
+        input.value = String(runtime?.getAutoPlanInterval?.() || 1);
     }
 
     function createConfigNumberInput(value, settingKey = '') {
@@ -13738,7 +13786,7 @@
         [
             '一般用于总结时，只需保留剧情时间、状态栏和剧情正文；思维链、行动选项、小剧场、摘要等不需要进入总结的文字，应优先加入黑名单剔除。',
             '正文是裸文本时，白名单必须留空；不确定时优先只用黑名单或点击“自动诊断”。',
-            '只有正文确实被 <content>...</content> 包裹时，才把 content 填入白名单；任一 Assistant 楼层缺少该标签时，填表或总结会停止并提示。',
+            '只有正文确实被 <content>...</content> 包裹时，才把 content 填入白名单；填表和总结中，某楼缺少 content 标签时，会保留该楼清洗后的正文并继续应用黑名单，不会因此停止任务。',
             '白名单不会清理保留内容里的嵌套标签；例如 <thinking> 位于 <content> 内时，还需把 thinking 加入黑名单。',
             '同一标签不要同时填入黑名单和白名单，否则它会先被黑名单删除。',
             '不要填写 <content>、</content>、[时间][/时间]、<!-- --> 或 |--。',
@@ -15135,7 +15183,10 @@
         plotSummaryCollapsedDays.add(key);
     }
 
-    function groupPlotSummaryItemsByDay(items = []) {
+    function groupPlotSummaryItemsByDay(items = [], options = {}) {
+        if (typeof YuzukiMemory.PlotSummary?.groupItemsByDay === 'function') {
+            return YuzukiMemory.PlotSummary.groupItemsByDay(items, options);
+        }
         const groups = [];
         const byDate = new Map();
         items.forEach((item) => {
@@ -15223,7 +15274,9 @@
                 ...items.filter((item) => !item.hidden),
                 ...items.filter((item) => item.hidden),
             ];
-            const groups = groupPlotSummaryItemsByDay(displayItems);
+            const groups = groupPlotSummaryItemsByDay(displayItems, {
+                contextDates: [getRecordValue(record, '主线'), getRecordValue(record, '支线')],
+            });
             groups.forEach((group, index) => {
                 list.appendChild(createPlotSummaryDayGroup(group, kind, isPlotDayExpanded(kind, group.date, index, group, groups)));
             });
@@ -15661,8 +15714,9 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '剧情规划失败时显示具体原因和 AI 原始返回，方便排查问题。',
-            '修复 MVU 额外模型解析后生成状态未释放，导致自动总结和自动批量填表无法触发的问题。',
+            '修复剧情摘要因日期写法不同，将同一天拆成多组的问题。',
+            '自动剧情规划新增轮数间隔设置，AI 开场白不计入轮数。',
+            '实时填表和批量填表兼容 #剧情摘要 格式，未区分主支线时自动归入主线摘要。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -18870,6 +18924,10 @@
             });
             configView.addEventListener('change', (event) => {
                 const target = event.target;
+                if (target?.matches?.('[data-yzm-story-director-interval]')) {
+                    saveStoryDirectorIntervalInput(target);
+                    return;
+                }
                 if (!target?.matches?.('[data-yzm-preset-select]')) return;
                 applyTagPreset(root, target.value);
             });
@@ -19114,6 +19172,12 @@
             });
             configView.addEventListener('blur', (event) => {
                 const target = event.target;
+                if (target?.matches?.('[data-yzm-story-director-interval]')) {
+                    if (target.value !== String(YuzukiMemory.StoryDirectorRuntime?.getAutoPlanInterval?.() || 1)) {
+                        saveStoryDirectorIntervalInput(target);
+                    }
+                    return;
+                }
                 if (target?.matches?.('.yzm-auto-summary-number-input[data-yzm-auto-summary-setting]')) {
                     normalizeAutoSummaryNumberInput(target);
                     updateAutoSummarySetting(target.dataset.yzmAutoSummarySetting, Number(target.value));
@@ -19446,6 +19510,13 @@
         }
         loadedSessionId = getStorage()?.getCurrentSessionId?.() || loadedSessionId;
         memoryState = prepareLoadedState(getStorage()?.loadState?.(createDefaultState(), loadedSessionId));
+        // Saving a numeric preference must preserve the focused input and mobile keyboard.
+        if (event?.detail?.source === 'story-director-interval') return;
+        if (event?.detail?.source === 'story-director-toggle') {
+            const intervalControl = root.querySelector('[data-yzm-story-director-interval-control]');
+            if (intervalControl) intervalControl.hidden = memoryState?.storyDirector?.enabled !== true;
+            return;
+        }
         activeHistorianPromptDraft = null;
         activeCharacterStatusPromptDraft = null;
         activeStoryDirectorPromptDraft = null;

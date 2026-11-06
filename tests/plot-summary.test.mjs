@@ -131,6 +131,85 @@ test('modern date parsing remains unchanged', () => {
     assert.equal(items[0].endTime, '15:00');
 });
 
+test('display grouping reunites the screenshot dates and preserves every source node', () => {
+    const items = plotSummary.normalizeStoredItems([
+        '0117年12月06日,12:00-12:30\t午间事件',
+        '0117年12月07日,09:00-09:30\t次日事件',
+        '上弦历117年12月06日,08:00-08:30\t早间事件',
+    ]).map((item, index) => ({ ...item, id: `node-${index}`, hidden: false }));
+    const before = JSON.stringify(items);
+    const groups = plotSummary.groupItemsByDay(items);
+
+    assert.equal(groups.length, 2);
+    assert.equal(groups[0].date, '上弦历117年12月06日');
+    assert.equal(groups[1].date, '上弦历117年12月07日');
+    assert.deepEqual(Array.from(groups[0].items, (item) => item.text), ['早间事件', '午间事件']);
+    assert.equal(groups.flatMap((group) => group.items).length, 3);
+    assert.ok(groups[0].items.every((item) => items.includes(item)));
+    assert.equal(JSON.stringify(items), before);
+});
+
+test('display grouping normalizes padding, separators, and Chinese regnal numerals', () => {
+    const modern = plotSummary.groupItemsByDay([
+        { date: '2026年1月6日' }, { date: '2026-01-06' }, { date: '2026/1/6' },
+    ]);
+    assert.equal(modern.length, 1);
+    assert.equal(modern[0].date, '2026年01月06日');
+    const ancient = plotSummary.groupItemsByDay([
+        { date: '景和七年正月初六日' }, { date: '景和7年01月06日' },
+    ]);
+    assert.equal(ancient.length, 1);
+    assert.equal(ancient[0].date, '景和七年正月初六日');
+});
+
+test('display calendar inference uses chat context and remains local to each call', () => {
+    const items = [{ date: '0117年12月07日' }];
+    const options = { contextDates: ['上弦历117年12月06日,08:00\t另一个摘要分组'] };
+    assert.equal(plotSummary.groupItemsByDay(items, options)[0].date, '上弦历117年12月07日');
+    assert.equal(plotSummary.groupItemsByDay(items, {
+        contextDates: ['上弦历117年12月06日,08:00\t提到下弦历117年12月06日的往事'],
+    })[0].date, '上弦历117年12月07日');
+    assert.equal(plotSummary.groupItemsByDay(items)[0].date, '0117年12月07日');
+    assert.equal(plotSummary.groupItemsByDay([{ date: '0118年1月1日' }], options)[0].date, '0118年01月01日');
+});
+
+test('competing calendars and yearless dates remain separate', () => {
+    const groups = plotSummary.groupItemsByDay([
+        { date: '上弦历117年12月06日' }, { date: '下弦历117年12月06日' },
+        { date: '0117年12月06日' }, { date: '12月06日' }, { date: '' },
+    ]);
+    assert.equal(groups.length, 5);
+    assert.equal(new Set(groups.map((group) => group.date)).size, 5);
+    const ambiguous = plotSummary.groupItemsByDay([{ date: '0117年12月06日' }], {
+        contextDates: ['上弦历117年12月07日', '下弦历117年12月08日'],
+    });
+    assert.equal(ambiguous[0].date, '0117年12月06日');
+});
+
+test('display grouping preserves identical nodes, hidden states and chronological ordering', () => {
+    const hidden = { date: '117年12月6日', startTime: '07:00', hidden: true, id: 'hidden' };
+    const duplicate = { date: '0117年12月06日', startTime: '08:00', id: 'first' };
+    const groups = plotSummary.groupItemsByDay([
+        hidden, { date: '117年12月6日', startTime: '12:00', id: 'late' },
+        duplicate, { ...duplicate, id: 'second' },
+    ]);
+    assert.deepEqual(Array.from(groups[0].items, (item) => item.id), ['first', 'second', 'late', 'hidden']);
+    assert.equal(groups[0].items[3], hidden);
+});
+
+test('plot UI delegates grouping with dates from both current-chat summary fields', () => {
+    const uiSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
+    const match = uiSource.match(/    function groupPlotSummaryItemsByDay\(items = \[\], options = \{\}\) \{[\s\S]*?\n    \}/);
+    assert.ok(match);
+    const uiSandbox = { YuzukiMemory: { PlotSummary: plotSummary } };
+    vm.createContext(uiSandbox);
+    vm.runInContext(`${match[0]}\nresult = groupPlotSummaryItemsByDay;`, uiSandbox);
+    assert.equal(uiSandbox.result([{ date: '0117年12月06日' }], {
+        contextDates: ['上弦历117年12月07日'],
+    })[0].date, '上弦历117年12月06日');
+    assert.match(uiSource, /groupPlotSummaryItemsByDay\(displayItems, \{\s*contextDates: \[getRecordValue\(record, '主线'\), getRecordValue\(record, '支线'\)\]/);
+});
+
 test('plot record normalization keeps metadata and hidden state aligned after time sorting', () => {
     const normalizerSandbox = loadPlotRecordNormalizer();
     const record = {
@@ -265,6 +344,30 @@ test('realtime plot batch inherits its first explicit date instead of the histor
 </Memory>`);
     assert.equal(leadingTimeRows.length, 2);
     assert.equal(leadingTimeRows[0].values['日期'], '2026年1月4日,11:30-11:40');
+});
+
+test('generic plot headings default to main while explicit storyline labels still take precedence', () => {
+    const parser = createParserSandbox();
+    const rows = parser.extractMemoryRows(`<Memory><!--
+#剧情摘要
+[2026年1月4日,08:00-09:15]|内容:A和B商量去找C;[09:25-12:15]|内容:A购买礼物
+[2026年1月4日,08:00-09:10]|内容:C和D商讨工作;[09:30-10:20]|内容:C确认账册异常
+[支线摘要]|日期:2026年1月4日,13:00-13:10|内容:D联系同事
+#支线摘要
+[2026年1月4日,14:00-14:10]|内容:D离开公司
+#剧情摘要
+[2026年1月4日,15:00-15:10]|内容:A回到家中
+#角色档案
+[A]|身份:顾客
+--></Memory>`);
+    assert.equal(rows.length, 8);
+    assert.deepEqual(Array.from(rows.slice(0, 7), row => row.primaryValue), [
+        '主线摘要', '主线摘要', '主线摘要', '主线摘要', '支线摘要', '支线摘要', '主线摘要',
+    ]);
+    assert.equal(rows[1].values.日期, '2026年1月4日,09:25-12:15');
+    assert.equal(rows[3].values.日期, '2026年1月4日,09:30-10:20');
+    assert.equal(rows[7].table, '角色档案');
+    assert.equal(rows[7].values.身份, '顾客');
 });
 
 test('plot extraction rejects explicit OOC and quote blocks without filtering narrative mentions', () => {

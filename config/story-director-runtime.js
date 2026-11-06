@@ -71,6 +71,7 @@
 
 没有名册变更时，<角色账本更新>保持为空。没有新的Assistant正文需要记录时只输出“发生: 否”。`;
     const RUN_DELAY_MS = 1800;
+    const AUTO_PLAN_INTERVAL_KEY = 'yzm_memory_global_story_director_auto_plan_interval';
     const MESSAGE_MUTATION_SETTLE_MS = 250;
     const RUN_STATE_EVENT = 'yzm-story-director-run-state';
     const EMPTY_RESPONSE_MAX_RETRIES = 2;
@@ -108,6 +109,52 @@
 
     function isStoryDirectorEnabled(sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.()) {
         return loadState(sessionId)?.storyDirector?.enabled === true;
+    }
+
+    function normalizeAutoPlanInterval(value) {
+        const number = Number(value);
+        return Number.isFinite(number) ? Math.max(1, Math.min(9999, Math.floor(number))) : 1;
+    }
+
+    function getAutoPlanInterval() {
+        return normalizeAutoPlanInterval(YuzukiMemory.GlobalSettings?.get?.(AUTO_PLAN_INTERVAL_KEY, 1));
+    }
+
+    function setAutoPlanInterval(value) {
+        if (!YuzukiMemory.GlobalSettings?.set) return false;
+        try {
+            YuzukiMemory.GlobalSettings.set(AUTO_PLAN_INTERVAL_KEY, normalizeAutoPlanInterval(value));
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to save automatic story-planning interval.', error);
+            return false;
+        }
+        window.dispatchEvent(new CustomEvent('yzm-memory-state-updated', {
+            detail: { source: 'story-director-interval' },
+        }));
+        return true;
+    }
+
+    function getCompletedDialogueAssistantIndices(chat = getContext()?.chat) {
+        const indices = [];
+        let awaitingAssistant = false;
+        (Array.isArray(chat) ? chat : []).forEach((message, index) => {
+            if (!isDialogueMessage(message) || isPluginMessage(message)
+                || ['system', 'tool', 'function'].includes(String(message.role || '').toLowerCase())
+                || !getMessageText(message).trim()) return;
+            // Hidden story floors still count. An opening greeting has no preceding User.
+            if (isUserMessage(message)) {
+                awaitingAssistant = true;
+            } else if (awaitingAssistant && isAssistantMessage(message)) {
+                indices.push(index);
+                awaitingAssistant = false;
+            }
+        });
+        return indices;
+    }
+
+    function getCompletedDialogueRounds(chat = getContext()?.chat) {
+        const indices = getCompletedDialogueAssistantIndices(chat);
+        return { completedRounds: indices.length, lastCompletedAssistantIndex: indices.at(-1) ?? -1 };
     }
 
     function isRunning() {
@@ -934,6 +981,26 @@
         return buildAssistantAnchor(chat[floor], floor, sessionId);
     }
 
+    function collectAssistantReviews(visibleChat, sessionId, ledger, latestAssistantReview) {
+        const interval = getAutoPlanInterval();
+        if (interval === 1) return latestAssistantReview?.shouldRecord ? [latestAssistantReview] : [];
+        const visibleFloors = new Set(visibleChat.filter((message) => message.role === 'assistant')
+            .map((message) => Number(message.floor)));
+        const chat = getContext()?.chat || [];
+        const maxFloor = latestAssistantReview?.source?.assistantIndex ?? -1;
+        const sources = getCompletedDialogueAssistantIndices(chat)
+            .filter((floor) => floor <= maxFloor)
+            .slice(-interval)
+            .filter((floor) => visibleFloors.has(floor))
+            .map((floor) => buildAssistantAnchor(chat[floor], floor, sessionId))
+            .filter(Boolean);
+        // Manual planning of an opening greeting remains supported.
+        if (!sources.length && latestAssistantReview?.shouldRecord) sources.push(latestAssistantReview.source);
+        const history = readRoleAppearanceHistory(ledger);
+        return sources.filter((source) => !history.some((entry) => assistantSourcesMatch(entry.source, source)))
+            .map((source) => ({ source, shouldRecord: true }));
+    }
+
     function buildTrackBModuleBinding(director, source, ledger = '') {
         const user = findRespondedUserAnchor(source);
         if (!user || hasTrackBHistorySource(ledger, source)) return null;
@@ -1738,6 +1805,35 @@
         return { rosterUpdates, actualTrackB: { occurred, entries } };
     }
 
+    function parseRoleLedgerUpdates(result, reviews, latestAssistantReview) {
+        if (reviews.length <= 1) {
+            const review = reviews[0] || latestAssistantReview;
+            const update = parseRoleLedgerUpdate(result, review);
+            return { rosterUpdates: update.rosterUpdates, reviews: review?.shouldRecord
+                ? [{ ...update.actualTrackB, source: review.source }] : [] };
+        }
+        const text = readAgentResultText(result);
+        const roster = readSingleDirectorPlanTag(text, '角色账本更新');
+        const pattern = /<轨道B最后一轮角色出场账本>([\s\S]*?)<\/轨道B最后一轮角色出场账本>/gi;
+        const blocks = [...text.matchAll(pattern)];
+        if (blocks.length !== reviews.length || text.replace(roster.full, '').replace(pattern, '').trim()) {
+            throw new Error('第一轮必须为每个指定楼层分别输出一次角色出场账本，不得缺漏或追加其他内容。');
+        }
+        const updates = new Map();
+        let rosterUpdates = [];
+        blocks.forEach((block) => {
+            const floorMatch = block[1].trim().match(/^楼层\s*[:：]\s*(\d+)\s*\r?\n/);
+            const floor = floorMatch ? Number(floorMatch[1]) : -1;
+            const review = reviews.find((item) => item.source.assistantIndex === floor);
+            if (!review || updates.has(floor)) throw new Error('角色出场账本的楼层未指定、重复或不在本次核验范围内。');
+            const body = block[1].trim().slice(floorMatch[0].length);
+            const update = parseRoleLedgerUpdate({ text: `${roster.full}\n<轨道B最后一轮角色出场账本>\n${body}\n</轨道B最后一轮角色出场账本>` }, review);
+            rosterUpdates = update.rosterUpdates;
+            updates.set(floor, { ...update.actualTrackB, source: review.source });
+        });
+        return { rosterUpdates, reviews: reviews.map((review) => updates.get(review.source.assistantIndex)) };
+    }
+
     function parseFinalDirectorCard(result) {
         const source = readAgentResultText(result);
         const matches = source.match(/<下轮导演卡>[\s\S]*?<\/下轮导演卡>/gi) || [];
@@ -1810,6 +1906,7 @@
         const markLatestAssistant = options.markLatestAssistant === true;
         const rawReviewFloor = Number(context?.latestAssistantReview?.assistantFloor);
         const reviewFloor = Number.isFinite(rawReviewFloor) ? Math.max(0, Math.round(rawReviewFloor)) : -1;
+        const batchFloors = new Set((context.assistantReviews || []).map((review) => review.assistantFloor));
         const messages = (Array.isArray(context?.profileMessages) ? context.profileMessages : [])
             .map((message) => ({
                 role: 'system',
@@ -1848,8 +1945,10 @@
                 const role = message?.role === 'user' ? 'user' : 'assistant';
                 const floor = Math.max(0, Math.round(Number(message?.floor) || 0));
                 let content = String(message?.content || '');
-                if (markLatestAssistant && role === 'assistant' && floor === reviewFloor) {
-                    const instruction = '当前核验目标为此楼正文；根据此楼内容更新<角色账本更新>及<轨道B最后一轮角色出场账本>。';
+                if (markLatestAssistant && role === 'assistant' && (batchFloors.size ? batchFloors.has(floor) : floor === reviewFloor)) {
+                    const instruction = batchFloors.size
+                        ? '本次轨道B待核验楼层；只记录此楼实际发生的轨道B角色、题材模块和事件，返回账本时注明此楼层编号。'
+                        : '当前核验目标为此楼正文；根据此楼内容更新<角色账本更新>及<轨道B最后一轮角色出场账本>。';
                     content = `[楼层 ${floor}] ${instruction}\n${content}`;
                 }
                 return { role, content };
@@ -1865,16 +1964,35 @@
                 ledger: context.ledger,
                 anchor: context.anchor,
                 latestAssistantReview: context.latestAssistantReview,
+                ...(context.assistantReviews ? { assistantReviews: context.assistantReviews } : {}),
             }),
         };
     }
 
     function buildRoleLedgerMessages(context) {
+        const batch = (context.assistantReviews || []).length > 1;
+        const prompt = batch ? [
+            ROLE_LEDGER_PROMPT.slice(0, ROLE_LEDGER_PROMPT.indexOf('【轨道B核验规则】'))
+                .replace('最后一条实际Assistant正文', '本次标记的各条Assistant正文'),
+            ROLE_LEDGER_PROMPT.slice(ROLE_LEDGER_PROMPT.indexOf('【轨道B核验规则】'), ROLE_LEDGER_PROMPT.indexOf('1. 核验系统提供的 latestAssistantReview')),
+            '【逐楼核验规则】',
+            '系统 assistantReviews 列出了本次必须逐条核验的 Assistant 原始楼层，正文也已逐楼标记。未标记正文只作背景参考，不得将其中事件记入目标楼层。',
+            '对每个指定楼层独立核验轨道B实际登场角色、题材模块和具体事件。仅被提及、回忆、讨论、等待或计划不算实际出场。不得只检查最后一楼，也不得合并多个楼层为一轮。',
+            '只记录正文已发生事实；禁止依据旧导演卡、候选方向或计划推测事件。按各场景实际主要驱动力分类 Module1 至 Module5，同一楼有多个场景时分别记录。',
+            '角色名册只输出一次增量更新；没有名册更新时标签内留空。每个指定楼层分别输出一个 <轨道B最后一轮角色出场账本>，第一行必须为“楼层: 原始楼层编号”，第二行为“发生: 是”或“发生: 否”。',
+            '发生为是时，后续每行格式为“[角色标准名] | Module1 | 此楼实际发生的具体事件”，模块按事实填写。没有轨道B时写“发生: 否”，不得编造补齐。每个楼层必须恰好返回一次。',
+            '严格只输出一次 <角色账本更新> 和指定楼层各自的出场账本标签，禁止 JSON、代码块、标签外文字及 <下轮导演卡>。',
+            '<角色账本更新>\n</角色账本更新>',
+            ...context.assistantReviews.map((review) => `<轨道B最后一轮角色出场账本>\n楼层: ${review.assistantFloor}\n发生: 否\n</轨道B最后一轮角色出场账本>`),
+            '以上空账本仅示范结构；实际发生的场景必须据实填写，不得一律填“否”。',
+        ].join('\n\n') : ROLE_LEDGER_PROMPT;
         return YuzukiMemory.TaskRunner.appendTaskInstructions(
             buildDirectorContextMessages(context, { markLatestAssistant: true }),
             [
-                resolveDirectorVariables(ROLE_LEDGER_PROMPT),
-                '第一轮：只更新角色账本。根据全部资料输出一次 <角色账本更新> 和一次 <轨道B最后一轮角色出场账本>，不得生成或讨论 <下轮导演卡>。',
+                resolveDirectorVariables(prompt),
+                batch
+                    ? '第一轮：只更新角色账本。逐一核验所有标记楼层，逐楼输出带楼层编号的出场账本，不得生成或讨论 <下轮导演卡>。'
+                    : '第一轮：只更新角色账本。根据全部资料输出一次 <角色账本更新> 和一次 <轨道B最后一轮角色出场账本>，不得生成或讨论 <下轮导演卡>。',
             ],
         );
     }
@@ -2036,9 +2154,14 @@
         activeRunSignature = source.signature;
         activeRunIsManual = manualRun;
         dispatchRunState(true, sessionId);
+        let assistantReviews = [];
         const assertActive = () => {
             if (controller.signal.aborted || (!manualRun && !isStoryDirectorEnabled(sessionId))) throw new DOMException('Aborted', 'AbortError');
             if (!sourceIsValid(source)) throw new Error('导演完成前正文分支或会话已经变化。');
+            if (assistantReviews.some((review) => !assistantSourcesMatch(review.source,
+                buildAssistantAnchor(getContext()?.chat?.[review.source.assistantIndex], review.source.assistantIndex, sessionId)))) {
+                throw new Error('导演核验期间目标楼层正文或分支已经变化。');
+            }
         };
         try {
             await waitForDirectorWork(() => YuzukiMemory.readyPromise, controller.signal);
@@ -2064,16 +2187,23 @@
                 source: latestAssistantSource,
                 shouldRecord: preservedAppearance.alreadyRecorded !== true,
             } : null;
-            const trackBModuleBinding = latestAssistantReview?.shouldRecord === true
-                ? buildTrackBModuleBinding(previousDirector, latestAssistantSource, ledger)
-                : null;
+            assistantReviews = collectAssistantReviews(visibleChat, sessionId, ledger, latestAssistantReview);
+            const trackBModuleBindings = new Map(assistantReviews.map((review) => [
+                review.source.assistantIndex, buildTrackBModuleBinding(previousDirector, review.source, ledger),
+            ]));
             const vectors = await waitForDirectorWork(
                 () => searchVectorMemories(visibleChat), controller.signal,
             );
             assertActive();
             const context = await waitForDirectorWork(
-                () => prepareDirectorContext(state, source, ledger, latestAssistantReview, visibleChat, vectors), controller.signal,
+                () => prepareDirectorContext(state, source, ledger,
+                    assistantReviews.length === 1 ? assistantReviews[0] : latestAssistantReview, visibleChat, vectors), controller.signal,
             );
+            if (assistantReviews.length > 1) {
+                context.assistantReviews = assistantReviews.map((review) => ({
+                    assistantFloor: review.source.assistantIndex, shouldRecord: true,
+                }));
+            }
             assertActive();
             const snapshot = YuzukiMemory.TaskRunner?.createLlmRequestSnapshot?.('storyDirector') || { mode: 'tavern', preset: null };
             const tools = [];
@@ -2093,24 +2223,24 @@
             const roleLedgerResult = await requestPass(roleLedgerMessages, 1);
             let roleLedgerUpdate;
             try {
-                roleLedgerUpdate = parseRoleLedgerUpdate(roleLedgerResult, latestAssistantReview);
+                roleLedgerUpdate = parseRoleLedgerUpdates(roleLedgerResult, assistantReviews, latestAssistantReview);
             } catch (error) {
                 throw createDirectorValidationError('剧情导演第一轮账本校验失败', error, roleLedgerResult);
             }
 
             let finalLedger = mergeCharacterRoster(ledger, roleLedgerUpdate.rosterUpdates);
-            if (latestAssistantReview?.shouldRecord === true) {
+            for (const review of roleLedgerUpdate.reviews) {
                 finalLedger = appendRoleAppearanceHistory(finalLedger, {
-                    occurred: roleLedgerUpdate.actualTrackB.occurred,
-                    entries: roleLedgerUpdate.actualTrackB.entries,
-                    source: latestAssistantReview.source,
+                    occurred: review.occurred,
+                    entries: review.entries,
+                    source: review.source,
                 });
-            }
-            if (trackBModuleBinding && roleLedgerUpdate.actualTrackB.occurred) {
-                const roles = [...new Set(roleLedgerUpdate.actualTrackB.entries
+                const trackBModuleBinding = trackBModuleBindings.get(review.source.assistantIndex);
+                if (!trackBModuleBinding || !review.occurred) continue;
+                const roles = [...new Set(review.entries
                     .map((entry) => normalizeCharacterRosterName(entry.name))
                     .filter(Boolean))].join('、');
-                const event = [...new Set(roleLedgerUpdate.actualTrackB.entries
+                const event = [...new Set(review.entries
                     .map((entry) => normalizeRoleAppearanceEvent(entry.event))
                     .filter(Boolean))].join('；');
                 finalLedger = appendActualTrackBHistory(finalLedger, {
@@ -2125,6 +2255,7 @@
                 ...context,
                 ledger: serializeDirectorLedgerForModel(finalLedger),
                 latestAssistantReview: null,
+                ...(context.assistantReviews ? { assistantReviews: [] } : {}),
             };
             const planningMessages = buildDirectorMessages(promptEntry.prompt, planningContext);
             const planningResult = await requestPass(planningMessages, 2);
@@ -2450,6 +2581,10 @@
             rememberDialogueMutationSnapshot();
             const state = loadState(source.sessionId);
             const director = state?.storyDirector || {};
+            const rounds = getCompletedDialogueRounds();
+            const interval = getAutoPlanInterval();
+            if (rounds.lastCompletedAssistantIndex !== source.assistantIndex
+                || rounds.completedRounds === 0 || rounds.completedRounds % interval !== 0) return;
             if (director.pendingCard && director.source?.signature === source.signature && sourceMatchesCurrentMessage(director.source)) return;
             if (activeRunSignature === source.signature) return;
             console.info('[yuzuki-Memory] 剧情导演开始运行。', { reason, assistantIndex: source.assistantIndex });
@@ -2805,6 +2940,9 @@
         clearPendingCard,
         discardPendingCard,
         scheduleDirector,
+        getAutoPlanInterval,
+        setAutoPlanInterval,
+        getCompletedDialogueRounds,
         cancelActiveRun,
         disableAutomaticPlanning,
         isStoryDirectorEnabled,

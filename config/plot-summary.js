@@ -443,6 +443,67 @@
             .map((item, index) => ({ ...item, index, title: `节点 ${String(index + 1).padStart(2, '0')}` }));
     }
 
+    // Resolve display groups without rewriting stored dates or merging source nodes.
+    function groupItemsByDay(items = [], options = {}) {
+        const parsedItems = items.map((item) => ({ item, parts: parseDateToken(item.date) }));
+        const erasByYear = new Map();
+        const rememberEra = (parts) => {
+            if (!parts?.era || parts.year === null) return;
+            if (!erasByYear.has(parts.year)) erasByYear.set(parts.year, new Set());
+            erasByYear.get(parts.year).add(parts.era);
+        };
+        parsedItems.forEach(({ parts }) => rememberEra(parts));
+        (options.contextDates || []).forEach((text) => {
+            String(text || '').split(/\n+/).flatMap(splitEntries).forEach((entry) => {
+                // Narrative references to other dates are not calendar declarations.
+                const { time } = splitTimeAndContent(entry);
+                getDateTokenMatches(time || entry).forEach(({ token }) => rememberEra(parseDateToken(token)));
+            });
+        });
+
+        const byDate = new Map();
+        parsedItems.forEach(({ item, parts }) => {
+            let era = parts?.era || '';
+            const candidates = erasByYear.get(parts?.year);
+            // A year with competing calendars is ambiguous: keep unnamed dates separate.
+            if (parts && !era && parts.year !== null && candidates?.size === 1) {
+                era = [...candidates][0];
+            }
+            const fallbackDate = String(item.date || '未记录日期').trim() || '未记录日期';
+            const key = parts
+                ? JSON.stringify([era, parts.year, parts.month, parts.day])
+                : JSON.stringify(['raw', fallbackDate]);
+            if (!byDate.has(key)) {
+                const yearText = !parts || parts.year === null ? ''
+                    : `${era ? parts.year : String(parts.year).padStart(4, '0')}年`;
+                const date = parts
+                    ? `${era}${yearText}${String(parts.month).padStart(2, '0')}月${String(parts.day).padStart(2, '0')}日`
+                    : fallbackDate;
+                byDate.set(key, { date, items: [], parts, hasExplicitEra: false });
+            }
+            const group = byDate.get(key);
+            // Preserve an actual named date as the heading (including regnal notation).
+            if (parts?.era && !group.hasExplicitEra) {
+                group.date = fallbackDate;
+                group.hasExplicitEra = true;
+            }
+            group.items.push(item);
+        });
+
+        return [...byDate.values()]
+            .sort((a, b) => {
+                if (!a.parts || !b.parts) return Number(!a.parts) - Number(!b.parts);
+                return (a.parts.year ?? 2000) - (b.parts.year ?? 2000)
+                    || a.parts.month - b.parts.month || a.parts.day - b.parts.day;
+            })
+            .map(({ date, items: dayItems }) => ({
+                date,
+                items: [...dayItems].sort((a, b) => Number(!!a.hidden) - Number(!!b.hidden)
+                    || (getClockRange(a.startTime)?.start ?? Number.MAX_SAFE_INTEGER)
+                    - (getClockRange(b.startTime)?.start ?? Number.MAX_SAFE_INTEGER)),
+            }));
+    }
+
     function normalizeStoredLines(source = '', options = {}) {
         return normalizeStoredItems(source, options).map((item) => item.raw).join('\n');
     }
@@ -453,6 +514,7 @@
         getClockRange,
         getDateToken,
         getDateTokenMatches,
+        groupItemsByDay,
         parseDateToken,
         normalizeStoredItems,
         normalizeStoredLines,

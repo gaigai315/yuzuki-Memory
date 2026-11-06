@@ -33,6 +33,8 @@ test('tag filter help keeps its entry point, behavior, examples, and scoped styl
     assert.ok(uiSource.includes('思维链、行动选项、小剧场、摘要等不需要进入总结的文字，应优先加入黑名单剔除'));
     assert.ok(uiSource.includes('正文是裸文本时，白名单必须留空'));
     assert.ok(uiSource.includes('只有正文确实被 <content>...</content> 包裹时，才把 content 填入白名单'));
+    assert.ok(uiSource.includes('某楼缺少 content 标签时，会保留该楼清洗后的正文并继续应用黑名单'));
+    assert.equal(uiSource.includes('任一 Assistant 楼层缺少该标签时，填表或总结会停止并提示'), false);
     assert.ok(uiSource.includes('<thinking>内部推理</thinking>剧情正文<Memory>填表内容</Memory>'));
     assert.ok(uiSource.includes('<content>剧情正文</content><thinking>内部推理</thinking>'));
     assert.ok(uiSource.includes('<content>剧情正文<thinking>内部推理</thinking></content><statusbar>状态</statusbar>'));
@@ -320,7 +322,7 @@ function createTagWhitelistGuardSandbox(chat, preset = { id: 'content-whitelist'
     };
 }
 
-test('content whitelist blocks trace and summary only when every non-empty floor has no boundary', async (t) => {
+test('content whitelist falls back to cleaned source floors for trace and summary when every floor lacks a boundary', async (t) => {
     const cases = [
         {
             name: 'single raw Assistant',
@@ -328,28 +330,38 @@ test('content whitelist blocks trace and summary only when every non-empty floor
                 { is_user: true, name: '用户', mes: '用户裸文本不应触发拦截' },
                 { is_user: false, name: '角色', mes: '没有 content 标签的助手正文' },
             ],
-            missingFloors: [0, 1],
+            expectedTexts: ['用户裸文本不应触发拦截', '没有 content 标签的助手正文'],
         },
         {
-            name: 'image replacement remains non-empty and requires a boundary',
+            name: 'image placeholder remains available without a content boundary',
             chat: [
                 { is_user: false, name: '角色', mes: '<img src="data:image/png;base64,AAAA">' },
             ],
-            missingFloors: [0],
+            expectedTexts: ['[图片]'],
         },
         {
             name: 'legacy Assistant without explicit role metadata',
             chat: [
                 { name: '角色', mes: '旧格式无 content 标签的助手正文' },
             ],
-            missingFloors: [0],
+            expectedTexts: ['旧格式无 content 标签的助手正文'],
+        },
+        {
+            name: 'fallback still removes blacklisted text and Memory payloads',
+            chat: [
+                { is_user: false, name: '角色', mes: '<thinking>隐藏推理</thinking>应保留的正文<Memory>填表数据</Memory>' },
+            ],
+            expectedTexts: ['应保留的正文'],
         },
     ];
 
-    for (const { name, chat, missingFloors } of cases) {
+    for (const { name, chat, expectedTexts } of cases) {
         await t.test(name, async () => {
             for (const method of ['runTrace', 'runSummary']) {
-                const { memory, requests, state } = createTagWhitelistGuardSandbox(chat);
+                const originalChat = structuredClone(chat);
+                const { memory, requests, state } = createTagWhitelistGuardSandbox(chat, {
+                    id: 'content-fallback', blacklist: ['thinking'], whitelist: ['CoNtEnT'],
+                });
                 const result = await memory.TaskRunner[method](state, {
                     start: 0,
                     end: chat.length,
@@ -358,12 +370,14 @@ test('content whitelist blocks trace and summary only when every non-empty floor
                 });
 
                 assert.equal(result.success, false, method);
-                assert.equal(result.code, 'tag_whitelist_content_missing', method);
-                assert.equal(result.error, '白名单含 content，但实际正文并无 content 标签，请检查。', method);
-                assert.equal(result.retryable, false, method);
-                assert.equal(result.toastOnly, true, method);
-                assert.deepEqual(Array.from(result.diagnostics?.missingFloors || []), missingFloors, method);
-                assert.equal(requests.length, 0, `${method} must stop before calling the LLM`);
+                // The mock deliberately fails after capturing the actual LLM request.
+                assert.equal(result.error, 'request captured', method);
+                assert.notEqual(result.code, 'tag_whitelist_content_missing', method);
+                assert.equal(requests.length, 1, method);
+                const requestText = requests[0].map((message) => String(message.content || '')).join('\n');
+                for (const text of expectedTexts) assert.ok(requestText.includes(text), `${method}: ${text}`);
+                assert.doesNotMatch(requestText, /隐藏推理|填表数据|data:image\/png;base64,AAAA/, method);
+                assert.deepEqual(chat, originalChat, `${method} must preserve the original chat`);
             }
         });
     }

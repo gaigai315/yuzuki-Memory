@@ -29,6 +29,18 @@ function createCardResponse(card = '<下轮导演卡>推进支线。</下轮导�
     return { success: true, message: { role: 'assistant', content: text }, text, toolCalls: [] };
 }
 
+function createBatchRoleLedgerResponse(reviews, options = {}) {
+    const result = createRoleLedgerResponse(options);
+    const roster = result.text.match(/<角色账本更新>[\s\S]*?<\/角色账本更新>/)[0];
+    const blocks = reviews.map((review) => {
+        const data = options.forFloor ? options.forFloor(review.assistantFloor) : options;
+        const block = createRoleLedgerResponse(data).text.match(/<轨道B最后一轮角色出场账本>[\s\S]*?<\/轨道B最后一轮角色出场账本>/)[0];
+        return block.replace('<轨道B最后一轮角色出场账本>', `<轨道B最后一轮角色出场账本>\n楼层: ${review.assistantFloor}`);
+    });
+    const text = [roster, ...blocks].join('\n');
+    return { ...result, text, message: { role: 'assistant', content: text } };
+}
+
 function createTrackBCard(roles, module, plot = '推进支线') {
     return '<下轮导演卡>\n【轨道B调度指令】\n出场角色：' + roles
         + '\n所属模块：' + module + '\n剧情推演：' + plot + '\n</下轮导演卡>';
@@ -117,6 +129,7 @@ function readContext(messages) {
         ledger: director.ledger,
         anchor: director.anchor,
         latestAssistantReview: director.latestAssistantReview,
+        ...(director.assistantReviews ? { assistantReviews: director.assistantReviews } : {}),
     };
 }
 
@@ -253,14 +266,16 @@ function createSandbox(options = {}) {
     const requests = [];
     const dispatchedEvents = [];
     const requestOptions = [];
+    const globalSettings = options.globalSettings || new Map();
     const memory = {
         GlobalSettings: {
             get(key, fallback) {
                 if (key === 'yzm_memory_global_plugin_settings') {
                     return { enableStoryDirector: enabled !== true };
                 }
-                return fallback;
+                return globalSettings.has(key) ? structuredClone(globalSettings.get(key)) : fallback;
             },
+            set(key, value) { globalSettings.set(key, structuredClone(value)); return value; },
         },
         Storage: {
             getCurrentSessionId: () => 'chat:test',
@@ -324,6 +339,12 @@ function createSandbox(options = {}) {
             async requestAgentWithTavern(messages, availableTools, options) {
                 requests.push(structuredClone(messages));
                 requestOptions.push({ tools: structuredClone(availableTools), ...options });
+                const reviews = readContext(messages).assistantReviews;
+                if (!isReview(messages) && reviews?.length > 1) {
+                    return createBatchRoleLedgerResponse(reviews, {
+                        roster: [{ name: '甲', type: '配角', status: '有效' }],
+                    });
+                }
                 return isReview(messages)
                     ? createCardResponse()
                     : createRoleLedgerResponse({
@@ -2333,6 +2354,303 @@ test('manual replan replaces an existing card without changing chat messages', a
     assert.equal((await runtime.replanLatest()).success, true);
     assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>新的安排。</下轮导演卡>');
     assert.deepEqual(chat, originalChat);
+});
+
+test('automatic planning counts User/Assistant rounds for both possible first-floor roles', async () => {
+    for (const greeting of [false, true]) {
+        for (const interval of [1, 3]) {
+            const { sandbox, memory, chat, requests, getState } = createSandbox();
+            const runtime = memory.StoryDirectorRuntime;
+            chat.splice(0);
+            if (greeting) chat.push({ is_user: false, mes: '角色卡开场白' });
+            assert.equal(runtime.setAutoPlanInterval(interval), true);
+            let scheduled;
+            sandbox.window.setTimeout = (callback) => { scheduled = callback; return 1; };
+            const plan = async () => {
+                runtime.scheduleDirector('assistant-updated', 0);
+                await scheduled();
+            };
+            await plan();
+            assert.equal(requests.length, 0, 'an opening greeting is not a complete round');
+            for (let round = 1; round <= 6; round += 1) {
+                chat.push({ is_user: true, mes: `用户第${round}轮` });
+                await plan();
+                const previousRequests = requests.length;
+                chat.push({ is_user: false, mes: `AI第${round}轮`, swipe_id: 0 });
+                await plan();
+                assert.equal(requests.length, previousRequests + (round % interval === 0 ? 2 : 0));
+                assert.equal(runtime.getCompletedDialogueRounds().completedRounds, round);
+                if (round % interval === 0) {
+                    assert.equal(getState().storyDirector.source.assistantIndex, (greeting ? 0 : -1) + round * 2);
+                }
+                await plan();
+                assert.equal(requests.length, Math.floor(round / interval) * 2, 'duplicate callbacks do not plan twice');
+            }
+            assert.equal(runtime.getAutoPlanInterval(), interval);
+            assert.equal(getState().storyDirector.autoPlanInterval, undefined);
+        }
+    }
+});
+
+test('interval two and three review every marked reply and commit actual modules in chronological order', async () => {
+    for (const interval of [2, 3]) {
+        const { sandbox, memory, chat, requests, getState } = createSandbox({ initialLedger: '' });
+        const runtime = memory.StoryDirectorRuntime;
+        runtime.setAutoPlanInterval(interval);
+        chat.splice(0, chat.length, { is_user: false, mes: '开场白不在轮次内' });
+        for (let round = 1; round <= interval; round++) {
+            chat.push({ is_user: true, mes: `用户${round}` }, { is_user: false, mes: `实际轨道B事件${round}` });
+        }
+        memory.LlmClient.requestAgentWithTavern = async (messages) => {
+            requests.push(structuredClone(messages));
+            if (isReview(messages)) return createCardResponse();
+            const reviews = readContext(messages).assistantReviews;
+            assert.deepEqual(reviews.map(item => item.assistantFloor), Array.from({ length: interval }, (_, i) => 2 + i * 2));
+            assert.equal(messages.filter(item => item.content.includes('本次轨道B待核验楼层')).length, interval);
+            assert.doesNotMatch(messages.find(item => item.content === '开场白不在轮次内')?.content || '', /待核验楼层/);
+            assert.match(messages.at(-1).content, /不得只检查最后一楼/);
+            return createBatchRoleLedgerResponse([...reviews].reverse(), {
+                forFloor: floor => floor === 4 ? {} : {
+                    occurred: true,
+                    entries: [
+                        { name: `角色${floor}`, module: 'Module3', event: `第${floor}楼买菜` },
+                        { name: `另一角色${floor}`, module: 'Module5', event: `第${floor}楼处理事务` },
+                    ],
+                },
+            });
+        };
+        let scheduled;
+        sandbox.window.setTimeout = callback => { scheduled = callback; return 1; };
+        runtime.scheduleDirector('assistant-updated', 0);
+        await scheduled();
+        assert.equal(requests.length, 2);
+        const ledger = getState().storyDirector.ledger;
+        const lines = ledger.split('\n').filter(line => /^距今\d+轮轨道B剧情:/.test(line));
+        assert.equal(lines.length, interval);
+        assert.match(lines[0], /Module 3.*第2楼买菜.*Module 5.*第2楼处理事务.*正文来源：2\/0\//);
+        assert.match(lines[1], /未发生｜正文来源：4\/0\//);
+        if (interval === 3) assert.match(lines[2], /第6楼买菜.*正文来源：6\/0\//);
+        const planning = readContext(requests[1]);
+        assert.match(planning.ledger, /第2楼买菜/);
+        assert.doesNotMatch(planning.ledger, /正文来源/);
+        assert.deepEqual(planning.assistantReviews, []);
+    }
+});
+
+test('manual planning within a three-round interval leaves only the new reply to review at the boundary', async () => {
+    const { sandbox, memory, chat, requests, getState } = createSandbox({ initialLedger: '' });
+    const runtime = memory.StoryDirectorRuntime;
+    runtime.setAutoPlanInterval(3);
+    chat.splice(0);
+    for (let round = 1; round <= 2; round++) chat.push({ is_user: true, mes: `用户${round}` }, { is_user: false, mes: `回复${round}` });
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.deepEqual(readContext(requests[0]).assistantReviews.map(item => item.assistantFloor), [1, 3]);
+    chat.push({ is_user: true, mes: '用户3' }, { is_user: false, mes: '回复3' });
+    let scheduled;
+    sandbox.window.setTimeout = callback => { scheduled = callback; return 1; };
+    runtime.scheduleDirector('assistant-updated', 0);
+    await scheduled();
+    assert.equal(requests.length, 4);
+    assert.deepEqual(readContext(requests[2]).latestAssistantReview, { assistantFloor: 5, shouldRecord: true });
+    const ledger = getState().storyDirector.ledger;
+    assert.equal((ledger.match(/^距今\d+轮轨道B剧情:/gm) || []).length, 3);
+    for (const floor of [1, 3, 5]) assert.equal((ledger.match(new RegExp(`正文来源：${floor}/0/`, 'g')) || []).length, 1);
+});
+
+test('batch review rejects missing, duplicate, unnumbered and unrelated floors before any draft is committed', async () => {
+    for (const kind of ['missing', 'duplicate', 'unnumbered', 'unrelated', 'bad-module']) {
+        const { memory, chat, requests, getState } = createSandbox({ initialLedger: '' });
+        const runtime = memory.StoryDirectorRuntime;
+        runtime.setAutoPlanInterval(3);
+        chat.splice(0);
+        for (let round = 1; round <= 3; round++) chat.push({ is_user: true, mes: `用户${round}` }, { is_user: false, mes: `回复${round}` });
+        memory.LlmClient.requestAgentWithTavern = async messages => {
+            requests.push(messages);
+            const reviews = readContext(messages).assistantReviews;
+            let text = createBatchRoleLedgerResponse(reviews).text;
+            if (kind === 'missing') text = text.replace(/<轨道B最后一轮角色出场账本>[\s\S]*?<\/轨道B最后一轮角色出场账本>/, '');
+            if (kind === 'duplicate') text = text.replace('楼层: 3', '楼层: 1');
+            if (kind === 'unnumbered') text = text.replace('楼层: 3\n', '');
+            if (kind === 'unrelated') text = text.replace('楼层: 3', '楼层: 2');
+            if (kind === 'bad-module') text = text.replace('楼层: 3\n发生: 否', '楼层: 3\n发生: 是\n[甲] | Module6 | 不合法题材');
+            return { success: true, text };
+        };
+        const result = await runtime.replanLatest();
+        assert.equal(result.success, false, kind);
+        assert.match(result.error, /第一轮账本校验失败/);
+        assert.equal(requests.length, 1);
+        assert.equal(getState().storyDirector.ledger, '');
+        assert.equal(getState().storyDirector.pendingCard, '');
+    }
+});
+
+test('batch review keeps hidden floors out and commits no partial history when the second pass fails', async () => {
+    const { memory, chat, requests, getState } = createSandbox({ initialLedger: '' });
+    const runtime = memory.StoryDirectorRuntime;
+    runtime.setAutoPlanInterval(3);
+    chat.splice(0);
+    for (let round = 1; round <= 3; round++) chat.push({ is_user: true, mes: `用户${round}` }, { is_user: false, mes: `回复${round}` });
+    chat[1].is_system = true;
+    chat[1].is_yzm_hidden_floor = true;
+    memory.LlmClient.requestAgentWithTavern = async messages => {
+        requests.push(messages);
+        if (isReview(messages)) return { success: false, error: '第二轮失败' };
+        const reviews = readContext(messages).assistantReviews;
+        assert.deepEqual(reviews.map(item => item.assistantFloor), [3, 5]);
+        return createBatchRoleLedgerResponse(reviews, { occurred: true, entries: [{ name: '甲', module: 'Module2', event: '实际事件' }] });
+    };
+    assert.equal((await runtime.replanLatest()).success, false);
+    assert.equal(requests.length, 2);
+    assert.equal(getState().storyDirector.ledger, '');
+    assert.equal(getState().storyDirector.pendingCard, '');
+});
+
+test('an earlier target changing during batch review invalidates the whole run', async () => {
+    const { memory, chat, requests, getState } = createSandbox({ initialLedger: '' });
+    const runtime = memory.StoryDirectorRuntime;
+    runtime.setAutoPlanInterval(2);
+    chat.splice(0, chat.length, { is_user: true, mes: '用户1' }, { is_user: false, mes: '回复1' }, { is_user: true, mes: '用户2' }, { is_user: false, mes: '回复2' });
+    memory.LlmClient.requestAgentWithTavern = async messages => {
+        requests.push(messages);
+        const response = createBatchRoleLedgerResponse(readContext(messages).assistantReviews);
+        chat[1].mes = '第一楼正文已经变化';
+        return response;
+    };
+    assert.equal((await runtime.replanLatest()).success, false);
+    assert.equal(requests.length, 1);
+    assert.equal(getState().storyDirector.ledger, '');
+});
+
+test('round counting includes hidden history and skips plugins, system messages and extra Assistant messages', () => {
+    const { memory } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    const chat = [
+        { role: 'ai', text: '开场白' },
+        { role: 'human', text: '第一轮用户', is_system: true, is_yzm_hidden_floor: true },
+        { role: 'system', content: '系统消息' },
+        { role: 'assistant', text: '插件消息', yzmMemoryInternal: true },
+        { role: 'model', text: '第一轮回复', is_system: true, is_yzm_hidden_floor: true },
+        { role: 'assistant', text: '追加内容' },
+        { is_user: true, mes: '第二轮用户' },
+        { is_user: false, mes: '' },
+        { mes: '旧格式AI回复' },
+        { role: 'user', content: '尚未回复' },
+    ];
+    const rounds = runtime.getCompletedDialogueRounds(chat);
+    assert.equal(rounds.completedRounds, 2);
+    assert.equal(rounds.lastCompletedAssistantIndex, 8);
+});
+
+test('swiping a boundary reply replans that round while deletion recalculates cadence', async () => {
+    const { sandbox, memory, chat, requests } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    chat.splice(0);
+    runtime.setAutoPlanInterval(3);
+    let scheduled;
+    sandbox.window.setTimeout = (callback) => { scheduled = callback; return 1; };
+    const plan = async () => { runtime.scheduleDirector('branch-changed', 0); await scheduled(); };
+    for (let round = 1; round <= 3; round += 1) {
+        chat.push({ is_user: true, mes: `用户${round}` }, { is_user: false, mes: `回复${round}`, swipe_id: 0 });
+    }
+    await plan();
+    assert.equal(requests.length, 2);
+    chat[5].swipe_id = 1;
+    chat[5].mes = '另一条有效回复';
+    await plan();
+    assert.equal(requests.length, 4);
+    assert.equal(runtime.getCompletedDialogueRounds().completedRounds, 3);
+    chat.splice(4, 2);
+    await plan();
+    assert.equal(requests.length, 4, 'deleting the third round leaves only two completed rounds');
+    chat.push({ is_user: true, mes: '替代用户3' }, { is_user: false, mes: '替代回复3' });
+    await plan();
+    assert.equal(requests.length, 6);
+});
+
+test('automatic timer reads the latest interval and manual planning bypasses the interval', async () => {
+    const { sandbox, memory, requests, getState } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    let scheduled;
+    sandbox.window.setTimeout = (callback) => { scheduled = callback; return 1; };
+    runtime.scheduleDirector('assistant-updated', 0);
+    assert.equal(runtime.setAutoPlanInterval(3), true);
+    await scheduled();
+    assert.equal(requests.length, 0);
+    assert.equal((await runtime.replanLatest()).success, true);
+    assert.equal(requests.length, 2);
+    assert.equal(runtime.getAutoPlanInterval(), 3);
+    assert.equal(getState().storyDirector.autoPlanInterval, undefined);
+    for (const value of ['', 0, -5, 'abc', Infinity]) {
+        assert.equal(runtime.setAutoPlanInterval(value), true);
+        assert.equal(runtime.getAutoPlanInterval(), 1);
+    }
+    runtime.setAutoPlanInterval(3.8);
+    assert.equal(runtime.getAutoPlanInterval(), 3);
+    runtime.setAutoPlanInterval(99999);
+    assert.equal(runtime.getAutoPlanInterval(), 9999);
+    memory.Storage.isSessionSwitching = () => true;
+    assert.equal(runtime.setAutoPlanInterval(2), true);
+    assert.equal(runtime.getAutoPlanInterval(), 2);
+});
+
+test('planning interval is shared across chats while enable switches remain independent', async () => {
+    const globalSettings = new Map();
+    const first = createSandbox({ globalSettings });
+    const second = createSandbox({ globalSettings });
+    first.memory.Storage.getCurrentSessionId = () => 'chat:first';
+    second.memory.Storage.getCurrentSessionId = () => 'chat:second';
+    first.setEnabled(true);
+    second.setEnabled(false);
+    const firstRuntime = first.memory.StoryDirectorRuntime;
+    const secondRuntime = second.memory.StoryDirectorRuntime;
+    const firstState = structuredClone(first.getState());
+    const secondState = structuredClone(second.getState());
+    firstRuntime.setAutoPlanInterval(3);
+    assert.equal(secondRuntime.getAutoPlanInterval(), 3);
+    secondRuntime.setAutoPlanInterval(2);
+    assert.equal(firstRuntime.getAutoPlanInterval(), 2);
+    assert.deepEqual(first.getState(), firstState, 'global edits do not save or alter the current chat');
+    assert.deepEqual(second.getState(), secondState, 'editing from a disabled chat leaves it disabled');
+
+    // A stale chat restore must not overwrite the shared preference.
+    firstState.storyDirector.autoPlanInterval = 9;
+    first.memory.Storage.saveState(firstState);
+    assert.equal(firstRuntime.getAutoPlanInterval(), 2);
+    let firstScheduled;
+    let secondScheduled;
+    first.sandbox.window.setTimeout = callback => { firstScheduled = callback; return 1; };
+    second.sandbox.window.setTimeout = callback => { secondScheduled = callback; return 1; };
+    firstRuntime.scheduleDirector('assistant-updated', 0);
+    await firstScheduled();
+    assert.equal(first.requests.length, 2);
+    secondRuntime.scheduleDirector('assistant-updated', 0);
+    if (secondScheduled) await secondScheduled();
+    assert.equal(second.requests.length, 0, 'a disabled chat never plans at the shared interval');
+    assert.equal(secondRuntime.getAutoPlanInterval(), 2);
+});
+
+test('global interval save failures preserve the previous value', () => {
+    const { memory } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    runtime.setAutoPlanInterval(3);
+    memory.GlobalSettings.set = () => { throw new Error('settings unavailable'); };
+    assert.equal(runtime.setAutoPlanInterval(5), false);
+    assert.equal(runtime.getAutoPlanInterval(), 3);
+});
+
+test('interval input sets numeric bounds and saving keeps the focused config panel intact', () => {
+    const input = { dataset: {}, setAttribute(name, value) { this[name] = value; } };
+    const uiSandbox = {
+        YuzukiMemory: { StoryDirectorRuntime: { getAutoPlanInterval: () => 3 } },
+        createConfigNumberInput: (value) => { input.value = String(value); return input; },
+    };
+    vm.createContext(uiSandbox);
+    const match = memoryWindowSource.match(/    function createStoryDirectorIntervalInput\(\) \{[\s\S]*?\n    \}/);
+    vm.runInContext(`${match[0]}\ncreateStoryDirectorIntervalInput();`, uiSandbox);
+    assert.equal(input.value, '3');
+    assert.equal(input.min, '1');
+    assert.equal(input.dataset.yzmStoryDirectorInterval, 'true');
+    assert.match(memoryWindowSource, /event\?\.detail\?\.source === 'story-director-interval'\) return;/);
 });
 
 test('automatic planning notifies once on success but manual planning does not duplicate it', async () => {

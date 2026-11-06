@@ -667,13 +667,15 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.1.7', () => {
-    assert.equal(manifest.version, '1.1.7');
-    assert.match(indexSource, /const VERSION = '1\.1\.7';/);
+test('release metadata and update notice describe version 1.1.8', () => {
+    assert.equal(manifest.version, '1.1.8');
+    assert.match(indexSource, /const VERSION = '1\.1\.8';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /剧情规划失败时显示具体原因和 AI 原始返回，方便排查问题。/);
-    assert.match(noticeSource, /修复 MVU 额外模型解析后生成状态未释放，导致自动总结和自动批量填表无法触发的问题。/);
+    assert.match(noticeSource, /修复剧情摘要因日期写法不同，将同一天拆成多组的问题。/);
+    assert.match(noticeSource, /自动剧情规划新增轮数间隔设置，AI 开场白不计入轮数。/);
+    assert.doesNotMatch(noticeSource, /剧情规划失败时显示具体原因和 AI 原始返回/);
+    assert.doesNotMatch(noticeSource, /修复 MVU 额外模型解析后生成状态未释放/);
     assert.doesNotMatch(noticeSource, /修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。/);
     assert.doesNotMatch(noticeSource, /修复实时填表模式下，仅修改 AI 回复正文、未改动 Memory 内容时，本轮表格更新消失的问题。/);
     assert.doesNotMatch(noticeSource, /新增按楼层范围删除功能/);
