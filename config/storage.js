@@ -964,6 +964,113 @@
         return aliases[field] || [field];
     }
 
+    function parseSummaryOrderRange(value) {
+        const matches = [...String(value || '').matchAll(/(\d+)\s*(?:-|~|－|—|至|到)\s*(\d+)/g)];
+        if (!matches.length) return null;
+        return matches.reduce((earliest, match) => {
+            const first = Math.max(0, Math.round(Number(match[1]) || 0));
+            const second = Math.max(0, Math.round(Number(match[2]) || 0));
+            const range = { start: Math.min(first, second), end: Math.max(first, second) };
+            if (!earliest || range.start < earliest.start || (range.start === earliest.start && range.end < earliest.end)) {
+                return range;
+            }
+            return earliest;
+        }, null);
+    }
+
+    function getSummaryOrderRange(source) {
+        if (Array.isArray(source?.summarySegments) && source.summarySegments.length) {
+            const segmentRanges = source.summarySegments.map((segment) => getSummaryOrderRange(segment)).filter(Boolean);
+            if (segmentRanges.length) {
+                return segmentRanges.reduce((earliest, range) => (
+                    range.start < earliest.start || (range.start === earliest.start && range.end < earliest.end)
+                        ? range
+                        : earliest
+                ));
+            }
+        }
+        if (source?.floor !== undefined) {
+            const floorRange = parseSummaryOrderRange(source.floor);
+            if (floorRange) return floorRange;
+        }
+        const values = source?.values && typeof source.values === 'object' ? source.values : {};
+        const valueRange = parseSummaryOrderRange(getFirstDefinedValue(values, '楼层数'));
+        if (valueRange) return valueRange;
+        const storedRange = source?.range || source?.meta?.yzmMemoryTask?.range;
+        const storedStart = Number(storedRange?.start);
+        const storedEnd = Number(storedRange?.end);
+        if (Number.isFinite(storedStart) && Number.isFinite(storedEnd) && storedEnd > storedStart) {
+            return { start: Math.max(0, storedStart), end: Math.max(storedStart, storedEnd) };
+        }
+        return null;
+    }
+
+    function getSummaryOrderScope(source, fallback = null) {
+        return normalizeFloorScope(
+            source?.floorScope
+            || source?.range?.floorScope
+            || source?.meta?.yzmMemoryTask?.floorScope
+            || source?.meta?.yzmMemoryTask?.range?.floorScope,
+            fallback,
+        );
+    }
+
+    function sortSummaryItems(items = [], options = {}) {
+        const source = Array.isArray(items) ? items : [];
+        const scopeOrder = new Map();
+        const prepared = source.map((item, index) => {
+            const fallbackScope = options.getFallbackScope?.(item) || null;
+            const scope = getSummaryOrderScope(item, fallbackScope);
+            const scopeKey = String(scope?.id || scope?.label || scope?.kind || '');
+            if (!scopeOrder.has(scopeKey)) scopeOrder.set(scopeKey, scopeOrder.size);
+            return { item, index, scopeKey, range: getSummaryOrderRange(item) };
+        });
+        prepared.sort((left, right) => {
+            const scopeDelta = (scopeOrder.get(left.scopeKey) || 0) - (scopeOrder.get(right.scopeKey) || 0);
+            if (scopeDelta) return scopeDelta;
+            const leftStart = left.range?.start ?? Number.MAX_SAFE_INTEGER;
+            const rightStart = right.range?.start ?? Number.MAX_SAFE_INTEGER;
+            if (leftStart !== rightStart) return leftStart - rightStart;
+            const leftEnd = left.range?.end ?? Number.MAX_SAFE_INTEGER;
+            const rightEnd = right.range?.end ?? Number.MAX_SAFE_INTEGER;
+            if (leftEnd !== rightEnd) return leftEnd - rightEnd;
+            return left.index - right.index;
+        });
+        return prepared.map((entry) => entry.item);
+    }
+
+    function sortSummarySegments(segments = [], fallbackScope = null) {
+        return sortSummaryItems(segments, { getFallbackScope: () => fallbackScope });
+    }
+
+    function syncOrderedSummarySegments(record) {
+        if (!Array.isArray(record?.summarySegments) || !record.summarySegments.length) return record;
+        const recordScope = getRecordFloorScope(record);
+        record.summarySegments = sortSummarySegments(record.summarySegments, recordScope);
+        record.values = record.values && typeof record.values === 'object' ? record.values : {};
+        record.values.楼层数 = record.summarySegments.map((segment) => String(segment?.floor || '').trim()).filter(Boolean).join('\n');
+        record.values.总结内容 = record.summarySegments.map((segment) => String(segment?.summary || '').trim()).filter(Boolean).join('\n');
+        const unresolved = record.summarySegments.map((segment) => String(segment?.unresolved || '').trim()).filter(Boolean);
+        const remarks = record.summarySegments.map((segment) => String(segment?.remark || '').trim()).filter(Boolean);
+        if (unresolved.length) record.values.未解决问题 = unresolved.join('\n');
+        if (remarks.length) record.values.备注 = remarks.join('\n');
+        return record;
+    }
+
+    function sortSummaryRecords(records = []) {
+        return sortSummaryItems(records, {
+            getFallbackScope: (record) => getRecordFloorScope(record),
+        });
+    }
+
+    function sortSummaryRecordsInState(state) {
+        if (!state?.records || !Array.isArray(state.records.memory_summary)) return state;
+        state.records.memory_summary = sortSummaryRecords(
+            state.records.memory_summary.map((record) => syncOrderedSummarySegments(record)),
+        );
+        return state;
+    }
+
     function getFirstDefinedValue(source, field) {
         for (const name of getSummaryFieldAliases(field)) {
             const value = String(source?.[name] ?? '').trim();
@@ -996,11 +1103,11 @@
                 summary: stripStoredSummaryHeading(segment?.summary, kind, character),
             }))
             : record?.summarySegments;
-        return {
+        return syncOrderedSummarySegments({
             ...record,
             values,
             ...(Array.isArray(summarySegments) ? { summarySegments } : {}),
-        };
+        });
     }
 
     function normalizeTableColumns(table, fallback, options = {}) {
@@ -1242,6 +1349,7 @@
         ['memory_summary', 'plot_summary'].forEach((tableId) => {
             (records[tableId] || []).forEach((record) => ensureRecordFloorScope(record, fallbackRecordScope));
         });
+        sortSummaryRecordsInState({ records });
         const hasLegacyHistorianPromptSelection = Object.prototype.hasOwnProperty.call(rawState, 'historianPromptId');
         const hasLegacyHistorianPromptInitialization = Object.prototype.hasOwnProperty.call(rawState, 'historianPromptSelectionInitialized');
 
@@ -1467,6 +1575,9 @@
         formatFloorScopeLabel,
         getRecordFloorScope,
         ensureRecordFloorScope,
+        sortSummarySegments,
+        sortSummaryRecords,
+        sortSummaryRecordsInState,
         getGlobalTableColumns,
         setGlobalTableColumns,
         applyGlobalTableColumnsToState,

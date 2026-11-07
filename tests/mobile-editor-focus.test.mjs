@@ -99,6 +99,47 @@ test('range deletion dialog saves immediately and reports success only after sav
     }
 });
 
+test('silent manual summary commits to the latest state after a long request', async () => {
+    const staleState = { records: { memory_summary: [] } };
+    const liveState = { records: { memory_summary: [] } };
+    let currentState = staleState;
+    let taskOptions;
+    let committedState;
+    const sandbox = {
+        YuzukiMemory: { TaskRunner: {
+            async runSummary(_state, options) {
+                taskOptions = options;
+                currentState = liveState;
+                return { success: true, kind: 'summary', payloads: [{ summary: '流式总结' }] };
+            },
+        } },
+        getState: () => currentState,
+        commitTaskResult(_action, state, result) {
+            committedState = state;
+            state.records.memory_summary.push({ values: { 总结内容: result.payloads[0].summary } });
+            return { ...result, count: 1 };
+        },
+        ensureRoot: () => ({}),
+        openTaskResultConfirmDialog: async () => { throw new Error('silent mode must not open confirmation'); },
+        getTaskActionLabel: () => '手动总结',
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(`async ${getFunctionSource('runSingleTaskBatch')}`, sandbox);
+
+    const result = await sandbox.runSingleTaskBatch('summary', { silent: true });
+    assert.equal(taskOptions.previewOnly, true);
+    assert.equal(committedState, liveState);
+    assert.equal(staleState.records.memory_summary.length, 0);
+    assert.equal(liveState.records.memory_summary[0].values.总结内容, '流式总结');
+    assert.equal(result.count, 1);
+});
+
+test('silent manual tasks still show their final success notification', () => {
+    const source = getFunctionSource('runTaskFromPanel');
+    assert.match(source, /showTaskToast\(`\$\{getTaskActionLabel\(action\)\}完成：共 \$\{results\.length\} 批，写入 \$\{result\.count \|\| 0\} 条。`, 'success'\)/);
+    assert.doesNotMatch(source, /if \(!options\.silent\) showTaskToast\(`\$\{getTaskActionLabel\(action\)\}完成/);
+});
+
 test('tavern LLM mode hides independent API settings but keeps its connection test', () => {
     const customNodes = [{ hidden: false }, { hidden: false }, { hidden: false }];
     const tavernNodes = [{ hidden: true }];
@@ -667,13 +708,13 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.1.8', () => {
-    assert.equal(manifest.version, '1.1.8');
-    assert.match(indexSource, /const VERSION = '1\.1\.8';/);
+test('release metadata and update notice describe version 1.1.9', () => {
+    assert.equal(manifest.version, '1.1.9');
+    assert.match(indexSource, /const VERSION = '1\.1\.9';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /修复剧情摘要因日期写法不同，将同一天拆成多组的问题。/);
-    assert.match(noticeSource, /自动剧情规划新增轮数间隔设置，AI 开场白不计入轮数。/);
+    assert.match(noticeSource, /记忆总结会在同一存档范围内按楼层自动排序，导入的旧存档与当前存档保持独立分组，不再混排。/);
+    assert.match(noticeSource, /修复长时间流式手动总结在静默模式下显示已落盘却未写入的问题，并补充完成通知与流式终止响应。/);
     assert.doesNotMatch(noticeSource, /剧情规划失败时显示具体原因和 AI 原始返回/);
     assert.doesNotMatch(noticeSource, /修复 MVU 额外模型解析后生成状态未释放/);
     assert.doesNotMatch(noticeSource, /修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。/);

@@ -1173,7 +1173,8 @@
                 parseError: state.parseErrors[0] || '',
             };
         };
-        return { accept, result };
+        const isComplete = () => state.sawDone || state.sawTerminalEvent;
+        return { accept, result, isComplete };
     }
 
     function parseSseTextPayload(text = '') {
@@ -1271,6 +1272,14 @@
                     break;
                 }
                 parser.feed(value ? decoder.decode(value, { stream: true }) : '', false);
+                if (collector.isComplete()) {
+                    try {
+                        await reader.cancel?.('stream terminal event received');
+                    } catch (_error) {
+                        // The response is already complete; cancellation only releases a lingering connection.
+                    }
+                    break;
+                }
             }
         } finally {
             reader.releaseLock();

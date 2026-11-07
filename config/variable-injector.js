@@ -785,7 +785,11 @@
     function getSummaryEntries(state = getCurrentState()) {
         const table = (Array.isArray(state?.tables) ? state.tables : []).find((entry) => entry.id === FIXED_SUMMARY_TABLE_ID);
         if (!table || table.hidden) return [];
-        return tableRecords(state, FIXED_SUMMARY_TABLE_ID)
+        const records = tableRecords(state, FIXED_SUMMARY_TABLE_ID);
+        const orderedRecords = typeof YuzukiMemory.Storage?.sortSummaryRecords === 'function'
+            ? YuzukiMemory.Storage.sortSummaryRecords(records)
+            : records;
+        return orderedRecords
             .map((record, index) => {
                 const text = summaryRecordToText(table, record);
                 if (!text) return null;
@@ -871,9 +875,12 @@
 
     function getSummaryEntryParts(entry) {
         if (/支[线線]/.test(String(entry?.title || ''))) return [entry];
-        const segments = Array.isArray(entry?.record?.summarySegments)
+        const rawSegments = Array.isArray(entry?.record?.summarySegments)
             ? entry.record.summarySegments.filter((segment) => String(segment?.summary || '').trim())
             : [];
+        const segments = typeof YuzukiMemory.Storage?.sortSummarySegments === 'function'
+            ? YuzukiMemory.Storage.sortSummarySegments(rawSegments, entry?.record?.floorScope)
+            : rawSegments;
         if (segments.length <= 1) return [entry];
         const groups = new Map();
         segments.forEach((segment) => {

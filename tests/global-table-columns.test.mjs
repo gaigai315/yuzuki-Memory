@@ -136,6 +136,58 @@ test('bracket column syntax marks global columns without changing their stored n
     ]);
 });
 
+test('summary records and grouped segments sort by floor within the same floor scope', () => {
+    const { storage } = createStorageSandbox();
+    const scope = { id: 'scope:summary-order' };
+    const records = [
+        { id: 'later', floorScope: scope, values: { 楼层数: '50-60' } },
+        { id: 'earlier', floorScope: scope, values: { 楼层数: '0-50' } },
+    ];
+    assert.deepEqual(Array.from(storage.sortSummaryRecords(records), (record) => record.id), ['earlier', 'later']);
+
+    const segments = [
+        { floor: '50-60', summary: '后段', floorScope: scope },
+        { floor: '0-50', summary: '前段', floorScope: scope },
+    ];
+    assert.deepEqual(Array.from(storage.sortSummarySegments(segments, scope), (segment) => segment.summary), ['前段', '后段']);
+
+    const state = { records: { memory_summary: [{
+        id: 'branch',
+        floorScope: scope,
+        values: { 楼层数: '50-60\n0-50', 总结内容: '后段\n前段', 未解决问题: '保留问题' },
+        summarySegments: segments,
+    }] } };
+    storage.sortSummaryRecordsInState(state);
+    assert.equal(state.records.memory_summary[0].values.楼层数, '0-50\n50-60');
+    assert.equal(state.records.memory_summary[0].values.总结内容, '前段\n后段');
+    assert.equal(state.records.memory_summary[0].values.未解决问题, '保留问题');
+
+    const groupedRecords = [
+        { id: 'middle', floorScope: scope, values: { 楼层数: '20-30' } },
+        {
+            id: 'grouped',
+            floorScope: scope,
+            values: { 楼层数: '0-50\n50-60' },
+            summarySegments: segments,
+            meta: { yzmMemoryTask: { range: { start: 50, end: 61 }, floorScope: scope } },
+        },
+    ];
+    assert.deepEqual(Array.from(storage.sortSummaryRecords(groupedRecords), (record) => record.id), ['grouped', 'middle']);
+
+    const importedScope = { id: 'import:archive', label: '旧存档', kind: 'import' };
+    const currentScope = { id: 'char:test:current', label: '当前存档', kind: 'session' };
+    const crossArchiveRecords = [
+        { id: 'import-later', floorScope: importedScope, values: { 楼层数: '50-60' } },
+        { id: 'current-earlier', floorScope: currentScope, values: { 楼层数: '0-50' } },
+        { id: 'import-earlier', floorScope: importedScope, values: { 楼层数: '0-50' } },
+        { id: 'current-later', floorScope: currentScope, values: { 楼层数: '50-60' } },
+    ];
+    assert.deepEqual(
+        Array.from(storage.sortSummaryRecords(crossArchiveRecords), (record) => record.id),
+        ['import-earlier', 'import-later', 'current-earlier', 'current-later'],
+    );
+});
+
 test('global columns merge into new and existing sessions while local columns stay isolated', () => {
     const { storage, localStorage } = createStorageSandbox();
     storage.setGlobalTableColumns('character_profile', [

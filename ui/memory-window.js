@@ -765,7 +765,10 @@
     }
 
     function getPrimaryDisplayRecords(tableId = getActiveTable()?.id) {
-        const records = getRecords(tableId);
+        const sourceRecords = getRecords(tableId);
+        const records = tableId === FIXED_TABLE_ID && typeof getStorage()?.sortSummaryRecords === 'function'
+            ? getStorage().sortSummaryRecords(sourceRecords)
+            : sourceRecords;
         return [
             ...records.filter((record) => !isRecordDisplayedAsVectorized(tableId, record)),
             ...records.filter((record) => isRecordDisplayedAsVectorized(tableId, record)),
@@ -3612,6 +3615,7 @@
         if (currentSessionId && (!loadedSessionId || (loadedSessionId !== currentSessionId && !getStorage()?.isSessionSwitching?.()))) {
             loadedSessionId = currentSessionId;
         }
+        getStorage()?.sortSummaryRecordsInState?.(getState());
         return !!getStorage()?.saveState?.(getState(), createDefaultState(), loadedSessionId, options);
     }
 
@@ -7122,7 +7126,7 @@
     function getSummarySegments(record) {
         const recordFloorScope = getRecordFloorScope(record);
         if (Array.isArray(record?.summarySegments) && record.summarySegments.length) {
-            return record.summarySegments
+            const segments = record.summarySegments
                 .map((segment) => ({
                     floor: String(segment?.floor || '').trim(),
                     summary: String(segment?.summary || '').trim(),
@@ -7134,6 +7138,9 @@
                     createdAt: segment?.createdAt || 0,
                 }))
                 .filter((segment) => segment.floor || segment.summary);
+            return typeof getStorage()?.sortSummarySegments === 'function'
+                ? getStorage().sortSummarySegments(segments, recordFloorScope)
+                : segments;
         }
         const floors = splitSummaryLines(getSummaryValue(record, ['楼层数', '楼层范围', '楼层']));
         const summaries = splitSummaryLines(getSummaryValue(record, ['总结内容']));
@@ -8818,7 +8825,9 @@
 
     async function runSingleTaskBatch(action, options) {
         const requiresConfirmation = action === 'summaryOptimize' || !options.silent;
-        const taskOptions = { ...options, previewOnly: requiresConfirmation };
+        // Long streaming tasks may outlive the state object captured before the request.
+        // Always commit explicitly against the latest state after generation finishes.
+        const taskOptions = { ...options, previewOnly: true };
         let state = getState();
         let result;
         if (action === 'trace') result = await YuzukiMemory.TaskRunner.runTrace(state, taskOptions);
@@ -8889,6 +8898,10 @@
                 result = YuzukiMemory.TaskRunner.rebuildTaskResultFromText(action, result, confirmation.text);
                 if (!result?.success) return result;
             }
+            state = getState();
+            result = commitTaskResult(action, state, result);
+        }
+        if (!requiresConfirmation) {
             state = getState();
             result = commitTaskResult(action, state, result);
         }
@@ -9088,7 +9101,7 @@
                 await syncSummaryToVectorBook({ vectorize: true, hideAfterSync: true });
             }
             await waitForTaskBuffer('最终缓冲，等待数据完全落盘', 2);
-            if (!options.silent) showTaskToast(`${getTaskActionLabel(action)}完成：共 ${results.length} 批，写入 ${result.count || 0} 条。`, 'success');
+            showTaskToast(`${getTaskActionLabel(action)}完成：共 ${results.length} 批，写入 ${result.count || 0} 条。`, 'success');
         } catch (error) {
             console.error('[yuzuki-Memory] Task failed.', error);
             window.alert(`任务执行失败：${String(error?.message || error || '未知错误')}`);
@@ -15728,9 +15741,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '修复剧情摘要因日期写法不同，将同一天拆成多组的问题。',
-            '自动剧情规划新增轮数间隔设置，AI 开场白不计入轮数。',
-            '实时填表和批量填表兼容 #剧情摘要 格式，未区分主支线时自动归入主线摘要。',
+            '记忆总结会在同一存档范围内按楼层自动排序，导入的旧存档与当前存档保持独立分组，不再混排。',
+            '修复长时间流式手动总结在静默模式下显示已落盘却未写入的问题，并补充完成通知与流式终止响应。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

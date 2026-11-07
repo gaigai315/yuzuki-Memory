@@ -2205,6 +2205,9 @@
         } else {
             record.summarySegments.push(segment);
         }
+        if (typeof YuzukiMemory.Storage?.sortSummarySegments === 'function') {
+            record.summarySegments = YuzukiMemory.Storage.sortSummarySegments(record.summarySegments, recordScope);
+        }
         syncSummarySegmentsToValues(record);
     }
 
@@ -2977,6 +2980,7 @@
             return { ...result, success: false, count: 0, error: '未找到记忆总结表，总结未写入。' };
         }
         const records = validPayloads.map((payload) => upsertSummaryRecord(state, payload, result?.meta)).filter(Boolean);
+        YuzukiMemory.Storage?.sortSummaryRecordsInState?.(state);
         const hiddenPlotSummaryCount = hidePlotSummaryItemsCoveredByExistingSummaries(state);
         return { ...result, success: true, count: records.length, record: records[0] || null, records, hiddenPlotSummaryCount };
     }

@@ -32,6 +32,31 @@ test('summary commit rejects a missing summary table and whitespace output', () 
     assert.equal(state.records.memory_summary.length, 0);
 });
 
+test('later-created summaries are reordered by floor after commit', () => {
+    const harness = createHarness({ activateAfterBind: false });
+    const state = harness.stateRef.current;
+    const sortByFloor = (records) => [...records].sort((left, right) => {
+        const floor = (record) => Number(String(record?.values?.楼层数 || '').match(/\d+/)?.[0] ?? Number.MAX_SAFE_INTEGER);
+        return floor(left) - floor(right);
+    });
+    harness.memory.Storage.sortSummaryRecords = sortByFloor;
+    harness.memory.Storage.sortSummaryRecordsInState = (target) => {
+        target.records.memory_summary = sortByFloor(target.records.memory_summary);
+        return target;
+    };
+
+    harness.taskRunner.commitSummaryResult(state, {
+        payloads: [{ kind: 'main', summary: '后段总结' }],
+        meta: { range: { start: 50, end: 61 }, floorScope: harness.floorScope },
+    });
+    harness.taskRunner.commitSummaryResult(state, {
+        payloads: [{ kind: 'main', summary: '前段总结' }],
+        meta: { range: { start: 0, end: 51 }, floorScope: harness.floorScope },
+    });
+
+    assert.deepEqual(Array.from(state.records.memory_summary, (record) => record.values.楼层数), ['0-50', '50-60']);
+});
+
 test('exact range deletion removes only matching summaries and matching branch segments in this scope', () => {
     const harness = createHarness({ activateAfterBind: false });
     const state = harness.stateRef.current;
@@ -376,6 +401,7 @@ function createHarness(options = {}) {
         vectorSyncCalls,
         worldbookSyncCalls,
         floorScope,
+        memory: sandbox.window.YuzukiMemory,
         taskRunner: sandbox.window.YuzukiMemory.TaskRunner,
         requestState,
         get generatedCount() {

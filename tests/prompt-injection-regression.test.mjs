@@ -556,6 +556,31 @@ test('branch summaries for one character share one injected message across floor
     assert.equal(state.records.memory_summary.length, 5, 'injection must not rewrite stored records');
 });
 
+test('summary injection follows floor order instead of record creation order', () => {
+    const sandbox = createBaseSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    const scope = { id: 'summary-order' };
+    const state = {
+        tables: [{ id: 'memory_summary', name: '记忆总结', columns: ['总结标题', '楼层数', '总结内容'] }],
+        records: { memory_summary: [
+            { id: 'later', floorScope: scope, values: { 总结标题: '后段', 楼层数: '50-60', 总结内容: '后段正文' } },
+            { id: 'earlier', floorScope: scope, values: { 总结标题: '前段', 楼层数: '0-50', 总结内容: '前段正文' } },
+        ] },
+    };
+    memory.Storage = {
+        loadState: () => state,
+        sortSummaryRecords: (records) => [...records].sort((left, right) => (
+            Number(String(left.values.楼层数).match(/\d+/)?.[0]) - Number(String(right.values.楼层数).match(/\d+/)?.[0])
+        )),
+    };
+    vm.runInContext(variableInjectorSource, sandbox, { filename: 'variable-injector.js' });
+
+    const messages = memory.VariableInjector.buildSummaryMessages(state);
+    assert.equal(messages.length, 2);
+    assert.match(messages[0].content, /前段正文/);
+    assert.match(messages[1].content, /后段正文/);
+});
+
 test('injected summary timelines keep one line per explicit date without changing stored text', () => {
     const sandbox = createBaseSandbox();
     const memory = sandbox.window.YuzukiMemory;

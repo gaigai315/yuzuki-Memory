@@ -17,6 +17,31 @@ function createResponse(body, options = {}) {
     };
 }
 
+function createStreamingResponse(chunks, options = {}) {
+    const encoded = chunks.map((chunk) => new TextEncoder().encode(chunk));
+    let index = 0;
+    return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        headers: { get: (name) => name.toLowerCase() === 'content-type' ? 'text/event-stream' : '' },
+        body: {
+            getReader() {
+                return {
+                    async read() {
+                        if (index < encoded.length) return { done: false, value: encoded[index++] };
+                        throw new Error('stream stayed open after its terminal event');
+                    },
+                    async cancel() {
+                        options.onCancel?.();
+                    },
+                    releaseLock() {},
+                };
+            },
+        },
+    };
+}
+
 function createClient(fetchImpl, options = {}) {
     let currentSessionId = options.sessionId || 'char:7:chat-a';
     const elements = options.elements || {};
@@ -93,6 +118,30 @@ test('ordinary custom requests preserve the configured stream mode', async () =>
     )).success, true);
 
     assert.deepEqual(requests.map((payload) => payload.stream), [true, false]);
+});
+
+test('streaming requests finish on a terminal event without waiting for HTTP EOF', async () => {
+    let cancelled = 0;
+    const settings = {
+        oai_settings: {
+            chat_completion_source: 'deepseek',
+            deepseek_model: 'deepseek-chat',
+            openai_max_tokens: 128,
+        },
+    };
+    const { client } = createClient(async (url) => {
+        if (url === '/api/settings/get') return createResponse({ settings });
+        return createStreamingResponse([
+            'data: {"choices":[{"delta":{"content":"<Memory>完成</Memory>"},"finish_reason":null}]}\n\n',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+        ], { onCancel: () => { cancelled += 1; } });
+    });
+
+    const result = await client.generateWithTavern([{ role: 'user', content: 'test' }], { stream: true });
+    assert.equal(result.success, true);
+    assert.equal(result.text, '<Memory>完成</Memory>');
+    assert.equal(result.streamComplete, true);
+    assert.equal(cancelled, 1);
 });
 
 test('OpenCode Go proxy requests carry a stable opaque session header per chat', async () => {
