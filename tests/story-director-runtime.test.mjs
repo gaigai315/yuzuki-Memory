@@ -2827,10 +2827,13 @@ test('director card modal exposes deletion for pending and bound cards', () => {
     assert.match(memoryCssSource, /\.yzm-story-director-card-editor \{[\s\S]*?right: auto;[\s\S]*?bottom: auto;[\s\S]*?width: 79%;[\s\S]*?height: 61%;/);
     assert.match(memoryCssSource, /@media \(max-width: 760px\)[\s\S]*?\.yzm-story-director-card-editor \{[\s\S]*?width: 81%;[\s\S]*?height: 59%;/);
     assert.match(memoryWindowSource, /本轮已使用/);
+    assert.match(memoryWindowSource, /usedTabFloor\.textContent = hasUsedFloor \? `#\$\{usedFloor\}` : ''/);
+    assert.match(memoryWindowSource, /随 #\$\{usedFloor\} 楼用户消息发送，用于生成其下方回复/);
     assert.match(memoryWindowSource, /下一轮待用/);
     assert.match(memoryWindowSource, /getDirectorCardPages/);
     assert.match(memoryWindowSource, /runManualStoryDirector\(replanButton, activePage\)/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-tabs/);
+    assert.match(memoryCssSource, /\.yzm-story-director-card-tab-floor/);
 });
 
 test('turning off the switch stops an already scheduled plan', async () => {

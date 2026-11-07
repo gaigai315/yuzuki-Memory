@@ -2901,8 +2901,14 @@
         usedTab.type = 'button';
         usedTab.className = 'yzm-story-director-card-tab';
         usedTab.dataset.yzmDirectorPage = 'used';
-        usedTab.textContent = '本轮已使用';
         usedTab.setAttribute('role', 'tab');
+        const usedTabLabel = document.createElement('span');
+        usedTabLabel.className = 'yzm-story-director-card-tab-label';
+        usedTabLabel.textContent = '本轮已使用';
+        const usedTabFloor = document.createElement('span');
+        usedTabFloor.className = 'yzm-story-director-card-tab-floor';
+        usedTabFloor.hidden = true;
+        usedTab.append(usedTabLabel, usedTabFloor);
         const nextTab = document.createElement('button');
         nextTab.type = 'button';
         nextTab.className = 'yzm-story-director-card-tab';
@@ -3007,6 +3013,14 @@
             const pages = YuzukiMemory.StoryDirectorRuntime?.getDirectorCardPages?.() || {};
             const latest = pages[activePage] || null;
             const latestContent = String(latest?.content || '').trim();
+            const usedFloor = Number(pages.used?.userIndex);
+            const hasUsedFloor = Number.isInteger(usedFloor) && usedFloor >= 0;
+            usedTabFloor.hidden = !hasUsedFloor;
+            usedTabFloor.textContent = hasUsedFloor ? `#${usedFloor}` : '';
+            usedTab.title = hasUsedFloor
+                ? `该导演卡随 #${usedFloor} 楼用户消息发送，用于生成其下方回复`
+                : '本轮已使用的导演卡';
+            usedTab.setAttribute('aria-label', usedTab.title);
             setEditing(false);
             [usedTab, nextTab].forEach((tab) => {
                 const page = tab.dataset.yzmDirectorPage;
