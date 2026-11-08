@@ -868,6 +868,35 @@ test('director card pages expose the card used by the current response and the n
     assert.equal(pages.next.assistantIndex, 5);
 });
 
+test('manual and automatic planning keep cards pending until normal request injection', async () => {
+    for (const manual of [false, true]) {
+        const { memory, chat, getState } = createSandbox();
+        const runtime = memory.StoryDirectorRuntime;
+        if (manual) chat.pop();
+        const result = manual
+            ? await runtime.replanLatest()
+            : await runtime.runDirector(runtime.getLatestAssistantAnchor());
+        assert.equal(result.success, true);
+        assert.equal(runtime.getDirectorCardPage('used'), null);
+        assert.ok(runtime.getDirectorCardPage('next'));
+        assert.equal(getState().storyDirector.messageCards.length, 0);
+        assert.equal(runtime.updateCurrentDirectorCard('待用的新规划', 'next').success, true);
+        assert.equal(runtime.getDirectorCardPage('used'), null);
+        if (!manual) chat.push({ is_user: true, mes: '使用自动规划' });
+        assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+        assert.equal(runtime.getDirectorCardPage('next'), null);
+        assert.equal(runtime.getDirectorCardPage('used').content, '待用的新规划');
+        assert.equal(getState().storyDirector.pendingCard, '');
+        assert.equal(getState().storyDirector.source, null);
+        for (const generationType of ['regenerate', 'swipe']) {
+            const request = structuredClone(chat);
+            assert.equal(runtime.injectDirectorCardForGeneration(request, { generationType }), true);
+            assert.match(request.at(-1).mes, /待用的新规划/);
+            assert.equal(runtime.getDirectorCardPage('next'), null);
+        }
+    }
+});
+
 test('replanning the used card excludes the current response and replaces regenerate injection', async () => {
     const { memory, chat, getState, requests } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
@@ -916,7 +945,7 @@ test('editing a pending director card changes the stored card and the next norma
     assert.match(generationClone.at(-1).mes, /<下轮导演卡>\n只保留轨道B第二项。\n<\/下轮导演卡>/);
 });
 
-test('editing a bound director card updates regenerate and its matching pending copy', async () => {
+test('editing a bound director card updates regenerate without restoring a pending copy', async () => {
     const { memory, chat, getState } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
     assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
@@ -927,7 +956,7 @@ test('editing a bound director card updates regenerate and its matching pending 
 
     const edited = runtime.updateCurrentDirectorCard('绑定卡只保留这一条。');
     assert.equal(edited.success, true);
-    assert.equal(getState().storyDirector.pendingCard, '<下轮导演卡>\n绑定卡只保留这一条。\n</下轮导演卡>');
+    assert.equal(getState().storyDirector.pendingCard, '');
     assert.equal(getState().storyDirector.messageCards.at(-1).card, '<下轮导演卡>\n绑定卡只保留这一条。\n</下轮导演卡>');
 
     const regenerateClone = structuredClone(chat);
@@ -1298,7 +1327,8 @@ test('deleting, regenerating, or swiping A2 reuses the card bound to U2 and manu
     setPlannerCard('<下轮导演卡>手动覆盖 U2 的新规划。</下轮导演卡>');
     assert.equal((await runtime.replanLatest()).success, true);
     assert.equal(getState().storyDirector.messageCards.length, 1);
-    assert.match(getState().storyDirector.messageCards[0].card, /手动覆盖 U2/);
+    assert.match(getState().storyDirector.messageCards[0].card, /推进支线/);
+    assert.match(runtime.getDirectorCardPage('next').content, /手动覆盖 U2/);
 
     const resendManual = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(resendManual, { generationType: 'normal' }), true);
@@ -2143,7 +2173,8 @@ test('changing User text preserves and rebinds its director card without replann
     timers.shift().callback();
 
     assert.equal(requests.length, requestCount);
-    assert.equal(getState().storyDirector.pendingCard, savedCard);
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.equal(getState().storyDirector.messageCards.at(-1).card, savedCard);
     assert.notEqual(getState().storyDirector.messageCards.at(-1).user.signature, savedSignature);
     const request = structuredClone(chat);
     assert.equal(runtime.injectDirectorCardForGeneration(request, { generationType: 'regenerate' }), true);
@@ -2223,7 +2254,8 @@ test('bulk deletion ending at a hidden user plans its current action without unh
         assert.equal(getState().storyDirector.source.messageIndex, 2);
         assert.equal(runtime.getCurrentDirectorCard().origin, 'pending');
         assert.equal(runtime.updateCurrentDirectorCard('修改后的规划').success, true);
-        assert.match(runtime.getInjectableCard({ generationType: 'regenerate' }), /修改后的规划/);
+        assert.equal(runtime.getInjectableCard({ generationType: 'regenerate' }), '');
+        assert.match(runtime.getInjectableCard({ generationType: 'normal' }), /修改后的规划/);
         assert.equal(runtime.updateCurrentDirectorCard('').deleted, true);
         assert.equal(runtime.getCurrentDirectorCard(), null);
         assert.equal(runtime.getInjectableCard({ generationType: 'normal' }), '');
@@ -2795,14 +2827,14 @@ test('clearing a ready pending card prevents the next normal injection and prese
     assert.equal(generationClone.at(-1).mes, '这一轮不用导演卡');
 });
 
-test('discarding a user-anchored pending card also removes its same-turn bound copy', async () => {
+test('discarding a user-anchored pending card prevents binding and injection', async () => {
     const { memory, chat, getState } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
     chat.pop();
 
     assert.equal((await runtime.replanLatest()).success, true);
     assert.equal(runtime.getCurrentDirectorCard()?.origin, 'pending');
-    assert.equal(getState().storyDirector.messageCards.length, 1);
+    assert.equal(getState().storyDirector.messageCards.length, 0);
     assert.equal(runtime.discardPendingCard('idle'), true);
     assert.equal(getState().storyDirector.pendingCard, '');
     assert.equal(getState().storyDirector.messageCards.length, 0);

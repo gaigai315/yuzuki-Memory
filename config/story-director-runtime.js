@@ -2267,7 +2267,7 @@
                 throw createDirectorValidationError('剧情导演第二轮定稿校验失败', error, planningResult);
             }
             assertActive();
-            const messageCards = source.role === 'user'
+            const messageCards = source.role === 'user' && options.outputMode === 'bound'
                 ? upsertMessageCard(previousDirector.messageCards, source, card)
                 : normalizeMessageCards(previousDirector.messageCards);
             const boundOnly = options.outputMode === 'bound';
@@ -2654,7 +2654,9 @@
         const user = getGenerationTargetUser(generationType);
         if (!director || !user) return null;
         const boundCard = findMessageCard(director.messageCards, user);
-        if (boundCard) return { card: resolveDirectorVariables(boundCard), user, origin: 'bound' };
+        if (boundCard && !(generationType === 'normal' && pendingCardTargetsUser(director, user))) {
+            return { card: resolveDirectorVariables(boundCard), user, origin: 'bound' };
+        }
         if (generationType === 'regenerate' || generationType === 'swipe' || !pendingCardTargetsUser(director, user)) return null;
         const pendingCard = String(director.pendingCard || '').trim();
         return pendingCard ? { card: resolveDirectorVariables(pendingCard), user, origin: 'pending' } : null;
@@ -2780,9 +2782,6 @@
                 return { success: false, error: '导演卡来源已经变化，请重新打开后再编辑。' };
             }
             nextDirector.pendingCard = card;
-            if (director.source?.role === 'user') {
-                nextDirector.messageCards = upsertMessageCard(director.messageCards, director.source, card);
-            }
         } else {
             if (!sourceMatchesCurrentMessage(current.source)) {
                 return { success: false, error: '导演卡绑定的用户消息已经变化，请重新打开后再编辑。' };
@@ -2822,10 +2821,12 @@
         chat[userIndex] = clone;
         const state = loadState(resolved.user.sessionId);
         const director = state?.storyDirector;
-        if (director && findMessageCard(director.messageCards, resolved.user) !== card) {
+        const consumesPending = director && pendingCardTargetsUser(director, resolved.user);
+        if (director && (findMessageCard(director.messageCards, resolved.user) !== card || consumesPending)) {
             saveDirectorState(resolved.user.sessionId, {
                 ...director,
                 messageCards: upsertMessageCard(director.messageCards, resolved.user, card),
+                ...(consumesPending ? { pendingCard: '', source: null } : {}),
             }, 'story-director-bind-card');
         }
         console.info('[yuzuki-Memory] 下轮导演卡已临时附加到用户请求副本。', {
