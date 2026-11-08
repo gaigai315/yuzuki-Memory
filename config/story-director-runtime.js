@@ -521,10 +521,11 @@
     }
 
     function parseCharacterRosterLine(line = '') {
-        const match = String(line || '').trim().match(/^\[([^\]\r\n]+)\]\s*[|｜]\s*(主角|配角)\s*[|｜]\s*状态\s*[:：]\s*(有效|暂时退场|死亡)\s*$/);
+        // 兼容省略姓名方括号或“状态:”前缀的三列名册，仍严格校验类型和状态。
+        const match = String(line || '').trim().match(/^(?:\[([^\[\]|｜\r\n]+)\]|([^\[\]|｜\r\n]+))\s*[|｜]\s*(主角|配角)\s*[|｜]\s*(?:状态\s*[:：]\s*)?(有效|暂时退场|死亡)\s*$/);
         if (!match) return null;
-        const name = normalizeCharacterRosterName(match[1]);
-        return name ? { name, type: match[2], status: match[3] } : null;
+        const name = normalizeCharacterRosterName(match[1] || match[2]);
+        return name ? { name, type: match[3], status: match[4] } : null;
     }
 
     function readCharacterRoster(ledger = '') {

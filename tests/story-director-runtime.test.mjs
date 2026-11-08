@@ -1783,6 +1783,57 @@ test('invalid second-pass cards stop without committing the provisional ledger',
     }
 });
 
+test('roster updates accept abbreviated rows and store the canonical format', async () => {
+    const { memory, getState } = createSandbox();
+    memory.LlmClient.requestAgentWithTavern = async (messages) => {
+        if (isReview(messages)) return createCardResponse();
+        const response = createRoleLedgerResponse();
+        response.text = response.text.replace('<角色账本更新>', [
+            '<角色账本更新>',
+            '阿野 | 主角 | 有效',
+            '[裴烬] | 主角 | 有效',
+            '雷恩·霍克 ｜ 配角 ｜ 状态： 暂时退场',
+            '[苏拉] | 配角 | 状态: 死亡',
+        ].join('\n'));
+        return response;
+    };
+    assert.equal((await memory.StoryDirectorRuntime.replanLatest()).success, true);
+    const ledger = getState().storyDirector.ledger;
+    for (const line of [
+        '[阿野] | 主角 | 状态: 有效',
+        '[裴烬] | 主角 | 状态: 有效',
+        '[雷恩·霍克] | 配角 | 状态: 暂时退场',
+        '[苏拉] | 配角 | 状态: 死亡',
+    ]) assert.ok(ledger.includes(line), line);
+});
+
+test('abbreviated roster rows still reject invalid fields without committing', async (t) => {
+    for (const row of [
+        '阿野 | 路人 | 有效',
+        '阿野 | 主角 | 存活',
+        ' | 主角 | 有效',
+        '[阿野 | 主角 | 有效',
+        '阿野] | 主角 | 有效',
+        '阿野 | 主角 | 有效 | 多余字段',
+    ]) {
+        await t.test(row, async () => {
+            const { memory, getState, requests } = createSandbox();
+            memory.LlmClient.requestAgentWithTavern = async (messages) => {
+                requests.push(messages);
+                const response = createRoleLedgerResponse();
+                response.text = response.text.replace('<角色账本更新>', `<角色账本更新>\n${row}`);
+                return response;
+            };
+            const result = await memory.StoryDirectorRuntime.replanLatest();
+            assert.equal(result.success, false);
+            assert.match(result.error, /格式错误的角色记录/);
+            assert.equal(requests.length, 1);
+            assert.equal(getState().storyDirector.ledger, '旧账本');
+            assert.equal(getState().storyDirector.pendingCard, '');
+        });
+    }
+});
+
 test('roster updates use the character name as key and preserve the original type', async () => {
     const initialLedger = '【剧情角色名册】\n[林雪] | 配角 | 状态: 有效';
     const { memory, getState } = createSandbox({ initialLedger });
