@@ -2521,6 +2521,35 @@ test('interval two and three review every marked reply and commit actual modules
     }
 });
 
+test('batch review accepts roster and appearance records without character-name brackets', async () => {
+    const { memory, chat, requests, getState } = createSandbox({ initialLedger: '' });
+    const runtime = memory.StoryDirectorRuntime;
+    runtime.setAutoPlanInterval(3);
+    chat.splice(0);
+    for (let round = 1; round <= 3; round++) {
+        chat.push({ is_user: true, mes: `用户${round}` }, { is_user: false, mes: `回复${round}` });
+    }
+    memory.LlmClient.requestAgentWithTavern = async messages => {
+        requests.push(messages);
+        if (isReview(messages)) return createCardResponse();
+        const response = createBatchRoleLedgerResponse(readContext(messages).assistantReviews, {
+            roster: [{ name: '宋清秋', type: '主角', status: '有效' }],
+            occurred: true,
+            entries: [{ name: '沉末', module: 'Module1', event: '在研究所处理事务' }],
+        });
+        response.text = response.text.replace(/^\[([^\]]+)\](?=\s*\|)/gm, '$1');
+        response.message.content = response.text;
+        return response;
+    };
+
+    const result = await runtime.replanLatest();
+    assert.equal(result.success, true);
+    assert.equal(requests.length, 2);
+    const ledger = getState().storyDirector.ledger;
+    assert.match(ledger, /\[宋清秋\] \| 主角 \| 状态: 有效/);
+    assert.equal((ledger.match(/\[沉末\] \| Module 1 \| 在研究所处理事务/g) || []).length, 3);
+});
+
 test('manual planning within a three-round interval leaves only the new reply to review at the boundary', async () => {
     const { sandbox, memory, chat, requests, getState } = createSandbox({ initialLedger: '' });
     const runtime = memory.StoryDirectorRuntime;

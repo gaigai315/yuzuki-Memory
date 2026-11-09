@@ -607,12 +607,14 @@
     }
 
     function parseRoleAppearanceLine(line = '') {
-        const match = String(line || '').trim().match(/^\[([^\]\r\n]+)\]\s*[|｜]\s*([\s\S]+)$/);
+        // 兼容模型省略角色姓名方括号；分隔符后的模块与事件格式仍严格校验。
+        const match = String(line || '').trim().match(/^(?:\[([^\[\]|｜\r\n]+)\]|([^\[\]|｜\r\n]+))\s*[|｜]\s*([\s\S]+)$/);
         if (!match) return null;
-        const name = normalizeCharacterRosterName(match[1]);
-        const moduleMatch = match[2].match(/^\s*(Module\s*[1-5])\s*[|｜]\s*([\s\S]+)$/i);
+        const name = normalizeCharacterRosterName(match[1] || match[2]);
+        const content = match[3];
+        const moduleMatch = content.match(/^\s*(Module\s*[1-5])\s*[|｜]\s*([\s\S]+)$/i);
         const module = normalizeTrackBModule(moduleMatch?.[1]);
-        const event = normalizeRoleAppearanceEvent(moduleMatch?.[2] || match[2]);
+        const event = normalizeRoleAppearanceEvent(moduleMatch?.[2] || content);
         return name && event ? { name, ...(module ? { module } : {}), event } : null;
     }
 
