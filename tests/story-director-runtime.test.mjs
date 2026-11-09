@@ -202,6 +202,7 @@ function createSandbox(options = {}) {
             pendingCard: '',
             source: null,
             messageCards: [],
+            roundBaseline: 0,
             status: 'idle',
             lastError: '',
             updatedAt: 0,
@@ -2827,6 +2828,63 @@ test('clearing a ready pending card prevents the next normal injection and prese
     assert.equal(generationClone.at(-1).mes, '这一轮不用导演卡');
 });
 
+test('resetting story director data clears ledgers, NPC roster, cards and request viewer state', async () => {
+    const { memory, chat, getState } = createSandbox({ initialLedger: '' });
+    const runtime = memory.StoryDirectorRuntime;
+    let clearedProbeSessionId = '';
+    memory.RequestProbe.clearStoryDirectorRequestData = (sessionId) => {
+        clearedProbeSessionId = sessionId;
+        return true;
+    };
+
+    assert.equal((await runtime.replanLatest()).success, true);
+    chat.push({ is_user: true, mes: '使用这张导演卡' });
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+    const beforeReset = getState().storyDirector;
+    assert.match(beforeReset.ledger, /【剧情角色名册】/);
+    assert.match(beforeReset.ledger, /【轨道B最近20轮角色出场账本】/);
+    assert.ok(beforeReset.pendingCard || beforeReset.messageCards.length);
+
+    const result = runtime.resetCurrentDirectorData();
+    assert.equal(result.success, true);
+    assert.equal(result.roundBaseline, 2);
+    assert.equal(clearedProbeSessionId, 'chat:test');
+    assert.equal(getState().storyDirector.enabled, true);
+    assert.equal(getState().storyDirector.ledgerVersion, 2);
+    assert.equal(getState().storyDirector.ledger, '');
+    assert.equal(getState().storyDirector.pendingCard, '');
+    assert.equal(getState().storyDirector.source, null);
+    assert.deepEqual(getState().storyDirector.messageCards, []);
+    assert.equal(getState().storyDirector.roundBaseline, 2);
+    assert.equal(getState().storyDirector.status, 'idle');
+    assert.equal(getState().storyDirector.lastError, '');
+    assert.equal(runtime.getCurrentDirectorCard(), null);
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), false);
+});
+
+test('automatic story planning counts its interval from the latest director reset', async () => {
+    const { sandbox, memory, chat, requests } = createSandbox({ initialLedger: '' });
+    const runtime = memory.StoryDirectorRuntime;
+    runtime.setAutoPlanInterval(2);
+    assert.equal(runtime.resetCurrentDirectorData().success, true);
+
+    let scheduled;
+    sandbox.window.setTimeout = (callback) => { scheduled = callback; return 1; };
+    const schedule = async () => {
+        runtime.scheduleDirector('assistant-updated', 0);
+        await scheduled();
+    };
+
+    await schedule();
+    assert.equal(requests.length, 0, 'the pre-reset completed round must not trigger a new plan');
+    chat.push({ is_user: true, mes: '重开后的用户1' }, { is_user: false, mes: '重开后的回复1' });
+    await schedule();
+    assert.equal(requests.length, 0);
+    chat.push({ is_user: true, mes: '重开后的用户2' }, { is_user: false, mes: '重开后的回复2' });
+    await schedule();
+    assert.equal(requests.length, 2);
+});
+
 test('discarding a user-anchored pending card prevents binding and injection', async () => {
     const { memory, chat, getState } = createSandbox();
     const runtime = memory.StoryDirectorRuntime;
@@ -2917,6 +2975,10 @@ test('director card modal exposes deletion for pending and bound cards', () => {
     assert.match(memoryWindowSource, /runManualStoryDirector\(replanButton, activePage\)/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-tabs/);
     assert.match(memoryCssSource, /\.yzm-story-director-card-tab-floor/);
+    assert.match(memoryWindowSource, /className = 'yzm-story-director-card-reset'/);
+    assert.match(memoryWindowSource, /resetCurrentDirectorData\?\.\(\)/);
+    assert.match(memoryWindowSource, /将删除 NPC 名册、近期剧情历史、轨道 B 调用历史、已使用导演卡、待用导演卡/);
+    assert.match(memoryCssSource, /\.yzm-story-director-card-reset/);
 });
 
 test('turning off the switch stops an already scheduled plan', async () => {

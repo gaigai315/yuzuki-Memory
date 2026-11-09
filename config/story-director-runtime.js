@@ -157,6 +157,15 @@
         return { completedRounds: indices.length, lastCompletedAssistantIndex: indices.at(-1) ?? -1 };
     }
 
+    function getCompletedRoundsSinceReset(director, chat = getContext()?.chat) {
+        const rounds = getCompletedDialogueRounds(chat);
+        const roundBaseline = Math.max(0, Math.round(Number(director?.roundBaseline) || 0));
+        return {
+            ...rounds,
+            completedRoundsSinceReset: Math.max(0, rounds.completedRounds - roundBaseline),
+        };
+    }
+
     function isRunning() {
         return Boolean(activeRunSignature);
     }
@@ -1037,6 +1046,9 @@
             pendingCard: String(nextDirector?.pendingCard || ''),
             source: nextDirector?.source && typeof nextDirector.source === 'object' ? { ...nextDirector.source } : null,
             messageCards,
+            roundBaseline: Object.prototype.hasOwnProperty.call(nextDirector || {}, 'roundBaseline')
+                ? Math.max(0, Math.round(Number(nextDirector.roundBaseline) || 0))
+                : Math.max(0, Math.round(Number(latest.storyDirector?.roundBaseline) || 0)),
             status: String(nextDirector?.status || 'idle'),
             lastError: String(nextDirector?.lastError || ''),
             updatedAt: Date.now(),
@@ -2530,6 +2542,38 @@
         }, 'story-director-clear');
     }
 
+    function resetCurrentDirectorData() {
+        if (isRunning()) {
+            return { success: false, error: '剧情导演正在运行，请等待当前规划完成后再清理。' };
+        }
+        const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
+        const state = sessionId ? loadState(sessionId) : null;
+        const director = state?.storyDirector;
+        if (!sessionId || !director) {
+            return { success: false, error: '当前会话的剧情导演状态不可用。' };
+        }
+        window.clearTimeout(runTimer);
+        runTimer = null;
+        const rounds = getCompletedDialogueRounds();
+        const saved = saveDirectorState(sessionId, {
+            ledgerVersion: 2,
+            ledger: '',
+            pendingCard: '',
+            source: null,
+            messageCards: [],
+            roundBaseline: rounds.completedRounds,
+            status: director.enabled === true ? 'idle' : 'disabled',
+            lastError: '',
+        }, 'story-director-reset');
+        if (!saved) return { success: false, error: '剧情规划数据清理失败，请重试。' };
+        YuzukiMemory.RequestProbe?.clearStoryDirectorRequestData?.(sessionId);
+        console.info('[yuzuki-Memory] 当前会话的剧情导演数据已清空。', {
+            sessionId,
+            roundBaseline: rounds.completedRounds,
+        });
+        return { success: true, roundBaseline: rounds.completedRounds };
+    }
+
     function discardPendingCard(status = 'idle') {
         const sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '';
         const state = loadState(sessionId);
@@ -2582,10 +2626,11 @@
             rememberDialogueMutationSnapshot();
             const state = loadState(source.sessionId);
             const director = state?.storyDirector || {};
-            const rounds = getCompletedDialogueRounds();
+            const rounds = getCompletedRoundsSinceReset(director);
             const interval = getAutoPlanInterval();
             if (rounds.lastCompletedAssistantIndex !== source.assistantIndex
-                || rounds.completedRounds === 0 || rounds.completedRounds % interval !== 0) return;
+                || rounds.completedRoundsSinceReset === 0
+                || rounds.completedRoundsSinceReset % interval !== 0) return;
             if (director.pendingCard && director.source?.signature === source.signature && sourceMatchesCurrentMessage(director.source)) return;
             if (activeRunSignature === source.signature) return;
             console.info('[yuzuki-Memory] 剧情导演开始运行。', { reason, assistantIndex: source.assistantIndex });
@@ -2941,6 +2986,7 @@
         injectDirectorCardForGeneration,
         clearPendingCard,
         discardPendingCard,
+        resetCurrentDirectorData,
         scheduleDirector,
         getAutoPlanInterval,
         setAutoPlanInterval,

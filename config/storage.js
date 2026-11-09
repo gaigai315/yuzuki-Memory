@@ -1239,6 +1239,9 @@
                 createdAt: Math.max(0, Math.round(Number(anchor.createdAt) || 0)),
             } : null,
             messageCards,
+            roundBaseline: legacyLedger
+                ? 0
+                : Math.max(0, Math.round(Number(source.roundBaseline ?? fallback.roundBaseline) || 0)),
             status: legacyLedger ? (enabled ? 'idle' : 'disabled') : String(source.status || fallback.status || 'idle'),
             lastError: legacyLedger ? '' : String(source.lastError || ''),
             updatedAt: Math.max(0, Math.round(Number(source.updatedAt) || 0)),

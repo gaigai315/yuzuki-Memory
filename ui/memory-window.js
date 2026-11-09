@@ -396,6 +396,7 @@
                 pendingCard: '',
                 source: null,
                 messageCards: [],
+                roundBaseline: 0,
                 status: 'idle',
                 lastError: '',
                 updatedAt: 0,
@@ -2947,6 +2948,13 @@
         clearButton.setAttribute('aria-label', clearButton.title);
         clearButton.innerHTML = '<i class="fa-regular fa-trash-can" aria-hidden="true"></i>';
 
+        const resetButton = document.createElement('button');
+        resetButton.type = 'button';
+        resetButton.className = 'yzm-story-director-card-reset';
+        resetButton.title = '清空剧情规划数据';
+        resetButton.setAttribute('aria-label', resetButton.title);
+        resetButton.innerHTML = '<i class="fa-solid fa-broom" aria-hidden="true"></i>';
+
         const editButton = document.createElement('button');
         editButton.type = 'button';
         editButton.className = 'yzm-story-director-card-edit';
@@ -2972,7 +2980,7 @@
 
         const actionBar = document.createElement('div');
         actionBar.className = 'yzm-story-director-card-actions';
-        actionBar.append(clearButton, replanButton, editButton, cancelEditButton, saveEditButton);
+        actionBar.append(resetButton, clearButton, replanButton, editButton, cancelEditButton, saveEditButton);
 
         const syncEditSaveButton = () => {
             saveEditButton.disabled = YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true;
@@ -2984,6 +2992,7 @@
             body.hidden = active;
             editor.hidden = !active;
             clearButton.hidden = active || clearButton.dataset.yzmAvailable !== 'true';
+            resetButton.hidden = active;
             editButton.hidden = active || editButton.dataset.yzmAvailable !== 'true';
             replanButton.hidden = active;
             cancelEditButton.hidden = !active;
@@ -3012,6 +3021,10 @@
             syncEditSaveButton();
         };
 
+        const syncResetButton = () => {
+            resetButton.disabled = YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true;
+        };
+
         const refreshCardContent = () => {
             const pages = YuzukiMemory.StoryDirectorRuntime?.getDirectorCardPages?.() || {};
             const latest = pages[activePage] || null;
@@ -3036,6 +3049,7 @@
             body.textContent = latestContent || (activePage === 'used' ? '本轮没有已使用的导演卡' : '下一轮导演卡尚未生成');
             syncClearButton(latest, latestContent);
             syncEditButton(latest, latestContent);
+            syncResetButton();
             body.scrollTop = 0;
         };
 
@@ -3043,7 +3057,7 @@
         overlay.appendChild(sheet);
         host.appendChild(overlay);
         host.classList.add('yzm-story-director-card-host-open');
-        activeStoryDirectorCardWindow = { host, overlay, abortController, syncClearButton, syncEditButton };
+        activeStoryDirectorCardWindow = { host, overlay, abortController, syncClearButton, syncEditButton, syncResetButton };
         refreshCardContent();
         updateStoryDirectorActionButton(replanButton, YuzukiMemory.StoryDirectorRuntime?.isRunning?.() === true);
 
@@ -3060,6 +3074,20 @@
             refreshCardContent();
             showTaskToast(
                 result?.success ? '导演卡已删除，后续生成不再注入此卡' : String(result?.error || '导演卡删除失败。'),
+                result?.success ? 'success' : 'warning',
+            );
+        }, { signal: abortController.signal });
+        resetButton.addEventListener('click', (event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const confirmed = window.confirm(
+                '确定清空当前会话的剧情规划数据吗？\n\n将删除 NPC 名册、近期剧情历史、轨道 B 调用历史、已使用导演卡、待用导演卡，以及导演请求查看记录。不会删除正文、表格或总结。',
+            );
+            if (!confirmed) return;
+            const result = YuzukiMemory.StoryDirectorRuntime?.resetCurrentDirectorData?.();
+            refreshCardContent();
+            showTaskToast(
+                result?.success ? '剧情规划数据已清空' : String(result?.error || '剧情规划数据清理失败。'),
                 result?.success ? 'success' : 'warning',
             );
         }, { signal: abortController.signal });
@@ -4188,6 +4216,7 @@
         const content = String(latest?.content || '').trim();
         activeStoryDirectorCardWindow?.syncClearButton?.(latest, content);
         activeStoryDirectorCardWindow?.syncEditButton?.(latest, content);
+        activeStoryDirectorCardWindow?.syncResetButton?.();
     }
 
     async function runManualStoryDirector(button, page = 'next') {

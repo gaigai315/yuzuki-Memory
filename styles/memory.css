@@ -13226,6 +13226,7 @@
 
 #yzm-memory-global-modal-root .yzm-story-director-card-replan,
 #yzm-memory-global-modal-root .yzm-story-director-card-clear,
+#yzm-memory-global-modal-root .yzm-story-director-card-reset,
 #yzm-memory-global-modal-root .yzm-story-director-card-edit,
 #yzm-memory-global-modal-root .yzm-story-director-card-edit-cancel,
 #yzm-memory-global-modal-root .yzm-story-director-card-edit-save {
@@ -13254,6 +13255,12 @@
     border-color: rgba(143, 37, 29, 0.28);
 }
 
+#yzm-memory-global-modal-root .yzm-story-director-card-reset {
+    color: #8f251d;
+    background: rgba(255, 244, 241, 0.86);
+    border-color: rgba(143, 37, 29, 0.28);
+}
+
 #yzm-memory-global-modal-root .yzm-story-director-card-edit-save {
     color: #2f6144;
     background: rgba(241, 251, 244, 0.88);
@@ -13264,6 +13271,8 @@
 #yzm-memory-global-modal-root .yzm-story-director-card-replan:focus-visible,
 #yzm-memory-global-modal-root .yzm-story-director-card-clear:hover,
 #yzm-memory-global-modal-root .yzm-story-director-card-clear:focus-visible,
+#yzm-memory-global-modal-root .yzm-story-director-card-reset:hover,
+#yzm-memory-global-modal-root .yzm-story-director-card-reset:focus-visible,
 #yzm-memory-global-modal-root .yzm-story-director-card-edit:hover,
 #yzm-memory-global-modal-root .yzm-story-director-card-edit:focus-visible,
 #yzm-memory-global-modal-root .yzm-story-director-card-edit-cancel:hover,
@@ -13278,6 +13287,7 @@
 
 #yzm-memory-global-modal-root .yzm-story-director-card-replan:disabled,
 #yzm-memory-global-modal-root .yzm-story-director-card-clear:disabled,
+#yzm-memory-global-modal-root .yzm-story-director-card-reset:disabled,
 #yzm-memory-global-modal-root .yzm-story-director-card-edit:disabled,
 #yzm-memory-global-modal-root .yzm-story-director-card-edit-cancel:disabled,
 #yzm-memory-global-modal-root .yzm-story-director-card-edit-save:disabled {
@@ -13346,6 +13356,7 @@
 
     #yzm-memory-global-modal-root .yzm-story-director-card-replan,
     #yzm-memory-global-modal-root .yzm-story-director-card-clear,
+    #yzm-memory-global-modal-root .yzm-story-director-card-reset,
     #yzm-memory-global-modal-root .yzm-story-director-card-edit,
     #yzm-memory-global-modal-root .yzm-story-director-card-edit-cancel,
     #yzm-memory-global-modal-root .yzm-story-director-card-edit-save {

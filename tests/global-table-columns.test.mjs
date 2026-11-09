@@ -100,6 +100,7 @@ function createFallbackState() {
             pendingCard: '',
             source: null,
             messageCards: [],
+            roundBaseline: 0,
             status: 'idle',
             lastError: '',
             updatedAt: 0,

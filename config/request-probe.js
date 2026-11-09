@@ -1860,6 +1860,18 @@
         return copyRequestDataForRead(lastStoryDirectorRequestData);
     }
 
+    function clearStoryDirectorRequestData(sessionId = YuzukiMemory.Storage?.getCurrentSessionId?.() || '') {
+        const targetSessionId = String(sessionId || '');
+        if (lastStoryDirectorRequestData && targetSessionId
+            && lastStoryDirectorRequestData.sessionId !== targetSessionId) return false;
+        storyDirectorCaptureSequence += 1;
+        lastStoryDirectorRequestData = null;
+        window.dispatchEvent(new CustomEvent('yzm-memory-request-probe-updated', {
+            detail: { storyDirector: true, cleared: true, sessionId: targetSessionId },
+        }));
+        return true;
+    }
+
     YuzukiMemory.RequestProbe = Object.assign(YuzukiMemory.RequestProbe || {}, {
         installed: false,
         captureFromBody,
@@ -1876,6 +1888,7 @@
         getLastPreviewRequestData,
         getLatestRequestData,
         getLastStoryDirectorRequestData,
+        clearStoryDirectorRequestData,
         getChatRequestState: () => ({
             activeCount: activeChatRequestCount,
             lastFinishedAt: lastChatRequestFinishedAt,
