@@ -2892,11 +2892,12 @@
         if (!range) return failure('请输入有效楼层范围，例如 40-60；起始楼层不能大于结束楼层。');
         const floorScope = normalizeFloorScope(options.floorScope, getCurrentFloorScope(state));
         const matches = (text, storedRange, scope) => {
-            // Stored ranges are exclusive at the end; user input follows displayed floor numbers.
+            // Stored task ranges are end-exclusive. getRangeFloorValue converts them to the
+            // same inclusive floor bounds shown in the UI before containment is checked.
             const bounds = String(text || '').trim()
                 ? parseExactFloorRange(text)
                 : (storedRange ? parseExactFloorRange(getRangeFloorValue(storedRange)) : null);
-            return bounds?.start === range.start && bounds?.end === range.end
+            return bounds?.start >= range.start && bounds?.end <= range.end
                 && isSameFloorScope(normalizeFloorScope(scope, floorScope), floorScope);
         };
         if (tableId === PLOT_SUMMARY_TABLE_ID
@@ -2963,7 +2964,7 @@
             });
             return [record];
         });
-        if (!count) return failure('没有对应楼层范围，请确认起始和结束楼层与已保存内容完全一致。');
+        if (!count) return failure('该楼层区域内没有可删除的完整总结或摘要；跨出区域边界的内容会保留。');
         state.records[tableId] = nextRecords;
         if (state.activeRecordIds && removedRecordIds.includes(state.activeRecordIds[tableId])) {
             state.activeRecordIds[tableId] = nextRecords.find((record) => !record.hidden)?.id || '';

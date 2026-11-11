@@ -57,7 +57,7 @@ test('later-created summaries are reordered by floor after commit', () => {
     assert.deepEqual(Array.from(state.records.memory_summary, (record) => record.values.楼层数), ['0-50', '50-60']);
 });
 
-test('exact range deletion removes only matching summaries and matching branch segments in this scope', () => {
+test('range deletion removes only summaries fully contained in the requested bounds and matching scope', () => {
     const harness = createHarness({ activateAfterBind: false });
     const state = harness.stateRef.current;
     const scope = harness.floorScope;
@@ -67,38 +67,39 @@ test('exact range deletion removes only matching summaries and matching branch s
         id, floorScope, values: { 总结标题: id, 楼层数: floor, 总结内容: '多行正文\n不能按行误删' },
     });
     state.records.memory_summary = [
-        standalone('exact', '40-60'), standalone('partial', '40-59'),
-        standalone('overlap', '41-61'), standalone('other', '40-60', otherScope),
+        standalone('overlap-left', '180-220'), standalone('contained', '220-280'),
+        standalone('overlap-right', '280-320'), standalone('other', '220-280', otherScope),
         { id: 'branch', floorScope: scope, values: { 总结标题: '支线总结（1）', 核心角色: '角色A' },
             summarySegments: [
-                { floor: '40-60', summary: '删除分段', unresolved: '删除问题', remark: '删除备注', floorScope: scope },
-                { floor: '61-80', summary: '保留分段', unresolved: '保留问题', remark: '保留备注', floorScope: scope },
-                { floor: '40-60', summary: '旧篇保留', floorScope: otherScope },
+                { floor: '230-260', summary: '删除分段', unresolved: '删除问题', remark: '删除备注', floorScope: scope },
+                { floor: '180-220', summary: '左侧跨界保留', unresolved: '左侧问题', remark: '左侧备注', floorScope: scope },
+                { floor: '280-320', summary: '右侧跨界保留', unresolved: '右侧问题', remark: '右侧备注', floorScope: scope },
+                { floor: '230-260', summary: '旧篇保留', floorScope: otherScope },
             ] },
     ];
-    const result = harness.taskRunner.deleteContentByExactFloorRange(state, 'memory_summary', '40-60');
+    const result = harness.taskRunner.deleteContentByExactFloorRange(state, 'memory_summary', '200-300');
     assert.equal(result.success, true);
     assert.equal(result.count, 2);
-    assert.deepEqual(Array.from(state.records.memory_summary, (record) => record.id), ['partial', 'overlap', 'other', 'branch']);
+    assert.deepEqual(Array.from(state.records.memory_summary, (record) => record.id), ['overlap-left', 'overlap-right', 'other', 'branch']);
     const branch = state.records.memory_summary.at(-1);
-    assert.equal(branch.values.总结内容, '保留分段\n旧篇保留');
-    assert.equal(branch.values.楼层数, '61-80\n40-60');
-    assert.equal(branch.values.未解决问题, '保留问题');
-    assert.equal(branch.values.备注, '保留备注');
+    assert.equal(branch.values.总结内容, '左侧跨界保留\n右侧跨界保留\n旧篇保留');
+    assert.equal(branch.values.楼层数, '180-220\n280-320\n230-260');
+    assert.equal(branch.values.未解决问题, '左侧问题\n右侧问题');
+    assert.equal(branch.values.备注, '左侧备注\n右侧备注');
     assert.equal(state.settings.manualPointers.historySummary, 200);
 });
 
-test('range deletion rejects mismatches, invalid inputs and ordinary tables without changing state', () => {
+test('range deletion rejects non-containing bounds, invalid inputs and ordinary tables without changing state', () => {
     const harness = createHarness({ activateAfterBind: false });
     const state = harness.stateRef.current;
     state.records.memory_summary = [{ id: 'summary', floorScope: harness.floorScope,
-        values: { 楼层数: '40-60', 总结内容: '保持原样' } }];
+        values: { 楼层数: '220-280', 总结内容: '保持原样' } }];
     const before = JSON.stringify(state);
-    for (const input of ['40-59', '41-60', '39-61', '60-40', '-1-60', '40.5-60', '', '40-60abc', '40-60\n61-80']) {
+    for (const input of ['221-300', '200-279', '280-220', '-1-300', '200.5-300', '', '200-300abc', '200-300\n301-400']) {
         assert.equal(harness.taskRunner.deleteContentByExactFloorRange(state, 'memory_summary', input).success, false, input);
         assert.equal(JSON.stringify(state), before, input);
     }
-    assert.equal(harness.taskRunner.deleteContentByExactFloorRange(state, 'character_profile', '40-60').success, false);
+    assert.equal(harness.taskRunner.deleteContentByExactFloorRange(state, 'character_profile', '200-300').success, false);
     assert.equal(JSON.stringify(state), before);
 });
 
@@ -107,9 +108,9 @@ test('metadata-only summary ranges use the same inclusive bounds as displayed fl
     const state = harness.stateRef.current;
     state.records.memory_summary = [{ id: 'metadata-summary', floorScope: harness.floorScope,
         values: { 总结内容: '待删除' },
-        meta: { yzmMemoryTask: { range: { start: 40, end: 61 }, floorScope: harness.floorScope } } }];
-    assert.equal(harness.taskRunner.deleteContentByExactFloorRange(state, 'memory_summary', '40-61').success, false);
-    assert.equal(harness.taskRunner.deleteContentByExactFloorRange(state, 'memory_summary', '40-60').success, true);
+        meta: { yzmMemoryTask: { range: { start: 220, end: 281 }, floorScope: harness.floorScope } } }];
+    assert.equal(harness.taskRunner.deleteContentByExactFloorRange(state, 'memory_summary', '221-300').success, false);
+    assert.equal(harness.taskRunner.deleteContentByExactFloorRange(state, 'memory_summary', '200-300').success, true);
     assert.equal(state.records.memory_summary.length, 0);
 });
 
