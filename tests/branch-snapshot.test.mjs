@@ -58,7 +58,7 @@ const branchSnapshot = window.YuzukiMemory.BranchSnapshot;
 const taskRunnerSource = fs.readFileSync(new URL('../config/task-runner.js', import.meta.url), 'utf8');
 vm.runInThisContext(taskRunnerSource, { filename: 'task-runner.js' });
 
-test('exact range deletion persists through repeated forced branch restores without touching other ranges', () => {
+test('contained range deletion persists through repeated forced branch restores without touching crossing ranges', () => {
     storedState = createState();
     const scope = { id: 'scope:range-delete' };
     storedState.currentFloorScope = scope;
@@ -71,7 +71,7 @@ test('exact range deletion persists through repeated forced branch restores with
     record.plotItemMeta = {
         main: [
             { id: 'range-main', source: 'realtime', sourceRange: { start: 40, end: 61 }, floorScope: scope },
-            { id: 'range-kept', source: 'realtime', sourceRange: { start: 41, end: 61 }, floorScope: scope },
+            { id: 'range-kept', source: 'realtime', sourceRange: { start: 41, end: 62 }, floorScope: scope },
         ],
         branch: [{ id: 'range-branch', source: 'trace', sourceRange: { start: 40, end: 61 }, floorScope: scope }],
     };

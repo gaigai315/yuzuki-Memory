@@ -86,7 +86,7 @@ test('range deletion dialog saves immediately and reports success only after sav
         };
         vm.runInNewContext(`${getFunctionSource('openDeleteFloorRangeDialog')}\nopenDeleteFloorRangeDialog({});`, sandbox);
         if (mode === 'chat-switched') ready = false;
-        nodes.find((item) => item.textContent === '删除对应内容').handlers.click();
+        nodes.find((item) => item.textContent === '删除区域内内容').handlers.click();
         assert.equal(messages.length, mode === 'saved' ? 1 : 0, mode);
         assert.equal(updates.length, mode === 'saved' ? 1 : 0, mode);
         assert.equal(state.records.memory_summary.length, mode === 'saved' ? 0 : 1, mode);
@@ -708,13 +708,15 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.1.9', () => {
-    assert.equal(manifest.version, '1.1.9');
-    assert.match(indexSource, /const VERSION = '1\.1\.9';/);
+test('release metadata and update notice describe version 1.1.10', () => {
+    assert.equal(manifest.version, '1.1.10');
+    assert.match(indexSource, /const VERSION = '1\.1\.10';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /记忆总结会在同一存档范围内按楼层自动排序，导入的旧存档与当前存档保持独立分组，不再混排。/);
-    assert.match(noticeSource, /修复长时间流式手动总结在静默模式下显示已落盘却未写入的问题，并补充完成通知与流式终止响应。/);
+    assert.match(noticeSource, /总结优化的目标选择新增全选、取消全选与部分选中状态，批量选择总结时无需再逐条勾选。/);
+    assert.match(noticeSource, /按楼层范围删除改为清理输入区域内完整包含的总结与剧情摘要，跨出区域边界的内容会保留。/);
+    assert.doesNotMatch(noticeSource, /记忆总结会在同一存档范围内按楼层自动排序/);
+    assert.doesNotMatch(noticeSource, /修复长时间流式手动总结在静默模式下显示已落盘却未写入的问题/);
     assert.doesNotMatch(noticeSource, /剧情规划失败时显示具体原因和 AI 原始返回/);
     assert.doesNotMatch(noticeSource, /修复 MVU 额外模型解析后生成状态未释放/);
     assert.doesNotMatch(noticeSource, /修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。/);

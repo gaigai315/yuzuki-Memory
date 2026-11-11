@@ -3997,7 +3997,7 @@
         const input = field.querySelector('input');
         const hint = document.createElement('p');
         hint.className = 'yzm-structure-hint';
-        hint.textContent = '仅删除当前表、本篇中起止楼层完全一致的主线和支线内容。例如 40-60 不会删除 40-59 或 41-60。删除后重 Roll、Swipe 不会恢复旧内容。';
+        hint.textContent = '删除当前表、本篇中完整落在输入区域内的主线和支线内容。例如输入 200-300，会删除 220-280，但保留跨出边界的 180-220 和 280-320。删除后重 Roll、Swipe 不会恢复旧内容。';
         const feedback = document.createElement('p');
         feedback.className = 'yzm-structure-hint';
         feedback.setAttribute('role', 'status');
@@ -4006,7 +4006,7 @@
         const actions = document.createElement('div');
         actions.className = 'yzm-record-actions';
         const cancel = createButton('取消', 'yzm-api-button');
-        const remove = createButton('删除对应内容', 'yzm-api-button yzm-api-button-danger');
+        const remove = createButton('删除区域内内容', 'yzm-api-button yzm-api-button-danger');
         actions.append(cancel, remove);
         dialog.append(header, fields, hint, feedback, actions);
         overlay.appendChild(dialog);
@@ -7747,8 +7747,19 @@
         ]);
         const dialogSelect = selectWrap.querySelector('.yzm-api-select');
         dialogSelect.dataset.yzmSummaryOptimizeDialogTarget = 'true';
+        const selectionBar = document.createElement('div');
+        selectionBar.className = 'yzm-summary-optimize-selection-bar';
         const count = document.createElement('div');
         count.className = 'yzm-summary-optimize-count';
+        const selectAll = document.createElement('label');
+        selectAll.className = 'yzm-summary-optimize-select-all';
+        const selectAllCheckbox = document.createElement('input');
+        selectAllCheckbox.type = 'checkbox';
+        selectAllCheckbox.dataset.yzmSummaryOptimizeSelectAll = 'true';
+        const selectAllText = document.createElement('span');
+        selectAllText.textContent = '全选';
+        selectAll.append(selectAllCheckbox, selectAllText);
+        selectionBar.append(count, selectAll);
         const list = document.createElement('div');
         list.className = 'yzm-summary-optimize-target-list yzm-summary-optimize-dialog-list';
 
@@ -7756,9 +7767,15 @@
             const candidates = getSummaryOptimizeCandidateRecords(dialogTarget);
             const availableIds = new Set(candidates.map(({ record }) => record.id).filter(Boolean));
             selectedIds = new Set([...selectedIds].filter((id) => availableIds.has(id)));
+            const selectedCount = [...selectedIds].filter((id) => availableIds.has(id)).length;
             count.textContent = candidates.length
-                ? `已选择 ${[...selectedIds].filter((id) => availableIds.has(id)).length} / ${candidates.length} 条${dialogTarget === initialTarget ? '' : ''}`
+                ? `已选择 ${selectedCount} / ${candidates.length} 条`
                 : '当前分类没有可优化的总结内容';
+            selectAllCheckbox.disabled = candidates.length === 0;
+            selectAllCheckbox.checked = candidates.length > 0 && selectedCount === candidates.length;
+            selectAllCheckbox.indeterminate = selectedCount > 0 && selectedCount < candidates.length;
+            selectAllText.textContent = selectAllCheckbox.checked ? '取消全选' : '全选';
+            selectAll.classList.toggle('yzm-summary-optimize-select-all-disabled', candidates.length === 0);
             return candidates;
         };
 
@@ -7777,7 +7794,7 @@
             });
         };
 
-        body.append(selectWrap, count, list);
+        body.append(selectWrap, selectionBar, list);
 
         const actions = document.createElement('div');
         actions.className = 'yzm-structure-actions yzm-summary-optimize-dialog-actions';
@@ -7801,6 +7818,21 @@
             dialogTarget = dialogSelect.value || 'all';
             selectedIds = new Set();
             renderList();
+        });
+        selectAllCheckbox.addEventListener('change', () => {
+            const candidates = getSummaryOptimizeCandidateRecords(dialogTarget);
+            const shouldSelectAll = selectAllCheckbox.checked;
+            candidates.forEach(({ record }) => {
+                if (!record.id) return;
+                if (shouldSelectAll) selectedIds.add(record.id);
+                else selectedIds.delete(record.id);
+            });
+            list.querySelectorAll('[data-yzm-summary-optimize-dialog-record-id]').forEach((input) => {
+                input.checked = shouldSelectAll;
+                input.closest('.yzm-summary-optimize-target-row')
+                    ?.classList.toggle('yzm-summary-optimize-target-row-active', shouldSelectAll);
+            });
+            syncSelectedCount();
         });
         list.addEventListener('change', (event) => {
             const input = event.target;
@@ -15770,8 +15802,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '记忆总结会在同一存档范围内按楼层自动排序，导入的旧存档与当前存档保持独立分组，不再混排。',
-            '修复长时间流式手动总结在静默模式下显示已落盘却未写入的问题，并补充完成通知与流式终止响应。',
+            '总结优化的目标选择新增全选、取消全选与部分选中状态，批量选择总结时无需再逐条勾选。',
+            '按楼层范围删除改为清理输入区域内完整包含的总结与剧情摘要，跨出区域边界的内容会保留。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;

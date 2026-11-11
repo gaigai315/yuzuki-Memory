@@ -3519,6 +3519,41 @@
     line-height: 1.35;
 }
 
+#yzm-memory-root .yzm-summary-optimize-selection-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-width: 0;
+}
+
+#yzm-memory-root .yzm-summary-optimize-select-all {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    color: var(--yzm-title);
+    font-size: 12px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+}
+
+#yzm-memory-root .yzm-summary-optimize-select-all input {
+    width: 16px;
+    min-width: 16px;
+    height: 16px;
+    margin: 0;
+    accent-color: var(--yzm-icon);
+}
+
+#yzm-memory-root .yzm-summary-optimize-select-all-disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 #yzm-memory-root .yzm-summary-optimize-target-row {
     display: grid;
     grid-template-columns: 18px minmax(0, 1fr) auto;
