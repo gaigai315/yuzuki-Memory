@@ -1726,6 +1726,7 @@
             maxTokens: String(rawPreset.maxTokens || ''),
             stream: !!rawPreset.stream,
             customHeaders: typeof rawCustomHeaders === 'string' ? rawCustomHeaders : JSON.stringify(rawCustomHeaders, null, 2),
+            extraBody: typeof rawPreset.extraBody === 'string' ? rawPreset.extraBody : JSON.stringify(rawPreset.extraBody ?? {}),
         };
     }
 
@@ -1845,6 +1846,7 @@
             maxTokens: '',
             stream: false,
             customHeaders: '',
+            extraBody: '',
         };
     }
 
@@ -10796,6 +10798,7 @@
                     createApiField('模型名称', createApiInlineControl(createApiInput('输入模型名称', 'text', false, '', 'model'), fetchModelButton)),
                     createApiField('Max Tokens', createApiInput('输入 Max Tokens', 'number', false, '', 'maxTokens')),
                     customHeadersField,
+                    createApiField('额外请求参数（JSON，仅 OpenAI 兼容接口）', createApiTextarea('{}', 'extraBody'), 'yzm-api-field-wide'),
                 ]),
                 openCodeWarning,
                 createApiConnectionFooter(createApiField('任务流式响应（填表/总结/剧情导演）', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
@@ -11420,6 +11423,7 @@
             maxTokens: getApiFieldValue(root, 'maxTokens'),
             stream: root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch')?.classList.contains('yzm-config-switch-on'),
             customHeaders: provider === 'opencode_go' ? getApiFieldValue(root, 'customHeaders') : '',
+            extraBody: getApiFieldValue(root, 'extraBody'),
         };
     }
 
@@ -11434,6 +11438,7 @@
         setApiFieldValue(root, 'model', nextPreset.model);
         setApiFieldValue(root, 'maxTokens', nextPreset.maxTokens || (nextPreset.provider ? getDefaultLlmMaxTokens(nextPreset.provider) : ''));
         setApiFieldValue(root, 'customHeaders', nextPreset.provider === 'opencode_go' ? nextPreset.customHeaders : '');
+        setApiFieldValue(root, 'extraBody', nextPreset.extraBody || '');
         const streamSwitch = root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch');
         if (streamSwitch) {
             streamSwitch.classList.toggle('yzm-config-switch-on', !!nextPreset.stream);
@@ -11601,6 +11606,12 @@
             return;
         }
         if (customHeadersResult?.success) preset.customHeaders = customHeadersResult.normalized;
+        const extraResult = YuzukiMemory.LlmClient?.validateExtraBody?.(preset.extraBody);
+        if (extraResult && !extraResult.success) {
+            showLlmApiResultDialog(root, '保存失败', extraResult.error, 'error');
+            return;
+        }
+        if (extraResult?.success) preset.extraBody = extraResult.normalized;
 
         const presets = getLlmApiPresets();
         const nextPreset = {
