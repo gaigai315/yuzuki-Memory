@@ -609,19 +609,13 @@ test('Immersive PWA mode follows the extension runtime safe-area shift', () => {
     assert.match(memoryCssSource, /#yzm-memory-root\.yzm-immersive-pwa \.yzm-shell > #toast-container\s*\{[^}]*position:\s*absolute\s*!important;[^}]*z-index:\s*2147483647\s*!important;/);
 });
 
-test('floating icon reveals the memory shell before deferred ledger reconciliation', () => {
+test('floating icon opens the memory shell without scheduling ledger reconciliation', () => {
     const toggleSource = getFunctionSource('toggleShell');
-    const revealIndex = toggleSource.indexOf('setMemoryShellOpen(root, shell, opening)');
-    const frameIndex = toggleSource.indexOf('window.requestAnimationFrame');
-    const reconcileIndex = toggleSource.indexOf('FloorLedger?.reconcileNow');
 
-    assert.notEqual(revealIndex, -1);
-    assert.notEqual(frameIndex, -1);
-    assert.notEqual(reconcileIndex, -1);
-    assert.ok(revealIndex < frameIndex, 'the shell should be revealed before deferred work is scheduled');
-    assert.ok(frameIndex < reconcileIndex, 'ledger reconciliation should run after the first render opportunity');
-    assert.match(toggleSource, /requestIdleCallback\(runRefresh, \{ timeout: 500 \}\)/);
-    assert.match(toggleSource, /refreshRevision !== shellOpenRefreshRevision/);
+    assert.match(toggleSource, /setMemoryShellOpen\(root, shell, opening\)/);
+    assert.match(toggleSource, /maybeShowUpdateNotice\(root\)/);
+    assert.doesNotMatch(toggleSource, /requestAnimationFrame|requestIdleCallback/);
+    assert.doesNotMatch(toggleSource, /reconcileNow|scheduleReconcile|reloadStateFromStorage/);
 });
 
 test('text editor entry points use desktop-only initial focus', () => {
@@ -708,22 +702,15 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.1.10', () => {
-    assert.equal(manifest.version, '1.1.10');
-    assert.match(indexSource, /const VERSION = '1\.1\.10';/);
+test('release metadata and update notice describe version 1.2.0', () => {
+    assert.equal(manifest.version, '1.2.0');
+    assert.match(indexSource, /const VERSION = '1\.2\.0';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /总结优化的目标选择新增全选、取消全选与部分选中状态，批量选择总结时无需再逐条勾选。/);
-    assert.match(noticeSource, /按楼层范围删除改为清理输入区域内完整包含的总结与剧情摘要，跨出区域边界的内容会保留。/);
-    assert.doesNotMatch(noticeSource, /记忆总结会在同一存档范围内按楼层自动排序/);
-    assert.doesNotMatch(noticeSource, /修复长时间流式手动总结在静默模式下显示已落盘却未写入的问题/);
-    assert.doesNotMatch(noticeSource, /剧情规划失败时显示具体原因和 AI 原始返回/);
-    assert.doesNotMatch(noticeSource, /修复 MVU 额外模型解析后生成状态未释放/);
-    assert.doesNotMatch(noticeSource, /修复手动总结在部分情况下正文丢失或未保存却提示成功的问题。/);
-    assert.doesNotMatch(noticeSource, /修复实时填表模式下，仅修改 AI 回复正文、未改动 Memory 内容时，本轮表格更新消失的问题。/);
-    assert.doesNotMatch(noticeSource, /新增按楼层范围删除功能/);
-    assert.doesNotMatch(noticeSource, /优化任务请求格式/);
-    assert.doesNotMatch(noticeSource, /自动填表、总结失败后停止本次任务/);
+    assert.match(noticeSource, /角色档案与角色状态改为分批渲染、头像按需加载/);
+    assert.match(noticeSource, /绑定当前 User 的规划会自动回到“下一轮”/);
+    assert.doesNotMatch(noticeSource, /总结优化的目标选择新增全选/);
+    assert.doesNotMatch(noticeSource, /按楼层范围删除改为清理输入区域内完整包含的总结与剧情摘要/);
     assert.doesNotMatch(noticeSource, /删除聊天楼层后待办事项及角色空记录残留/);
     assert.doesNotMatch(noticeSource, /优化向量化召回条数|优化向量化自动分段功能|优化部分 CSS 渲染/);
     assert.doesNotMatch(noticeSource, /剧情规划界面支持编辑|剧情导演与柚月の手机互通/);
@@ -734,6 +721,11 @@ test('release metadata and update notice describe version 1.1.10', () => {
     assert.doesNotMatch(noticeSource, /编辑正文后不再自动重新剧情规划/);
     assert.doesNotMatch(noticeSource, /自动清理分支点之后的剧情摘要、正文表格更新和记忆总结/);
     assert.doesNotMatch(noticeSource, /魔法棒菜单中长按“柚月の记忆”/);
+});
+
+test('story director failure details stay above the open director card', () => {
+    assert.match(memoryCssSource, /#yzm-memory-global-modal-root \.yzm-story-director-card-modal\s*\{[^}]*z-index:\s*45;/);
+    assert.match(memoryCssSource, /#yzm-memory-global-modal-root \.yzm-structure-modal\.yzm-story-director-error-modal\s*\{[^}]*z-index:\s*60;/);
 });
 
 test('plugin form layout resists broad host theme selectors', () => {
@@ -799,4 +791,37 @@ test('summary primary search supports mobile Enter and cyclic detail highlightin
     assert.match(highlightSource, /mark\.scrollIntoView\(\{ block: 'center', inline: 'nearest' \}\)/);
     assert.doesNotMatch(jumpSource, /renderTableWorkspace|replaceChildren/);
     assert.match(memoryCssSource, /#yzm-memory-root \.yzm-summary-search-highlight \{/);
+});
+
+test('hidden workspaces are created as empty lazy containers', () => {
+    for (const name of [
+        'createConfigWorkspaceView',
+        'createApiWorkspaceView',
+        'createTraceWorkspaceView',
+        'createSummaryToolWorkspaceView',
+        'createPromptSchemeWorkspaceView',
+    ]) {
+        assert.doesNotMatch(getFunctionSource(name), /render\w+WorkspaceContent/);
+    }
+
+    const panelSource = getFunctionSource('createPanelBody');
+    assert.match(panelSource, /vectorPrimaryView\.className = 'yzm-vector-primary-view'/);
+    assert.match(panelSource, /vectorView\.className = 'yzm-vector-workspace-view'/);
+    assert.doesNotMatch(panelSource, /const vectorPrimaryView = createVectorPrimaryView\(\)/);
+    assert.doesNotMatch(panelSource, /const vectorView = createVectorWorkspaceView\(\)/);
+});
+
+test('character primary lists render progressively and defer avatar lookup', () => {
+    const renderSource = getFunctionSource('renderPrimaryList');
+    const characterItemSource = getFunctionSource('createCharacterPrimaryItem');
+    const statusItemSource = getFunctionSource('createCharacterStatusPrimaryItem');
+
+    assert.match(renderSource, /records\.slice\(0, renderLimit\)/);
+    assert.match(renderSource, /createPrimaryLoadMoreItem\(renderLimit, records\.length\)/);
+    assert.match(renderSource, /observePrimaryCharacterAvatars\(root, table\)/);
+    assert.match(characterItemSource, /prepareLazyCharacterAvatarNode\(avatar\)/);
+    assert.match(statusItemSource, /prepareLazyCharacterAvatarNode\(avatar\)/);
+    assert.doesNotMatch(characterItemSource, /applyCharacterAvatarNode\(avatar/);
+    assert.doesNotMatch(statusItemSource, /applyCharacterAvatarNode\(avatar/);
+    assert.match(memoryCssSource, /#yzm-memory-root \.yzm-primary-load-more \{/);
 });
