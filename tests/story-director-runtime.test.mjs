@@ -834,7 +834,8 @@ test('current director card prefers the latest pending card and never falls back
     assert.equal(boundWhileWaiting.content, '推进支线。');
     assert.equal(boundWhileWaiting.origin, 'bound');
     assert.equal(boundWhileWaiting.userIndex, 4);
-    assert.equal(runtime.getDirectorCardPage('used').content, '推进支线。');
+    assert.equal(runtime.getDirectorCardPage('used'), null);
+    assert.equal(runtime.getDirectorCardPage('next').content, '推进支线。');
 
     chat.push({ is_user: false, mes: '这一轮生成的助手正文' });
     assert.equal(runtime.getCurrentDirectorCard(), null);
@@ -869,6 +870,30 @@ test('director card pages expose the card used by the current response and the n
     assert.equal(pages.next.assistantIndex, 5);
 });
 
+test('deleting the AI reply returns its bound plan from used to next', async () => {
+    const { memory, chat } = createSandbox();
+    const runtime = memory.StoryDirectorRuntime;
+    assert.equal((await runtime.runDirector(runtime.getLatestAssistantAnchor())).success, true);
+
+    chat.push({ is_user: true, mes: '执行规划的用户回复' });
+    assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
+    chat.push({ is_user: false, mes: '随后被删除的 AI 回复' });
+
+    assert.equal(runtime.getDirectorCardPage('used').content, '推进支线。');
+    assert.equal(runtime.getDirectorCardPage('next'), null);
+
+    chat.pop();
+    const pages = runtime.getDirectorCardPages();
+    assert.equal(pages.used, null);
+    assert.equal(pages.next.content, '推进支线。');
+    assert.equal(pages.next.origin, 'bound');
+    assert.equal(pages.next.userIndex, 4);
+
+    const generationClone = structuredClone(chat);
+    assert.equal(runtime.injectDirectorCardForGeneration(generationClone, { generationType: 'normal' }), true);
+    assert.match(generationClone.at(-1).mes, /推进支线。/);
+});
+
 test('manual and automatic planning keep cards pending until normal request injection', async () => {
     for (const manual of [false, true]) {
         const { memory, chat, getState } = createSandbox();
@@ -885,15 +910,15 @@ test('manual and automatic planning keep cards pending until normal request inje
         assert.equal(runtime.getDirectorCardPage('used'), null);
         if (!manual) chat.push({ is_user: true, mes: '使用自动规划' });
         assert.equal(runtime.injectDirectorCardForGeneration(structuredClone(chat), { generationType: 'normal' }), true);
-        assert.equal(runtime.getDirectorCardPage('next'), null);
-        assert.equal(runtime.getDirectorCardPage('used').content, '待用的新规划');
+        assert.equal(runtime.getDirectorCardPage('used'), null);
+        assert.equal(runtime.getDirectorCardPage('next').content, '待用的新规划');
         assert.equal(getState().storyDirector.pendingCard, '');
         assert.equal(getState().storyDirector.source, null);
         for (const generationType of ['regenerate', 'swipe']) {
             const request = structuredClone(chat);
             assert.equal(runtime.injectDirectorCardForGeneration(request, { generationType }), true);
             assert.match(request.at(-1).mes, /待用的新规划/);
-            assert.equal(runtime.getDirectorCardPage('next'), null);
+            assert.equal(runtime.getDirectorCardPage('next').content, '待用的新规划');
         }
     }
 });
