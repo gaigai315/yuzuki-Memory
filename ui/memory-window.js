@@ -183,6 +183,8 @@
         ],
     };
     const VECTOR_SEGMENT_PAGE_SIZE = 10;
+    const PRIMARY_LIST_BATCH_SIZE = 32;
+    const PROGRESSIVE_PRIMARY_TABLE_IDS = new Set(['character_profile', 'character_status']);
     const CHARACTER_VECTOR_SYNC_DELAY = 1200;
     const DEFAULT_VECTOR_SEARCH_SETTINGS = {
         threshold: 0.3,
@@ -283,7 +285,6 @@
     let floatingResizeTimer = null;
     let floatingVisibilityTimer = null;
     let shellOpenInteractionGuardUntil = 0;
-    let shellOpenRefreshRevision = 0;
     let chatContextRefreshBound = false;
     let vectorLibraryRefreshBound = false;
     let vectorBookNameSyncTimer = null;
@@ -335,6 +336,9 @@
         segmentQuery: '',
     };
     let vectorSearchTimer = null;
+    let primarySearchTimer = null;
+    let primaryCharacterAvatarObserver = null;
+    const visiblePrimaryCharacterAvatarItems = new Set();
     let requestProbeSearchQuery = '';
     let requestProbeSource = 'request';
 
@@ -1231,10 +1235,61 @@
         }
     }
 
+    function prepareLazyCharacterAvatarNode(avatar) {
+        if (!avatar) return;
+        avatar.dataset.yzmAvatarLazy = 'true';
+        avatar.appendChild(createIconNode('fa-solid fa-user', ''));
+    }
+
+    function observePrimaryCharacterAvatars(root, table) {
+        primaryCharacterAvatarObserver?.disconnect?.();
+        primaryCharacterAvatarObserver = null;
+        visiblePrimaryCharacterAvatarItems.clear();
+        if (!root || !['character_profile', 'character_status'].includes(table?.id)) return;
+
+        const list = root.querySelector('.yzm-primary-list');
+        const items = [...root.querySelectorAll('.yzm-primary-character-item[data-yzm-record-id]')];
+        if (!list || !items.length) return;
+        const recordsById = new Map(getRecords(table.id).map((record) => [String(record?.id || ''), record]));
+        const loadAvatar = (item) => {
+            const avatar = item.querySelector('.yzm-primary-character-avatar');
+            const record = recordsById.get(String(item.dataset.yzmRecordId || ''));
+            if (avatar && record) applyCharacterAvatarNode(avatar, table, record);
+        };
+
+        if (typeof IntersectionObserver !== 'function') {
+            items.forEach((item) => {
+                visiblePrimaryCharacterAvatarItems.add(item);
+                loadAvatar(item);
+            });
+            return;
+        }
+
+        primaryCharacterAvatarObserver = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+                const item = entry.target;
+                if (!entry.isIntersecting) {
+                    visiblePrimaryCharacterAvatarItems.delete(item);
+                    return;
+                }
+                visiblePrimaryCharacterAvatarItems.add(item);
+                loadAvatar(item);
+            });
+        }, {
+            root: list,
+            rootMargin: '96px 0px',
+        });
+        items.forEach((item) => primaryCharacterAvatarObserver.observe(item));
+    }
+
     function refreshPhoneWechatCharacterAvatars(root) {
         const table = getActiveTable();
         if (!root || !['character_profile', 'character_status'].includes(table?.id)) return;
-        root.querySelectorAll('.yzm-primary-character-item[data-yzm-record-id]').forEach((item) => {
+        visiblePrimaryCharacterAvatarItems.forEach((item) => {
+            if (!item.isConnected) {
+                visiblePrimaryCharacterAvatarItems.delete(item);
+                return;
+            }
             const avatar = item.querySelector('.yzm-primary-character-avatar');
             const record = getRecords(table.id).find((entry) => entry.id === item.dataset.yzmRecordId);
             if (avatar && record) applyCharacterAvatarNode(avatar, table, record);
@@ -4386,8 +4441,10 @@
     function renderPanelState(root) {
         renderTableNav(root);
         renderWorkspaceList(root);
-        renderTableWorkspace(root);
-        renderActiveTableTitle(root);
+        if (activeWorkspaceView === 'table') {
+            renderTableWorkspace(root);
+            renderActiveTableTitle(root);
+        }
         bindPanelInteractions(root);
     }
 
@@ -4920,7 +4977,8 @@
         schemePrimaryHeader.hidden = true;
         schemePrimaryHeader.append(createIconNode('fa-solid fa-book-bookmark', ''), document.createTextNode('记忆方案'));
 
-        const vectorPrimaryView = createVectorPrimaryView();
+        const vectorPrimaryView = document.createElement('div');
+        vectorPrimaryView.className = 'yzm-vector-primary-view';
         vectorPrimaryView.hidden = true;
 
         primaryPane.append(primaryHeader, primarySearch, primaryList, configPrimaryHeader, createConfigNavList(), tracePrimaryHeader, createTraceNavList(), summaryToolPrimaryHeader, createSummaryToolNavList(), apiPrimaryHeader, createApiNavList(), schemePrimaryHeader, createPromptSchemeNavList(), vectorPrimaryView);
@@ -4949,7 +5007,8 @@
         summaryToolView.hidden = true;
         const schemeView = createPromptSchemeWorkspaceView();
         schemeView.hidden = true;
-        const vectorView = createVectorWorkspaceView();
+        const vectorView = document.createElement('div');
+        vectorView.className = 'yzm-vector-workspace-view';
         vectorView.hidden = true;
         tableFrame.append(tableContent, configView, traceView, summaryToolView, apiView, schemeView, vectorView);
         content.append(primaryPane, primaryToggle, tableFrame);
@@ -5465,10 +5524,55 @@
         });
     }
 
-    function renderPrimaryList(root) {
+    function isProgressivePrimaryTable(table) {
+        return PROGRESSIVE_PRIMARY_TABLE_IDS.has(String(table?.id || ''));
+    }
+
+    function primaryRecordMatchesQuery(table, record, query = '') {
+        const normalizedQuery = String(query || '').trim().toLowerCase();
+        if (!normalizedQuery) return true;
+        const values = record?.values && typeof record.values === 'object'
+            ? Object.values(record.values)
+            : [];
+        return [getRecordTitle(table, record), ...values]
+            .map((value) => String(value || ''))
+            .join(' ')
+            .toLowerCase()
+            .includes(normalizedQuery);
+    }
+
+    function createPrimaryLoadMoreItem(renderedCount, totalCount) {
+        const button = createButton(
+            `继续加载（${Math.max(0, totalCount - renderedCount)} 条）`,
+            'yzm-primary-load-more',
+        );
+        button.dataset.yzmPrimaryLoadMore = 'true';
+        button.setAttribute('aria-label', `已显示 ${renderedCount} 条，共 ${totalCount} 条，继续加载`);
+        return button;
+    }
+
+    function loadMorePrimaryRecords(root) {
+        const list = root?.querySelector?.('.yzm-primary-list');
+        const table = getActiveTable();
+        if (!list || !isProgressivePrimaryTable(table)) return false;
+        const currentLimit = Math.max(0, Number.parseInt(list.dataset.yzmRenderLimit || '', 10) || PRIMARY_LIST_BATCH_SIZE);
+        const totalCount = Math.max(0, Number.parseInt(list.dataset.yzmTotalCount || '', 10) || 0);
+        if (currentLimit >= totalCount) return false;
+        list.dataset.yzmRenderLimit = String(Math.min(totalCount, currentLimit + PRIMARY_LIST_BATCH_SIZE));
+        renderPrimaryList(root);
+        bindPanelInteractions(root);
+        return true;
+    }
+
+    function renderPrimaryList(root, options = {}) {
         const list = root.querySelector('.yzm-primary-list');
         const table = getActiveTable();
         if (!list || !table) return;
+        if (!isProgressivePrimaryTable(table)) {
+            primaryCharacterAvatarObserver?.disconnect?.();
+            primaryCharacterAvatarObserver = null;
+            visiblePrimaryCharacterAvatarItems.clear();
+        }
 
         list.classList.toggle('yzm-summary-primary-list', isSummaryLikeTable(table.id));
         list.classList.toggle('yzm-plot-primary-list', table.id === 'plot_summary');
@@ -5483,14 +5587,30 @@
             return;
         }
 
-        const records = getPrimaryDisplayRecords(table.id);
+        const progressive = isProgressivePrimaryTable(table);
+        const query = progressive
+            ? String(root.querySelector('.yzm-primary-search .yzm-search-input')?.value || '').trim().toLowerCase()
+            : '';
+        const sourceRecords = getPrimaryDisplayRecords(table.id);
+        const records = progressive
+            ? sourceRecords.filter((record) => primaryRecordMatchesQuery(table, record, query))
+            : sourceRecords;
+        const renderKey = `${table.id}\u0000${query}`;
+        if (progressive && (options.resetProgressive === true || list.dataset.yzmRenderKey !== renderKey)) {
+            list.dataset.yzmRenderLimit = String(PRIMARY_LIST_BATCH_SIZE);
+        }
+        const requestedLimit = progressive
+            ? Math.max(PRIMARY_LIST_BATCH_SIZE, Number.parseInt(list.dataset.yzmRenderLimit || '', 10) || PRIMARY_LIST_BATCH_SIZE)
+            : records.length;
+        const renderLimit = Math.min(records.length, requestedLimit);
+        const renderedRecords = progressive ? records.slice(0, renderLimit) : records;
         const nodes = [];
-        records.forEach((record, index) => {
+        renderedRecords.forEach((record, index) => {
             const displayedAsVectorized = isRecordDisplayedAsVectorized(table.id, record);
-            const previousDisplayedAsVectorized = records[index - 1]
-                ? isRecordDisplayedAsVectorized(table.id, records[index - 1])
+            const previousDisplayedAsVectorized = renderedRecords[index - 1]
+                ? isRecordDisplayedAsVectorized(table.id, renderedRecords[index - 1])
                 : false;
-            if (displayedAsVectorized && records[index - 1] && !previousDisplayedAsVectorized) {
+            if (displayedAsVectorized && renderedRecords[index - 1] && !previousDisplayedAsVectorized) {
                 nodes.push(createPrimaryHiddenDivider());
             }
             let item;
@@ -5509,8 +5629,15 @@
             item.dataset.yzmRecordId = record.id;
             nodes.push(item);
         });
+        if (progressive && renderLimit < records.length) {
+            nodes.push(createPrimaryLoadMoreItem(renderLimit, records.length));
+        }
+        list.dataset.yzmRenderKey = renderKey;
+        list.dataset.yzmRenderLimit = String(renderLimit);
+        list.dataset.yzmTotalCount = String(records.length);
         replacePrimaryListChildren(list, nodes);
-        applyPrimaryListSearch(root);
+        if (progressive) observePrimaryCharacterAvatars(root, table);
+        else applyPrimaryListSearch(root);
     }
 
     function renderSummaryPrimaryList(list, table, activeRecordId) {
@@ -6838,7 +6965,7 @@
 
         const avatar = document.createElement('div');
         avatar.className = 'yzm-primary-character-avatar';
-        applyCharacterAvatarNode(avatar, table, record);
+        prepareLazyCharacterAvatarNode(avatar);
 
         const content = document.createElement('div');
         content.className = 'yzm-primary-character-info';
@@ -6863,7 +6990,7 @@
 
         const avatar = document.createElement('div');
         avatar.className = 'yzm-primary-character-avatar';
-        applyCharacterAvatarNode(avatar, table, record);
+        prepareLazyCharacterAvatarNode(avatar);
 
         const content = document.createElement('div');
         content.className = 'yzm-primary-character-info';
@@ -7353,40 +7480,30 @@
     function createConfigWorkspaceView() {
         const page = document.createElement('div');
         page.className = 'yzm-config-view';
-
-        renderConfigWorkspaceContent(page);
         return page;
     }
 
     function createApiWorkspaceView() {
         const page = document.createElement('div');
         page.className = 'yzm-api-view';
-
-        renderApiWorkspaceContent(page);
         return page;
     }
 
     function createTraceWorkspaceView() {
         const page = document.createElement('div');
         page.className = 'yzm-trace-view';
-
-        renderTraceWorkspaceContent(page);
         return page;
     }
 
     function createSummaryToolWorkspaceView() {
         const page = document.createElement('div');
         page.className = 'yzm-summary-tool-view';
-
-        renderSummaryToolWorkspaceContent(page);
         return page;
     }
 
     function createPromptSchemeWorkspaceView() {
         const page = document.createElement('div');
         page.className = 'yzm-scheme-view';
-
-        renderPromptSchemeWorkspaceContent(page);
         return page;
     }
 
@@ -15802,8 +15919,8 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '总结优化的目标选择新增全选、取消全选与部分选中状态，批量选择总结时无需再逐条勾选。',
-            '按楼层范围删除改为清理输入区域内完整包含的总结与剧情摘要，跨出区域边界的内容会保留。',
+            '优化移动端记忆页面加载：角色档案与角色状态改为分批渲染、头像按需加载，打开页面时不再一次性处理全部角色数据，减少卡顿。',
+            '修复删除 AI 回复后剧情规划仍显示在“上一轮”的问题；绑定当前 User 的规划会自动回到“下一轮”，并继续用于下一次回复。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -19422,6 +19539,27 @@
             item.addEventListener('pointerleave', clearLongPress);
         });
 
+        const primaryList = root.querySelector('.yzm-primary-list');
+        if (primaryList && primaryList.dataset.yzmProgressiveBound !== 'true') {
+            primaryList.dataset.yzmProgressiveBound = 'true';
+            primaryList.addEventListener('click', (event) => {
+                const button = event.target?.closest?.('[data-yzm-primary-load-more]');
+                if (!button) return;
+                event.preventDefault();
+                loadMorePrimaryRecords(root);
+            });
+            primaryList.addEventListener('scroll', () => {
+                if (primaryList.dataset.yzmLoadScheduled === 'true') return;
+                const remaining = primaryList.scrollHeight - primaryList.scrollTop - primaryList.clientHeight;
+                if (remaining > 160) return;
+                primaryList.dataset.yzmLoadScheduled = 'true';
+                window.requestAnimationFrame(() => {
+                    primaryList.dataset.yzmLoadScheduled = 'false';
+                    loadMorePrimaryRecords(root);
+                });
+            }, { passive: true });
+        }
+
         const tableSearchInput = root.querySelector('.yzm-table-search .yzm-search-input');
         if (tableSearchInput && tableSearchInput.dataset.yzmBound !== 'true') {
             tableSearchInput.dataset.yzmBound = 'true';
@@ -19444,6 +19582,17 @@
                     resetSummarySearchJumpState(root, primarySearchInput.value);
                     renderPrimaryList(root);
                     bindPanelInteractions(root);
+                    return;
+                }
+                if (isProgressivePrimaryTable(table)) {
+                    const tableId = table.id;
+                    const query = primarySearchInput.value;
+                    window.clearTimeout(primarySearchTimer);
+                    primarySearchTimer = window.setTimeout(() => {
+                        if (getActiveTable()?.id !== tableId || primarySearchInput.value !== query) return;
+                        renderPrimaryList(root, { resetProgressive: true });
+                        bindPanelInteractions(root);
+                    }, 90);
                     return;
                 }
                 applyPrimaryListSearch(root);
@@ -19730,32 +19879,11 @@
             closeTagFilterHelpDialog(root);
             blurPluginFocus(shell);
         }
-        const refreshRevision = ++shellOpenRefreshRevision;
         setMemoryShellOpen(root, shell, opening);
         updateFloatingIconVisibility();
         if (isMemoryShellElementOpen(shell)) {
             applySavedDesktopShellGeometry(shell);
             maybeShowUpdateNotice(root);
-            // Let the opened shell reach the screen before ledger replay and the
-            // full workspace refresh occupy the mobile main thread.
-            window.requestAnimationFrame(() => {
-                const runRefresh = () => {
-                    if (refreshRevision !== shellOpenRefreshRevision || !isMemoryShellElementOpen(shell)) return;
-                    const result = YuzukiMemory.FloorLedger?.reconcileNow?.({
-                        reason: 'memory_window_open',
-                        force: true,
-                    });
-                    if (result?.reason === 'busy' || result?.reason === 'branch_busy' || result?.reason === 'save_failed') {
-                        YuzukiMemory.FloorLedger?.scheduleReconcile?.('memory_window_open', 300, { force: true });
-                    }
-                    reloadStateFromStorage();
-                };
-                if (typeof window.requestIdleCallback === 'function') {
-                    window.requestIdleCallback(runRefresh, { timeout: 500 });
-                } else {
-                    window.setTimeout(runRefresh, 0);
-                }
-            });
         }
     }
 
@@ -19848,7 +19976,7 @@
         startManagedVectorBookNameSync();
         getVectorStore()?.whenReady?.().then(() => {
             const root = document.getElementById(ROOT_ID);
-            if (root) renderVectorWorkspace(root);
+            if (root && activeWorkspaceView === 'vector') renderVectorWorkspace(root);
             scheduleAllManagedVectorSyncs();
             void syncExistingSummaryVectorBook();
         });
