@@ -1780,6 +1780,7 @@
             model: String(rawPreset.model || ''),
             maxTokens: String(rawPreset.maxTokens || ''),
             stream: !!rawPreset.stream,
+            thinkingEnabled: rawPreset.thinkingEnabled !== false,
             customHeaders: typeof rawCustomHeaders === 'string' ? rawCustomHeaders : JSON.stringify(rawCustomHeaders, null, 2),
         };
     }
@@ -1899,6 +1900,7 @@
             model: '',
             maxTokens: '',
             stream: false,
+            thinkingEnabled: true,
             customHeaders: '',
         };
     }
@@ -5505,6 +5507,20 @@
     function renderWorkspaceList(root) {
         if (activeWorkspaceView === 'table') renderPrimaryList(root);
         updateWorkspaceMode(root);
+    }
+
+    function refreshPrimaryListSelection(root, table, activeRecordId) {
+        if (!isProgressivePrimaryTable(table)) {
+            renderPrimaryList(root);
+            return;
+        }
+
+        root?.querySelectorAll?.('.yzm-primary-list .yzm-primary-item[data-yzm-record-id]').forEach((item) => {
+            const isActive = String(item.dataset.yzmRecordId || '') === String(activeRecordId || '');
+            item.classList.toggle('yzm-primary-item-active', isActive);
+            if (isActive) item.setAttribute('aria-current', 'true');
+            else item.removeAttribute('aria-current');
+        });
     }
 
     function replacePrimaryListChildren(list, nodes) {
@@ -10876,6 +10892,16 @@
         const customHeadersField = createApiField('自定义请求头（JSON）', createApiTextarea('{"Header-Name":"value"}', 'customHeaders'), 'yzm-api-field-wide');
         customHeadersField.dataset.yzmOpenCodeHeadersField = 'true';
         customHeadersField.hidden = true;
+        const deepseekThinkingSwitch = createConfigSwitch(true);
+        deepseekThinkingSwitch.dataset.yzmDeepseekThinking = 'true';
+        deepseekThinkingSwitch.setAttribute('aria-label', 'DeepSeek 思考模式');
+        const deepseekThinkingField = createApiField('DeepSeek 思考模式（关闭更适合结构化填表）', deepseekThinkingSwitch, 'yzm-api-field-inline');
+        deepseekThinkingField.dataset.yzmDeepseekThinkingField = 'true';
+        deepseekThinkingField.title = '打开时使用思考模式；关闭时使用非思考模式，适合需要稳定 JSON 或结构化填表的任务。';
+        deepseekThinkingField.hidden = true;
+        const streamSwitch = createConfigSwitch(false);
+        streamSwitch.dataset.yzmLlmStream = 'true';
+        streamSwitch.setAttribute('aria-label', '任务流式响应');
         const panel = document.createElement('section');
         panel.className = 'yzm-api-panel yzm-llm-api-panel';
         const modeCard = createApiCard('API 模式', 'fa-solid fa-route', [
@@ -10912,10 +10938,11 @@
                     createApiField('API Key', createApiInput('sk-...', 'password', true, '', 'apiKey')),
                     createApiField('模型名称', createApiInlineControl(createApiInput('输入模型名称', 'text', false, '', 'model'), fetchModelButton)),
                     createApiField('Max Tokens', createApiInput('输入 Max Tokens', 'number', false, '', 'maxTokens')),
+                    deepseekThinkingField,
                     customHeadersField,
                 ]),
                 openCodeWarning,
-                createApiConnectionFooter(createApiField('任务流式响应（填表/总结/剧情导演）', createConfigSwitch(false), 'yzm-api-field-inline'), createApiActions([
+                createApiConnectionFooter(createApiField('任务流式响应（填表/总结/剧情导演）', streamSwitch, 'yzm-api-field-inline'), createApiActions([
                     ['测试连接', 'fa-solid fa-plug-circle-check', '', 'testLlmConnection'],
                 ])),
             ]);
@@ -11464,6 +11491,8 @@
         if (openCodeWarning) openCodeWarning.hidden = !isOpenCodeGo;
         const customHeadersField = root.querySelector('.yzm-api-view [data-yzm-open-code-headers-field]');
         if (customHeadersField) customHeadersField.hidden = !isOpenCodeGo;
+        const deepseekThinkingField = root.querySelector('.yzm-api-view [data-yzm-deepseek-thinking-field]');
+        if (deepseekThinkingField) deepseekThinkingField.hidden = provider !== 'deepseek';
         if (!isOpenCodeGo) setApiFieldValue(root, 'customHeaders', '');
     }
 
@@ -11535,7 +11564,8 @@
             apiKey: getApiFieldValue(root, 'apiKey'),
             model: getApiFieldValue(root, 'model'),
             maxTokens: getApiFieldValue(root, 'maxTokens'),
-            stream: root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch')?.classList.contains('yzm-config-switch-on'),
+            stream: root.querySelector('.yzm-api-view [data-yzm-llm-stream]')?.classList.contains('yzm-config-switch-on'),
+            thinkingEnabled: root.querySelector('.yzm-api-view [data-yzm-deepseek-thinking]')?.classList.contains('yzm-config-switch-on') !== false,
             customHeaders: provider === 'opencode_go' ? getApiFieldValue(root, 'customHeaders') : '',
         };
     }
@@ -11551,7 +11581,9 @@
         setApiFieldValue(root, 'model', nextPreset.model);
         setApiFieldValue(root, 'maxTokens', nextPreset.maxTokens || (nextPreset.provider ? getDefaultLlmMaxTokens(nextPreset.provider) : ''));
         setApiFieldValue(root, 'customHeaders', nextPreset.provider === 'opencode_go' ? nextPreset.customHeaders : '');
-        const streamSwitch = root.querySelector('.yzm-api-view .yzm-api-field-inline .yzm-config-switch');
+        const thinkingSwitch = root.querySelector('.yzm-api-view [data-yzm-deepseek-thinking]');
+        setConfigSwitchState(thinkingSwitch, nextPreset.thinkingEnabled !== false);
+        const streamSwitch = root.querySelector('.yzm-api-view [data-yzm-llm-stream]');
         if (streamSwitch) {
             streamSwitch.classList.toggle('yzm-config-switch-on', !!nextPreset.stream);
             streamSwitch.setAttribute('aria-pressed', String(!!nextPreset.stream));
@@ -19494,7 +19526,7 @@
                 if (!table || !item.dataset.yzmRecordId) return;
 
                 setActiveRecordId(table.id, item.dataset.yzmRecordId);
-                renderWorkspaceList(root);
+                refreshPrimaryListSelection(root, table, item.dataset.yzmRecordId);
                 renderTableWorkspace(root);
                 bindPanelInteractions(root);
                 openRecordActionMenu(root, table.id, item.dataset.yzmRecordId, event.clientX, event.clientY);
@@ -19516,7 +19548,7 @@
                 }
                 if (!table || !item.dataset.yzmRecordId) return;
                 setActiveRecordId(table.id, item.dataset.yzmRecordId);
-                renderPrimaryList(root);
+                refreshPrimaryListSelection(root, table, item.dataset.yzmRecordId);
                 renderTableWorkspace(root);
                 bindPanelInteractions(root);
             });

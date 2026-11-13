@@ -381,6 +381,40 @@
         }
     }
 
+    function validateExtraBody(rawBody = '') {
+        try {
+            const source = typeof rawBody === 'string' ? rawBody.trim() : JSON.stringify(rawBody ?? {});
+            if (source.length > 16384) throw new Error('额外请求参数最多允许 16 KB。');
+            const body = source ? JSON.parse(source, (key, value) => {
+                if (['__proto__', 'constructor', 'prototype'].includes(key)) {
+                    throw new Error('额外请求参数包含禁止使用的属性。');
+                }
+                return value;
+            }) : {};
+            if (!body || typeof body !== 'object' || Array.isArray(body)) {
+                throw new Error('额外请求参数必须是 JSON 对象。');
+            }
+            const reserved = ['model', 'messages', 'stream', 'stream_options', 'tools', 'tool_choice', 'function_call', 'functions'];
+            if (reserved.some((key) => Object.prototype.hasOwnProperty.call(body, key))) {
+                throw new Error('请勿在额外请求参数中覆盖模型、消息、流式模式或工具配置。');
+            }
+            return {
+                success: true,
+                body,
+                normalized: Object.keys(body).length ? JSON.stringify(body, null, 2) : '',
+            };
+        } catch (error) {
+            return {
+                success: false,
+                body: {},
+                normalized: '',
+                error: error instanceof SyntaxError
+                    ? '额外请求参数 JSON 格式无效。'
+                    : formatError(error, '额外请求参数无效'),
+            };
+        }
+    }
+
     function isOfficialOpenCodeGoUrl(apiUrl = '') {
         try {
             const url = new URL(String(apiUrl || '').trim());
@@ -566,14 +600,29 @@
     function normalizeCustomConfig(rawConfig = {}) {
         const provider = String(rawConfig.provider || '').trim();
         const customHeadersResult = validateCustomHeaders(rawConfig.customHeaders ?? rawConfig.headers ?? '');
+        const extraBodyResult = validateExtraBody(rawConfig.extraBody);
+        const apiUrl = processApiUrl(rawConfig.baseUrl || rawConfig.apiUrl || '', provider);
+        const extraBody = { ...extraBodyResult.body };
+        const thinkingEnabled = rawConfig.thinkingEnabled !== false;
+        if (provider === 'deepseek') {
+            extraBody.thinking = { type: thinkingEnabled ? 'enabled' : 'disabled' };
+        }
+        const nativeProvider = provider === 'claude' || shouldUseGeminiNative({ provider, apiUrl });
         return {
             provider,
-            apiUrl: processApiUrl(rawConfig.baseUrl || rawConfig.apiUrl || '', provider),
+            apiUrl,
             apiKey: String(rawConfig.apiKey || '').trim(),
             model: String(rawConfig.model || '').trim(),
             maxTokens: intFromCandidates([rawConfig.maxTokens, rawConfig.max_tokens], getProviderDefaultMaxTokens(provider)),
             temperature: numberFromCandidates([rawConfig.temperature], 1),
             stream: rawConfig.stream !== false,
+            thinkingEnabled,
+            extraBody,
+            extraBodyError: !extraBodyResult.success
+                ? extraBodyResult.error
+                : nativeProvider && Object.keys(extraBodyResult.body).length
+                    ? '额外请求参数仅支持 OpenAI 兼容接口；原生 Claude/Gemini 接口不透传。'
+                    : '',
             customHeaders: customHeadersResult.headers,
             customHeadersError: customHeadersResult.success ? '' : customHeadersResult.error,
         };
@@ -618,7 +667,9 @@
         if (provider === 'claude') source = 'claude';
         if (provider === 'proxy_only' || provider === 'local') source = 'custom';
         const supportsCustomOpenAiProxy = provider !== 'claude' && !shouldUseGeminiNative(config);
-        if (supportsCustomOpenAiProxy && (isOfficialOpenCodeGoUrl(apiUrl) || Object.keys(config.customHeaders || {}).length)) {
+        if (supportsCustomOpenAiProxy && (isOfficialOpenCodeGoUrl(apiUrl)
+            || Object.keys(config.customHeaders || {}).length
+            || Object.keys(config.extraBody || {}).length)) {
             source = 'custom';
         }
 
@@ -643,6 +694,9 @@
 
         if (source === 'custom') {
             payload.custom_include_headers = JSON.stringify(resolveUpstreamHeaders(config));
+            if (Object.keys(config.extraBody || {}).length) {
+                payload.custom_include_body = JSON.stringify(config.extraBody);
+            }
         }
 
         if (model.toLowerCase().includes('gemini')) {
@@ -1561,6 +1615,7 @@
         if (!PROVIDERS[config.provider]) return { success: false, error: '请选择 API 服务商。' };
         if (!config.apiUrl) return { success: false, error: '请填写 Base URL。' };
         if (!config.model) return { success: false, error: '请填写模型名称。' };
+        if (config.extraBodyError) return { success: false, error: config.extraBodyError };
         if (config.customHeadersError) return { success: false, error: config.customHeadersError };
         if (config.provider === OPENCODE_GO_PROVIDER && !isSupportedOpenCodeGoBaseUrl(config.apiUrl)) {
             return { success: false, error: `OpenCode Go Base URL 请填写 ${OPENCODE_GO_BASE_URL}。` };
@@ -1632,7 +1687,7 @@
             payload.safety_settings = GEMINI_SAFETY_SETTINGS;
             payload.safetySettings = GEMINI_SAFETY_SETTINGS;
         }
-        return payload;
+        return { ...payload, ...config.extraBody };
     }
 
     async function postDirectGenerate(config, messages, options = {}) {
@@ -1754,6 +1809,7 @@
         if (!PROVIDERS[config.provider]) return { success: false, error: '请选择 API 服务商。' };
         if (!config.apiUrl) return { success: false, error: '请填写 Base URL。' };
         if (!config.model) return { success: false, error: '请填写模型名称。' };
+        if (config.extraBodyError) return { success: false, error: config.extraBodyError };
         if (config.customHeadersError) return { success: false, error: config.customHeadersError };
         if (config.provider === OPENCODE_GO_PROVIDER && !isOfficialOpenCodeGoUrl(config.apiUrl)) {
             return { success: false, error: `OpenCode Go 类型仅支持官方地址 ${OPENCODE_GO_BASE_URL}。反向代理请改用“兼容中转/代理”并手动配置请求头。` };
@@ -1771,7 +1827,7 @@
         const failedAttempts = [];
         let lastFailure = null;
         let skipCustomProxy = false;
-        if (shouldUseProxyGeminiCompat(config)) {
+        if (!Object.keys(config.extraBody || {}).length && shouldUseProxyGeminiCompat(config)) {
             const proxyGeminiResult = await generateWithProxyGeminiCompat(config, cleanMessages, options);
             if (proxyGeminiResult?.success) return proxyGeminiResult;
             lastFailure = proxyGeminiResult;
@@ -1803,7 +1859,9 @@
                 max_tokens: config.maxTokens,
                 stream: options.stream ?? config.stream,
             };
-            const retryResult = await postTavernGenerate(retryPayload, options);
+            const retryResult = await postTavernGenerate(Object.keys(config.extraBody || {}).length
+                ? resolveCustomProxyPayload(retryConfig, cleanMessages, options)
+                : retryPayload, options);
             if (retryResult?.success) return { ...retryResult, config: retryConfig, fallback: 'openai' };
             lastFailure = retryResult;
             failedAttempts.push({ label: '降级 OpenAI 协议', result: retryResult });
@@ -2028,6 +2086,7 @@
         getProviderOptions,
         getProviderDefaultMaxTokens,
         validateCustomHeaders,
+        validateExtraBody,
         isOfficialOpenCodeGoUrl,
         getTavernStatus,
         generateWithTavern,

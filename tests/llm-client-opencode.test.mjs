@@ -101,6 +101,15 @@ const openCodeConfig = {
     stream: false,
 };
 
+const deepSeekConfig = {
+    provider: 'deepseek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    apiKey: 'deepseek-test-key',
+    model: 'deepseek-flash',
+    maxTokens: 128,
+    stream: false,
+};
+
 test('ordinary custom requests preserve the configured stream mode', async () => {
     const requests = [];
     const { client } = createClient(async (_url, init) => {
@@ -118,6 +127,88 @@ test('ordinary custom requests preserve the configured stream mode', async () =>
     )).success, true);
 
     assert.deepEqual(requests.map((payload) => payload.stream), [true, false]);
+});
+
+test('DeepSeek thinking switch is forwarded through the backend proxy', async () => {
+    const requests = [];
+    const { client } = createClient(async (_url, init) => {
+        requests.push(JSON.parse(init.body));
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    });
+
+    assert.equal((await client.generateWithCustom(
+        { ...deepSeekConfig, thinkingEnabled: true },
+        [{ role: 'user', content: 'thinking' }],
+    )).success, true);
+    assert.equal((await client.generateWithCustom(
+        { ...deepSeekConfig, thinkingEnabled: false },
+        [{ role: 'user', content: 'non-thinking' }],
+    )).success, true);
+
+    assert.equal(requests[0].chat_completion_source, 'custom');
+    assert.deepEqual(JSON.parse(requests[0].custom_include_body), { thinking: { type: 'enabled' } });
+    assert.deepEqual(JSON.parse(requests[1].custom_include_body), { thinking: { type: 'disabled' } });
+});
+
+test('DeepSeek thinking switch survives proxy failure and direct fallback', async () => {
+    const requests = [];
+    const { client } = createClient(async (url, init) => {
+        requests.push({ url, payload: JSON.parse(init.body) });
+        if (String(url).startsWith('/api/')) {
+            return createResponse('proxy failed', { ok: false, status: 502, statusText: 'Bad Gateway' });
+        }
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    });
+
+    const result = await client.generateWithCustom(
+        { ...deepSeekConfig, thinkingEnabled: false },
+        [{ role: 'user', content: 'test' }],
+    );
+
+    assert.equal(result.success, true);
+    assert.equal(result.fallback, 'direct');
+    assert.equal(requests[1].url, 'https://api.deepseek.com/v1/chat/completions');
+    assert.deepEqual(JSON.parse(requests[0].payload.custom_include_body), { thinking: { type: 'disabled' } });
+    assert.deepEqual(requests[1].payload.thinking, { type: 'disabled' });
+});
+
+test('DeepSeek thinking switch is forwarded without changing agent tools', async () => {
+    let request;
+    const { client } = createClient(async (_url, init) => {
+        request = JSON.parse(init.body);
+        return createResponse({ choices: [{ message: { content: 'OK' } }] });
+    });
+    const tools = [{
+        type: 'function',
+        function: { name: 'read_state', description: 'read', parameters: { type: 'object', properties: {} } },
+    }];
+
+    const result = await client.requestAgentWithCustom(
+        { ...deepSeekConfig, thinkingEnabled: false },
+        [{ role: 'user', content: 'review' }],
+        tools,
+        { emptyResponseMaxRetries: 0 },
+    );
+
+    assert.equal(result.success, true);
+    assert.deepEqual(JSON.parse(request.custom_include_body), { thinking: { type: 'disabled' } });
+    assert.deepEqual(request.tools, tools);
+    assert.equal(request.tool_choice, 'auto');
+    assert.equal(request.stream, false);
+});
+
+test('extra request body validation preserves safe values and rejects protocol overrides', () => {
+    const { client } = createClient(async () => createResponse({}));
+    const safe = client.validateExtraBody('{"seed":0,"logprobs":false,"response_format":{"type":"json_object"}}');
+
+    assert.equal(safe.success, true);
+    assert.equal(safe.body.seed, 0);
+    assert.equal(safe.body.logprobs, false);
+    assert.equal(safe.body.response_format.type, 'json_object');
+    assert.equal(client.validateExtraBody('{bad json').success, false);
+    assert.equal(client.validateExtraBody('[]').success, false);
+    assert.equal(client.validateExtraBody('{"model":"forbidden"}').success, false);
+    assert.equal(client.validateExtraBody('{"nested":{"__proto__":{}}}').success, false);
 });
 
 test('streaming requests finish on a terminal event without waiting for HTTP EOF', async () => {

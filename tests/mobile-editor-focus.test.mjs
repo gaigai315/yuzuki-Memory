@@ -815,6 +815,7 @@ test('character primary lists render progressively and defer avatar lookup', () 
     const renderSource = getFunctionSource('renderPrimaryList');
     const characterItemSource = getFunctionSource('createCharacterPrimaryItem');
     const statusItemSource = getFunctionSource('createCharacterStatusPrimaryItem');
+    const selectionSource = getFunctionSource('refreshPrimaryListSelection');
 
     assert.match(renderSource, /records\.slice\(0, renderLimit\)/);
     assert.match(renderSource, /createPrimaryLoadMoreItem\(renderLimit, records\.length\)/);
@@ -823,5 +824,39 @@ test('character primary lists render progressively and defer avatar lookup', () 
     assert.match(statusItemSource, /prepareLazyCharacterAvatarNode\(avatar\)/);
     assert.doesNotMatch(characterItemSource, /applyCharacterAvatarNode\(avatar/);
     assert.doesNotMatch(statusItemSource, /applyCharacterAvatarNode\(avatar/);
+    assert.match(selectionSource, /isProgressivePrimaryTable\(table\)/);
+    assert.match(selectionSource, /classList\.toggle\('yzm-primary-item-active', isActive\)/);
+    assert.doesNotMatch(selectionSource, /renderPrimaryList\(root\)[\s\S]*isProgressivePrimaryTable/);
     assert.match(memoryCssSource, /#yzm-memory-root \.yzm-primary-load-more \{/);
+});
+
+test('DeepSeek thinking mode uses a provider-only per-preset switch', () => {
+    const sandbox = {
+        createLlmApiPresetId: () => 'preset-test',
+        result: null,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        getFunctionSource('normalizeLlmApiPreset'),
+        `result = [
+            normalizeLlmApiPreset({ name: '旧预设', provider: 'deepseek' }),
+            normalizeLlmApiPreset({ name: '关闭思考', provider: 'deepseek', thinkingEnabled: false }),
+        ];`,
+    ].join('\n'), sandbox);
+    const [legacyPreset, disabledPreset] = JSON.parse(JSON.stringify(sandbox.result));
+
+    assert.equal(legacyPreset.thinkingEnabled, true);
+    assert.equal(disabledPreset.thinkingEnabled, false);
+
+    const panelSource = getFunctionSource('createLlmApiPanel');
+    const syncSource = getFunctionSource('syncLlmProviderPlaceholders');
+    const readSource = getFunctionSource('readLlmApiForm');
+    const applySource = getFunctionSource('applyLlmApiPreset');
+    assert.match(panelSource, /dataset\.yzmDeepseekThinking = 'true'/);
+    assert.match(panelSource, /dataset\.yzmLlmStream = 'true'/);
+    assert.match(syncSource, /provider !== 'deepseek'/);
+    assert.match(readSource, /data-yzm-deepseek-thinking/);
+    assert.match(readSource, /data-yzm-llm-stream/);
+    assert.match(applySource, /setConfigSwitchState\(thinkingSwitch, nextPreset\.thinkingEnabled !== false\)/);
+    assert.doesNotMatch(readSource, /\.yzm-api-field-inline \.yzm-config-switch/);
 });
