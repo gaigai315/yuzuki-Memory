@@ -2751,15 +2751,22 @@
         if (!director) return null;
         if (page === 'used') {
             const pair = getCurrentResponsePair();
-            const latest = getLatestManualAnchor();
-            const user = pair?.user || (latest?.role === 'user' ? latest : null);
+            const user = pair?.user || null;
             const card = user ? findMessageCard(director.messageCards, user) : '';
             return card ? buildDirectorCardView(card, user, 'bound') : null;
         }
         const pendingCard = String(director.pendingCard || '').trim();
-        return pendingCard && sourceIsLatestDialogue(director.source)
-            ? buildDirectorCardView(pendingCard, director.source, 'pending')
-            : null;
+        if (pendingCard && sourceIsLatestDialogue(director.source)) {
+            return buildDirectorCardView(pendingCard, director.source, 'pending');
+        }
+
+        // A card bound to the latest unanswered User message is still the plan
+        // for the upcoming response. If that response gets deleted, expose the
+        // binding on the next page again instead of treating it as already used.
+        const latest = getLatestManualAnchor();
+        if (latest?.role !== 'user') return null;
+        const boundCard = findMessageCard(director.messageCards, latest);
+        return boundCard ? buildDirectorCardView(boundCard, latest, 'bound') : null;
     }
 
     function getDirectorCardPages() {
