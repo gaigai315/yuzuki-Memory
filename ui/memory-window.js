@@ -5204,6 +5204,7 @@
             }
             try {
                 shell.showPopover();
+                document.getElementById(GLOBAL_MODAL_ROOT_ID)?._yzmSyncModalLayer?.(true);
                 syncHostToastContainer(root, shell);
                 return true;
             } catch (error) {
@@ -15898,8 +15899,36 @@
         }
         const shellTheme = memoryRoot?.querySelector?.('.yzm-shell')?.dataset?.yzmTheme || getSavedTheme();
         host.dataset.yzmTheme = shellTheme === 'dark' ? 'dark' : 'light';
+        bindGlobalModalLayer(host);
         bindPluginTextControlIsolation(host);
         return host;
+    }
+
+    function bindGlobalModalLayer(host) {
+        if (!host || host._yzmModalLayerObserver) return;
+        const sync = (bringToFront = false) => {
+            const hasModal = host.childElementCount > 0;
+            if (hasModal && host.parentElement === document.body && document.body.lastElementChild !== host) {
+                document.body.appendChild(host);
+            }
+            // A body-level z-index cannot cover a shell in the browser top layer.
+            if (typeof host.showPopover === 'function' && typeof host.hidePopover === 'function') {
+                host.setAttribute('popover', 'manual');
+                try {
+                    if (bringToFront === true && hasModal && isShellPopoverOpen(host)) host.hidePopover();
+                    if (hasModal && !isShellPopoverOpen(host)) host.showPopover();
+                    else if (!hasModal && isShellPopoverOpen(host)) host.hidePopover();
+                } catch (error) {
+                    host.removeAttribute('popover');
+                    console.warn('[yuzuki-Memory] Global modal top-layer fallback active.', error);
+                }
+            }
+        };
+        const observer = new MutationObserver(() => sync());
+        observer.observe(host, { childList: true });
+        host._yzmModalLayerObserver = observer;
+        host._yzmSyncModalLayer = sync;
+        sync();
     }
 
     function closeModalElement(modal) {
@@ -20016,6 +20045,7 @@
     }
 
     YuzukiMemory.MemoryWindow = Object.assign(YuzukiMemory.MemoryWindow || {}, {
+        bindGlobalModalLayer,
         mount,
         toggle: toggleShell,
         setTheme,

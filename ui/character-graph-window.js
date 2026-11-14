@@ -53,6 +53,7 @@
         const shellTheme = document.querySelector('#yzm-memory-root .yzm-shell')?.dataset?.yzmTheme;
         if (shellTheme) host.dataset.yzmTheme = shellTheme;
         YuzukiMemory.MemoryWindow?.applyHostCompatibilityClasses?.(host);
+        YuzukiMemory.MemoryWindow?.bindGlobalModalLayer?.(host);
         return host;
     }
 

@@ -53,6 +53,13 @@
 }
 
 #yzm-memory-global-modal-root {
+    z-index: 2147483647 !important;
+    margin: 0;
+    border: 0;
+    background: transparent;
+    color: var(--yzm-text);
+    max-width: none;
+    max-height: none;
     padding: 0;
     pointer-events: none;
 }
@@ -738,6 +745,7 @@
 
 #yzm-memory-root .yzm-shell-body {
     position: relative;
+    z-index: 0;
     display: grid;
     grid-template-columns: var(--yzm-desktop-sidebar-width) 12px minmax(320px, 1fr);
     height: 100%;

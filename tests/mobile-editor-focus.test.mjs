@@ -475,6 +475,7 @@ function runImmersiveShellLifecycle() {
         appendChild: () => calls.push('append-root'),
     };
     const sandbox = {
+        GLOBAL_MODAL_ROOT_ID: 'yzm-memory-global-modal-root',
         result: null,
         calls,
         console,
@@ -515,6 +516,48 @@ function runImmersiveShellLifecycle() {
     ].join('\n'), sandbox);
     return JSON.parse(JSON.stringify(sandbox.result));
 }
+
+test('global modal layer opens above the shell, survives nested dialogs and releases on close', () => {
+    const calls = [];
+    let opened = false;
+    let notify;
+    const body = { appendChild(host) { this.lastElementChild = host; } };
+    const host = {
+        childElementCount: 0, parentElement: body,
+        setAttribute() {}, removeAttribute() {},
+        matches: () => opened,
+        showPopover() { opened = true; calls.push('show'); },
+        hidePopover() { opened = false; calls.push('hide'); },
+    };
+    const sandbox = {
+        host, console, document: { body },
+        MutationObserver: class {
+            constructor(callback) { notify = callback; }
+            observe() {}
+        },
+    };
+    vm.createContext(sandbox);
+    vm.runInContext([
+        getFunctionSource('isShellPopoverOpen'),
+        getFunctionSource('bindGlobalModalLayer'),
+        'bindGlobalModalLayer(host);',
+    ].join('\n'), sandbox);
+    assert.equal(opened, false);
+    host.childElementCount = 1;
+    notify();
+    assert.equal(opened, true);
+    host.childElementCount = 2;
+    notify();
+    host.childElementCount = 1;
+    notify();
+    assert.deepEqual(calls, ['show']);
+    host._yzmSyncModalLayer(true);
+    assert.deepEqual(calls, ['show', 'hide', 'show']);
+    host.childElementCount = 0;
+    notify();
+    assert.equal(opened, false);
+    assert.deepEqual(calls, ['show', 'hide', 'show', 'hide']);
+});
 
 test('editor controls do not receive initial focus on mobile layouts', () => {
     const mobile = runFocusHelper(true, { preventScroll: true, select: true });
