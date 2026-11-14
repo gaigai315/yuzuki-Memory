@@ -1317,6 +1317,13 @@
             || content.includes('【角色信息】');
     }
 
+    function isWechatPrefixMessage(item) {
+        if (String(item?.role || '').toLowerCase() !== 'system') return false;
+        const name = String(item?.name || item?.identifier || '').trim();
+        return name === 'SYSTEM (🧩微信破限词)'
+            || /^\s*【微信线上创作元系统前置词】/.test(getMessageText(item));
+    }
+
     function repositionPhoneMemoryMessages(body, phonePermissions = null) {
         if (!phonePermissions) return 0;
 
@@ -1325,16 +1332,20 @@
             const items = target.items;
             if (!Array.isArray(items) || items.length === 0) return;
 
-            const memoryMessages = items.filter(isPhoneMemoryPlacementMessage);
-            if (memoryMessages.length === 0) return;
-
-            const remainingMessages = items.filter((item) => !isPhoneMemoryPlacementMessage(item));
-            const characterProfileIndex = remainingMessages.findIndex(isPhoneCharacterProfileMessage);
-            if (characterProfileIndex < 0) return;
-
-            remainingMessages.splice(characterProfileIndex, 0, ...memoryMessages);
-            items.splice(0, items.length, ...remainingMessages);
-            movedCount += memoryMessages.length;
+            // Memory fallback injection may prepend summaries after the phone built its request.
+            // Keep the explicit WeChat prefix first, including when no character card is present.
+            const prefixes = items.filter(isWechatPrefixMessage);
+            let remainingMessages = items.filter((item) => !isWechatPrefixMessage(item));
+            const memoryMessages = remainingMessages.filter(isPhoneMemoryPlacementMessage);
+            const withoutMemory = remainingMessages.filter((item) => !isPhoneMemoryPlacementMessage(item));
+            const characterProfileIndex = withoutMemory.findIndex(isPhoneCharacterProfileMessage);
+            if (memoryMessages.length && characterProfileIndex >= 0) {
+                withoutMemory.splice(characterProfileIndex, 0, ...memoryMessages);
+                remainingMessages = withoutMemory;
+            }
+            const ordered = [...prefixes, ...remainingMessages];
+            movedCount += ordered.filter((item, index) => item !== items[index]).length;
+            items.splice(0, items.length, ...ordered);
         });
         return movedCount;
     }

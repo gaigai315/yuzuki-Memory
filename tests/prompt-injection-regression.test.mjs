@@ -156,6 +156,73 @@ test('timed prompt injection preserves an existing director card on the same use
     assert.equal((chat[0].content.match(/<定时提醒>/g) || []).length, 1);
 });
 
+test('phone memory injection keeps the WeChat prefix ahead of summaries and preserves memory order', () => {
+    const sandbox = createBaseSandbox();
+    vm.runInContext(requestProbeSource, sandbox, { filename: 'request-probe.js' });
+    const probe = sandbox.window.YuzukiMemory.RequestProbe;
+    // The transport path can strip display names, so the built-in heading must also work.
+    for (const prefix of [
+        { role: 'system', name: 'SYSTEM (🧩微信破限词)', content: '用户自定义前置词' },
+        { role: 'system', content: '【微信线上创作元系统前置词】\n测试内容' },
+    ]) {
+        const summary1 = { role: 'system', yzmMemoryInjectionType: 'summary', content: '总结一' };
+        const summary2 = { role: 'system', isGaigaiData: true, content: '总结二' };
+        const vector = { role: 'system', isYuzukiVector: true, content: '向量参考' };
+        const alias = { role: 'system', content: '用户身份别名' };
+        const card = { role: 'system', content: '【角色信息】角色卡' };
+        const user = { role: 'user', content: '你好' };
+        const body = { messages: [summary1, summary2, prefix, alias, card, vector, user] };
+        assert.ok(probe.repositionPhoneMemoryMessages(body, { appId: 'wechat' }) > 0);
+        assert.deepEqual(body.messages, [prefix, alias, summary1, summary2, vector, card, user]);
+        assert.equal(probe.repositionPhoneMemoryMessages(body, { appId: 'wechat' }), 0);
+        assert.deepEqual(body.messages, [prefix, alias, summary1, summary2, vector, card, user]);
+    }
+});
+
+test('WeChat prefix ordering works without a character card and leaves ordinary requests untouched', () => {
+    const sandbox = createBaseSandbox();
+    vm.runInContext(requestProbeSource, sandbox, { filename: 'request-probe.js' });
+    const probe = sandbox.window.YuzukiMemory.RequestProbe;
+    const summary = { role: 'system', yzmMemoryInjectionType: 'summary', content: '总结' };
+    const prefix = { role: 'system', content: '【微信线上创作元系统前置词】\n测试内容' };
+    const user = { role: 'user', content: '引用【微信线上创作元系统前置词】' };
+    const body = { messages: [summary, prefix, user] };
+    assert.equal(probe.repositionPhoneMemoryMessages(body, null), 0);
+    assert.deepEqual(body.messages, [summary, prefix, user]);
+    probe.repositionPhoneMemoryMessages(body, { appId: 'wechat' });
+    assert.deepEqual(body.messages, [prefix, summary, user]);
+});
+
+test('final phone transport restores prefix order after memory injection and captures the same order', async () => {
+    const sandbox = createBaseSandbox();
+    sandbox.CustomEvent = class {
+        constructor(type, options) { this.type = type; this.detail = options?.detail; }
+    };
+    sandbox.window.dispatchEvent = () => true;
+    sandbox.window.YuzukiMemory.VariableInjector = {
+        processBody: async body => {
+            body.messages.unshift({ role: 'system', content: '总结一', yzmMemoryInjectionType: 'summary' });
+            return body;
+        },
+    };
+    vm.runInContext(requestProbeSource, sandbox, { filename: 'request-probe.js' });
+    const probe = sandbox.window.YuzukiMemory.RequestProbe;
+    const prefixText = '【微信线上创作元系统前置词】\n测试内容';
+    const [, options] = await probe.processFetchArgs(['/v1/chat/completions', {
+        method: 'POST',
+        body: JSON.stringify({ messages: [
+            { role: 'system', content: prefixText },
+            { role: 'system', content: '【角色信息】角色卡' },
+            { role: 'user', content: '你好', gaigaiPhoneSignal: { appId: 'wechat', allowSummary: true } },
+        ] }),
+    }]);
+    const sent = JSON.parse(options.body);
+    assert.deepEqual(sent.messages.map(message => message.content), [prefixText, '总结一', '【角色信息】角色卡', '你好']);
+    assert.ok(sent.messages.every(message => !('gaigaiPhoneSignal' in message) && !('yzmMemoryInjectionType' in message)));
+    const captured = await probe.captureFromBody(sent);
+    assert.equal(captured.messages[0].content, prefixText);
+});
+
 test('request probe keeps summaries in the memory color group without the legacy preface', async () => {
     const sandbox = createBaseSandbox();
     sandbox.CustomEvent = class CustomEvent {
