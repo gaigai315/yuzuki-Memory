@@ -386,6 +386,58 @@ test('memory prompt fallback ignores unrelated names and schema flags without du
     }
 });
 
+test('empty shell cleanup preserves tool history and legacy function messages', async () => {
+    const sandbox = createBaseSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    memory.GlobalSettings = {
+        get: (key, fallback) => key === 'yzm_memory_global_plugin_settings'
+            ? { injectMemoryTable: true, injectVectorMemory: false }
+            : fallback,
+    };
+    memory.Storage = { loadState: () => ({ tables: [], records: {}, settings: {} }) };
+    vm.runInContext(variableInjectorSource, sandbox, { filename: 'variable-injector.js' });
+
+    const history = [
+        { role: 'system', content: 'Keep the conversation history.' },
+        { role: 'assistant', content: null, tool_calls: [{
+            id: 'call_context', type: 'function',
+            function: { name: 'context', arguments: '{}' },
+        }] },
+        { role: 'tool', tool_call_id: 'call_context', content: 'Scene background' },
+    ];
+    for (let turn = 0; turn < 3; turn += 1) {
+        history.push(
+            { role: 'user', content: `User turn ${turn}` },
+            { role: 'assistant', content: '', tool_calls: [{
+                id: `call_reply_${turn}`, type: 'function',
+                function: { name: 'soliumbra_reply', arguments: JSON.stringify({ reply: `NPC reply ${turn}` }) },
+            }] },
+            { role: 'tool', tool_call_id: `call_reply_${turn}`, content: '' },
+        );
+    }
+    history.push(
+        { role: 'assistant', function_call: { name: 'legacy_reply', arguments: '{"reply":"Legacy history"}' } },
+        { role: 'function', name: 'legacy_reply', content: '' },
+        { role: 'tool', content: null },
+        { tool_call_id: 'call_structured_result', content: '' },
+    );
+
+    for (const key of ['messages', 'chat', 'prompt', 'contents']) {
+        for (const internal of [false, true]) {
+            const body = { [key]: structuredClone(history).concat([
+                { role: 'assistant', content: '' },
+                { role: 'assistant', content: '  ', tool_calls: [] },
+                { role: 'system', content: '{{MEMORY_TABLE}}' },
+            ]) };
+            await memory.VariableInjector.processBody(body, {
+                disableFallbackInjection: true,
+                yzmMemoryInternalApi: internal,
+            });
+            assert.deepEqual(body[key], history, `${key}, internal=${internal}`);
+        }
+    }
+});
+
 test('vector anchors include managed table recalls when generic recall is empty', async () => {
     const sandbox = createBaseSandbox();
     const memory = sandbox.window.YuzukiMemory;

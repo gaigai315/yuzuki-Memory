@@ -1579,6 +1579,13 @@
         let changed = false;
         targets.forEach((target) => {
             const nextItems = target.items.filter((item) => {
+                // 工具调用可能把历史正文放在 arguments 中；空 content 不代表空消息。
+                if (item && typeof item === 'object') {
+                    if (Array.isArray(item.tool_calls) && item.tool_calls.length > 0) return true;
+                    if (item.tool_call_id || item.function_call) return true;
+                    const role = String(item.role || '').toLowerCase();
+                    if (role === 'tool' || role === 'function') return true;
+                }
                 const text = cleanAnchorFragmentText(getMessageText(item));
                 return text.trim() !== '';
             });
