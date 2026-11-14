@@ -457,6 +457,52 @@ test('copied branch chat metadata also rebinds parent summaries to the new branc
     assert.equal(summary.meta.yzmMemoryTask.range.floorScope.id, 'char:0:branch-chat');
 });
 
+test('current summaries survive character reindexing and chat renaming without rebinding archives', () => {
+    const context = {
+        characterId: 0,
+        characters: [{ name: 'Same', avatar: 'same.png' }],
+        chatMetadata: { file_name: 'original-chat' },
+        chat: [{ mes: 'Hidden history', is_system: true, is_yzm_hidden_floor: true }],
+    };
+    const { storage } = createStorageSandbox({ context });
+    const fallback = createFallbackState();
+    fallback.tables.push({ id: 'memory_summary', name: '记忆总结', columns: ['总结标题', '楼层数', '总结内容'] });
+    const state = storage.loadState(fallback);
+    const originalScope = storage.getCurrentFloorScope();
+    const archiveScope = storage.createFloorScope('import:archive', { kind: 'import', label: 'Archive' });
+    const otherScope = storage.createFloorScope('char:0:other-chat');
+    const aliasScope = storage.createFloorScope('char:same.png:original-chat');
+    state.records.memory_summary = [originalScope, archiveScope, otherScope, aliasScope].map((floorScope, index) => ({
+        id: `summary-${index}`, floorScope,
+        values: { 总结标题: `Summary ${index}`, 楼层数: '0-19', 总结内容: 'History' },
+        summarySegments: [{ floor: '0-19', summary: 'History', floorScope,
+            range: { start: 0, end: 20, floorScope } }],
+        meta: { yzmMemoryTask: { floorScope, range: { start: 0, end: 20, floorScope } } },
+    }));
+    assert.equal(storage.saveState(state, fallback, undefined, { force: true }), true);
+
+    for (const change of ['reindex', 'rename']) {
+        if (change === 'reindex') {
+            context.characterId = 1;
+            context.characters = [null, { name: 'Same', avatar: 'same.png' }];
+        } else {
+            context.chatMetadata.file_name = 'renamed-chat';
+        }
+        const loaded = storage.loadState(fallback);
+        const scope = storage.getCurrentFloorScope();
+        const current = loaded.records.memory_summary.find((record) => record.id === 'summary-0');
+        assert.equal(current.floorScope.id, scope.id, change);
+        assert.equal(current.meta.yzmMemoryTask.range.floorScope.id, scope.id);
+        assert.equal(current.summarySegments[0].range.floorScope.id, scope.id);
+        assert.equal(storage.formatFloorScopeLabel(current.floorScope), '本篇');
+        assert.equal(loaded.records.memory_summary.find((record) => record.id === 'summary-3').floorScope.id, scope.id);
+        assert.equal(loaded.records.memory_summary.find((record) => record.id === 'summary-1').floorScope.id, archiveScope.id);
+        assert.equal(loaded.records.memory_summary.find((record) => record.id === 'summary-2').floorScope.id, otherScope.id);
+        assert.equal(storage.saveState(loaded, fallback, undefined, { force: true }), true);
+        assert.equal(storage.loadState(fallback).records.memory_summary.find((record) => record.id === 'summary-0').floorScope.id, scope.id);
+    }
+});
+
 test('legacy story director records are cleared and persisted as ledger version 2', () => {
     const { storage, localStorage } = createStorageSandbox();
     const fallback = createFallbackState();

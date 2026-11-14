@@ -661,7 +661,8 @@
         const recordScope = getRecordFloorScope(record, sourceFloorScope);
         const rebaseScope = (scope, fallback = recordScope) => {
             const normalized = normalizeFloorScope(scope, fallback);
-            return isSameFloorScope(normalized, sourceFloorScope) ? clone(targetFloorScope) : normalized;
+            return normalized?.kind === 'session' && isSameFloorScope(normalized, sourceFloorScope)
+                ? clone(targetFloorScope) : normalized;
         };
         record.floorScope = rebaseScope(record.floorScope, recordScope);
 
@@ -727,7 +728,9 @@
         Object.entries(value).forEach(([key, child]) => {
             if (key === 'floorScope') {
                 const normalized = normalizeFloorScope(child);
-                if (isSameFloorScope(normalized, sourceFloorScope)) value[key] = clone(targetFloorScope);
+                if (normalized?.kind === 'session' && isSameFloorScope(normalized, sourceFloorScope)) {
+                    value[key] = clone(targetFloorScope);
+                }
                 return;
             }
             rebaseExplicitFloorScopes(child, sourceFloorScope, targetFloorScope);
@@ -735,7 +738,7 @@
         return value;
     }
 
-    function rebaseBranchInheritedFloorScopes(state, sessionId) {
+    function rebaseSessionFloorScopes(state, sessionId) {
         if (!state || typeof state !== 'object' || !sessionId) return state;
         const inherited = clone(state);
         const sourceFloorScope = normalizeFloorScope(
@@ -743,19 +746,31 @@
             getCurrentFloorScope(inherited.sessionId),
         );
         const targetFloorScope = getCurrentFloorScope(sessionId);
-        if (!sourceFloorScope || !targetFloorScope || isSameFloorScope(sourceFloorScope, targetFloorScope)) return inherited;
+        if (!sourceFloorScope || !targetFloorScope) return inherited;
 
-        ['memory_summary', 'plot_summary'].forEach((tableId) => {
-            (inherited.records?.[tableId] || []).forEach((record) => (
-                rebaseInheritedFloorBoundRecord(record, sourceFloorScope, targetFloorScope)
+        // 在覆盖会话 ID 前迁移本篇来源；角色编号、会话名称和分支变化都可能改变 ID。
+        // 只认原状态自己的会话及别名，不按楼层、名称或可见性猜测导入记录的归属。
+        const sourceIds = uniqueValues([
+            sourceFloorScope.id,
+            inherited.sessionId,
+            ...(Array.isArray(inherited.sessionAliases) ? inherited.sessionAliases : []),
+        ]).filter((id) => extractSessionChatId(id) === extractSessionChatId(sourceFloorScope.id));
+        sourceIds.forEach((sourceId) => {
+            const sourceScope = getCurrentFloorScope(sourceId);
+            if (isSameFloorScope(sourceScope, targetFloorScope)) return;
+
+            ['memory_summary', 'plot_summary'].forEach((tableId) => {
+                (inherited.records?.[tableId] || []).forEach((record) => (
+                    rebaseInheritedFloorBoundRecord(record, sourceScope, targetFloorScope)
+                ));
+            });
+            (inherited.floorLedger?.baselineRecords?.plot_summary || []).forEach((record) => (
+                rebaseInheritedFloorBoundRecord(record, sourceScope, targetFloorScope)
+            ));
+            Object.values(inherited.floorLedger?.entries || {}).forEach((entry) => (
+                rebaseExplicitFloorScopes(entry, sourceScope, targetFloorScope)
             ));
         });
-        (inherited.floorLedger?.baselineRecords?.plot_summary || []).forEach((record) => (
-            rebaseInheritedFloorBoundRecord(record, sourceFloorScope, targetFloorScope)
-        ));
-        Object.values(inherited.floorLedger?.entries || {}).forEach((entry) => (
-            rebaseExplicitFloorScopes(entry, sourceFloorScope, targetFloorScope)
-        ));
         inherited.currentFloorScope = clone(targetFloorScope);
         return inherited;
     }
@@ -1410,11 +1425,8 @@
             const recoveredStoryDirector = recoverNewerStoryDirectorEnabled(recoveredWorldbook.state, localStates);
             const branchParentState = compatibleMetadata ? null : loadBranchParentState(sessionId);
             const sourceCandidate = recoveredStoryDirector.state || branchParentState || pickBestState(localStates);
-            const copiedBranchMetadata = !!compatibleMetadata
-                && !isCompatibleStateSession(compatibleMetadata, sessionId)
-                && getBranchParentSessionAliases(sessionId).length > 0;
-            const sourceState = sourceCandidate && (branchParentState || copiedBranchMetadata)
-                ? rebaseBranchInheritedFloorScopes(sourceCandidate, sessionId)
+            const sourceState = sourceCandidate
+                ? rebaseSessionFloorScopes(sourceCandidate, sessionId)
                 : sourceCandidate;
             const normalized = normalizeState(sourceState ? stampSession(sourceState, sessionId) : null, fallbackState);
             const storyDirectorEnabledNeedsMigration = !!sourceState
