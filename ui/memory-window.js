@@ -5747,7 +5747,10 @@
         const entries = [
             { kind: 'main', title: '主线摘要', icon: 'fa-solid fa-timeline', count: mainCount, hidden: isPlotSummaryKindHidden(record, 'main') },
             { kind: 'branch', title: '支线摘要', icon: 'fa-solid fa-code-branch', count: branchCount, hidden: isPlotSummaryKindHidden(record, 'branch') },
-        ];
+        ].filter((entry) => entry.count > 0 || record?.manualPlotKinds?.[entry.kind] === true);
+        if (entries.length && !entries.some((entry) => entry.kind === activePlotSummaryKind)) {
+            activePlotSummaryKind = (entries.find((entry) => !entry.hidden) || entries[0]).kind;
+        }
         const displayEntries = [
             ...entries.filter((entry) => !entry.hidden),
             ...entries.filter((entry) => entry.hidden),
@@ -15489,6 +15492,14 @@
         const view = document.createElement('div');
         view.className = 'yzm-plot-view';
 
+        if (!items.length && record?.manualPlotKinds?.[kind] !== true) {
+            const empty = document.createElement('div');
+            empty.className = 'yzm-plot-empty';
+            empty.append(createIconNode(icon, ''), document.createTextNode('暂无剧情摘要'));
+            view.appendChild(empty);
+            return view;
+        }
+
         const panel = document.createElement('section');
         panel.className = 'yzm-plot-panel';
 
@@ -15980,8 +15991,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化移动端记忆页面加载：角色档案与角色状态改为分批渲染、头像按需加载，打开页面时不再一次性处理全部角色数据，减少卡顿。',
-            '修复删除 AI 回复后剧情规划仍显示在“上一轮”的问题；绑定当前 User 的规划会自动回到“下一轮”，并继续用于下一次回复。',
+            '优化填表/总结提示词方案，新增两个方案。使用时请根据方案开启或隐藏对应的表格数据。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -17682,7 +17692,8 @@
         const actions = document.createElement('div');
         actions.className = 'yzm-record-actions yzm-plot-editor-actions';
         const save = createButton('保存', 'yzm-add-table-confirm yzm-record-save');
-        const canDeleteCurrent = !isAppend && editIndex > -1 && editIndex < currentLines.length;
+        const canDeleteEmptyKind = !isAppend && !currentLines.length && record.manualPlotKinds?.[normalizedKind] === true;
+        const canDeleteCurrent = canDeleteEmptyKind || (!isAppend && editIndex > -1 && editIndex < currentLines.length);
         const deleteCurrent = canDeleteCurrent
             ? createIconButton(`删除当前${label}`, 'fa-regular fa-trash-can', 'yzm-api-button yzm-api-button-danger yzm-plot-summary-delete')
             : null;
@@ -17719,6 +17730,11 @@
 
         deleteCurrent?.addEventListener('click', () => {
             if (!window.confirm(`确定删除当前${label}吗？`)) return;
+            if (canDeleteEmptyKind) {
+                delete record.manualPlotKinds[normalizedKind];
+                persistEditorChanges('当前会话尚未就绪，剧情摘要未删除。');
+                return;
+            }
             const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, currentLines.length);
             const metaList = normalizePlotItemMeta(record, normalizedKind, currentLines.length);
             YuzukiMemory.BranchSnapshot?.markDeletedPlotItems?.(record, [{
@@ -17742,6 +17758,9 @@
             const timeInput = fields.querySelector('[data-yzm-record-field="时间"]');
             const contentInput = fields.querySelector(`[data-yzm-record-field="${field}"]`);
             const nextValue = formatPlotSummaryEditorValue(timeInput?.value, contentInput?.value);
+            record.manualPlotKinds = record.manualPlotKinds && typeof record.manualPlotKinds === 'object' ? record.manualPlotKinds : {};
+            if (isAppend && !nextValue) record.manualPlotKinds[normalizedKind] = true;
+            if (nextValue) delete record.manualPlotKinds[normalizedKind];
             const hiddenStates = normalizePlotItemHiddenStates(record, normalizedKind, currentLines.length);
             const metaList = normalizePlotItemMeta(record, normalizedKind, currentLines.length);
             record.values = record.values && typeof record.values === 'object' ? record.values : {};

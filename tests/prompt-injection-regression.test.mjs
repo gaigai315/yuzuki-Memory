@@ -598,7 +598,9 @@ test('switching built-in schemes keeps the realtime prompt with existing plot re
     const memory = sandbox.window.YuzukiMemory;
     vm.runInContext(promptLibrarySource, sandbox, { filename: 'prompt-library.js' });
     const schemes = memory.PromptLibrary.getDefaultSchemes();
-    let activeId = schemes[0].id;
+    const withoutPlotScheme = schemes.find((scheme) => scheme.id === 'yuzuki_default_prompt_without_plot_summary_v1');
+    const withPlotScheme = schemes.find((scheme) => scheme.id === 'yuzuki_default_prompt_blank_trace_v1');
+    let activeId = withoutPlotScheme.id;
     let state = null;
     memory.GlobalSettings = {
         get(key, fallback) {
@@ -615,15 +617,113 @@ test('switching built-in schemes keeps the realtime prompt with existing plot re
     state.records.plot_summary = [{ id: 'plot-record', values: { 主线: '历史剧情', 支线: '' } }];
 
     const withoutPlot = memory.VariableInjector.buildMemoryPromptText(state);
-    activeId = schemes[1].id;
+    activeId = withPlotScheme.id;
     const withPlot = memory.VariableInjector.buildMemoryPromptText(state);
 
     assert.ok(withoutPlot.length > 0);
     assert.ok(withPlot.length > 0);
-    assert.equal(memory.VariableInjector.getActivePromptScheme(state).id, schemes[1].id);
+    assert.equal(memory.VariableInjector.getActivePromptScheme(state).id, withPlotScheme.id);
     assert.doesNotMatch(withoutPlot, /主线\/支线摘要最高级禁令/);
     assert.match(withPlot, /主线\/支线摘要最高级禁令/);
     assert.equal(state.records.plot_summary.length, 1);
+});
+
+test('initial scheme includes plot summaries and saved choices survive the new ordering', () => {
+    const sandbox = createBaseSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    const settings = new Map();
+    memory.GlobalSettings = { get: (key, fallback) => settings.has(key) ? settings.get(key) : fallback };
+    vm.runInContext(promptLibrarySource, sandbox);
+    const schemes = memory.PromptLibrary.getDefaultSchemes();
+    assert.equal(schemes[0].id, 'yuzuki_default_prompt_blank_trace_v1');
+    assert.equal(schemes[0].name, 'yuzuki_默认（主线+支线+摘要）');
+    memory.Storage = { loadState: (fallback) => fallback };
+    vm.runInContext(variableInjectorSource, sandbox);
+    const taskFunction = taskRunnerSource.match(/    function getActivePromptScheme\(state\) \{[\s\S]*?\n    \}/);
+    assert.ok(taskFunction);
+    sandbox.PROMPT_SCHEMES_STORAGE_KEY = 'schemes';
+    sandbox.PROMPT_SCHEME_CHARACTER_BINDINGS_STORAGE_KEY = 'bindings';
+    sandbox.PROMPT_SCHEME_GLOBAL_ACTIVE_STORAGE_KEY = 'yzm_memory_global_prompt_scheme_active';
+    sandbox.YuzukiMemory = memory;
+    sandbox.parseJsonStorage = (key, fallback) => settings.has(key) ? settings.get(key) : fallback;
+    sandbox.getCurrentCharacterPromptKeys = () => ['character'];
+    vm.runInContext(`${taskFunction[0]}\nthis.resolveTaskScheme = getActivePromptScheme;`, sandbox);
+    assert.equal(memory.VariableInjector.getActivePromptScheme({}).id, schemes[0].id);
+    assert.equal(sandbox.resolveTaskScheme({}).id, schemes[0].id);
+    const custom = { id: 'user-scheme', name: '自定义', prompts: { traceRealtime: '用户提示词' } };
+    settings.set('schemes', [custom]);
+    settings.set('yzm_memory_global_prompt_schemes', [custom]);
+    for (const scheme of [...schemes, custom]) {
+        settings.set('yzm_memory_global_prompt_scheme_active', scheme.id);
+        assert.equal(memory.VariableInjector.getActivePromptScheme({}).id, scheme.id);
+        assert.equal(sandbox.resolveTaskScheme({}).id, scheme.id);
+    }
+    settings.set('bindings', { character: schemes[1].id });
+    assert.equal(sandbox.resolveTaskScheme({}).id, schemes[1].id);
+});
+
+test('single storyline preset provides unified filling, summary and optimization prompts', () => {
+    const sandbox = createBaseSandbox();
+    vm.runInContext(promptLibrarySource, sandbox, { filename: 'prompt-library.js' });
+    const library = sandbox.window.YuzukiMemory.PromptLibrary;
+    const schemes = library.getDefaultSchemes();
+    const scheme = schemes.find((entry) => entry.id === 'yuzuki_default_prompt_single_story_v1');
+    assert.ok(scheme);
+    assert.equal(schemes[2].id, scheme.id);
+    assert.equal(scheme.name, 'yuzuki_默认（单线剧情｜含剧情摘要）');
+    assert.equal(scheme.builtin, true);
+    assert.equal(scheme.modes.trace, 'realtime');
+    for (const key of ['traceRealtime', 'traceBatch', 'traceOptimize']) {
+        assert.match(scheme.prompts[key], /#剧情摘要/);
+        assert.doesNotMatch(scheme.prompts[key], /#主线摘要|#支线摘要/);
+    }
+    assert.match(scheme.prompts.traceRealtime, /本轮发生的所有关键剧情/);
+    assert.match(scheme.prompts.traceBatch, /本区间发生的所有关键剧情/);
+    for (const key of ['summary', 'summaryOptimize']) {
+        assert.match(scheme.prompts[key], /【主线总结】/);
+        assert.doesNotMatch(scheme.prompts[key], /【支线总结/);
+    }
+    scheme.prompts.summary = 'changed';
+    assert.notEqual(library.getDefaultSchemes()[2].prompts.summary, 'changed');
+});
+
+test('single storyline without plot preset omits plot writing in all filling modes and keeps unified summaries', () => {
+    const sandbox = createBaseSandbox();
+    const memory = sandbox.window.YuzukiMemory;
+    vm.runInContext(promptLibrarySource, sandbox);
+    const schemes = memory.PromptLibrary.getDefaultSchemes();
+    const withPlot = schemes.find((scheme) => scheme.id === 'yuzuki_default_prompt_single_story_v1');
+    const scheme = schemes.find((scheme) => scheme.id === 'yuzuki_default_prompt_single_story_without_plot_summary_v1');
+    assert.ok(scheme);
+    assert.equal(schemes[3].id, scheme.id);
+    assert.equal(scheme.name, 'yuzuki_默认（单线剧情｜不含剧情摘要）');
+    for (const key of ['traceRealtime', 'traceBatch', 'traceOptimize']) {
+        const text = scheme.prompts[key];
+        assert.match(text, /不要生成或更新该表/);
+        assert.doesNotMatch(text, /#剧情摘要|#主线摘要|#支线摘要|【剧情摘要|一、剧情摘要/);
+        assert.match(text, /#角色档案/);
+        assert.match(text, /#物品/);
+        assert.match(text, /#世界设定/);
+        assert.match(text, /<Memory>/);
+    }
+    for (const key of ['summary', 'summaryOptimize']) {
+        assert.equal(scheme.prompts[key], withPlot.prompts[key]);
+        assert.match(scheme.prompts[key], /【主线总结】/);
+        assert.doesNotMatch(scheme.prompts[key], /【支线总结|#剧情摘要/);
+    }
+    assert.equal(Object.keys(scheme.tableVisibility).length, 0);
+    memory.GlobalSettings = {
+        get: (key, fallback) => key === 'yzm_memory_global_prompt_scheme_active' ? scheme.id : fallback,
+    };
+    memory.Storage = { loadState: (fallback) => fallback };
+    vm.runInContext(variableInjectorSource, sandbox);
+    const state = memory.VariableInjector.createDefaultState();
+    state.records.plot_summary = [{ id: 'existing', values: { 主线: '已有剧情', 支线: '' } }];
+    assert.equal(memory.VariableInjector.getActivePromptScheme(state).id, scheme.id);
+    const prompt = memory.VariableInjector.buildMemoryPromptText(state);
+    assert.match(prompt, /不要生成或更新该表/);
+    assert.doesNotMatch(prompt, /剧情摘要最高级禁令/);
+    assert.equal(state.records.plot_summary[0].values.主线, '已有剧情');
 });
 
 test('branch summaries for one character share one injected message across floor ranges', async () => {

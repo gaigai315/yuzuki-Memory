@@ -745,13 +745,14 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.2.0', () => {
-    assert.equal(manifest.version, '1.2.0');
-    assert.match(indexSource, /const VERSION = '1\.2\.0';/);
+test('release metadata and update notice describe version 1.2.1', () => {
+    assert.equal(manifest.version, '1.2.1');
+    assert.match(indexSource, /const VERSION = '1\.2\.1';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /角色档案与角色状态改为分批渲染、头像按需加载/);
-    assert.match(noticeSource, /绑定当前 User 的规划会自动回到“下一轮”/);
+    assert.match(noticeSource, /优化填表\/总结提示词方案，新增两个方案。使用时请根据方案开启或隐藏对应的表格数据。/);
+    assert.doesNotMatch(noticeSource, /角色档案与角色状态改为分批渲染、头像按需加载/);
+    assert.doesNotMatch(noticeSource, /绑定当前 User 的规划会自动回到“下一轮”/);
     assert.doesNotMatch(noticeSource, /总结优化的目标选择新增全选/);
     assert.doesNotMatch(noticeSource, /按楼层范围删除改为清理输入区域内完整包含的总结与剧情摘要/);
     assert.doesNotMatch(noticeSource, /删除聊天楼层后待办事项及角色空记录残留/);

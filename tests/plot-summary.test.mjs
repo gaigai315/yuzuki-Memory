@@ -11,6 +11,38 @@ vm.runInContext(source, sandbox, { filename: 'plot-summary.js' });
 const plotSummary = sandbox.window.YuzukiMemory.PlotSummary;
 const parserBranchSnapshots = new WeakMap();
 
+test('plot sidebar omits initial placeholders and respects manually created empty kinds', () => {
+    const uiSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
+    const match = uiSource.match(/    function renderPlotPrimaryList\(list\) \{[\s\S]*?\n    \}/);
+    assert.ok(match);
+    const record = { values: { 主线: '', 支线: '' } };
+    const context = {
+        activePlotSummaryKind: 'main',
+        getPlotSummaryRecord: () => record,
+        getRecordValue: (entry, field) => entry.values[field],
+        getPlotSummaryItems: (value) => value ? [value] : [],
+        isPlotSummaryKindHidden: () => false,
+        createPlotPrimaryItem: (kind) => kind,
+        replacePrimaryListChildren: (list, nodes) => { list.nodes = nodes; },
+    };
+    vm.createContext(context);
+    vm.runInContext(`${match[0]}\nthis.render = renderPlotPrimaryList;`, context);
+    const list = {};
+    context.render(list);
+    assert.deepEqual(Array.from(list.nodes), []);
+    record.manualPlotKinds = { branch: true };
+    context.render(list);
+    assert.deepEqual(Array.from(list.nodes), ['branch']);
+    assert.equal(context.activePlotSummaryKind, 'branch');
+    delete record.manualPlotKinds.branch;
+    context.render(list);
+    context.render(list);
+    assert.deepEqual(Array.from(list.nodes), []);
+    record.values.主线 = '实际剧情';
+    context.render(list);
+    assert.deepEqual(Array.from(list.nodes), ['main']);
+});
+
 function loadPlotRecordNormalizer() {
     const uiSource = fs.readFileSync(new URL('../ui/memory-window.js', import.meta.url), 'utf8');
     const match = uiSource.match(/    function normalizePlotSummaryRecordValues\(record, options = \{\}\) \{[\s\S]*?\n    \}/);
