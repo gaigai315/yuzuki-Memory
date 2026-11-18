@@ -124,6 +124,41 @@ function parserSandboxBranchSnapshot(parser) {
     return parserBranchSnapshots.get(parser);
 }
 
+test('explicit plot replay restores deleted summaries, skips gaps and overlaps, and preserves floors', () => {
+    const parser = createParserSandbox();
+    const state = parser.createDefaultState();
+    const chat = [
+        { is_user: false, mes: '<Memory>\n#主线摘要\n日期:2026年1月4日,12:00-12:10|摘要内容:进入遗迹\n</Memory>' },
+        { is_user: true, mes: '继续' },
+        { is_user: false, mes: '没有摘要' },
+        { role: 'assistant', mes: '<Memory>\n#主线摘要\n日期:2026年1月4日,12:10-12:20|摘要内容:找到密道\n#支线摘要\n日期:2026年1月4日,12:10-12:20|摘要内容:远方来信\n</Memory>' },
+    ];
+    const before = JSON.stringify(state);
+    const result = parser.preparePlotReplay(state, '0-50', 'main', chat);
+    assert.equal(result.added, 2);
+    assert.equal(result.foundFloors, 2);
+    assert.equal(JSON.stringify(state), before, 'preview must not mutate state');
+    assert.equal(result.records[0].values.支线 || '', '');
+    assert.deepEqual(Array.from(result.records[0].plotItemMeta.main, (meta) => meta.sourceRange.start), [0, 3]);
+    state.records.plot_summary = result.records;
+    const again = parser.preparePlotReplay(state, '0-50', 'main', chat);
+    assert.equal(again.added, 0);
+    assert.equal(again.overlaps, 2);
+    const record = result.records[0];
+    const raw = record.values.主线.split('\n')[0];
+    parserSandboxBranchSnapshot(parser).markDeletedPlotItems(record, [{ kind: 'main', raw, meta: record.plotItemMeta.main[0] }]);
+    parserSandboxBranchSnapshot(parser).applyDeletedPlotPolicy(record);
+    const restored = parser.preparePlotReplay(state, '0', 'main', chat);
+    assert.equal(restored.added, 1);
+    parserSandboxBranchSnapshot(parser).applyDeletedPlotPolicy(restored.records[0]);
+    assert.match(restored.records[0].values.主线, /进入遗迹/);
+    assert.equal(parser.preparePlotReplay(state, '3', 'branch', chat).added, 1);
+    assert.throws(() => parser.preparePlotReplay(state, '50-0', 'main', chat));
+    assert.throws(() => parser.preparePlotReplay(state, '-1', 'main', chat));
+    state.tables.find((table) => table.id === 'plot_summary').hidden = true;
+    assert.throws(() => parser.preparePlotReplay(state, '0-50', 'main', chat));
+});
+
 test('ancient regnal dates remain visible in plot summary groups', () => {
     const items = plotSummary.normalizeStoredItems(
         '[景和七年三月十五日,20:00-20:30] | 内容: 沈昭阳将楚玄带回永宁王府',

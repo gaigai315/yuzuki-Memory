@@ -874,6 +874,67 @@
         return count;
     }
 
+    // Explicit recovery uses the same parser and provenance as realtime writes.
+    // Build a draft so previewing overlaps never mutates the current chat.
+    function preparePlotReplay(state, input, kind = 'main', chat = getContext()?.chat) {
+        const match = String(input ?? '').trim().match(/^(\d+)\s*(?:[-－—~～至]\s*(\d+))?\s*楼?$/);
+        if (!match) throw new Error('请输入楼层范围，例如 0-50，或单个楼层号。');
+        const start = Number(match[1]);
+        const end = Number(match[2] ?? match[1]);
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end < start) {
+            throw new Error('楼层范围无效，结束楼层不能小于起始楼层。');
+        }
+        const table = state?.tables?.find((entry) => entry.id === PLOT_SUMMARY_TABLE_ID);
+        if (!table || table.hidden) throw new Error('请先启用剧情摘要表。');
+        if (!Array.isArray(chat) || !chat.length) throw new Error('当前聊天没有可读取的楼层。');
+        const key = kind === 'branch' ? 'branch' : 'main';
+        const field = key === 'branch' ? '支线' : '主线';
+        const draft = JSON.parse(JSON.stringify(state));
+        const floorScope = YuzukiMemory.Storage?.getCurrentFloorScope?.() || null;
+        let added = 0;
+        let overlaps = 0;
+        let foundFloors = 0;
+        for (let floor = start; floor <= Math.min(end, chat.length - 1); floor += 1) {
+            const message = chat[floor];
+            const role = String(message?.role || '').toLowerCase();
+            if (!message || message.is_system || message.is_user === true
+                || !(message.is_user === false || ['assistant', 'model', 'ai'].includes(role))) continue;
+            const text = message.mes ?? message.content ?? message.text ?? '';
+            const rows = extractMemoryRows(text).filter((row) => findTable(state, row.table)?.id === PLOT_SUMMARY_TABLE_ID);
+            const scratch = { ...draft, records: { [PLOT_SUMMARY_TABLE_ID]: [] } };
+            applyRowsToState(scratch, rows, { source: 'realtime', floor, range: { start: floor, end: floor + 1 }, floorScope });
+            const recovered = scratch.records[PLOT_SUMMARY_TABLE_ID][0];
+            const lines = String(recovered?.values?.[field] || '').split(/\n+/).filter(Boolean);
+            if (!lines.length) continue;
+            foundFloors += 1;
+            draft.records[PLOT_SUMMARY_TABLE_ID] ||= [];
+            if (!draft.records[PLOT_SUMMARY_TABLE_ID][0]) {
+                const empty = createRecord(table, {});
+                draft.records[PLOT_SUMMARY_TABLE_ID].push(empty);
+            }
+            const target = draft.records[PLOT_SUMMARY_TABLE_ID][0];
+            lines.forEach((line, index) => {
+                const previous = String(target.values?.[field] || '').split(/\n+/).filter(Boolean);
+                if (previous.some((entry) => normalizePlotLineText(entry) === normalizePlotLineText(line))) {
+                    overlaps += 1;
+                    return;
+                }
+                target.values ||= {};
+                const next = [...previous, line];
+                target.values[field] = next.join('\n');
+                syncPlotItemMetadata(target, key, previous, next, {
+                    source: 'realtime', range: { start: floor, end: floor + 1 }, floorScope,
+                });
+                const identity = { ...recovered.plotItemMeta?.[key]?.[index], kind: key, text: line.replace(/\s+/g, ' ').trim() };
+                target.deletedPlotItemIdentities = (target.deletedPlotItemIdentities || []).filter((deleted) => (
+                    !YuzukiMemory.BranchSnapshot?.isDeletedPlotItem?.(identity, [deleted], { allowRealtimeProvenanceFallback: true })
+                ));
+                added += 1;
+            });
+        }
+        return { records: draft.records[PLOT_SUMMARY_TABLE_ID] || [], added, overlaps, foundFloors, start, end };
+    }
+
     function getRecordCounts(state) {
         const records = state?.records && typeof state.records === 'object' ? state.records : {};
         return Object.fromEntries(Object.entries(records).map(([tableId, tableRecords]) => [
@@ -1198,6 +1259,7 @@
         processMessage,
         clearPendingMessage,
         applyRowsToState,
+        preparePlotReplay,
         mergeAliasDuplicateRecords,
         cleanColumnName,
         isAppendColumn,

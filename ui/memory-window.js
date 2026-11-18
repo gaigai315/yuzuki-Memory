@@ -15991,7 +15991,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化填表/总结提示词方案，新增两个方案。使用时请根据方案开启或隐藏对应的表格数据。',
+            '优化剧情摘要：「条目整理」中新增「重放」按钮，可按楼层范围（如 0-50）将实时填表模式下正文中已有的剧情摘要重新加入表格，并保留来源楼层号。缺失楼层自动跳过，重复摘要会提示并跳过，方便恢复此前清理的摘要。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -16814,7 +16814,9 @@
         vectorizeButton.hidden = !['character_profile', 'item_tracking', 'world_setting'].includes(table.id);
         const deleteButton = createIconButton('删除', 'fa-solid fa-trash-can', 'yzm-organizer-action yzm-organizer-danger');
         deleteButton.dataset.yzmOrganizerBatch = 'delete';
-        actions.append(toggleButton, autoVectorControl, vectorizeButton, deleteButton);
+        const replayButton = createIconButton('重放', 'fa-solid fa-rotate-left', 'yzm-organizer-action');
+        replayButton.hidden = table.id !== 'plot_summary';
+        actions.append(replayButton, toggleButton, autoVectorControl, vectorizeButton, deleteButton);
         toolbar.append(selectLabel, actions);
 
         const list = document.createElement('div');
@@ -16840,6 +16842,29 @@
             renderRecordOrganizerList(list, table);
             updateRecordOrganizerSelection(dialog);
             updateHint();
+        };
+        replayButton.onclick = () => {
+            const input = window.prompt(`重放${getPlotSummaryLabel(activePlotSummaryKind)}：请输入楼层范围（含首尾），例如 0-50。缺失楼层自动跳过。`, '0-50');
+            if (input === null) return;
+            try {
+                const storage = getStorage();
+                if (storage?.isSessionSwitching?.() || storage?.getCurrentSessionId?.() !== loadedSessionId) {
+                    throw new Error('聊天正在切换，请稍后重新打开整理窗口。');
+                }
+                const result = YuzukiMemory.MemoryTagParser.preparePlotReplay(getState(), input, activePlotSummaryKind);
+                if (!result.added) {
+                    window.alert(result.overlaps ? `发现 ${result.overlaps} 条重叠摘要，已全部跳过。` : '指定范围内没有可重放的剧情摘要。');
+                    return;
+                }
+                if (result.overlaps && !window.confirm(`发现 ${result.overlaps} 条重叠摘要，将跳过；继续重放其余 ${result.added} 条吗？`)) return;
+                getState().records[table.id] = result.records;
+                if (refreshAfterRecordOrganizerChange(root, table)) {
+                    rerenderOrganizer();
+                    window.alert(`已从 ${result.foundFloors} 个楼层重放 ${result.added} 条摘要，保留来源楼层号。${result.overlaps ? `已跳过 ${result.overlaps} 条重叠摘要。` : ''}`);
+                }
+            } catch (error) {
+                window.alert(String(error?.message || error));
+            }
         };
         bindRecordOrganizerDrag(root, table, list, rerenderOrganizer);
         const applyBatch = async (action, ids) => {

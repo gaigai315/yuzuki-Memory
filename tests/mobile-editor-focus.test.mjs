@@ -745,12 +745,14 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.2.1', () => {
-    assert.equal(manifest.version, '1.2.1');
-    assert.match(indexSource, /const VERSION = '1\.2\.1';/);
+test('release metadata and update notice describe version 1.2.2', () => {
+    assert.equal(manifest.version, '1.2.2');
+    assert.match(indexSource, /const VERSION = '1\.2\.2';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /优化填表\/总结提示词方案，新增两个方案。使用时请根据方案开启或隐藏对应的表格数据。/);
+    assert.match(noticeSource, /优化剧情摘要：「条目整理」中新增「重放」按钮/);
+    assert.match(noticeSource, /实时填表模式下正文中已有的剧情摘要重新加入表格/);
+    assert.doesNotMatch(noticeSource, /优化填表\/总结提示词方案，新增两个方案/);
     assert.doesNotMatch(noticeSource, /角色档案与角色状态改为分批渲染、头像按需加载/);
     assert.doesNotMatch(noticeSource, /绑定当前 User 的规划会自动回到“下一轮”/);
     assert.doesNotMatch(noticeSource, /总结优化的目标选择新增全选/);
