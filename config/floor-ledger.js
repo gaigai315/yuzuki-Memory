@@ -1510,12 +1510,8 @@
             // Validate explicit recovery against the current branch's source text.
             const scratch = { tables: [{ ...table, hidden: false }], records: { [PLOT_TABLE_ID]: [] } };
             try {
-                const recovered = YuzukiMemory.MemoryTagParser?.preparePlotReplay?.(scratch, String(floor), 'main', chat);
-                const branch = YuzukiMemory.MemoryTagParser?.preparePlotReplay?.(scratch, String(floor), 'branch', chat);
-                const candidates = [
-                    ...getPlotItems({ [PLOT_TABLE_ID]: recovered?.records || [] }, table),
-                    ...getPlotItems({ [PLOT_TABLE_ID]: branch?.records || [] }, table),
-                ];
+                const recovered = YuzukiMemory.MemoryTagParser?.preparePlotReplay?.(scratch, String(floor), 'all', chat);
+                const candidates = getPlotItems({ [PLOT_TABLE_ID]: recovered?.records || [] }, table);
                 const current = new Set(candidates.map((item) => getPlotProvenance(item.kind, item.line, item.meta).exactKey));
                 items.forEach((item) => {
                     if (current.has(getPlotProvenance(item.kind, item.line, item.meta).exactKey)) {

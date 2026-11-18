@@ -173,15 +173,19 @@ test('manual replay of floors 850-900 survives reconciliation with only the late
     const ledger = window.YuzukiMemory.FloorLedger;
     storedState = parser.createDefaultState();
     chat = Array.from({ length: 901 }, (_, floor) => floor >= 850 && floor % 2 === 0
-        ? assistantMemoryMessage(`#主线摘要\n[2026年9月22日,18:00-19:30] | 内容: 第${floor}楼的独立事件。`)
+        ? assistantMemoryMessage(`#主线摘要\n[2026年9月22日,18:00-19:30] | 内容: 第${floor}楼的独立事件。\n#支线摘要\n[2026年9月22日,18:00-19:30] | 内容: 第${floor}楼的支线事件。`)
         : userMessage('继续'));
+    chat.forEach((message, floor) => { if (floor < 900) message.is_system = true; });
     assert.equal(parser.applyMemoryText(chat[900].mes, { floor: 900, dispatch: false }).success, true);
     storedState.records.plot_summary = [];
-    const replay = parser.preparePlotReplay(storedState, '850-900', 'main', chat);
-    assert.equal(replay.added, 26);
+    const replay = parser.preparePlotReplay(storedState, '850-900');
+    assert.equal(replay.added, 52);
+    assert.equal(replay.foundFloors, 26);
+    assert.deepEqual(replay.addedByKind, { main: 26, branch: 26 });
     storedState.records.plot_summary = clone(replay.records);
     ledger.reconcileNow({ reason: 'manual-replay', force: true });
     assert.equal(storedState.records.plot_summary[0].values.主线.split('\n').length, 26);
+    assert.equal(storedState.records.plot_summary[0].values.支线.split('\n').length, 26);
     ledger.reconcileNow({ reason: 'chat_changed', force: true });
     assert.equal(storedState.records.plot_summary[0].values.主线.split('\n').length, 26);
     ledger.rebaseState(storedState, { reason: 'manual-rebase' });
@@ -194,6 +198,61 @@ test('manual replay of floors 850-900 survives reconciliation with only the late
     chat.splice(852);
     ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
     assert.equal(storedState.records.plot_summary?.[0]?.values?.主线 || '', '');
+    assert.equal(storedState.records.plot_summary?.[0]?.values?.支线 || '', '');
+});
+
+test('hidden floor replay survives real storage, snapshots, reload and ledger reconciliation for both kinds', () => {
+    const values = new Map();
+    const testChat = Array.from({ length: 901 }, (_, floor) => ({
+        ...assistantMemoryMessage(`#主线摘要\n[0117年12月16日,20:28-20:58] | 内容: 主线事件${floor}。\n#支线摘要\n[0117年12月16日,20:28-20:58] | 内容: 支线事件${floor}。`),
+        is_user: floor % 2 === 0,
+        is_system: floor < 897,
+        is_yzm_hidden_floor: floor < 897,
+    }));
+    const testContext = { chat: testChat, chatId: 'replay', characterId: 0, chatMetadata: {}, eventSource: { on() {} }, eventTypes: {} };
+    const sandbox = {
+        console, structuredClone, CustomEvent,
+        localStorage: {
+            get length() { return values.size; },
+            key: (index) => [...values.keys()][index],
+            getItem: (key) => values.get(key) ?? null,
+            setItem: (key, value) => values.set(key, String(value)),
+            removeItem: (key) => values.delete(key),
+        },
+        SillyTavern: { getContext: () => testContext },
+        document: { addEventListener() {}, getElementById: () => null },
+        window: {
+            YuzukiMemory: { GlobalSettings: { get: (key, fallback) => key === 'yzm_memory_global_plugin_settings' ? { fillMode: 'realtime' } : fallback } },
+            setTimeout: () => 1, clearTimeout() {}, setInterval: () => 1, clearInterval() {},
+            addEventListener() {}, dispatchEvent() {},
+        },
+    };
+    vm.createContext(sandbox);
+    for (const module of ['storage', 'plot-summary', 'memory-tag-parser', 'branch-snapshot', 'floor-ledger']) {
+        vm.runInContext(fs.readFileSync(new URL(`../config/${module}.js`, import.meta.url), 'utf8'), sandbox);
+    }
+    const { Storage: storage, MemoryTagParser: parser, FloorLedger: ledger, BranchSnapshot: snapshots } = sandbox.window.YuzukiMemory;
+    const fallback = parser.createDefaultState();
+    storage.saveState(fallback, fallback, undefined, { force: true });
+    parser.applyMemoryText(testChat[897].mes, { floor: 897, dispatch: false });
+    let state = storage.loadState(fallback);
+    state.records.plot_summary = [];
+    storage.saveState(state, fallback, undefined, { force: true, saveOrigin: 'manual' });
+    state = storage.loadState(fallback);
+    const replay = parser.preparePlotReplay(state, '850-900');
+    assert.equal(replay.added, 50);
+    assert.equal(replay.foundFloors, 25);
+    state.records.plot_summary = replay.records;
+    storage.saveState(state, fallback, undefined, { force: true, saveOrigin: 'manual' });
+    snapshots.markManualEdit();
+    snapshots.captureCurrentStateSnapshot(state);
+    ledger.reconcileNow({ force: true });
+    const loaded = storage.loadState(fallback);
+    for (const [kind, field] of [['main', '主线'], ['branch', '支线']]) {
+        assert.equal(loaded.records.plot_summary[0].values[field].split('\n').length, 25);
+        assert.equal(loaded.records.plot_summary[0].plotItemMeta[kind][0].sourceRange.start, 851);
+    }
+    assert.equal(testChat[851].is_system, true, 'replay must not unhide source floors');
 });
 
 test('alias matcher normalizes full-width separators for newly stored primary keys', () => {

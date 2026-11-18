@@ -15991,7 +15991,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化剧情摘要：「条目整理」中新增「重放」按钮，可按楼层范围（如 0-50）将实时填表模式下正文中已有的剧情摘要重新加入表格，并保留来源楼层号。缺失楼层自动跳过，重复摘要会提示并跳过，方便恢复此前清理的摘要。',
+            '优化剧情摘要：「条目整理」中新增「重放」按钮，可按楼层范围（如 0-50）将实时填表模式下正文中已有的剧情摘要重新加入表格，同时恢复主线和支线，包含已隐藏楼层，并保留来源楼层号。缺失楼层自动跳过，重复摘要会提示并跳过，方便恢复此前清理的摘要。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
@@ -16844,14 +16844,14 @@
             updateHint();
         };
         replayButton.onclick = () => {
-            const input = window.prompt(`重放${getPlotSummaryLabel(activePlotSummaryKind)}：请输入楼层范围（含首尾），例如 0-50。缺失楼层自动跳过。`, '0-50');
+            const input = window.prompt('重放剧情摘要（主线和支线）：请输入楼层范围（含首尾），例如 0-50。缺失楼层自动跳过。', '0-50');
             if (input === null) return;
             try {
                 const storage = getStorage();
                 if (storage?.isSessionSwitching?.() || storage?.getCurrentSessionId?.() !== loadedSessionId) {
                     throw new Error('聊天正在切换，请稍后重新打开整理窗口。');
                 }
-                const result = YuzukiMemory.MemoryTagParser.preparePlotReplay(getState(), input, activePlotSummaryKind);
+                const result = YuzukiMemory.MemoryTagParser.preparePlotReplay(getState(), input);
                 if (!result.added) {
                     window.alert(result.overlaps ? `发现 ${result.overlaps} 条重叠摘要，已全部跳过。` : '指定范围内没有可重放的剧情摘要。');
                     return;
@@ -16860,7 +16860,7 @@
                 getState().records[table.id] = result.records;
                 if (refreshAfterRecordOrganizerChange(root, table)) {
                     rerenderOrganizer();
-                    window.alert(`已从 ${result.foundFloors} 个楼层重放 ${result.added} 条摘要，保留来源楼层号。${result.overlaps ? `已跳过 ${result.overlaps} 条重叠摘要。` : ''}`);
+                    window.alert(`已从 ${result.foundFloors} 个楼层重放主线 ${result.addedByKind.main} 条、支线 ${result.addedByKind.branch} 条，保留来源楼层号。${result.overlaps ? `已跳过 ${result.overlaps} 条重叠摘要。` : ''}`);
                 }
             } catch (error) {
                 window.alert(String(error?.message || error));

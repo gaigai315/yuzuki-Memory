@@ -876,7 +876,7 @@
 
     // Explicit recovery uses the same parser and provenance as realtime writes.
     // Build a draft so previewing overlaps never mutates the current chat.
-    function preparePlotReplay(state, input, kind = 'main', chat = getContext()?.chat) {
+    function preparePlotReplay(state, input, kind = 'all', chat = getContext()?.chat) {
         const match = String(input ?? '').trim().match(/^(\d+)\s*(?:[-－—~～至]\s*(\d+))?\s*楼?$/);
         if (!match) throw new Error('请输入楼层范围，例如 0-50，或单个楼层号。');
         const start = Number(match[1]);
@@ -887,53 +887,61 @@
         const table = state?.tables?.find((entry) => entry.id === PLOT_SUMMARY_TABLE_ID);
         if (!table || table.hidden) throw new Error('请先启用剧情摘要表。');
         if (!Array.isArray(chat) || !chat.length) throw new Error('当前聊天没有可读取的楼层。');
-        const key = kind === 'branch' ? 'branch' : 'main';
-        const field = key === 'branch' ? '支线' : '主线';
+        const kinds = kind === 'all' ? ['main', 'branch'] : [kind === 'branch' ? 'branch' : 'main'];
         const draft = JSON.parse(JSON.stringify(state));
         const floorScope = YuzukiMemory.Storage?.getCurrentFloorScope?.() || null;
         let added = 0;
         let overlaps = 0;
         let foundFloors = 0;
+        const addedByKind = { main: 0, branch: 0 };
         for (let floor = start; floor <= Math.min(end, chat.length - 1); floor += 1) {
             const message = chat[floor];
             const role = String(message?.role || '').toLowerCase();
-            if (!message || message.is_system || message.is_user === true
+            // SillyTavern also uses is_system for hidden dialogue floors.
+            // Explicit replay includes those floors, while excluding actual system data.
+            if (!message || role === 'system' || message.is_user === true
+                || message.isGaigaiPrompt || message.isGaigaiData || message.isGaigaiVector || message.isYuzukiVector
                 || !(message.is_user === false || ['assistant', 'model', 'ai'].includes(role))) continue;
             const text = getMessageText(message);
             const rows = extractMemoryRows(text).filter((row) => findTable(state, row.table)?.id === PLOT_SUMMARY_TABLE_ID);
             const scratch = { ...draft, records: { [PLOT_SUMMARY_TABLE_ID]: [] } };
             applyRowsToState(scratch, rows, { source: 'realtime', floor, range: { start: floor, end: floor + 1 }, floorScope });
             const recovered = scratch.records[PLOT_SUMMARY_TABLE_ID][0];
-            const lines = String(recovered?.values?.[field] || '').split(/\n+/).filter(Boolean);
-            if (!lines.length) continue;
+            if (!kinds.some((key) => String(recovered?.values?.[key === 'branch' ? '支线' : '主线'] || '').trim())) continue;
             foundFloors += 1;
-            draft.records[PLOT_SUMMARY_TABLE_ID] ||= [];
-            if (!draft.records[PLOT_SUMMARY_TABLE_ID][0]) {
-                const empty = createRecord(table, {});
-                draft.records[PLOT_SUMMARY_TABLE_ID].push(empty);
-            }
-            const target = draft.records[PLOT_SUMMARY_TABLE_ID][0];
-            lines.forEach((line, index) => {
-                const previous = String(target.values?.[field] || '').split(/\n+/).filter(Boolean);
-                if (previous.some((entry) => normalizePlotLineText(entry) === normalizePlotLineText(line))) {
-                    overlaps += 1;
-                    return;
+            kinds.forEach((key) => {
+                const field = key === 'branch' ? '支线' : '主线';
+                const lines = String(recovered?.values?.[field] || '').split(/\n+/).filter(Boolean);
+                if (!lines.length) return;
+                draft.records[PLOT_SUMMARY_TABLE_ID] ||= [];
+                if (!draft.records[PLOT_SUMMARY_TABLE_ID][0]) {
+                    const empty = createRecord(table, {});
+                    draft.records[PLOT_SUMMARY_TABLE_ID].push(empty);
                 }
-                target.values ||= {};
-                const next = [...previous, line];
-                target.values[field] = next.join('\n');
-                syncPlotItemMetadata(target, key, previous, next, {
-                    source: 'realtime', range: { start: floor, end: floor + 1 }, floorScope,
+                const target = draft.records[PLOT_SUMMARY_TABLE_ID][0];
+                lines.forEach((line, index) => {
+                    const previous = String(target.values?.[field] || '').split(/\n+/).filter(Boolean);
+                    if (previous.some((entry) => normalizePlotLineText(entry) === normalizePlotLineText(line))) {
+                        overlaps += 1;
+                        return;
+                    }
+                    target.values ||= {};
+                    const next = [...previous, line];
+                    target.values[field] = next.join('\n');
+                    syncPlotItemMetadata(target, key, previous, next, {
+                        source: 'realtime', range: { start: floor, end: floor + 1 }, floorScope,
+                    });
+                    target.plotItemMeta[key][next.length - 1].manualReplay = true;
+                    const identity = { ...recovered.plotItemMeta?.[key]?.[index], kind: key, text: line.replace(/\s+/g, ' ').trim() };
+                    target.deletedPlotItemIdentities = (target.deletedPlotItemIdentities || []).filter((deleted) => (
+                        !YuzukiMemory.BranchSnapshot?.isDeletedPlotItem?.(identity, [deleted], { allowRealtimeProvenanceFallback: true })
+                    ));
+                    added += 1;
+                    addedByKind[key] += 1;
                 });
-                target.plotItemMeta[key][next.length - 1].manualReplay = true;
-                const identity = { ...recovered.plotItemMeta?.[key]?.[index], kind: key, text: line.replace(/\s+/g, ' ').trim() };
-                target.deletedPlotItemIdentities = (target.deletedPlotItemIdentities || []).filter((deleted) => (
-                    !YuzukiMemory.BranchSnapshot?.isDeletedPlotItem?.(identity, [deleted], { allowRealtimeProvenanceFallback: true })
-                ));
-                added += 1;
             });
         }
-        return { records: draft.records[PLOT_SUMMARY_TABLE_ID] || [], added, overlaps, foundFloors, start, end };
+        return { records: draft.records[PLOT_SUMMARY_TABLE_ID] || [], added, addedByKind, overlaps, foundFloors, start, end };
     }
 
     function getRecordCounts(state) {
