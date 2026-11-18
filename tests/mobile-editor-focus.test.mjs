@@ -745,9 +745,9 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.2.3', () => {
-    assert.equal(manifest.version, '1.2.3');
-    assert.match(indexSource, /const VERSION = '1\.2\.3';/);
+test('release metadata and update notice describe version 1.2.2', () => {
+    assert.equal(manifest.version, '1.2.2');
+    assert.match(indexSource, /const VERSION = '1\.2\.2';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
     assert.match(noticeSource, /优化剧情摘要：「条目整理」中新增「重放」按钮/);
