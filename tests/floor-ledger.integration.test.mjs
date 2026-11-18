@@ -168,6 +168,34 @@ function seedRecord(state, tableId, values) {
     return record;
 }
 
+test('manual replay of floors 850-900 survives reconciliation with only the latest floor in the ledger', () => {
+    const parser = window.YuzukiMemory.MemoryTagParser;
+    const ledger = window.YuzukiMemory.FloorLedger;
+    storedState = parser.createDefaultState();
+    chat = Array.from({ length: 901 }, (_, floor) => floor >= 850 && floor % 2 === 0
+        ? assistantMemoryMessage(`#主线摘要\n[2026年9月22日,18:00-19:30] | 内容: 第${floor}楼的独立事件。`)
+        : userMessage('继续'));
+    assert.equal(parser.applyMemoryText(chat[900].mes, { floor: 900, dispatch: false }).success, true);
+    storedState.records.plot_summary = [];
+    const replay = parser.preparePlotReplay(storedState, '850-900', 'main', chat);
+    assert.equal(replay.added, 26);
+    storedState.records.plot_summary = clone(replay.records);
+    ledger.reconcileNow({ reason: 'manual-replay', force: true });
+    assert.equal(storedState.records.plot_summary[0].values.主线.split('\n').length, 26);
+    ledger.reconcileNow({ reason: 'chat_changed', force: true });
+    assert.equal(storedState.records.plot_summary[0].values.主线.split('\n').length, 26);
+    ledger.rebaseState(storedState, { reason: 'manual-rebase' });
+    storedState.tables.find((table) => table.id === 'plot_summary').hidden = true;
+    ledger.reconcileNow({ reason: 'table_hidden', force: true });
+    assert.equal(storedState.records.plot_summary[0].values.主线.split('\n').length, 26);
+    chat[850].mes = assistantMemoryMessage('#主线摘要\n[2026年9月22日,18:00-19:30] | 内容: 已修改的事件。').mes;
+    ledger.reconcileNow({ reason: 'message_edited', force: true });
+    assert.doesNotMatch(storedState.records.plot_summary[0].values.主线, /第850楼的独立事件/);
+    chat.splice(852);
+    ledger.reconcileNow({ reason: 'message_deleted', pruneRemoved: true, force: true });
+    assert.equal(storedState.records.plot_summary?.[0]?.values?.主线 || '', '');
+});
+
 test('alias matcher normalizes full-width separators for newly stored primary keys', () => {
     const matcher = window.YuzukiMemory.CharacterNameMatcher;
     const aliasMatch = { values: { 设定名: '苍穹议会|天空议会' } };

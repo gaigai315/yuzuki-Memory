@@ -899,7 +899,7 @@
             const role = String(message?.role || '').toLowerCase();
             if (!message || message.is_system || message.is_user === true
                 || !(message.is_user === false || ['assistant', 'model', 'ai'].includes(role))) continue;
-            const text = message.mes ?? message.content ?? message.text ?? '';
+            const text = getMessageText(message);
             const rows = extractMemoryRows(text).filter((row) => findTable(state, row.table)?.id === PLOT_SUMMARY_TABLE_ID);
             const scratch = { ...draft, records: { [PLOT_SUMMARY_TABLE_ID]: [] } };
             applyRowsToState(scratch, rows, { source: 'realtime', floor, range: { start: floor, end: floor + 1 }, floorScope });
@@ -925,6 +925,7 @@
                 syncPlotItemMetadata(target, key, previous, next, {
                     source: 'realtime', range: { start: floor, end: floor + 1 }, floorScope,
                 });
+                target.plotItemMeta[key][next.length - 1].manualReplay = true;
                 const identity = { ...recovered.plotItemMeta?.[key]?.[index], kind: key, text: line.replace(/\s+/g, ' ').trim() };
                 target.deletedPlotItemIdentities = (target.deletedPlotItemIdentities || []).filter((deleted) => (
                     !YuzukiMemory.BranchSnapshot?.isDeletedPlotItem?.(identity, [deleted], { allowRealtimeProvenanceFallback: true })

@@ -1494,6 +1494,42 @@
         return migrated;
     }
 
+    function collectManualReplayPlotAllowance(state, table) {
+        const allowance = createPlotAllowance();
+        const chat = getChat();
+        const byFloor = new Map();
+        getPlotItems(state.records, table).forEach((item) => {
+            if (item.meta?.source !== 'realtime' || item.meta?.manualReplay !== true) return;
+            const floor = Number(item.meta.sourceRange?.start);
+            if (!Number.isInteger(floor) || floor < 0 || Number(item.meta.sourceRange?.end) !== floor + 1) return;
+            if (!byFloor.has(floor)) byFloor.set(floor, []);
+            byFloor.get(floor).push(item);
+        });
+        byFloor.forEach((items, floor) => {
+            // Historical messages may predate the ledger or a manual clear.
+            // Validate explicit recovery against the current branch's source text.
+            const scratch = { tables: [{ ...table, hidden: false }], records: { [PLOT_TABLE_ID]: [] } };
+            try {
+                const recovered = YuzukiMemory.MemoryTagParser?.preparePlotReplay?.(scratch, String(floor), 'main', chat);
+                const branch = YuzukiMemory.MemoryTagParser?.preparePlotReplay?.(scratch, String(floor), 'branch', chat);
+                const candidates = [
+                    ...getPlotItems({ [PLOT_TABLE_ID]: recovered?.records || [] }, table),
+                    ...getPlotItems({ [PLOT_TABLE_ID]: branch?.records || [] }, table),
+                ];
+                const current = new Set(candidates.map((item) => getPlotProvenance(item.kind, item.line, item.meta).exactKey));
+                items.forEach((item) => {
+                    if (current.has(getPlotProvenance(item.kind, item.line, item.meta).exactKey)) {
+                        addPlotAllowanceItem(allowance, item);
+                        addActivePlotRangeScope(allowance, item);
+                    }
+                });
+            } catch (_error) {
+                // Unavailable source messages grant no allowance.
+            }
+        });
+        return allowance;
+    }
+
     function collectActivePlotAllowance(state, ledger, references, table) {
         const emptyBaseline = createEmptyManagedRecords(state);
         const canonicalRecords = replayEntries(state, ledger, references, emptyBaseline);
@@ -1811,9 +1847,13 @@
         const plotTable = (Array.isArray(state.tables) ? state.tables : [])
             .find((table) => table?.id === PLOT_TABLE_ID);
         const activePlotAllowance = plotTable
-            ? collectActivePlotAllowance(state, ledger, nextEntries, plotTable)
+            ? mergePlotAllowancesMax(
+                collectActivePlotAllowance(state, ledger, nextEntries, plotTable),
+                collectManualReplayPlotAllowance(state, plotTable),
+            )
             : createPlotAllowance();
-        const baselinePlotReconcile = plotTable && Object.keys(ledger.entries || {}).length
+        const baselinePlotReconcile = plotTable && (Object.keys(ledger.entries || {}).length
+            || getPlotItems(ledger.baselineRecords, plotTable).some((item) => item.meta?.manualReplay === true))
             ? pruneOrphanedRealtimePlotItems(
                 ledger.baselineRecords,
                 activePlotAllowance,
