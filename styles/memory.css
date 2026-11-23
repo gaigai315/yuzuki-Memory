@@ -49,7 +49,7 @@
     --yzm-desktop-sidebar-width: 180px;
     --yzm-desktop-primary-width: 168px;
     --yzm-mobile-sidebar-width: 118px;
-    --yzm-mobile-primary-width: 132px;
+    --yzm-mobile-primary-width: 96px;
 }
 
 #yzm-memory-global-modal-root {
@@ -10930,6 +10930,15 @@
         grid-template-columns: 28px minmax(0, 1fr);
     }
 
+    /* 角色列表用纵向卡片，将横向空间留给右侧资料。 */
+    #yzm-memory-root .yzm-shell:not(.yzm-primary-icon-mode) .yzm-primary-character-item:has(.yzm-primary-character-info) {
+        grid-template-columns: minmax(0, 1fr);
+        justify-items: center;
+        gap: 4px;
+        min-height: 76px;
+        padding: 6px 4px;
+    }
+
     #yzm-memory-root .yzm-primary-item-card {
         grid-template-columns: 28px minmax(0, 1fr);
     }
@@ -11073,6 +11082,8 @@
         min-height: 330px;
         max-height: none;
         overflow: hidden;
+        /* 移动端由 table-frame 滚动，卡片自身不拦截向外传递的滑动。 */
+        overscroll-behavior: auto;
     }
 
     #yzm-memory-root .yzm-character-card-title,
@@ -11099,14 +11110,17 @@
     }
 
     #yzm-memory-root .yzm-character-field {
-        grid-template-columns: minmax(80px, 0.48fr) minmax(0, 1fr);
-        gap: 8px;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+        gap: 4px;
+        padding: 8px 0;
     }
 
     #yzm-memory-root .yzm-character-side {
         max-height: none;
         height: auto;
         overflow: visible;
+        overscroll-behavior: auto;
         padding-right: 0;
     }
 
@@ -11194,9 +11208,11 @@
 
     #yzm-memory-root .yzm-item-detail-row,
     #yzm-memory-root .yzm-world-detail-row {
-        grid-template-columns: minmax(92px, 0.42fr) minmax(90px, 1fr);
-        gap: 8px;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+        gap: 4px;
         min-height: 48px;
+        padding: 9px 0;
     }
 
     #yzm-memory-root .yzm-world-detail-row {
@@ -11221,7 +11237,8 @@
 
     #yzm-memory-root .yzm-item-detail-value,
     #yzm-memory-root .yzm-world-detail-value {
-        padding-left: 8px;
+        padding-left: 0;
+        border-left: 0;
         font-size: 12px;
     }
 
@@ -11239,15 +11256,18 @@
     }
 
     #yzm-memory-root .yzm-generic-table-field-row {
-        grid-template-columns: minmax(88px, 0.44fr) minmax(0, 1fr);
-        gap: 7px;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: start;
+        gap: 4px;
         min-height: 36px;
-        padding: 0 8px;
+        padding: 8px;
     }
 
     #yzm-memory-root .yzm-generic-table-field-label,
     #yzm-memory-root .yzm-generic-table-field-value {
         font-size: 12px;
+        white-space: normal;
+        overflow-wrap: anywhere;
     }
 
     #yzm-memory-root .yzm-generic-table-field-label {

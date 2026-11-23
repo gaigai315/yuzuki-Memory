@@ -59,7 +59,7 @@
         },
         mobile: {
             sidebar: { value: 118, min: 58, max: 176 },
-            primary: { value: 132, min: 58, max: 210 },
+            primary: { value: 96, min: 58, max: 210 },
         },
     };
     const LAYOUT_ICON_MODE_AT = {
@@ -15991,7 +15991,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '优化剧情摘要：「条目整理」中新增「重放」按钮，可按楼层范围（如 0-50）将实时填表模式下正文中已有的剧情摘要重新加入表格，同时恢复主线和支线，包含已隐藏楼层，并保留来源楼层号。缺失楼层自动跳过，重复摘要会提示并跳过，方便恢复此前清理的摘要。',
+            '优化移动端css',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
