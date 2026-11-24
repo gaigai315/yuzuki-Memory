@@ -194,7 +194,13 @@
         return shouldHide;
     }
 
-    async function saveChat(context) {
+    async function saveChat(context, target = YuzukiMemory.Storage?.captureChatSaveTarget?.(context)) {
+        const storage = YuzukiMemory.Storage;
+        if (storage?.captureChatSaveTarget && storage?.saveChatForTarget) {
+            const saved = await storage.saveChatForTarget(target);
+            if (!saved) throw new Error('当前聊天正在切换或保存目标已变化，已跳过楼层保存。');
+            return;
+        }
         if (typeof context?.saveChat === 'function') {
             await context.saveChat();
             return;
@@ -216,6 +222,7 @@
     }
 
     async function ensureFirstFloorVisible(options = {}) {
+        if (YuzukiMemory.Storage?.isSessionSwitching?.()) return { success: false, skipped: true, reason: 'session_switching' };
         const context = options.context || getContext();
         const chat = options.chat || context?.chat;
         const firstMessage = Array.isArray(chat) ? chat[0] : null;
@@ -259,6 +266,11 @@
     async function hideIndices(chat, indices, label, options = {}) {
         if (!indices.length) return { success: true, count: 0, indices: [] };
         const context = options.context || getContext();
+        const target = options.saveTarget || YuzukiMemory.Storage?.captureChatSaveTarget?.(context);
+        if (YuzukiMemory.Storage?.isSessionSwitching?.()
+            || (target && !YuzukiMemory.Storage.isChatSaveTargetCurrent(target))) {
+            return { success: false, skipped: true, reason: 'session_changed' };
+        }
         let count = 0;
         indices.forEach((index) => {
             if (!chat[index]) return;
@@ -267,12 +279,13 @@
             updateMessageDom(index);
             count += 1;
         });
-        await saveChat(context);
+        await saveChat(context, target);
         console.log(`[yuzuki-Memory] ${label}：隐藏 ${count} 条。`);
         return { success: true, count, indices: [...indices] };
     }
 
     async function applyContextLimitHiding(options = {}) {
+        if (YuzukiMemory.Storage?.isSessionSwitching?.()) return { success: false, skipped: true, reason: 'session_switching' };
         if (running) return { success: false, skipped: true, reason: 'running' };
         const settings = loadSettings();
         if (!options.force && !settings.hideFloorsEnabled) return { success: false, skipped: true, reason: 'disabled' };
@@ -281,6 +294,7 @@
         const context = getContext();
         const chat = context?.chat;
         if (!Array.isArray(chat) || !chat.length) return { success: false, skipped: true, reason: 'no_chat' };
+        const saveTarget = YuzukiMemory.Storage?.captureChatSaveTarget?.(context);
 
         const keepFirstFloorVisible = options.keepFirstFloorVisible ?? settings.keepFirstFloorVisible;
         if (keepFirstFloorVisible) await ensureFirstFloorVisible({ context, chat });
@@ -289,7 +303,7 @@
 
         running = true;
         try {
-            const result = await hideIndices(chat, indices, `隐藏楼层完成，保留 ${keepFloors} 层`);
+            const result = await hideIndices(chat, indices, `隐藏楼层完成，保留 ${keepFloors} 层`, { context, saveTarget });
             return result;
         } catch (error) {
             console.warn('[yuzuki-Memory] 隐藏楼层失败。', error);
@@ -300,6 +314,7 @@
     }
 
     async function applySummaryPointerHiding(options = {}) {
+        if (YuzukiMemory.Storage?.isSessionSwitching?.()) return { success: false, skipped: true, reason: 'session_switching' };
         if (running) return { success: false, skipped: true, reason: 'running' };
         const settings = loadAutoSummarySettings();
         if (!options.force && !settings.hideSummaryFloors) return { success: false, skipped: true, reason: 'disabled' };
@@ -307,6 +322,7 @@
         const context = getContext();
         const chat = context?.chat;
         if (!Array.isArray(chat) || !chat.length) return { success: false, skipped: true, reason: 'no_chat' };
+        const saveTarget = YuzukiMemory.Storage?.captureChatSaveTarget?.(context);
 
         const pluginSettings = loadSettings();
         const keepFirstFloorVisible = options.keepFirstFloorVisible ?? pluginSettings.keepFirstFloorVisible;
@@ -342,7 +358,7 @@
 
         running = true;
         try {
-            return await hideIndices(chat, indices, `总结后隐藏完成，指针 ${summaryPointer}`);
+            return await hideIndices(chat, indices, `总结后隐藏完成，指针 ${summaryPointer}`, { context, saveTarget });
         } catch (error) {
             console.warn('[yuzuki-Memory] 总结后隐藏失败。', error);
             return { success: false, error: String(error?.message || error || '总结后隐藏失败') };

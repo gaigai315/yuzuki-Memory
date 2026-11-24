@@ -654,8 +654,22 @@
 
     function scheduleChatSave() {
         window.clearTimeout(chatSaveTimer);
+        const storage = YuzukiMemory.Storage;
+        if (storage?.isSessionSwitching?.()) return;
+        const target = storage?.captureChatSaveTarget?.();
+        const originalChat = getChat();
+        const originalFirstMessage = originalChat[0];
+        const originalLength = originalChat.length;
         chatSaveTimer = window.setTimeout(() => {
             chatSaveTimer = null;
+            if (storage?.isSessionSwitching?.()) return;
+            if (target && storage?.saveChatForTarget) {
+                void storage.saveChatForTarget(target);
+                return;
+            }
+            // Compatibility for hosts without the Storage save bridge.
+            if (getChat() !== originalChat || originalChat[0] !== originalFirstMessage
+                || originalChat.length < originalLength) return;
             const context = getContext();
             try {
                 if (typeof context?.saveChat === 'function') {
@@ -2108,6 +2122,8 @@
         });
         bindEvents([eventTypes.MESSAGE_SWIPED, 'message_swiped'], () => scheduleReconcile('message_swiped', 650));
         bindEvents([eventTypes.CHAT_CHANGED, 'chat_changed'], () => {
+            window.clearTimeout(chatSaveTimer);
+            chatSaveTimer = null;
             scheduleReconcile('chat_changed', 550, { pruneRemoved: true });
             window.setTimeout(bindChatMutationObserver, 0);
         });

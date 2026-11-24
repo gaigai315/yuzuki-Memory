@@ -13,6 +13,9 @@
     let pollTimer = null;
     let sessionSwitching = false;
     let chatSaveTimer = null;
+    let pendingMetadataSave = null;
+    let chatSaveRevision = 0;
+    let chatSaveEventSource = null;
     const quotaBlockedSessions = new Set();
 
     function getContext() {
@@ -380,47 +383,98 @@
         }
     }
 
-    function saveChatMetadataNow(context = getContext()) {
-        try {
-            if (typeof context?.saveChat === 'function') {
-                Promise.resolve(context.saveChat()).catch((error) => {
-                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
-                });
-                return;
-            }
-            if (typeof window.saveChatConditional === 'function') {
-                Promise.resolve(window.saveChatConditional()).catch((error) => {
-                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
-                });
-                return;
-            }
-            if (typeof window.saveChat === 'function') {
-                Promise.resolve(window.saveChat()).catch((error) => {
-                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
-                });
-                return;
-            }
-            if (typeof context?.saveMetadata === 'function') {
-                Promise.resolve(context.saveMetadata()).catch((error) => {
-                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
-                });
-            } else if (typeof window.saveMetadataDebounced === 'function') {
-                Promise.resolve(window.saveMetadataDebounced()).catch((error) => {
-                    console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
-                });
-            }
-        } catch (error) {
-            console.warn('[yuzuki-Memory] Failed to save chat metadata.', error);
-        }
+    function cancelPendingChatSave() {
+        window.clearTimeout(chatSaveTimer);
+        chatSaveTimer = null;
+        pendingMetadataSave = null;
+        chatSaveRevision += 1;
     }
 
-    function scheduleChatSave(context = getContext(), immediate = false) {
+    function bindChatSaveGuard() {
+        const context = getContext();
+        const source = context?.eventSource || window.eventSource;
+        const types = context?.eventTypes || context?.event_types || window.event_types;
+        if (!source?.on || source === chatSaveEventSource) return;
+        chatSaveEventSource = source;
+        source.on(types?.CHAT_CHANGED || 'chat_changed', cancelPendingChatSave);
+    }
+
+    function captureChatSaveTarget(context = getContext()) {
+        bindChatSaveGuard();
+        return {
+            revision: chatSaveRevision,
+            sessionId: getSessionAliases(getCurrentSessionParts(context))[0] || null,
+            chatId: context?.chatId,
+            characterId: context?.characterId,
+            groupId: context?.groupId,
+            chat: context?.chat,
+            firstMessage: context?.chat?.[0],
+            messageCount: context?.chat?.length || 0,
+            metadata: getChatMetadataSources(context),
+        };
+    }
+
+    function isChatSaveTargetCurrent(target, context = getContext()) {
+        if (!target?.sessionId || target.revision !== chatSaveRevision) return false;
+        return target.sessionId === (getSessionAliases(getCurrentSessionParts(context))[0] || null)
+            && target.chatId === context?.chatId
+            && target.characterId === context?.characterId
+            && target.groupId === context?.groupId
+            && target.chat === context?.chat
+            && target.firstMessage === context?.chat?.[0]
+            && target.messageCount <= (context?.chat?.length || 0)
+            && target.metadata.every((metadata) => getChatMetadataSources(context).includes(metadata));
+    }
+
+    async function saveChatForTarget(target, options = {}) {
+        const context = getContext();
+        if (sessionSwitching || !isChatSaveTargetCurrent(target, context)
+            || (activeSessionId && target.sessionId !== activeSessionId)) return false;
+        try {
+            // Metadata changes must not choose a full-chat save when a metadata API exists.
+            if (options.metadataOnly && typeof context?.saveMetadata === 'function') {
+                await context.saveMetadata();
+                return true;
+            }
+            // Loading/migrating plugin state must never rewrite the chat body. On hosts
+            // without a metadata API, native saves persist the in-memory metadata later.
+            if (options.allowFullChat === false) return false;
+            if (typeof context?.saveChat === 'function') {
+                await context.saveChat();
+                return true;
+            }
+            if (typeof window.saveChatConditional === 'function') {
+                await window.saveChatConditional();
+                return true;
+            }
+            if (typeof window.saveChat === 'function') {
+                await window.saveChat();
+                return true;
+            }
+        } catch (error) {
+            console.warn('[yuzuki-Memory] Failed to save guarded chat changes.', error);
+        }
+        return false;
+    }
+
+    function scheduleChatSave(context = getContext(), immediate = false, allowFullChat = true) {
         window.clearTimeout(chatSaveTimer);
+        const target = captureChatSaveTarget(context);
+        allowFullChat = allowFullChat && !sessionSwitching;
+        target.allowFullChat = allowFullChat;
+        pendingMetadataSave = target;
+        // Migrations may update local state during a switch, but must wait for readiness to save.
+        if (sessionSwitching) return;
         if (immediate) {
-            saveChatMetadataNow(context);
+            pendingMetadataSave = null;
+            void saveChatForTarget(target, { metadataOnly: true, allowFullChat });
             return;
         }
-        chatSaveTimer = window.setTimeout(() => saveChatMetadataNow(context), CHAT_SAVE_DEBOUNCE_MS);
+        chatSaveTimer = window.setTimeout(() => {
+            chatSaveTimer = null;
+            pendingMetadataSave = null;
+            void saveChatForTarget(target, { metadataOnly: true, allowFullChat });
+        }, CHAT_SAVE_DEBOUNCE_MS);
     }
 
     function writeChatMetadataState(state, options = {}) {
@@ -430,7 +484,7 @@
         metadataTargets.forEach((metadata) => {
             metadata[CHAT_METADATA_KEY] = state;
         });
-        scheduleChatSave(context, !!options.immediate);
+        scheduleChatSave(context, !!options.immediate, options.allowFullChat !== false);
         return true;
     }
 
@@ -1439,6 +1493,7 @@
             if (metadataNeedsMigration) {
                 saveState(normalized, fallbackState, sessionId, {
                     force: true,
+                    fromLoad: true,
                     saveOrigin: 'migration',
                     immediate: true,
                     allowDuringSwitch: true,
@@ -1446,6 +1501,7 @@
             } else if (recoveredWorldbook.recovered || recoveredStoryDirector.recovered) {
                 saveState(normalized, fallbackState, sessionId, {
                     force: true,
+                    fromLoad: true,
                     saveOrigin: recoveredWorldbook.recovered && recoveredStoryDirector.recovered
                         ? 'session-setting-recovery'
                         : (recoveredStoryDirector.recovered ? 'story-director-setting-recovery' : 'worldbook-selection-recovery'),
@@ -1455,6 +1511,7 @@
             } else if (branchParentState) {
                 saveState(normalized, fallbackState, sessionId, {
                     force: true,
+                    fromLoad: true,
                     saveOrigin: 'branch-inheritance',
                     immediate: true,
                     allowDuringSwitch: true,
@@ -1462,6 +1519,7 @@
             } else if (storyDirectorEnabledNeedsMigration || storyDirectorLedgerNeedsMigration) {
                 saveState(normalized, fallbackState, sessionId, {
                     force: true,
+                    fromLoad: true,
                     saveOrigin: storyDirectorEnabledNeedsMigration && storyDirectorLedgerNeedsMigration
                         ? 'story-director-migration'
                         : (storyDirectorLedgerNeedsMigration
@@ -1473,12 +1531,13 @@
             } else if (!compatibleMetadata && sourceState && sessionId === getCurrentSessionId()) {
                 saveState(normalized, fallbackState, sessionId, {
                     force: true,
+                    fromLoad: true,
                     saveOrigin: 'migration',
                     immediate: true,
                     allowDuringSwitch: true,
                 });
             } else if (sourceState && sourceState.sessionId && sourceState.sessionId !== sessionId) {
-                saveState(normalized, fallbackState, sessionId, { force: true, saveOrigin: 'migration' });
+                saveState(normalized, fallbackState, sessionId, { force: true, fromLoad: true, saveOrigin: 'migration' });
             }
             return normalized;
         } catch (error) {
@@ -1533,7 +1592,10 @@
             }
 
             const metadataSaved = sessionId === getCurrentSessionId()
-                ? writeChatMetadataState(payload, { immediate: options.force || options.immediate })
+                ? writeChatMetadataState(payload, {
+                    immediate: !options.fromLoad && (options.force || options.immediate),
+                    allowFullChat: !options.fromLoad,
+                })
                 : false;
             const localSaved = tryWritePayloadToLocalStorage([getPrimaryStorageKey(sessionId)].filter(Boolean), payload, sessionId);
             return sessionId === getCurrentSessionId() ? (metadataSaved || localSaved) : localSaved;
@@ -1553,18 +1615,23 @@
             if (nextSessionId === activeSessionId) return;
 
             const previousSessionId = activeSessionId;
+            cancelPendingChatSave();
             activeSessionId = nextSessionId;
             sessionSwitching = true;
             callback(nextSessionId, previousSessionId);
         };
 
         activeSessionId = getCurrentSessionId();
+        bindChatSaveGuard();
 
         const context = getContext();
         const eventSource = context?.eventSource || window.eventSource;
         const eventTypes = context?.eventTypes || context?.event_types || window.event_types;
         if (eventSource && eventTypes?.CHAT_CHANGED && typeof eventSource.on === 'function') {
-            eventSource.on(eventTypes.CHAT_CHANGED, () => window.setTimeout(handleChange, 0));
+            eventSource.on(eventTypes.CHAT_CHANGED, () => {
+                if (getCurrentSessionId() !== activeSessionId) sessionSwitching = true;
+                window.setTimeout(handleChange, 0);
+            });
         }
 
         window.clearInterval(pollTimer);
@@ -1573,6 +1640,9 @@
 
     function endSessionSwitch() {
         sessionSwitching = false;
+        const target = pendingMetadataSave;
+        if (target && isChatSaveTargetCurrent(target)) scheduleChatSave(getContext(), false, target.allowFullChat);
+        else pendingMetadataSave = null;
     }
 
     function isSessionSwitching() {
@@ -1581,6 +1651,9 @@
 
     YuzukiMemory.Storage = Object.assign(YuzukiMemory.Storage || {}, {
         getCurrentSessionId,
+        captureChatSaveTarget,
+        isChatSaveTargetCurrent,
+        saveChatForTarget,
         getCurrentSessionAliases,
         getCurrentFloorScope,
         createFloorScope,

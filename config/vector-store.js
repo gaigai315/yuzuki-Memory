@@ -340,7 +340,8 @@
                 delete this.library[bookId];
             }
 
-            this.setActiveBooks(this.getActiveBooks().filter((bookId) => !bookIds.includes(bookId)));
+            // The deletion event may arrive while another chat is loading. Reading active
+            // books already filters removed IDs; do not save an unrelated current chat here.
             if (bookIds.includes(this.selectedBookId)) this.selectedBookId = this.listVisibleBooks()[0]?.id || '';
             const saved = await this.saveLibrary();
             if (typeof window.dispatchEvent === 'function' && typeof CustomEvent === 'function') {
@@ -1461,10 +1462,13 @@
             metadata[ACTIVE_BOOKS_KEY] = [...new Set(Array.isArray(bookIds) ? bookIds : [])]
                 .filter((id) => this.library[id] && this.isBookVisibleInSession(id));
 
-            if (typeof context.saveChat === 'function') {
-                context.saveChat();
+            const storage = YuzukiMemory.Storage;
+            if (storage?.captureChatSaveTarget && storage?.saveChatForTarget) {
+                void storage.saveChatForTarget(storage.captureChatSaveTarget(context), { metadataOnly: true });
             } else if (typeof context.saveMetadata === 'function') {
                 context.saveMetadata();
+            } else if (typeof context.saveChat === 'function') {
+                context.saveChat();
             } else if (typeof window.saveMetadataDebounced === 'function') {
                 window.saveMetadataDebounced();
             } else if (typeof window.saveSettingsDebounced === 'function') {

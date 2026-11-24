@@ -1389,6 +1389,21 @@ test('vector store reads and updates active books from the compatible chat metad
     assert.deepEqual(Array.from(explicit.memory.VectorStore.getActiveBooks()), []);
 });
 
+test('deleted-chat vector cleanup never saves the currently open chat', async () => {
+    const host = await createVectorStoreMetadataSandbox({ yzm_memory_active_vector_books: ['managed-table-book', 'generic-book'] });
+    const store = host.memory.VectorStore;
+    store.getSessionOwnedBookIdsForChat = () => ['managed-table-book'];
+    store.purgeBackendBook = async () => {};
+    store.purgeLocalBook = async () => {};
+    store.saveLibrary = async () => true;
+
+    const result = await store.deleteSessionOwnedBooksForChat('an-already-deleted-chat');
+    assert.equal(result.removed, 1);
+    assert.equal(store.library['managed-table-book'], undefined);
+    assert.deepEqual(Array.from(store.getActiveBooks()), ['generic-book']);
+    assert.equal(host.getSaveChatCalls(), 0);
+});
+
 test('director recalls vectors once and sends only text to both requests and the viewer', async () => {
     const activeBookIds = ['generic-book', 'character-profile-book', 'item-tracking-book', 'world-setting-book'];
     const { memory, chat, requests, vectorCalls, directorCaptures, infoLogs } = createSandbox({
