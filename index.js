@@ -3,14 +3,14 @@
 // SillyTavern memory table plugin entry.
 // Keep this file as the loader/bootstrap only; feature logic belongs in modules.
 // ============================================================================
-import { saveSettings, saveSettingsDebounced } from '../../../../script.js';
+import { isChatSaving, saveSettings, saveSettingsDebounced } from '../../../../script.js';
 import { extension_settings } from '../../../extensions.js';
 
 (function () {
     'use strict';
 
     const NAMESPACE = 'YuzukiMemory';
-    const VERSION = '1.2.3';
+    const VERSION = '1.2.4';
     const baseUrl = new URL('./', import.meta.url).href;
     let resolveReady;
     const readyPromise = new Promise((resolve) => {
@@ -78,6 +78,7 @@ import { extension_settings } from '../../../extensions.js';
             extensionSettings: extension_settings,
             saveSettings,
             saveSettingsDebounced,
+            isChatSaving: () => isChatSaving,
             isPluginEnabled,
             setPluginEnabled,
             reloadPage: () => window.location.reload(),

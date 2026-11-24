@@ -276,7 +276,7 @@ test('hiding and marker tasks started during switching cannot save after a timeo
 
 // Optional integration with an installed SillyTavern checkout. Only native save
 // functions run: requests are captured in memory and no real chat is read or written.
-function installNativeSaves(host) {
+function installNativeSaves(host, options = {}) {
     const nativeSource = fs.readFileSync(`${process.env.SILLYTAVERN_SOURCE_DIR}/public/script.js`, 'utf8').replace(/\r\n/g, '\n');
     const extract = (name) => {
         const start = nativeSource.indexOf(`export async function ${name}(`);
@@ -286,6 +286,11 @@ function installNativeSaves(host) {
         return nativeSource.slice(start, end).replace(/export /g, '');
     };
     const requests = [];
+    const reads = [];
+    let persistedChat = options.persistedChat || structuredClone([
+        { chat_metadata: host.context.chatMetadata }, ...host.context.chat,
+    ]);
+    host.nativeReads = reads;
     const sandbox = host.sandbox;
     for (const [key, get] of Object.entries({
         chat: () => host.context.chat,
@@ -312,7 +317,13 @@ function installNativeSaves(host) {
         saveItemizedPrompts() {},
         getCurrentChatId: () => host.context.chatId,
         fetch: async (url, request) => {
+            if (url === '/api/chats/get' || url === '/api/chats/group/get') {
+                reads.push({ url, body: JSON.parse(request.body) });
+                if (options.read) return options.read();
+                return { ok: true, json: async () => structuredClone(persistedChat) };
+            }
             requests.push({ url, body: JSON.parse(request.body) });
+            persistedChat = structuredClone(requests.at(-1).body.chat);
             return { ok: true };
         },
         toastr: { error: (message) => assert.fail(message) },
@@ -322,6 +333,9 @@ function installNativeSaves(host) {
     vm.runInContext(`${extract('saveChat')}\n${extract('saveMetadata')}`, sandbox);
     host.context.saveMetadata = sandbox.saveMetadata;
     host.context.saveChat = sandbox.saveChatConditional;
+    host.context.getRequestHeaders = sandbox.getRequestHeaders;
+    host.memory.settingsBridge = { isChatSaving: () => sandbox.isChatSaving };
+    sandbox.window.fetch = sandbox.fetch;
     return requests;
 }
 
@@ -414,4 +428,186 @@ test('installed SillyTavern persists hidden floor flags and keeps all message te
     assert.equal(requests.length, 1);
     assert.deepEqual(Array.from(requests[0].body.chat.slice(1), (message) => message.mes), messages);
     assert.ok(requests[0].body.chat.some((message) => message.is_yzm_hidden_floor));
+});
+
+test('freshly captured empty chat cannot initiate a save even without a switch event', async () => {
+    const host = createHost();
+    host.open('A', 0);
+    assert.equal(await host.storage.saveChatForTarget(host.storage.captureChatSaveTarget()), false);
+    host.storage.saveState(fallback(), fallback(), undefined, { force: true });
+    assert.deepEqual(host.saves, []);
+});
+
+test('native chat identity takes precedence over an imported metadata file name', () => {
+    const host = createHost();
+    host.context.chatMetadata.file_name = 'old-backup-file';
+    assert.equal(host.storage.getCurrentSessionId(), 'char:0:A');
+});
+
+test('installed SillyTavern cannot overwrite 427 saved messages with a freshly captured greeting', {
+    skip: !process.env.SILLYTAVERN_SOURCE_DIR,
+}, async () => {
+    const host = createHost();
+    host.open('imported', 427);
+    const requests = installNativeSaves(host);
+    // Capturing after truncation defeated the old task-to-task length comparison.
+    host.context.chat.splice(1);
+    host.storage.saveState(fallback(), fallback(), undefined, { force: true });
+    await settleNativeSave();
+    assert.equal(requests.length, 0);
+    assert.equal(host.nativeReads.length, 1);
+    assert.equal(host.nativeReads[0].body.file_name, 'imported');
+    assert.ok(host.context.chatMetadata.yuzukiMemory);
+});
+
+test('installed SillyTavern reuses verified counts and rechecks when the current chat shrinks', {
+    skip: !process.env.SILLYTAVERN_SOURCE_DIR,
+}, async () => {
+    const host = createHost();
+    const requests = installNativeSaves(host);
+    assert.equal(await host.storage.saveChatForTarget(host.storage.captureChatSaveTarget()), true);
+    assert.equal(await host.storage.saveChatForTarget(host.storage.captureChatSaveTarget()), true);
+    assert.equal(host.nativeReads.length, 1);
+    host.context.chat.pop();
+    assert.equal(await host.storage.saveChatForTarget(host.storage.captureChatSaveTarget()), false);
+    assert.equal(host.nativeReads.length, 2);
+    assert.equal(requests.length, 2);
+});
+
+test('native user deletion remains saveable after SillyTavern persists the shorter chat', {
+    skip: !process.env.SILLYTAVERN_SOURCE_DIR,
+}, async () => {
+    const host = createHost();
+    const requests = installNativeSaves(host);
+    assert.equal(await host.storage.saveChatForTarget(host.storage.captureChatSaveTarget()), true);
+    host.context.chat.pop();
+    await host.context.saveChat();
+    assert.equal(await host.storage.saveChatForTarget(host.storage.captureChatSaveTarget()), true);
+    assert.equal(requests.length, 3);
+    assert.equal(requests.at(-1).body.chat.length, 3);
+});
+
+test('a new chat can still be persisted when the server file is empty', {
+    skip: !process.env.SILLYTAVERN_SOURCE_DIR,
+}, async () => {
+    const host = createHost();
+    host.open('new-chat', 1);
+    const requests = installNativeSaves(host, { persistedChat: [] });
+    assert.equal(await host.storage.saveChatForTarget(host.storage.captureChatSaveTarget()), true);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.chat.length, 2);
+});
+
+test('installed SillyTavern aborts a save when the chat changes during the server check', {
+    skip: !process.env.SILLYTAVERN_SOURCE_DIR,
+}, async () => {
+    const host = createHost();
+    let finishRead;
+    const requests = installNativeSaves(host, {
+        read: () => new Promise((resolve) => { finishRead = resolve; }),
+    });
+    const pending = host.storage.saveChatForTarget(host.storage.captureChatSaveTarget());
+    host.open('B', 1);
+    finishRead({ ok: true, json: async () => [] });
+    assert.equal(await pending, false);
+    assert.equal(requests.length, 0);
+});
+
+test('waiting for a busy native save keeps the original target and cancels on switching', {
+    skip: !process.env.SILLYTAVERN_SOURCE_DIR,
+}, async () => {
+    const host = createHost();
+    const requests = installNativeSaves(host);
+    host.sandbox.isChatSaving = true;
+    const pending = host.storage.saveChatForTarget(host.storage.captureChatSaveTarget());
+    host.open('B', 1);
+    host.sandbox.isChatSaving = false;
+    host.runTimers(100);
+    assert.equal(await pending, false);
+    assert.equal(requests.length, 0);
+    assert.equal(host.nativeReads.length, 0);
+});
+
+test('installed SillyTavern preserves the file when validation fails or returns invalid data', {
+    skip: !process.env.SILLYTAVERN_SOURCE_DIR,
+}, async () => {
+    for (const response of [
+        { ok: false, status: 503 },
+        { ok: true, json: async () => ({ error: true }) },
+    ]) {
+        const host = createHost();
+        const requests = installNativeSaves(host, { read: async () => response });
+        assert.equal(await host.storage.saveChatForTarget(host.storage.captureChatSaveTarget()), false);
+        assert.equal(requests.length, 0);
+    }
+});
+
+test('installed SillyTavern checks group chat files before allowing a shorter save', {
+    skip: !process.env.SILLYTAVERN_SOURCE_DIR,
+}, async () => {
+    const host = createHost();
+    host.open('group-file', 427);
+    host.context.groupId = 'group-1';
+    const requests = installNativeSaves(host);
+    host.context.chat.splice(1);
+    assert.equal(await host.storage.saveChatForTarget(host.storage.captureChatSaveTarget()), false);
+    assert.equal(requests.length, 0);
+    assert.equal(host.nativeReads[0].url, '/api/chats/group/get');
+    assert.equal(host.nativeReads[0].body.id, 'group-file');
+});
+
+function createImportedLedgerFixture() {
+    const owner = createHost();
+    owner.open('original', 427);
+    owner.load('floor-ledger');
+    const state = {
+        tables: [{ id: 'people', columns: ['name'] }],
+        records: { people: [] }, settings: {}, activeRecordIds: {},
+    };
+    for (let floor = 1; floor < 427; floor += 2) {
+        owner.memory.FloorLedger.recordAppliedDelta({
+            state, floor, rows: [{ table: 'people', primaryValue: 'actor', values: { name: 'actor' } }],
+        });
+    }
+    state.records.people = [{ id: 'actor', values: { name: 'actor' } }];
+    const entry = Object.values(state.floorLedger.entries)[0];
+    for (let index = 0; index < 8; index += 1) {
+        const id = `old-swipe-${index}`;
+        state.floorLedger.entries[id] = { ...structuredClone(entry), id, signature: `unreachable-${index}` };
+    }
+    return { state: structuredClone(state), chat: structuredClone(owner.context.chat) };
+}
+
+test('imported ledger with 213 active entries and 221 histories survives a one-greeting load', () => {
+    const fixture = createImportedLedgerFixture();
+    assert.equal(fixture.state.floorLedger.activeEntries.length, 213);
+    assert.equal(Object.keys(fixture.state.floorLedger.entries).length, 221);
+    for (const reason of ['chat_changed', 'session_ready', 'message_rendered', 'chat_monitor_start']) {
+        const host = createHost();
+        host.open('imported', 1);
+        host.context.chatMetadata.yuzukiMemory = structuredClone(fixture.state);
+        host.sandbox.CustomEvent = class { constructor(type, options) { this.type = type; this.detail = options.detail; } };
+        host.sandbox.window.dispatchEvent = () => {};
+        host.load('floor-ledger');
+        const result = host.memory.FloorLedger.reconcileNow({ reason, pruneRemoved: true });
+        assert.equal(result.reason, 'unverified_chat', reason);
+        const kept = host.storage.loadState(fallback());
+        assert.equal(kept.floorLedger.activeEntries.length, 213, reason);
+        assert.equal(Object.keys(kept.floorLedger.entries).length, 221, reason);
+        assert.equal(kept.records.people[0].values.name, 'actor', reason);
+        host.runTimers(500);
+        assert.deepEqual(host.saves, [], reason);
+    }
+});
+
+test('complete imported chat still matches all 213 ledger entries', () => {
+    const fixture = createImportedLedgerFixture();
+    const host = createHost();
+    host.context.chat = fixture.chat;
+    host.context.chatMetadata.yuzukiMemory = fixture.state;
+    host.load('floor-ledger');
+    const result = host.memory.FloorLedger.reconcileNow({ reason: 'chat_changed' });
+    assert.equal(result.reason, 'already_aligned');
+    assert.equal(host.storage.loadState(fallback()).floorLedger.activeEntries.length, 213);
+    assert.deepEqual(host.saves, []);
 });

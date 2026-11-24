@@ -38,6 +38,8 @@
     let saveRetryCount = 0;
     let pendingReason = '';
     let pendingReconcileOptions = { pruneRemoved: false, force: false };
+    let verifiedLedgerContext = null;
+    let lastUnverifiedLedgerWarning = '';
 
     function clone(value) {
         try {
@@ -72,12 +74,33 @@
         return YuzukiMemory.Storage?.loadState?.(getFallbackState()) || getFallbackState();
     }
 
-    function saveState(state) {
+    function saveState(state, options = {}) {
         return !!YuzukiMemory.Storage?.saveState?.(state, getFallbackState(), undefined, {
             force: true,
             immediate: true,
             saveOrigin: 'floor-ledger',
+            persistChat: options.persistChat !== false,
         });
+    }
+
+    function rememberVerifiedLedger(ledger) {
+        const context = getContext();
+        verifiedLedgerContext = {
+            ledgerId: ledger.id,
+            sessionId: YuzukiMemory.Storage?.getCurrentSessionId?.() || '',
+            metadata: context?.chatMetadata,
+        };
+        lastUnverifiedLedgerWarning = '';
+    }
+
+    function hasVerifiedLedger(ledger) {
+        return verifiedLedgerContext?.ledgerId === ledger.id
+            && verifiedLedgerContext.sessionId === (YuzukiMemory.Storage?.getCurrentSessionId?.() || '')
+            && verifiedLedgerContext.metadata === getContext()?.chatMetadata;
+    }
+
+    function isPassiveReconcile(reason) {
+        return /^(?:bind|chat_changed|session_ready|message_rendered|message_removed|chat_monitor(?:_start)?)$/.test(String(reason || ''));
     }
 
     function makeId(prefix) {
@@ -758,6 +781,7 @@
             commit() {
                 if (finished) return;
                 finished = true;
+                rememberVerifiedLedger(ledger);
                 scheduleChatSave();
             },
             rollback() {
@@ -1853,6 +1877,21 @@
         const previousEntries = normalizeActiveEntries(ledger.activeEntries);
         const scanned = scanLedgerReferences(ledger);
         const nextEntries = scanned.activeEntries;
+        const passive = isPassiveReconcile(options.reason);
+        if (passive && previousEntries.length > 0 && nextEntries.length === 0
+            && !hasVerifiedLedger(ledger)) {
+            const warningKey = `${ledger.id}:${getChatFingerprint()}`;
+            if (lastUnverifiedLedgerWarning !== warningKey) {
+                console.warn('[yuzuki-Memory FloorLedger] Kept ledger: loaded chat could not be verified.', {
+                    reason: String(options.reason || ''),
+                    previousEntryCount: previousEntries.length,
+                    currentMessageCount: getChat().length,
+                });
+                lastUnverifiedLedgerWarning = warningKey;
+            }
+            return { changed: false, reason: 'unverified_chat' };
+        }
+        if (nextEntries.length > 0 && nextEntries.length >= previousEntries.length) rememberVerifiedLedger(ledger);
         const activeEntriesChanged = !activeEntriesEqual(previousEntries, nextEntries);
         const plotTable = (Array.isArray(state.tables) ? state.tables : [])
             .find((table) => table?.id === PLOT_TABLE_ID);
@@ -1913,7 +1952,9 @@
 
             ledger.updatedAt = Date.now();
             state.floorLedger = ledger;
-            if (!saveState(state)) return { changed: false, reason: 'save_failed' };
+            // Rendering/loading is not a user edit. Keep repairs in metadata/cache
+            // and let the next normal save persist them without rewriting the body.
+            if (!saveState(state, { persistChat: !passive })) return { changed: false, reason: 'save_failed' };
 
             YuzukiMemory.BranchSnapshot?.resetSnapshotHistory?.(state, {
                 reason: `floor-ledger:${String(options.reason || 'reconcile')}`,

@@ -16,6 +16,8 @@
     let pendingMetadataSave = null;
     let chatSaveRevision = 0;
     let chatSaveEventSource = null;
+    let verifiedChatSaveTarget = null;
+    let verifiedChatMessageCount = 0;
     const quotaBlockedSessions = new Set();
 
     function getContext() {
@@ -128,7 +130,7 @@
     function getCurrentSessionParts(context = getContext()) {
         if (!context) return null;
 
-        const chatId = getChatMetadataValue('file_name', context) || context.chatId || context.chat?.file_name;
+        const chatId = context.chatId || getChatMetadataValue('file_name', context) || context.chat?.file_name;
         if (!chatId) return null;
 
         const character = Array.isArray(context.characters) ? context.characters[context.characterId] : null;
@@ -387,6 +389,8 @@
         window.clearTimeout(chatSaveTimer);
         chatSaveTimer = null;
         pendingMetadataSave = null;
+        verifiedChatSaveTarget = null;
+        verifiedChatMessageCount = 0;
         chatSaveRevision += 1;
     }
 
@@ -426,6 +430,63 @@
             && target.metadata.every((metadata) => getChatMetadataSources(context).includes(metadata));
     }
 
+    async function verifyPersistedChat(target, context) {
+        if (Array.isArray(context?.chat) && !context.chat.length) return false;
+        // Native SillyTavern exposes authenticated request headers. Other hosts keep
+        // the target guard, without assuming that they implement these endpoints.
+        if (typeof context?.getRequestHeaders !== 'function') return true;
+        if (!Array.isArray(context.chat) || !target.chatId) return false;
+        if (verifiedChatSaveTarget && isChatSaveTargetCurrent(verifiedChatSaveTarget, context)
+            && target.messageCount >= verifiedChatMessageCount) return true;
+
+        const character = context.characters?.[context.characterId];
+        if (!target.groupId && !character?.avatar) return false;
+        const endpoint = target.groupId ? '/api/chats/group/get' : '/api/chats/get';
+        const body = target.groupId
+            ? { id: target.chatId }
+            : { ch_name: character.name, file_name: target.chatId, avatar_url: character.avatar };
+        const controller = typeof AbortController === 'function' ? new AbortController() : null;
+        const timeout = controller ? window.setTimeout(() => controller.abort(), 10000) : null;
+        let persisted;
+        try {
+            const response = await (window.fetch || fetch)(endpoint, {
+                method: 'POST',
+                headers: context.getRequestHeaders(),
+                cache: 'no-store',
+                body: JSON.stringify(body),
+                ...(controller ? { signal: controller.signal } : {}),
+            });
+            if (!response.ok) throw new Error(`聊天保存前核对失败 (${response.status})`);
+            persisted = await response.json();
+        } finally {
+            if (timeout !== null) window.clearTimeout(timeout);
+        }
+        if (!Array.isArray(persisted)) throw new Error('聊天保存前核对返回了无效数据');
+        if (!isChatSaveTargetCurrent(target)) return false;
+        // Native JSONL responses include the header as their first array element.
+        const persistedMessageCount = Math.max(0, persisted.length - 1);
+        if (persistedMessageCount > target.messageCount) {
+            console.warn('[yuzuki-Memory SaveGuard] Refused to overwrite a longer saved chat.', {
+                persistedMessageCount,
+                currentMessageCount: target.messageCount,
+            });
+            return false;
+        }
+        verifiedChatSaveTarget = target;
+        verifiedChatMessageCount = target.messageCount;
+        return true;
+    }
+
+    async function waitForNativeSave(target) {
+        const startedAt = Date.now();
+        while (YuzukiMemory.settingsBridge?.isChatSaving?.()) {
+            if (sessionSwitching || !isChatSaveTargetCurrent(target)) return false;
+            if (Date.now() - startedAt >= 10000) throw new Error('等待酒馆完成保存超时');
+            await new Promise((resolve) => window.setTimeout(resolve, 100));
+        }
+        return !sessionSwitching && isChatSaveTargetCurrent(target);
+    }
+
     async function saveChatForTarget(target, options = {}) {
         const context = getContext();
         if (sessionSwitching || !isChatSaveTargetCurrent(target, context)
@@ -434,6 +495,16 @@
             // SillyTavern 1.19 saveMetadata delegates to saveChatConditional and writes
             // the entire chat too. Loading state must not call either save API.
             if (options.allowFullChat === false) return false;
+            if (Array.isArray(context?.chat) && !context.chat.length) return false;
+            // The native save API waits internally and then reads live chat globals.
+            // Wait here instead, so a queued save can still be cancelled on a switch.
+            if (YuzukiMemory.settingsBridge?.isChatSaving?.()
+                && !await waitForNativeSave(target)) return false;
+            if (typeof context?.getRequestHeaders === 'function'
+                && !await verifyPersistedChat(target, context)) return false;
+            if (YuzukiMemory.settingsBridge?.isChatSaving?.()
+                && !await waitForNativeSave(target)) return false;
+            if (sessionSwitching || !isChatSaveTargetCurrent(target)) return false;
             if (options.metadataOnly && typeof context?.saveMetadata === 'function') {
                 await context.saveMetadata();
                 return true;
@@ -1593,7 +1664,7 @@
             const metadataSaved = sessionId === getCurrentSessionId()
                 ? writeChatMetadataState(payload, {
                     immediate: !options.fromLoad && (options.force || options.immediate),
-                    allowFullChat: !options.fromLoad,
+                    allowFullChat: !options.fromLoad && options.persistChat !== false,
                 })
                 : false;
             const localSaved = tryWritePayloadToLocalStorage([getPrimaryStorageKey(sessionId)].filter(Boolean), payload, sessionId);
