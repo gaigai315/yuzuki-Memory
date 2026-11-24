@@ -431,14 +431,13 @@
         if (sessionSwitching || !isChatSaveTargetCurrent(target, context)
             || (activeSessionId && target.sessionId !== activeSessionId)) return false;
         try {
-            // Metadata changes must not choose a full-chat save when a metadata API exists.
+            // SillyTavern 1.19 saveMetadata delegates to saveChatConditional and writes
+            // the entire chat too. Loading state must not call either save API.
+            if (options.allowFullChat === false) return false;
             if (options.metadataOnly && typeof context?.saveMetadata === 'function') {
                 await context.saveMetadata();
                 return true;
             }
-            // Loading/migrating plugin state must never rewrite the chat body. On hosts
-            // without a metadata API, native saves persist the in-memory metadata later.
-            if (options.allowFullChat === false) return false;
             if (typeof context?.saveChat === 'function') {
                 await context.saveChat();
                 return true;
