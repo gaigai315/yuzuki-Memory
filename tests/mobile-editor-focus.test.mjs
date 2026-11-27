@@ -745,29 +745,13 @@ test('embedding form saves and restores independent ordinary and summary recall 
     assert.equal(persisted.summaryRecallLimit, 6);
 });
 
-test('release metadata and update notice describe version 1.2.4', () => {
-    assert.equal(manifest.version, '1.2.4');
-    assert.match(indexSource, /const VERSION = '1\.2\.4';/);
+test('release metadata and update notice describe version 1.2.5', () => {
+    assert.equal(manifest.version, '1.2.5');
+    assert.match(indexSource, /const VERSION = '1\.2\.5';/);
 
     const noticeSource = getFunctionSource('openUpdateNoticeDialog');
-    assert.match(noticeSource, /加强聊天存档保护，避免不完整内容覆盖较长记录/);
-    assert.match(noticeSource, /导入聊天的记忆账本无法匹配时保留原记忆，避免误清理/);
-    assert.doesNotMatch(noticeSource, /优化剧情摘要：「条目整理」中新增「重放」按钮/);
-    assert.doesNotMatch(noticeSource, /优化填表\/总结提示词方案，新增两个方案/);
-    assert.doesNotMatch(noticeSource, /角色档案与角色状态改为分批渲染、头像按需加载/);
-    assert.doesNotMatch(noticeSource, /绑定当前 User 的规划会自动回到“下一轮”/);
-    assert.doesNotMatch(noticeSource, /总结优化的目标选择新增全选/);
-    assert.doesNotMatch(noticeSource, /按楼层范围删除改为清理输入区域内完整包含的总结与剧情摘要/);
-    assert.doesNotMatch(noticeSource, /删除聊天楼层后待办事项及角色空记录残留/);
-    assert.doesNotMatch(noticeSource, /优化向量化召回条数|优化向量化自动分段功能|优化部分 CSS 渲染/);
-    assert.doesNotMatch(noticeSource, /剧情规划界面支持编辑|剧情导演与柚月の手机互通/);
-    assert.doesNotMatch(noticeSource, /修复快速取消正文生成后的剧情规划锁定/);
-    assert.doesNotMatch(noticeSource, /修复会话向量书归属/);
-    assert.doesNotMatch(noticeSource, /新增移动端世界书折叠兼容/);
-    assert.doesNotMatch(noticeSource, /兼容「沉浸式 PWA 顶部」插件/);
-    assert.doesNotMatch(noticeSource, /编辑正文后不再自动重新剧情规划/);
-    assert.doesNotMatch(noticeSource, /自动清理分支点之后的剧情摘要、正文表格更新和记忆总结/);
-    assert.doesNotMatch(noticeSource, /魔法棒菜单中长按“柚月の记忆”/);
+    const items = noticeSource.match(/\[\s*([\s\S]*?)\]\s*\.forEach/)?.[1];
+    assert.equal(items?.trim(), "'【优化】优化填表/总结任务的请求结构。',");
 });
 
 test('story director failure details stay above the open director card', () => {

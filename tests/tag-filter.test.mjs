@@ -173,15 +173,13 @@ test('every plugin task sends instructions after source material for all model r
                     assert.equal(result.error, 'request captured', label);
                     const messages = requests.at(-1).messages;
                     const tail = messages.at(-1);
-                    const packedTask = ['runTrace', 'runSummary'].includes(method);
-                    if (packedTask) {
-                        const sourceMessages = messages.filter((message) => message.role === 'user');
-                        assert.equal(sourceMessages.length, 1, label);
-                        assert.equal(messages.some((message) => message.role === 'assistant'), false, label);
-                        assert.equal(sourceMessages[0].content.split(taskBoundary).length, 2, label);
-                        assert.ok(sourceMessages[0].content.endsWith(taskBoundary), label);
-                        assert.ok(sourceMessages[0].content.indexOf('[楼层 0]') < sourceMessages[0].content.indexOf('[楼层 1]'), label);
-                        assert.equal(tail.role, 'system', label);
+                    if (['runTrace', 'runSummary'].includes(method)) {
+                        const [rangeMessage, sourceMessage] = messages.slice(-3);
+                        assert.deepEqual(messages.slice(-3).map(({ role }) => role), ['user', 'assistant', 'user'], label);
+                        assert.ok(messages.slice(0, -3).every(({ role }) => role === 'system'), label);
+                        assert.ok(rangeMessage.content.includes(`处理楼层范围：0 ~ ${chat.length}`), label);
+                        assert.doesNotMatch(rangeMessage.content, /左闭右开|不含/, label);
+                        assert.match(sourceMessage.content, /\n<raw_chat_logs>\n\[楼层 0\][\s\S]*\[楼层 1\][\s\S]*\n<\/raw_chat_logs>$/, label);
                         assert.ok(tail.content.includes(marker), label);
                         assert.equal(messages.slice(0, -1).some((message) => message.content.includes(marker)), false, label);
                     } else {
@@ -222,9 +220,9 @@ test('every plugin task sends instructions after source material for all model r
             });
             assert.equal(whitelistResult.error, 'request captured');
             const whitelistMessages = requests.at(-1).messages;
-            const whitelistSources = whitelistMessages.filter((message) => message.role === 'user');
+            const whitelistSources = whitelistMessages.filter((message) => message.role === 'assistant');
             assert.equal(whitelistSources.length, 1);
-            assert.match(whitelistSources[0].content, /^\[楼层 0\] 用户: 最初行动/);
+            assert.match(whitelistSources[0].content, /<raw_chat_logs>\n\[楼层 0\] 用户: 最初行动/);
             assert.match(whitelistSources[0].content, /\[楼层 1\] 角色: 待处理正文/);
             if (lastRole === 'user') assert.match(whitelistSources[0].content, /\[楼层 2\] 用户: 最后行动/);
             assert.doesNotMatch(whitelistSources[0].content, /<\/?content>/i);
@@ -590,13 +588,13 @@ test('trace uses the global historian selection and injects populated non-summar
         const messageContents = capturedMessages.map((message) => String(message.content || ''));
         const characterIndex = messageContents.findIndex((content) => content.includes('当前位置: 旧地点'));
         const itemIndex = messageContents.findIndex((content) => content.includes('物品名称: 旧钥匙'));
-        const sourceIndex = capturedMessages.findIndex((message) => message.role === 'user');
+        const sourceIndex = capturedMessages.findIndex((message) => message.role === 'assistant');
         const sourceContent = String(capturedMessages[sourceIndex]?.content || '');
         const tracePromptIndex = messageContents.findIndex((content) => content.includes('TRACE_PROMPT_MARKER'));
 
         assert.ok(characterIndex >= 0, `${mode}应注入自动向量化表的现有记录`);
         assert.ok(itemIndex >= 0, `${mode}应注入有数据的普通表`);
-        assert.equal(capturedMessages.filter((message) => message.role === 'user').length, 1, `${mode}应把正文合并为单条用户材料`);
+        assert.deepEqual(Array.from(capturedMessages.slice(-3), ({ role }) => role), ['user', 'assistant', 'user'], `${mode}应依次发送范围、正文和填表规则`);
         assert.ok(sourceContent.indexOf('[楼层 0]') < sourceContent.indexOf('[楼层 1]'), `${mode}应保留原始楼层顺序`);
         assert.ok(characterIndex < sourceIndex && itemIndex < sourceIndex, `${mode}的现有表格应位于聊天记录之前`);
         assert.ok(tracePromptIndex > sourceIndex, `${mode}的填表提示词应位于聊天记录之后`);

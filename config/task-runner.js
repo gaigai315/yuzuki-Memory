@@ -1435,25 +1435,6 @@
         return normalized;
     }
 
-    function buildTaskSourceMaterialMessage(messages = []) {
-        const content = normalizeTaskMessages(messages)
-            .map((message) => String(message.content || '').trim())
-            .filter(Boolean)
-            .join('\n\n');
-        if (!content) return null;
-        return {
-            role: 'user',
-            content: `${content}\n\n${TASK_SOURCE_BOUNDARY}`,
-        };
-    }
-
-    function appendTaskSystemInstructions(messages = [], instructions = []) {
-        const normalized = normalizeTaskMessages(messages).map((message) => ({ ...message }));
-        const taskText = instructions.map((text) => String(text || '').trim()).filter(Boolean).join('\n\n');
-        if (taskText) normalized.push({ role: 'system', content: taskText });
-        return normalized;
-    }
-
     function normalizeMemoryEnvelope(text = '') {
         let source = String(text || '').trim();
         if (!source) return '';
@@ -3208,18 +3189,29 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
 同一主线只输出一个主线分块，同一核心角色的支线只输出一个支线分块。原总结中确实包含独立角色支线时，即使输入只有一条主线，也可以新增对应支线分块，但不得编造。多条合并结果必须覆盖被选中旧总结里的关键事实，不要只输出增量差异。分块正文必须是最终可直接落盘的内容。支线标题中的角色名只能填写一个具体角色名，不要写组织名、势力名、事件名、分类名或多个角色名。楼层范围由插件本地绑定，不要输出或猜测。`;
     }
 
-    function buildTaskRangeText(range, kind = 'trace') {
-        const start = Math.max(0, Math.round(Number(range?.start) || 0));
-        const end = Math.max(start, Math.round(Number(range?.end) || 0));
-        const total = Math.max(0, Math.round(Number(range?.total) || 0));
-        const lastFloor = Math.max(0, total - 1);
-        const label = kind === 'summary' ? '总结' : '追溯填表';
-        return compactLines([
-            `【本次${label}任务】`,
-            `处理楼层范围：${start} ~ ${end}（左闭右开，不含 ${end}）`,
-            `当前总楼层：${total}；最高楼层号：${lastFloor}。`,
-            `实际处理聊天条目数：${Array.isArray(range?.messages) ? range.messages.length : 0}`,
-            '聊天内容已按原始楼层编号标注为 [楼层 N]。',
+    function buildHistoryTaskMessages(context, range, task, instructions) {
+        const floorRange = `${range.start} ~ ${range.end}`;
+        const rawChatLogs = range.messages.map(({ content }) => content).join('\n\n');
+        return normalizeTaskMessages([
+            ...context,
+            {
+                role: 'user',
+                content: [
+                    `【本次${task}任务】`,
+                    `请调取以下范围的历史聊天记录作为本次${task}的原始资料：`,
+                    `- 处理楼层范围：${floorRange}`,
+                    '',
+                    '聊天内容已按原始楼层编号标注为 [楼层 N]，请列出该范围内的原始记录。',
+                ].join('\n'),
+            },
+            {
+                role: 'assistant',
+                content: `已调取 ${floorRange} 范围内原始聊天记录，归档数据如下：\n<raw_chat_logs>\n${rawChatLogs}\n</raw_chat_logs>`,
+            },
+            {
+                role: 'user',
+                content: instructions.map((text) => text.trim()).filter(Boolean).join('\n\n'),
+            },
         ]);
     }
 
@@ -3239,15 +3231,12 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             : '';
         const targetRestriction = buildTraceTargetRestrictionText(state, options);
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const sourceMessage = buildTaskSourceMaterialMessage(range.messages);
-        const messages = appendTaskSystemInstructions([
+        const messages = buildHistoryTaskMessages([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText() },
             worldbookMessage,
             ...buildTraceReferenceMessages(state),
-            { role: 'system', content: buildTaskRangeText(range, 'trace') },
-            sourceMessage,
-        ], [
+        ], range, '追溯填表', [
             tracePrompt,
             characterStatusPrompt ? `【角色状态专用提示词】\n${characterStatusPrompt}` : '',
             targetRestriction,
@@ -3269,14 +3258,11 @@ YYYY年MM月DD日,HH:mm-HH:mm [地点] 角色名 事件闭环描述
             suppressMemoryTables: true,
         });
         const worldbookMessage = await buildWorldbookContextMessage(state, options);
-        const sourceMessage = buildTaskSourceMaterialMessage(range.messages);
-        const messages = appendTaskSystemInstructions([
+        const messages = buildHistoryTaskMessages([
             { role: 'system', content: historianPrompt },
             { role: 'system', content: buildRuntimeBackgroundText({ includeChatSummary: false }) },
             worldbookMessage,
-            { role: 'system', content: buildTaskRangeText(range, 'summary') },
-            sourceMessage,
-        ], [
+        ], range, '总结', [
             summaryPrompt,
             '请立即根据以上待总结聊天内容和总结提示词执行任务。不得遗漏最后结尾</Memory>标签。',
         ]);

@@ -15991,8 +15991,7 @@
         intro.textContent = '本次更新内容：';
         const list = document.createElement('ul');
         [
-            '加强聊天存档保护，避免不完整内容覆盖较长记录',
-            '导入聊天的记忆账本无法匹配时保留原记忆，避免误清理',
+            '【优化】优化填表/总结任务的请求结构。',
         ].forEach((text) => {
             const item = document.createElement('li');
             item.textContent = text;
